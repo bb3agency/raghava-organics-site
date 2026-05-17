@@ -1,0 +1,315 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import ShiprocketAdapter from './shiprocket.adapter';
+
+describe('ShiprocketAdapter', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('authenticates and caches token on first request', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ token: 'sr-token-123' })
+    }).mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({
+        data: { available_courier_companies: [{ courier_company_id: 1, courier_name: 'Test', rate: 50 }] }
+      })
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new ShiprocketAdapter({ email: 'test@example.com', password: 'secret' });
+    await adapter.checkServiceability('560001');
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const [authUrl, authInit] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(authUrl).toContain('/auth/login');
+    expect(authInit.method).toBe('POST');
+    expect((authInit.headers as Record<string, string>)['Content-Type']).toBe('application/json');
+
+    const [svcUrl, svcInit] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect(svcUrl).toContain('/courier/serviceability/');
+    expect((svcInit.headers as Record<string, string>).Authorization).toBe('Bearer sr-token-123');
+  });
+
+  it('creates shipment and assigns AWB', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ token: 'sr-token-123' })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({
+          order_id: 101,
+          shipment_id: 202,
+          status: 'NEW'
+        })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({
+          response: {
+            data: {
+              awb_assign_status: 1,
+              awb_code: 'AWB123456',
+              courier_name: 'TestCourier',
+              label_url: 'https://label.example/123'
+            }
+          }
+        })
+      });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new ShiprocketAdapter({ email: 'test@example.com', password: 'secret' });
+    const result = await adapter.createShipment({
+      orderNumber: 'ORD-2026-00001',
+      amountRupees: 499.5,
+      destinationPincode: '560001',
+      originPincode: '110001',
+      totalWeightGrams: 1200,
+      paymentMode: 'Prepaid',
+      sellerGstTin: '29ABCDE1234F1Z5',
+      hsnCode: '1001',
+      customer: {
+        fullName: 'Test User',
+        phone: '9999999999',
+        line1: 'Street 1',
+        city: 'Bengaluru',
+        state: 'Karnataka'
+      }
+    });
+
+    expect(result.awbNumber).toBe('AWB123456');
+    expect(result.trackingUrl).toContain('AWB123456');
+    expect(result.shiprocketOrderId).toBe('101');
+    expect(result.shiprocketShipmentId).toBe('202');
+    expect(result.courierName).toBe('TestCourier');
+    expect(result.labelUrl).toBe('https://label.example/123');
+    const createBody = JSON.parse((fetchMock.mock.calls[1] as [string, RequestInit])[1].body as string);
+    expect(createBody.payment_method).toBe('Prepaid');
+  });
+
+  it('sends payment_method COD in Shiprocket payload for COD orders', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ token: 'sr-token-123' })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ order_id: 201, shipment_id: 301, status: 'NEW' })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({
+          response: {
+            data: {
+              awb_assign_status: 1,
+              awb_code: 'AWB-COD-001',
+              courier_name: 'CODCourier'
+            }
+          }
+        })
+      });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new ShiprocketAdapter({ email: 'test@example.com', password: 'secret' });
+    await adapter.createShipment({
+      orderNumber: 'ORD-2026-00002',
+      amountRupees: 799,
+      destinationPincode: '400001',
+      originPincode: '110001',
+      totalWeightGrams: 500,
+      paymentMode: 'COD',
+      sellerGstTin: '27ABCDE1234F1Z5',
+      hsnCode: '6109',
+      customer: {
+        fullName: 'COD Customer',
+        phone: '8888888888',
+        line1: 'COD Street',
+        city: 'Mumbai',
+        state: 'Maharashtra'
+      }
+    });
+
+    const createBody = JSON.parse((fetchMock.mock.calls[1] as [string, RequestInit])[1].body as string);
+    expect(createBody.payment_method).toBe('COD');
+  });
+
+  it('tracks shipment and maps activities', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ token: 'sr-token-123' })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({
+          tracking_data: {
+            shipment_status: 6,
+            shipment_track_activities: [
+              { date: '2026-04-25T10:00:00Z', status: 'Delivered', activity: 'Delivered to customer', location: 'Bengaluru' }
+            ]
+          }
+        })
+      });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new ShiprocketAdapter({ email: 'test@example.com', password: 'secret' });
+    const result = await adapter.trackShipment('AWB123');
+
+    expect(result.status).toBe('Delivered');
+    expect(result.events).toHaveLength(1);
+    expect(result.events[0]?.status).toBe('Delivered');
+    expect(result.events[0]?.location).toBe('Bengaluru');
+  });
+
+  it('checks serviceability and returns true when couriers exist', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ token: 'sr-token-123' })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({
+          data: { available_courier_companies: [{ courier_company_id: 1, courier_name: 'Test', rate: 50 }] }
+        })
+      });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new ShiprocketAdapter({ email: 'test@example.com', password: 'secret' });
+    const result = await adapter.checkServiceability('560001');
+
+    expect(result.serviceable).toBe(true);
+    expect(result.pincode).toBe('560001');
+  });
+
+  it('calculates delivery rate from cheapest courier', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ token: 'sr-token-123' })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({
+          data: {
+            available_courier_companies: [
+              { courier_company_id: 1, courier_name: 'Fast', rate: 100, estimated_delivery_days: 2 },
+              { courier_company_id: 2, courier_name: 'Cheap', rate: 50, estimated_delivery_days: 4 }
+            ]
+          }
+        })
+      });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new ShiprocketAdapter({ email: 'test@example.com', password: 'secret' });
+    const result = await adapter.calculateDeliveryRate({
+      destinationPincode: '560001',
+      originPincode: '110001',
+      totalWeightGrams: 1500
+    });
+
+    expect(result.shippingChargePaise).toBe(5000);
+    expect(result.estimatedDays).toBe(4);
+    expect(result.courierName).toBe('Cheap');
+    expect(result.availableCouriers).toHaveLength(2);
+  });
+
+  it('schedules pickup successfully', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ token: 'sr-token-123' })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({
+          status: 1,
+          pickup_scheduled_date: '2026-05-06',
+          pickup_token_number: 'PKP123'
+        })
+      });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new ShiprocketAdapter({ email: 'test@example.com', password: 'secret' });
+    const result = await adapter.schedulePickup('SHIP202');
+
+    expect(result.scheduled).toBe(true);
+    expect(result.pickupScheduledDate).toBe('2026-05-06');
+    expect(result.pickupTokenNumber).toBe('PKP123');
+  });
+
+  it('generates label and returns URL', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ token: 'sr-token-123' })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({
+          label_url: 'https://label.example/abc.pdf'
+        })
+      });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new ShiprocketAdapter({ email: 'test@example.com', password: 'secret' });
+    const result = await adapter.generateLabel('SHIP202');
+
+    expect(result.labelUrl).toBe('https://label.example/abc.pdf');
+  });
+
+  it('refreshes token on 401 and retries', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ token: 'old-token' })
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+        text: async () => 'Unauthorized'
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ token: 'new-token' })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({
+          data: { available_courier_companies: [{ courier_company_id: 1, courier_name: 'Test', rate: 50 }] }
+        })
+      });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new ShiprocketAdapter({ email: 'test@example.com', password: 'secret' });
+    await adapter.checkServiceability('560001');
+
+    // First call: auth, second: serviceability (401), third: re-auth, fourth: retry serviceability
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+});

@@ -1,0 +1,2138 @@
+# Technical Requirements Document (TRD)
+## E-Commerce Backend Template — v2.0
+
+> **Derived from:** `ECOM_MASTER.md` — the canonical source of truth.
+> **This document does not contradict the master. If conflict exists, the master wins.**
+> **Audience:** Developer (you), AI IDEs (Cursor, Copilot), future collaborators.
+
+**Document Type:** Technical Requirements Document
+**Version:** 2.0
+**Status:** 🔒 Final — Derived from locked master decisions
+**Last Updated:** April 2026
+**Traceability:** Every requirement in this document maps to a section in `ECOM_MASTER.md`
+
+---
+
+## Table of Contents
+
+1. [Document Purpose & Scope](#1-document-purpose--scope)
+2. [System Overview](#2-system-overview)
+3. [Infrastructure Requirements](#3-infrastructure-requirements)
+4. [Backend Technical Requirements](#4-backend-technical-requirements)
+5. [Database Requirements](#5-database-requirements)
+6. [Authentication & Authorisation](#6-authentication--authorisation)
+7. [API Requirements](#7-api-requirements)
+8. [Module Technical Specifications](#8-module-technical-specifications)
+9. [Integration Specifications](#9-integration-specifications)
+10. [Background Job Requirements](#10-background-job-requirements)
+11. [Security Requirements](#11-security-requirements)
+12. [Frontend Technical Requirements](#12-frontend-technical-requirements)
+13. [Performance Requirements](#13-performance-requirements)
+14. [Testing Requirements](#14-testing-requirements)
+15. [Observability Requirements](#15-observability-requirements)
+16. [Constraint Registry](#16-constraint-registry)
+
+---
+
+## 1. Document Purpose & Scope
+
+### 1.1 What This Document Covers
+
+This TRD defines the **complete technical requirements** for building the e-commerce backend template — every specification a developer or AI IDE needs to implement each component correctly, without ambiguity.
+
+It covers:
+- Exact technology versions, configurations, and constraints
+- Complete data models with field types, validations, and relationships
+- Precise API request/response contracts with error codes
+- Integration specifications for every third-party service
+- Security requirements with implementation method
+- Performance targets with measurement methodology
+- Testing requirements with coverage thresholds
+
+Operational release sign-off is executed with:
+- `docs/BACKEND_GO_LIVE_CHECKLIST.md` (full backend env-to-implementation parity)
+- `docs/FRONTEND_AI_GO_LIVE_CHECKLIST.md` (frontend contract + integration boundary checks)
+- `docs/THIRD_PARTY_INTEGRATIONS_SETUP_AND_KEY_MANAGEMENT_GUIDE.md` (provider setup, dry-runs, rotation, incident drill controls)
+- `docs/CLIENT_INTEGRATION_CREDENTIAL_REGISTER_TEMPLATE.md` (per-client credential ownership + lifecycle record)
+
+### 1.1A Final cross-cutting closeout (May 2026)
+
+The following controls are normative and must be treated as part of technical acceptance:
+- Process crash boundary metric `process_crash_total{reason}` is emitted before API shutdown on unhandled rejection/uncaught exception.
+- `ADMIN_MFA_ENCRYPTION_KEY` isolation is enforced from `JWT_REFRESH_SECRET` in production-like profiles.
+- Admin permission model remains fail-closed for unprovisioned admins (`AdminPermissionGrant`-driven access only).
+- Admin permission updates are token-issuance scoped (mid-window changes require token revocation/logout for immediate effect).
+- Payment/shipping circuit-breaker state is process-local per replica unless explicitly redesigned for shared state.
+- Prisma delegate drift cleanup is complete: native delegates are used directly (`prisma.returnRequest`, `prisma.storeSettings`) and temporary drift workaround artifacts are removed.
+- `OpsUser.mfaSecretEncrypted` nullable schema behavior is guarded by fail-closed runtime checks when MFA is enabled.
+- `REFUNDED` transition from admin APIs is deferred/async through the refunds queue, not guaranteed as immediate synchronous status mutation.
+- Frontend delivery is mandatory contract-first simultaneous build + integration via vertical slices (contract -> typed API client -> UI -> real backend integration -> tests), not page-only UI-first delivery.
+- Frontend delivery sequence is mandatory: Foundation -> Ops control plane -> Admin read -> Admin mutation -> Reliability -> Storefront customer journey (see `docs/NEXTJS_FRONTEND_INTEGRATION_GUIDE.md` §1.2).
+
+### 1.2 What This Document Does Not Cover
+
+- Business rules and client-facing feature descriptions → see `BRD.md`
+- Architectural philosophy and decision rationale → see `ECOM_MASTER.md`
+- Per-client customisation procedures → see `ECOM_MASTER.md` §12
+
+### 1.3 Requirement Notation
+
+| Tag | Meaning |
+|---|---|
+| `[MUST]` | Non-negotiable. Violation is a defect. |
+| `[SHOULD]` | Strong recommendation. Deviation requires documented justification. |
+| `[MAY]` | Optional — implement if applicable to the current context. |
+| `[NEVER]` | Explicitly forbidden. Violation is a security or integrity defect. |
+
+---
+
+## 2. System Overview
+
+### 2.1 Architecture Pattern
+
+**`[MUST]`** The system `[MUST]` implement a **Modular Monolith** pattern — one Fastify process per client deployment, internally structured with fully decoupled modules that communicate only through defined TypeScript interfaces and injected services.
+
+**`[NEVER]`** Modules `[NEVER]` import directly from each other's internal files. Cross-module communication happens only through the public service interface of the target module.
+
+```
+src/modules/orders/orders.service.ts
+  CORRECT:  imports NotificationsService from src/modules/notifications/notifications.service.ts
+  WRONG:    imports ResendAdapter from src/modules/notifications/adapters/email/resend.adapter.ts
+```
+
+### 2.2 Technology Versions
+
+| Technology | Version | Constraint |
+|---|---|---|
+| Node.js | 22 LTS | `[MUST]` — LTS required for production stability |
+| TypeScript | 5.x | `[MUST]` — strict mode mandatory |
+| Fastify | 5.x | `[MUST]` — v5 runtime baseline |
+| Prisma | 5.x | `[MUST]` — schema-first ORM |
+| PostgreSQL | 16 | `[MUST]` — ACID, JSONB, tsvector |
+| Redis | 7 | `[MUST]` — required for BullMQ compatibility |
+| BullMQ | 5.x | `[MUST]` — requires Redis 7 |
+| Docker | 24+ | `[SHOULD]` — Compose v2 plugin syntax |
+| Ubuntu | 22.04 LTS | `[MUST]` — VPS operating system |
+| Nginx | 1.24+ | `[MUST]` — host-level reverse proxy |
+
+### 2.3 Per-Client Isolation Model
+
+**`[MUST]`** Each client deployment `[MUST]` be a fully independent Docker Compose stack with its own Fastify process, Redis container, PostgreSQL database, `.env` file, Nginx `server {}` block, and Certbot SSL certificate.
+
+**`[NEVER]`** Two client deployments `[NEVER]` share a Redis instance, database, JWT secret, or payment/delivery credentials.
+
+---
+
+## 3. Infrastructure Requirements
+
+### 3.1 VPS Specification
+
+| Resource | Minimum | Recommended (5–10 sites) |
+|---|---|---|
+| vCPU | 2 | 4 |
+| RAM | 4 GB | 8 GB |
+| Storage | 40 GB SSD | 80 GB SSD |
+| OS | Ubuntu 22.04 LTS | Ubuntu 22.04 LTS |
+
+### 3.2 Host-Level Services
+
+**`[MUST]`** Run on the host (not in Docker):
+
+| Service | Reason |
+|---|---|
+| PostgreSQL 16 | Simplifies `pg_dump` backup; reachable from all containers via `host.docker.internal` |
+| Nginx | One instance handles all domain routing and SSL |
+| Certbot | Manages certificates for all client domains |
+
+**`[MUST]`** Docker Compose `[MUST]` include:
+```yaml
+extra_hosts:
+  - "host.docker.internal:host-gateway"
+```
+
+### 3.3 Port Assignment Convention
+
+| Client Slot | Backend Port | Storefront Port |
+|---|---|---|
+| Client 1 | 3001 | 3101 |
+| Client 2 | 3002 | 3102 |
+| Client N | 3000 + N | 3100 + N |
+
+### 3.4 Redis Protected Mode (Security Constraint)
+
+**`[MUST]`** The Redis container runs with `--protected-mode yes` by default. Connecting from the Node.js application (on the host) into the Docker container routes through the Docker gateway interface, which Redis treats as an external IP. Therefore, you **`[MUST]`** set a `REDIS_PASSWORD` in your `.env` file. If `REDIS_PASSWORD` is blank, Redis will drop the connection, causing `ioredis` to crash into an infinite `ECONNRESET` loop.
+
+**`[MUST]`** Ports `[MUST]` be set via `BACKEND_PORT` in `.env`. Hardcoded port numbers in `docker-compose.yml` are forbidden.
+
+### 3.5 Docker Requirements
+
+**`[MUST]`** Every `docker-compose.yml` `[MUST]` include:
+- `restart: unless-stopped` on the backend service
+- `--maxmemory 100mb --maxmemory-policy noeviction` on the Redis command
+- A named bridge network (`client-network`)
+
+**`[MUST]`** The `Dockerfile` `[MUST]` use a **multi-stage build**:
+
+```dockerfile
+FROM node:22-alpine AS builder
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY . .
+RUN npx prisma generate
+RUN npm run build
+RUN npm prune --omit=dev
+
+FROM node:22-alpine AS production
+WORKDIR /app
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/prisma ./prisma
+COPY --from=builder /app/tsconfig.production.json ./tsconfig.production.json
+COPY --from=builder /app/bootstrap-backend.js ./bootstrap-backend.js
+COPY --from=builder /app/bootstrap-workers.js ./bootstrap-workers.js
+CMD ["node", "bootstrap-backend.js"]
+```
+
+### 3.6 Nginx Requirements
+
+**`[MUST]`** Nginx config per client `[MUST]` enforce:
+- HTTP → HTTPS redirect (301) on port 80
+- TLSv1.2 and TLSv1.3 only
+- `ssl_prefer_server_ciphers on`
+- `ssl_ciphers` ECDHE-only AEAD suite, `ssl_session_cache shared:SSL:10m`, `ssl_session_timeout 1d`, `ssl_session_tickets off`, `ssl_stapling on`, `ssl_stapling_verify on`
+- Security headers: `Strict-Transport-Security` (HSTS 2-year, preload), `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`, `X-XSS-Protection: 1; mode=block`, `Permissions-Policy`
+- `client_max_body_size 20M`
+- `X-Real-IP`, `X-Forwarded-For`, `X-Forwarded-Proto` proxy headers
+- Route-class `limit_req_zone` controls at edge:
+  - auth: 20 req/min (burst 8)
+  - checkout/payment: 35 req/min (burst 12)
+  - admin: 60 req/min (burst 15)
+  - catalog read: 240 req/min (burst 40)
+  - cart/session: 90 req/min (burst 20)
+  - webhook ingress: 300 req/min (burst 30)
+  - health: 60 req/min (burst 5)
+  - default API: 90 req/min (burst 20)
+
+**`[MUST]`** Admin experience `[MUST]` be served from the same frontend host using route-based mounting (for example `client1.com/admin`):
+
+```nginx
+server {
+  listen 443 ssl;
+  server_name client1.com www.client1.com;
+  location / {
+    proxy_pass http://127.0.0.1:3101;
+  }
+}
+```
+
+---
+
+## 4. Backend Technical Requirements
+
+### 4.1 TypeScript Configuration
+
+**`[MUST]`** `tsconfig.json` `[MUST]` enforce strict mode with these options at minimum:
+
+```json
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "CommonJS",
+    "strict": true,
+    "noImplicitAny": true,
+    "strictNullChecks": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitReturns": true,
+    "esModuleInterop": true,
+    "outDir": "dist",
+    "rootDir": ".",
+    "paths": {
+      "@modules/*": ["src/modules/*"],
+      "@common/*": ["src/common/*"],
+      "@config/*": ["src/config/*"],
+      "@queues/*": ["queues/*"]
+    }
+  }
+}
+```
+
+Current template compiles both `src/**` and `queues/**` from the project root.
+
+**`[NEVER]`** `any` type `[NEVER]` appears in production code without an inline `// eslint-disable` comment and a written justification.
+
+### 4.2 Fastify Plugin Registration Order
+
+**`[MUST]`** Plugins `[MUST]` be registered in this exact order in `src/main.ts`:
+
+```
+1. @fastify/helmet          (security headers first)
+2. @fastify/cors            (CORS before auth)
+3. @fastify/jwt             (JWT plugin before auth hooks)
+4. @fastify/rate-limit      (rate limiting before route handlers)
+5. @fastify/multipart       (file uploads)
+6. @fastify/swagger         (OpenAPI docs — dev/staging only)
+7. prismaPlugin             (DB connection)
+8. redisPlugin              (Redis connection)
+9. bullmqPlugin             (queue registration)
+10. Feature modules         (each via app.register())
+```
+
+### 4.3 Health Check Endpoint
+
+**`[MUST]`** `GET /api/v1/health` `[MUST]` actively ping PostgreSQL and Redis and return HTTP 503 if either is unreachable.
+Successful health responses return direct JSON payloads:
+
+```json
+{
+  "status": "ok",
+  "timestamp": "2026-04-01T10:00:00.000Z",
+  "version": "2.0.0",
+  "database": "connected",
+  "redis": "connected"
+}
+```
+
+### 4.4 Standard Response Envelope
+
+**`[MUST]`** Error responses always use the standard envelope from the global error handler. Success responses return route-specific payloads directly by default. When `FEATURE_RESPONSE_ENVELOPE_ENABLED=true`, all 2xx JSON responses are additionally wrapped in `{ "success": true, "data": <T>, "meta"?: {...} }` via the `onSend` hook (`src/common/hooks/response-envelope.hook.ts`):
+
+```typescript
+// Error
+interface ErrorResponse {
+  success: false
+  error: {
+    code: string       // SCREAMING_SNAKE_CASE — e.g. ORDER_NOT_FOUND
+    message: string    // Human-readable, safe to display
+    statusCode: number
+    details?: object   // Validation errors only
+  }
+}
+```
+
+**Exception:** non-JSON download responses (for example CSV exports with `text/csv`) are returned as raw file payloads and are exempt from JSON error envelope wrapping.
+
+### 4.5 Error Code Registry
+
+| Error Code | HTTP Status | When Used |
+|---|---|---|
+| `VALIDATION_ERROR` | 400 / 422 / 500 | Request validation failures (schema/business), plus a few configuration-validation guards currently surfaced with this code |
+| `INVALID_CREDENTIALS` | 401 | Wrong password or OTP |
+| `TOKEN_EXPIRED` | 401 | Reserved for explicit expired-token responses (currently not emitted in runtime paths) |
+| `UNAUTHORISED` | 401 | No valid token provided |
+| `FORBIDDEN` | 403 | Valid token, insufficient role |
+| `NOT_FOUND` | 404 | Resource does not exist |
+| `CONFLICT` | 409 | Duplicate SKU, email already registered |
+| `INSUFFICIENT_STOCK` | 422 | Requested quantity exceeds available inventory |
+| `PAYMENT_VERIFICATION_FAILED` | 401 | Payment signature verification failed |
+| `INVALID_STATUS_TRANSITION` | 409 | Attempt to move order to invalid state |
+| `COUPON_EXPIRED` | 400 | Coupon past validity window |
+| `COUPON_USAGE_EXCEEDED` | 409 | Coupon usage limit reached |
+| `PINCODE_NOT_SERVICEABLE` | 422 | Delhivery cannot deliver to address |
+| `RATE_LIMIT_EXCEEDED` | 429 | Too many requests |
+| `INTERNAL_ERROR` | 500 / 502 / 503 | Unhandled server error (500), upstream/provider failures surfaced by adapters/services (502), or dependency health degradation responses (503) |
+
+### 4.6 JSON Schema Validation
+
+**`[MUST]`** Every route `[MUST]` declare JSON Schema for `params`, `querystring`, and `response`. Routes that accept payloads (`POST` / `PATCH` / `PUT` / `DELETE` where body is allowed) `[MUST]` also declare `body`.
+
+**Exception:** third-party mounted UIs (for example Bull Board at `/api/v1/admin/queues`) may rely on plugin-provided routes and are exempt from per-route Fastify schema slot declarations, but `[MUST]` remain protected by admin JWT authorization.
+
+**`[MUST]`** `additionalProperties: false` `[MUST]` be set on all declared request body schemas. All 14 module schema files (300+ `type: 'object'` declarations) have been audited and confirmed compliant. Only webhook header schemas intentionally use `additionalProperties: true`.
+
+**`[MUST]`** All string inputs `[MUST]` have `maxLength`. All numeric inputs `[MUST]` have `minimum` and `maximum`.
+
+### 4.7 Pagination
+
+**`[MUST]`** All collection-list endpoints `[MUST]` support:
+
+```typescript
+interface PaginationQuery {
+  page?: number   // default: 1
+  limit?: number  // default: 20, max: 100
+}
+```
+
+**`[MUST]`** Paginated responses `[MUST]` include the `meta` object.
+Aggregate/report endpoints may return fixed arrays when pagination is not part of the route contract.
+
+---
+
+## 5. Database Requirements
+
+### 5.1 Primary Key Convention
+
+**`[MUST]`** All tables `[MUST]` use UUID v4 as primary keys: `id String @id @default(uuid())`
+
+**`[NEVER]`** Sequential integer IDs `[NEVER]` used as primary keys — they leak record counts.
+
+### 5.2 Timestamp Convention
+
+**`[MUST]`** All tables `[MUST]` include `createdAt DateTime @default(now())` and `updatedAt DateTime @updatedAt`.
+
+### 5.3 Money Storage
+
+**`[MUST]`** All monetary values `[MUST]` be stored as `Int` (paise). ₹1 = 100 paise.
+
+**`[NEVER]`** `Float`, `Decimal`, or `String` `[NEVER]` used for monetary values anywhere in the system.
+
+**`[MUST]`** Display conversion `[MUST]` occur only at the presentation layer: `(paise / 100).toFixed(2)`
+
+### 5.4 Snapshot Fields on OrderItem
+
+**`[MUST]`** These fields `[MUST]` be snapshotted at order creation time and `[NEVER]` updated afterward:
+
+```prisma
+productName String   // snapshot of Product.name
+variantName String   // snapshot of ProductVariant.name
+sku         String   // snapshot of ProductVariant.sku
+unitPrice   Int      // snapshot of ProductVariant.price (paise)
+totalPrice  Int      // quantity × unitPrice (paise)
+```
+
+**`[MUST]`** `Order.shippingAddress` `[MUST]` be a `Json` snapshot — never a FK to `Address`.
+
+**`[MUST]`** `CartItem.priceSnapshot` `[MUST]` capture `ProductVariant.price` at add-to-cart time.
+
+### 5.5 Soft Delete
+
+**`[MUST]`** Products `[MUST]` use soft delete via `isActive Boolean @default(true)`.
+
+**`[NEVER]`** Hard deletes on the `Product` table — they corrupt `OrderItem` snapshots.
+
+### 5.6 Full-Text Search
+
+**`[MUST]`** Product search `[MUST]` use PostgreSQL `tsvector` with a GIN index created via raw SQL migration (`20260427030000_add_product_full_text_search`).
+
+> **Prisma gotcha:** The `search_vector` column is a PostgreSQL `GENERATED ALWAYS AS (...) STORED` column. It `[MUST NOT]` appear in `schema.prisma` because Prisma's `Unsupported("tsvector")` type cannot represent generated columns — this causes false drift detection and failed migrations on every fresh `prisma migrate dev`. The column is managed entirely by the raw SQL migration and queried exclusively via `$queryRaw`.
+
+```typescript
+await prisma.$queryRaw`
+  SELECT id, name, slug FROM "Product"
+  WHERE to_tsvector('english', name || ' ' || description)
+    @@ plainto_tsquery('english', ${query})
+  AND "isActive" = true
+  ORDER BY ts_rank(
+    to_tsvector('english', name || ' ' || description),
+    plainto_tsquery('english', ${query})
+  ) DESC
+  LIMIT ${limit} OFFSET ${offset}
+`
+```
+
+### 5.7 Complete Prisma Schema
+
+#### Enums
+
+```prisma
+enum Role { CUSTOMER ADMIN }
+
+enum OrderStatus {
+  PENDING_PAYMENT  PAYMENT_FAILED  CONFIRMED  PROCESSING
+  SHIPPED  OUT_FOR_DELIVERY  DELIVERED  CANCELLED  REFUNDED
+}
+
+enum PaymentStatus { CREATED  CAPTURED  FAILED  REFUNDED  PARTIALLY_REFUNDED }
+enum PaymentProvider { RAZORPAY  CASHFREE }
+enum ShippingProvider { DELHIVERY  SHIPROCKET  SELF }
+
+enum ShipmentStatus {
+  PENDING  BOOKED  PICKED_UP  IN_TRANSIT  OUT_FOR_DELIVERY
+  DELIVERED  FAILED_DELIVERY  RTO_INITIATED  RTO_DELIVERED  CANCELLED
+}
+
+enum NotificationChannel { EMAIL  SMS  WHATSAPP }
+enum NotificationStatus { PENDING  SENT  FAILED }
+enum CouponType { PERCENTAGE_OFF  FLAT_AMOUNT_OFF  FREE_SHIPPING  BUY_X_GET_Y }
+enum AnalyticsEventType {
+  PAGE_VIEW  PRODUCT_VIEW  ADD_TO_CART  REMOVE_FROM_CART
+  CHECKOUT_STARTED  PAYMENT_INITIATED  PURCHASE  SEARCH
+}
+```
+
+#### Users & Addresses
+
+```prisma
+model User {
+  id           String    @id @default(uuid())
+  email        String    @unique
+  phone        String?   @unique
+  passwordHash String
+  firstName    String
+  lastName     String
+  role         Role      @default(CUSTOMER)
+  isVerified   Boolean   @default(false)
+  addresses    Address[]
+  orders       Order[]
+  cart         Cart?
+  reviews      Review[]
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  @@index([email])
+  @@index([phone])
+}
+
+model Address {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  fullName  String
+  phone     String
+  line1     String
+  line2     String?
+  city      String
+  state     String
+  pincode   String
+  isDefault Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([userId])
+}
+```
+
+#### Catalogue
+
+```prisma
+model Category {
+  id        String     @id @default(uuid())
+  name      String
+  slug      String     @unique
+  parentId  String?
+  parent    Category?  @relation("CategoryTree", fields: [parentId], references: [id])
+  children  Category[] @relation("CategoryTree")
+  imageUrl  String?
+  isActive  Boolean    @default(true)
+  products  Product[]
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+}
+
+model Product {
+  id              String           @id @default(uuid())
+  name            String
+  slug            String           @unique
+  description     String
+  categoryId      String
+  category        Category         @relation(fields: [categoryId], references: [id])
+  tags            String[]
+  attributes      Json?
+  metaTitle       String?
+  metaDescription String?
+  isActive        Boolean          @default(true)
+  isFeatured      Boolean          @default(false)
+  images          ProductImage[]
+  variants        ProductVariant[]
+  reviews         Review[]
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  @@index([slug])
+  @@index([categoryId])
+  @@index([isActive])
+}
+
+model ProductImage {
+  id        String   @id @default(uuid())
+  productId String
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  url       String
+  altText   String
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  @@index([productId])
+}
+
+model ProductVariant {
+  id             String      @id @default(uuid())
+  productId      String
+  product        Product     @relation(fields: [productId], references: [id], onDelete: Cascade)
+  sku            String      @unique
+  name           String
+  attributes     Json?
+  price          Int
+  compareAtPrice Int?
+  weight         Int?
+  isActive       Boolean     @default(true)
+  inventory      Inventory?
+  cartItems      CartItem[]
+  orderItems     OrderItem[]
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+  @@index([productId])
+  @@index([sku])
+}
+
+model Inventory {
+  id                String         @id @default(uuid())
+  variantId         String         @unique
+  variant           ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  quantity          Int            @default(0)
+  lowStockThreshold Int            @default(5)
+  lowStockAlerted   Boolean        @default(false)
+  updatedAt         DateTime       @updatedAt
+}
+```
+
+#### Cart
+
+```prisma
+model Cart {
+  id           String     @id @default(uuid())
+  userId       String?    @unique
+  user         User?      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sessionToken String?    @unique
+  couponId     String?
+  coupon       Coupon?    @relation(fields: [couponId], references: [id])
+  expiresAt    DateTime
+  items        CartItem[]
+  updatedAt    DateTime   @updatedAt
+  @@index([sessionToken])
+}
+
+model CartItem {
+  id            String         @id @default(uuid())
+  cartId        String
+  cart          Cart           @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  variantId     String
+  variant       ProductVariant @relation(fields: [variantId], references: [id])
+  quantity      Int
+  priceSnapshot Int
+  @@unique([cartId, variantId])
+  @@index([cartId])
+}
+```
+
+#### Orders
+
+```prisma
+model Order {
+  id              String               @id @default(uuid())
+  orderNumber     String               @unique
+  userId          String
+  user            User                 @relation(fields: [userId], references: [id])
+  status          OrderStatus          @default(PENDING_PAYMENT)
+  shippingAddress Json
+  subtotal        Int
+  shippingCharge  Int                  @default(0)
+  discountAmount  Int                  @default(0)
+  total           Int
+  notes           String?
+  items           OrderItem[]
+  payment         Payment?
+  shipment        Shipment?
+  statusHistory   OrderStatusHistory[]
+  invoice         Invoice?
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+  @@index([userId])
+  @@index([status])
+  @@index([orderNumber])
+  @@index([createdAt])
+  @@index([status, createdAt])
+}
+
+model OrderItem {
+  id          String         @id @default(uuid())
+  orderId     String
+  order       Order          @relation(fields: [orderId], references: [id])
+  variantId   String
+  variant     ProductVariant @relation(fields: [variantId], references: [id])
+  productName String
+  variantName String
+  sku         String
+  quantity    Int
+  unitPrice   Int
+  totalPrice  Int
+  @@index([orderId])
+}
+
+model OrderStatusHistory {
+  id         String       @id @default(uuid())
+  orderId    String
+  order      Order        @relation(fields: [orderId], references: [id])
+  fromStatus OrderStatus?
+  toStatus   OrderStatus
+  note       String?
+  createdAt  DateTime     @default(now())
+  @@index([orderId])
+}
+```
+
+#### Payments & Shipments
+
+```prisma
+model Payment {
+  id                String          @id @default(uuid())
+  orderId           String          @unique
+  order             Order           @relation(fields: [orderId], references: [id])
+  provider          PaymentProvider
+  providerOrderId   String
+  providerPaymentId String?
+  amount            Int
+  currency          String          @default("INR")
+  status            PaymentStatus   @default(CREATED)
+  method            String?
+  webhookPayload    Json?                               // sanitized provider metadata (no raw sensitive blobs)
+  capturedAt        DateTime?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+  @@index([providerOrderId])
+  @@index([providerPaymentId])
+}
+
+model Shipment {
+  id                String           @id @default(uuid())
+  orderId           String           @unique
+  order             Order            @relation(fields: [orderId], references: [id])
+  provider          ShippingProvider
+  awbNumber         String?
+  status            ShipmentStatus   @default(PENDING)
+  trackingUrl       String?
+  estimatedDelivery DateTime?
+  webhookPayload    Json?                               // sanitized provider metadata (no raw sensitive blobs)
+  events            ShipmentEvent[]
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+  @@index([awbNumber])
+}
+
+model ShipmentEvent {
+  id          String   @id @default(uuid())
+  shipmentId  String
+  shipment    Shipment @relation(fields: [shipmentId], references: [id])
+  status      String
+  location    String?
+  description String
+  occurredAt  DateTime
+  @@index([shipmentId])
+}
+```
+
+#### Promotions, Reviews, Notifications, Analytics, Invoices
+
+```prisma
+model Coupon {
+  id             String     @id @default(uuid())
+  code           String     @unique
+  type           CouponType
+  value          Int
+  minOrderPaise  Int        @default(0)
+  maxUsesTotal   Int?
+  maxUsesPerUser Int?
+  usesCount      Int        @default(0)
+  isActive       Boolean    @default(true)
+  validFrom      DateTime
+  validUntil     DateTime?
+  applicableTo   Json?
+  // Soft delete fields
+  deletedAt      DateTime?
+  deletedBy      String?    // Admin user ID who deleted
+  // Audit fields
+  createdBy      String     // Admin user ID who created
+  updatedBy      String?    // Admin user ID who last updated
+  carts          Cart[]
+  orders         Order[]
+  auditLogs      CouponAuditLog[]
+  usages         CouponUsage[]
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+  @@index([code])
+  @@index([deletedAt])
+  @@index([createdBy])
+  @@index([isActive, deletedAt, validFrom, validUntil])
+}
+
+model CouponAuditLog {
+  id          String   @id @default(uuid())
+  couponId    String
+  coupon      Coupon   @relation(fields: [couponId], references: [id], onDelete: Cascade)
+  action      String   // CREATE, UPDATE, DELETE, RESTORE, PAUSE, RESUME, ACTIVATE
+  actorId     String   // Admin user ID who performed action
+  actorType   String   // ADMIN, SYSTEM
+  previousState Json?  // Full previous state (for updates)
+  newState      Json   // Full new state
+  changes       Json?  // Diff of only changed fields
+  ipAddress   String?
+  userAgent   String?
+
+  // Tamper-evident hash chain
+  previousChainHash String?   // 'GENESIS' for first record per coupon; SHA-256 hash of prior row for subsequent rows
+  chainHash         String    // SHA-256(previousChainHash + canonicalised audit payload)
+
+  createdAt   DateTime @default(now())
+  @@index([couponId, createdAt])
+  @@index([actorId, createdAt])
+  @@index([action, createdAt])
+  @@index([chainHash])
+}
+
+model CouponUsage {
+  id             String   @id @default(uuid())
+  couponId       String
+  coupon         Coupon   @relation(fields: [couponId], references: [id], onDelete: SetNull)
+  orderId        String
+  order          Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  userId         String
+  discountAmount Int      // Actual discount applied in paise
+  usedAt         DateTime @default(now())
+  @@unique([couponId, orderId])
+  @@index([couponId, usedAt])
+  @@index([userId, usedAt])
+}
+
+model Review {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  productId String
+  product   Product  @relation(fields: [productId], references: [id])
+  orderId   String
+  rating    Int
+  body      String?
+  images    String[]
+  approved  Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@unique([userId, orderId, productId])
+  @@index([productId])
+  @@index([approved])
+}
+
+model WishlistItem {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  @@unique([userId, productId])
+  @@index([userId])
+  @@index([productId])
+}
+
+model NotificationLog {
+  id                String              @id @default(uuid())
+  channel           NotificationChannel
+  recipient         String
+  template          String
+  status            NotificationStatus  @default(PENDING)
+  provider          String
+  providerMessageId String?
+  errorMessage      String?
+  createdAt         DateTime            @default(now())
+  @@index([channel, status])
+  @@index([createdAt])
+}
+
+model Invoice {
+  id            String   @id @default(uuid())
+  orderId       String   @unique
+  order         Order    @relation(fields: [orderId], references: [id])
+  invoiceNumber String   @unique
+  pdfUrl        String
+  issuedAt      DateTime @default(now())
+}
+
+model AnalyticsEvent {
+  id         String             @id @default(uuid())
+  eventType  AnalyticsEventType
+  sessionId  String
+  userId     String?
+  payload    Json
+  occurredAt DateTime           @default(now())
+  @@index([eventType, occurredAt])
+  @@index([sessionId])
+}
+```
+
+---
+
+## 6. Authentication & Authorisation
+
+### 6.1 JWT Configuration
+
+| Property | Value |
+|---|---|
+| Access token TTL | 15 minutes |
+| Refresh token TTL | 7 days |
+| Refresh token storage | bcrypt hash (cost 10) in database |
+| Access token storage (frontend) | Memory only — never `localStorage` |
+| Refresh token delivery | `httpOnly`, `secure`, `sameSite: strict` cookie |
+
+**`[MUST]`** JWT payload `[MUST]` contain `{ sub: userId, role: Role, iat, exp }`.
+For admin users, payload also carries operation permissions (`permissions: string[]`) used by operation-level guards.
+
+**`[NEVER]`** Sensitive data (passwords, payment details) `[NEVER]` in JWT payload.
+
+**`[MUST]`** `JWT_SECRET` and `JWT_REFRESH_SECRET` `[MUST]` be different values, minimum 64 random characters each. Generated via: `openssl rand -base64 64`
+
+**`[MUST]`** JWT signing and verification `[MUST]` be explicitly pinned to `HS256` algorithm for both access tokens (`@fastify/jwt` plugin config) and refresh tokens (`jsonwebtoken` library calls). No implicit algorithm selection.
+
+### 6.2 OTP Configuration
+
+| Property | Value |
+|---|---|
+| Length | 6 digits |
+| TTL | 5 minutes |
+| Storage | Redis key `otp:<phone>` → SHA-256 hash of OTP |
+| Max attempts | 3 per phone per 15 minutes (`otp:attempts:<phone>` counter) |
+| Send rate limit | Route: 5 requests per 60 seconds (account+IP keying) + Redis cooldown: 1 OTP per 60 seconds per phone number |
+
+**`[NEVER]`** Raw OTP value `[NEVER]` stored — only its SHA-256 hash.
+
+### 6.3 Admin Authentication
+
+**`[MUST]`** Admin login and customer login apply progressive account+IP lockout after repeated failures (threshold: 5 failures in 15 minutes, exponential lock up to 60 minutes) and return `429` with `Retry-After`.
+
+**`[MUST]`** All `/api/v1/admin/*` routes `[MUST]` verify both valid JWT and `role === 'ADMIN'` via a `rolesGuard` Fastify `preHandler` hook.
+Sensitive admin routes `[MUST]` also enforce operation-level permissions (`products:read`, `products:write`, `categories:read`, `categories:write`, `inventory:read`, `inventory:write`, `coupons:read`, `coupons:write`, `settings:read`, `settings:write`, `reviews:read`, `reviews:moderate`, `dashboard:read`, `analytics:read`, `orders:read`, `orders:write`, `orders:export`, `orders:refund`, `orders:notify`, `analytics:export`, `analytics:replay`, `users:read`, `queues:inspect`).
+Customer namespaces (`/api/v1/users/me*`, `/api/v1/wishlist*`, `/api/v1/orders*`, `/api/v1/payments/*`, `/api/v1/shipping/track/:awb`, `GET /api/v1/reviews/me`, `POST /api/v1/reviews`) enforce `role === 'CUSTOMER'` in addition to JWT validity.
+
+### 6.4 Token Lifecycle
+
+**`[MUST]`** On refresh: old refresh token invalidated, new one issued.
+
+**`[MUST]`** On logout: refresh token record deleted from database.
+
+---
+
+## 7. API Requirements
+
+### 7.1 Route Conventions
+
+**`[MUST]`** All routes prefixed `/api/v1/`.
+
+**`[MUST]`** Versioning in URL path — not via headers.
+
+### 7.2 Auth Routes (`/api/v1/auth`)
+
+| Method | Path | Auth | Body | Response |
+|---|---|---|---|---|
+| POST | `/register` | Public | `{ firstName, lastName, phone, email, password }` | `{ user }` |
+| POST | `/send-otp` | Public | `{ phone }` | `{ message }` |
+| POST | `/verify-otp` | Public | `{ phone, otp }` | `{ accessToken, user }` + cookie |
+| POST | `/forgot-password` | Public | `{ email }` | `{ message }` |
+| POST | `/login` | Public | `{ email, password }` | `{ accessToken, user }` + cookie |
+| POST | `/refresh` | Cookie | — | `{ accessToken }` |
+| POST | `/logout` | Customer | — | `{ message }` + clears cookie |
+| POST | `/admin/login` | Public | `{ email, password }` | `{ accessToken, admin }` + cookie |
+
+### 7.3 User Routes (`/api/v1/users`)
+
+| Method | Path | Auth |
+|---|---|---|
+| GET | `/me` | Customer |
+| PATCH | `/me` | Customer |
+| GET | `/me/addresses` | Customer |
+| POST | `/me/addresses` | Customer |
+| PATCH | `/me/addresses/:id` | Customer |
+| DELETE | `/me/addresses/:id` | Customer |
+| GET | `/me/orders` | Customer |
+
+### 7.4 Product Routes (`/api/v1/products`)
+
+| Method | Path | Query Params |
+|---|---|---|
+| GET | `/` | `?category, search, minPrice, maxPrice, tags, sort, inStock, page, limit` |
+| GET | `/:slug` | Public product detail; includes approved reviews when reviews flag is enabled |
+| GET | `/categories` | — |
+| GET | `/categories/:slug/products` | Same as product list |
+
+`sort` supports `price_asc`, `price_desc`, `newest`, `popularity`. `inStock` defaults to `true` when omitted.
+
+### 7.5 Wishlist Routes (`/api/v1/wishlist`)
+
+| Method | Path | Auth | Notes |
+|---|---|---|---|
+| GET | `/` | Customer | Paginated saved products |
+| POST | `/items` | Customer | Body: `{ productId }` |
+| DELETE | `/items/:productId` | Customer | Remove by product id |
+
+### 7.6 Cart Routes (`/api/v1/cart`)
+
+| Method | Path | Auth | Notes |
+|---|---|---|---|
+| GET | `/` | Public/Customer | By session cookie or JWT |
+| POST | `/items` | Public/Customer | Body: `{ variantId, quantity }` |
+| PATCH | `/items/:id` | Public/Customer | Body: `{ quantity }` |
+| DELETE | `/items/:id` | Public/Customer | — |
+| DELETE | `/` | Public/Customer | Clear all |
+| POST | `/merge` | Customer | Merge guest cart on login |
+| POST | `/coupon` | Public/Customer | Body: `{ code }` |
+| DELETE | `/coupon` | Public/Customer | — |
+| POST | `/check-pincode` | Public | Body: `{ pincode }` |
+| GET | `/delivery-rates` | Public/Customer | Requires items + destination pincode |
+
+### 7.7 Review Routes (`/api/v1/reviews`)
+
+| Method | Path | Auth | Notes |
+|---|---|---|---|
+| GET | `/product/:slug` | Public | Approved reviews only, paginated; when reviews feature is disabled, returns `200` with empty `items` and `meta` |
+| GET | `/me` | Customer | Customer's own submitted reviews |
+| POST | `/` | Customer | Body: `{ productId, orderId, rating, body?, images? }`; only delivered-order purchasers |
+
+### 7.8 Order & Payment Routes
+
+| Method | Path | Auth | Notes |
+|---|---|---|---|
+| POST | `/orders` | Customer | Creates order — single Prisma transaction; accepts optional `paymentMode: 'PREPAID' | 'COD'` (default `PREPAID`). COD orders confirm immediately and return customer-facing order confirmation without Razorpay steps. |
+| GET | `/orders/:id` | Customer | Own orders only; response includes `paymentMode` field |
+| POST | `/orders/:id/cancel` | Customer | Only in CONFIRMED or PROCESSING; enforces `cancellationWindowHours` from StoreSettings |
+| POST | `/orders/:id/return-requests` | Customer | Body: `{ items: [{ orderItemId, quantity }], reason }`; only allowed on DELIVERED orders |
+| POST | `/payments/initiate` | Customer | Body: `{ orderId }` → returns Razorpay `order_id`; rejects COD orders with 400 |
+| POST | `/payments/verify` | Customer | Body: `{ orderId, razorpayPaymentId, razorpaySignature }`; validates signature then enqueues the same captured-payment worker pipeline as webhook flow |
+| POST | `/payments/retry` | Customer | Body: `{ orderId }`; only for PENDING_PAYMENT or PAYMENT_FAILED prepaid orders; returns 400 for COD |
+| POST | `/payments/webhook` | Public (HMAC) | Raw body text required (verified as `Buffer`) |
+| GET | `/shipping/track/:awb` | Customer | Returns ShipmentEvent[] for customer-owned orders (internal linkage IDs are omitted) |
+| POST | `/shipping/webhook` | Public (verified) | Shipping provider push webhook |
+
+### 7.9 Admin Routes (`/api/v1/admin`)
+
+Most admin routes require ADMIN JWT plus the listed merchant permission. The invite bootstrap routes are intentional exceptions:
+- `POST /api/v1/admin/invites` and `POST /api/v1/admin/invites/cleanup-expired` require ops auth + `ops:write` (Layer C developer/ops surface).
+- `POST /api/v1/admin/invites/consume` is public but rate-limited and token-bound for `/admin/setup`.
+- Route-discipline tooling must treat these as narrow explicit exemptions, not as precedent for unguarded admin routes.
+
+| Method | Path | Description |
+|---|---|---|
+| POST | `/invites` | Ops-authenticated merchant admin invite creation (`ops:write`, Layer C); sends `/admin/setup?token=...`, expires in 10 minutes |
+| POST | `/invites/consume` | Public rate-limited one-time setup-token completion; consumes token once, creates `User(role=ADMIN)` and merchant `AdminPermissionGrant` rows only after valid unexpired token verification |
+| POST | `/invites/cleanup-expired` | Ops-authenticated cleanup for expired unconsumed merchant admin invites (`ops:write`, Layer C) |
+| GET | `/dashboard/kpis` | `?period=today\|7d\|30d\|custom&from=&to=` |
+| GET | `/dashboard/sales-chart` | `?granularity=hour\|day\|week` |
+| GET | `/dashboard/top-products` | `?limit=10` |
+| GET | `/products` | List paginated |
+| POST | `/products/import-csv` | Bulk create/update products from CSV via `multipart/form-data` file upload (supports optional variant columns: `sku,variantName,price,compareAtPrice,weight,quantity,lowStockThreshold`) |
+| POST | `/products` | Create product |
+| GET | `/products/:id` | Detail |
+| POST | `/products/:id/variants` | Create variant for existing product |
+| PATCH | `/products/:id/variants/:variantId` | Update variant + inventory fields |
+| PATCH | `/products/:id` | Update |
+| DELETE | `/products/:id` | Soft-delete |
+| GET | `/categories` | Category tree list |
+| POST | `/categories` | Create category |
+| PATCH | `/categories/:id` | Update category |
+| DELETE | `/categories/:id` | Deactivate category |
+| GET | `/inventory` | All variants + stock |
+| PATCH | `/inventory/:variantId` | Update quantity + threshold |
+| GET | `/inventory/low-stock` | Variants below threshold |
+| GET | `/orders` | `?status, from, to, search` — flat paginated list; includes `paymentMode`, `awbNumber`, `labelUrl`, `shipmentStatus`, `canShipNow`, `shipBlockReason`, `shippingMode` per item |
+| GET | `/orders/board` | Kanban board grouped by status: `{ columns: { CONFIRMED, PROCESSING, SHIPPED, OUT_FOR_DELIVERY, DELIVERED, CANCELLED } }` — up to 100 most-recent orders per column; each card includes `canShipNow`, `shipBlockReason`, `shippingMode` |
+| GET | `/orders/:id` | Full detail: items + payment + shipment + history + invoice metadata + ship-action state fields (`canShipNow`, `shipBlockReason`, `shippingMode`) |
+| PATCH | `/orders/:id/status` | Manual status update |
+| POST | `/orders/:id/ship` | Manual-only shipment booking trigger for both PREPAID and COD orders (no payment-confirmation auto-dispatch). Enforces ship eligibility checks and then books shipment; passes `payment_method: "COD"` to Shiprocket for COD orders automatically |
+| POST | `/orders/:id/schedule-pickup` | Schedule courier pickup (Shiprocket) |
+| POST | `/orders/:id/print-label` | Generate and return shipping label URL (Shiprocket) |
+| POST | `/orders/:id/cancel` | Cancel + refund if paid |
+| POST | `/orders/:id/notifications/retrigger` | Re-dispatch selected template notifications by channel (`EMAIL`/`SMS`/`WHATSAPP`) |
+| GET | `/orders/export` | Download orders CSV for selected date range (`from`, `to`) with optional status/search filters |
+| GET | `/return-requests` | List all return requests; supports `?status, page, limit` |
+| PATCH | `/return-requests/:id` | Update return request status (`APPROVED`/`REJECTED`/`COMPLETED`) and optional `adminNote` |
+| GET | `/coupons` | Paginated coupon list (`page`, `limit`, `code`, `status`). Excludes deleted by default. |
+| POST | `/coupons` | Create coupon (`BUY_X_GET_Y` rejected until v2.2). Tracks `createdBy` admin. **Per-admin rate limit: 10 req/min.** |
+| PATCH | `/coupons/:id` | Update coupon fields. Prevents updates to deleted coupons. Tracks `updatedBy`. **Per-admin rate limit: 20 req/min.** |
+| PATCH | `/coupons/:id/status` | Pause/unpause coupon (`isActive`). Tracks `updatedBy`. **Per-admin rate limit: 20 req/min.** |
+| DELETE | `/coupons/:id` | Soft delete coupon (sets `deletedAt`, `deletedBy`, `isActive=false`). Hard delete is NOT allowed. **Per-admin rate limit: 5 req/min.** |
+| POST | `/coupons/:id/restore` | Restore soft-deleted coupon. Clears `deletedAt`, `deletedBy`, sets `isActive=true`. **Per-admin rate limit: 5 req/min.** |
+| GET | `/coupons/:id/audit` | Get full audit log for coupon (create, update, delete, restore, pause/resume actions). Each entry includes `chainHash`/`previousChainHash` for tamper-evidence verification. |
+| GET | `/coupons/analytics` | Coupon redemption count + total discount amount |
+| GET | `/reviews` | List reviews for moderation (`approved`, `page`, `limit`) |
+| PATCH | `/reviews/:id/moderate` | Approve or reject review (`approved: boolean`) |
+| GET | `/settings/shipping` | Read effective pickup pincode config |
+| PATCH | `/settings/shipping` | Update pickup pincode + minimum order value config |
+| GET | `/settings/store` | Read store identity/regulatory profile |
+| PATCH | `/settings/store` | Update store identity/regulatory profile |
+| GET | `/settings/notifications` | Read channel notification toggles |
+| PATCH | `/settings/notifications` | Update channel notification toggles |
+| GET | `/settings/inventory` | Read default low-stock threshold |
+| PATCH | `/settings/inventory` | Update default low-stock threshold |
+| GET | `/settings/cod` | Read COD settings: `isCodEnabled`, `cancellationWindowHours`, `sellerState` |
+| PATCH | `/settings/cod` | Update COD settings; `cancellationWindowHours` minimum is 1 (enforced by `Math.max(1, ...)`) |
+| GET | `/users` | Paginated customer list (+ search + aggregates) |
+| GET | `/users/:id` | Profile + addresses + order history |
+| GET | `/analytics/revenue` | `?from, to, granularity` |
+| GET | `/analytics/revenue/export` | Revenue CSV export (`?from, to, granularity`) |
+| GET | `/analytics/funnel` | Conversion funnel from AnalyticsEvent |
+| GET | `/analytics/inventory-alerts` | Past 30-day low-stock alert events report |
+| GET | `/analytics/notifications` | Delivery rates per channel |
+| GET | `/analytics/category-breakdown` | Revenue contribution by category (`from`, `to`) |
+| GET | `/analytics/reconciliation-issues` | Inventory/payment reconciliation issues (`page`, `limit`, filters per schema) |
+| GET | `/analytics/outbox-dead-letter` | Paginated BullMQ dead-letter / failed outbox messages (`analytics:replay`) |
+| POST | `/analytics/outbox-dead-letter/:id/replay-preview` | Preview replay side-effects (`analytics:replay`) |
+| POST | `/analytics/outbox-dead-letter/:id/replay` | Enqueue replay (`reason`, `dryRun`, `approvalToken`; strict profiles require `REPLAY_APPROVAL_TOKEN` where enforced) (`analytics:replay`) |
+| GET | `/analytics/inbox-failures` | Webhook inbox failures pending remediation (`analytics:replay`) |
+| POST | `/analytics/inbox-failures/:id/replay-preview` | Preview inbox replay (`analytics:replay`) |
+| POST | `/analytics/inbox-failures/:id/replay` | Execute inbox replay (`approvalToken`, optional `operationType`, `rawPayload`, `verificationHeader`, … per schema) (`analytics:replay`) |
+| GET | `/queues` | Bull Board UI |
+
+### 7.10 Webhook Raw Body Requirement
+
+**`[MUST]`** Webhook routes `[MUST]` preserve raw request content (`parseAs: 'buffer'`) and pass raw JSON text to handlers; cryptographic verification always runs on `Buffer.from(rawText)`:
+
+```typescript
+fastify.addContentTypeParser(
+  'application/json',
+  { parseAs: 'buffer' },
+  (req, body, done) => done(null, body)
+)
+```
+
+**Implementation (`src/main.ts`):** A single `application/json` content-type parser inspects the route path. `/api/v1/payments/webhook` and `/api/v1/shipping/webhook` receive **raw UTF-8 string** bodies for verification; all other JSON routes are parsed to objects. This matches the intent of the snippet above for webhook endpoints without forcing buffer-only parsing on the entire API.
+
+**`[MUST]`** Webhook endpoints `[MUST]` respond `HTTP 200` in < 200ms.
+For webhook endpoints, transport validation is performed on raw JSON text (string) and cryptographic verification always runs on `Buffer.from(rawText)`.
+
+### 7.11 PCI scope & API exposure classes
+
+**`[MUST]`** This service `[MUST NOT]` receive, store, or log primary account numbers (PAN), CVC/CVV, or magnetic-stripe data. Checkout uses the configured PSP (Razorpay by default); only PSP order ids, payment ids, signatures, and amounts are exchanged.
+
+**`[MUST]`** JSON responses `[MUST]` be minimized per caller class: public catalogue routes omit admin-only cost/inventory internals; customer routes omit internal shipment linkage ids and admin-only joins; admin routes use operation-level permissions as listed in §6.3. Ops metrics (`/api/v1/ops/metrics`) require `x-ops-token` in production; allowlist is defense-in-depth.
+
+| Class | Typical auth | Notes |
+|------|----------------|-------|
+| Public | None | Product/cart/reviews (limited)/webhooks (crypto or token verify) |
+| Customer | JWT + `CUSTOMER` | Profile, orders, payments, wishlist, tracking |
+| Admin | JWT + `ADMIN` + permission | `/api/v1/admin/*` as enumerated in §7.9 |
+| Ops | Header token (+ allowlist defense-in-depth) | Metrics scraper only |
+
+### 7.11.1 Control Ownership Layers (A/B/C)
+
+`[MUST]` endpoint ownership is enforced by control layer:
+
+| Layer | Ownership | Routes | Mutability |
+|---|---|---|---|
+| A | `merchant` | `/api/v1/admin/*` day-to-day operations | Read + write |
+| B | `merchant` (with audit metadata) | Sensitive admin operations (refund/replay) | Read + controlled write |
+| C | `developer` | `/api/v1/ops/*` | Platform-only writes; merchant read-only diagnostics only |
+
+`[MUST]` Layer C mutations be denied to merchant roles even when authenticated as `ADMIN`.
+`[MUST]` route-level controls remain additive/backward-compatible for response payload changes.
+`[MUST]` compatibility window: legacy grant scopes (`merchant:ops:*`, `merchant:superadmin:*`, `platform:ops:*`, `security:auditor:*`) remain accepted and mapped internally to canonical `merchant` / `developer`.
+
+### 7.12 Optional webhook defense-in-depth (env)
+
+**`[MAY]`** When `RAZORPAY_WEBHOOK_ALLOWLIST_CIDR` / `SHIPPING_WEBHOOK_ALLOWLIST_CIDR` (falls back to `DELHIVERY_WEBHOOK_ALLOWLIST_CIDR`) are non-empty, ingress IPs `[MAY]` be restricted to comma-separated IPs/CIDRs for both IPv4 and IPv6. Signature/token verification remains mandatory.
+
+**`[MAY]`** When Razorpay sends a numeric top-level `created_at` (Unix seconds), events outside `RAZORPAY_WEBHOOK_MAX_SKEW_SECONDS` (default 300) are rejected with `401`. Events without `created_at` remain accepted for backward compatibility.
+
+**`[MAY]`** For shipping provider webhooks with required fields (`awb`, `status`, `description`), when `occurredAt` is present it `[MUST]` be parseable ISO-8601; malformed values return `400` (`VALIDATION_ERROR`). When parseable, events outside the provider's max-skew window (default 300s via `DELHIVERY_WEBHOOK_MAX_SKEW_SECONDS` or `SHIPROCKET_WEBHOOK_MAX_SKEW_SECONDS`) return `401` (`UNAUTHORISED`). Empty/absent `occurredAt` skips skew checks (backward compatibility).
+
+### 7.13 Checkout risk hook
+
+**`[MAY]`** When `RISK_VELOCITY_ENABLED=true`, payment initiation is limited per user per hour (`RISK_PAYMENT_INIT_MAX_PER_HOUR`, default 30) via Redis counters.
+
+**`[MUST]`** Custom fraud or scoring integrations `[MUST]` implement `CheckoutRiskAssessmentPort` from `src/common/interfaces/checkout-risk.interface.ts`. Before `registerOrdersRoutes`, either rely on the built-in default (`registerOrdersRoutes` calls `fastify.decorate('checkoutRisk', new CheckoutRiskService(fastify))` when the decorator is absent) or register your own: `fastify.decorate('checkoutRisk', myAdapter)` in an application plugin that runs **before** `registerOrdersRoutes` in `registerApp` (`src/app.ts`). `OrdersService` reads `fastify.checkoutRisk` (with a same-process fallback for tests). Vendor adapters `[MUST]` map failures only to `ERROR_CODES` from §4.5 (see `docs/DECISIONS.md`).
+
+### 7.17 Ops Control Plane Routes (`/api/v1/ops`)
+
+**Layer C operations (developer/platform only).** All routes require `x-ops-key-id`, `x-ops-api-key`, and IP-allowlist membership. Privileged writes additionally require email OTP (`x-ops-mfa-code`) when `OPS_MFA_ENFORCE=true`.
+
+#### 7.17.1 Invite Lifecycle Routes
+
+| Method | Path | Auth | Body | Response | Notes |
+|--------|------|------|------|----------|-------|
+| POST | `/invites` | Trusted host CLI only (`ops:newuser`) | `{ email, name, ipAllowlist, setupBaseUrl }` | `{ inviteId, email, expiresAt }` | Creates invite; sends setup email via Resend. Expires in 10 minutes. |
+| POST | `/invites/consume` | Public (token-in-URL) | `{ token, name?, ipAllowlist? }` | `{ keyId, apiKey, user }` | One-time use; mints `OpsUser` credentials. `apiKey` shown once only. |
+| POST | `/invites/cleanup-expired` | Ops auth (`ops:write` scope) | — | `{ purgedCount }` | Manual trigger; also runs via recurring BullMQ job every 15 min. |
+
+**`[MUST]`** Invite tokens are cryptographically random 32-byte hex strings, hashed (SHA-256) before DB storage.
+
+**`[MUST]`** Expired unconsumed invites transition to `EXPIRED_CLEANED` status before hard deletion; deletion is audit-logged.
+
+#### 7.17.2 Email OTP Challenge Routes
+
+| Method | Path | Auth | Body | Response | Notes |
+|--------|------|------|------|----------|-------|
+| POST | `/otp/request` | Ops auth (`ops:write` or `ops:approve`) | `{ action, metadata? }` | `{ challengeId, expiresAt }` | Creates `OpsOtpChallenge`; 6-digit OTP sent to ops user email via Resend. Max 3 attempts. |
+| POST | `/otp/verify` | Ops auth + `x-ops-challenge-id` header | `{ otp }` | `{ verified: true, action }` | Transition to `VERIFIED`; failures increment counter; 3 failures → `FAILED`. |
+
+**`[MUST]`** OTP codes are 6-digit numeric (`crypto.randomInt(100000, 999999)`), SHA-256 hashed for storage.
+
+**`[MUST]`** Verified challenges are short-lived (10 min); verified status is checked for privileged write operations.
+
+#### 7.17.3 Config Contract Routes
+
+| Method | Path | Auth | Body | Response | Notes |
+|--------|------|------|------|----------|-------|
+| GET | `/config/overview` | Ops auth (`ops:read`) | — | `{ domains: { core, notifications, payment, shipping, security, featureFlags }, requiredMissing, warnings }` | Computed from `ops-config-contract.ts`; reveals only contract-defined keys. |
+| GET | `/config/stored` | Ops auth (`ops:read`) | — | `{ secrets: [{ key, domain, updatedAt }], maskedValues }` | Returns key list with metadata; secret values masked (`****`). |
+| POST | `/config/save` | Ops auth (`ops:write`) + verified OTP | `{ domain, values, challengeId, otpCode }` | `{ valid, savedKeys, domain, requiresRestart, masked }` | Only non-bootstrap keys with `mutableViaOps: true` in contract are persisted as DB runtime overlays. Values are encrypted AES-256-GCM before storage. |
+
+**`[MUST]`** Config contract (`ops-config-contract.ts`) is the single source of truth:
+- `OPS_CONFIG_OVERVIEW_GROUPS`: groups keys by domain and mutability.
+- `mutableViaOps` on each key controls DB-overlay eligibility for non-bootstrap keys.
+- Bootstrap-only keys (`DATABASE_URL`, initial `REDIS_URL`, `OPS_DB_ENCRYPTION_KEY`) must come from real deployment environment and are never activated from DB-backed config.
+- API and worker startup load DB-stored encrypted runtime overlays before provider/workers initialize, then run runtime validation.
+- Required key computation per provider/flags remains contract-driven (e.g., `RAZORPAY_*` required when `PAYMENT_PROVIDER=razorpay`).
+
+**`[MUST]`** Ops mutation policy is explicit in the contract. `DATABASE_URL`, initial `REDIS_URL`, and `OPS_DB_ENCRYPTION_KEY` are bootstrap-only. Other contract-listed runtime/security keys (for example JWT secrets, provider secrets, `OPS_API_KEY_SALT`, `ADMIN_MFA_ENCRYPTION_KEY`, `REPLAY_APPROVAL_TOKEN`) are editable through ops save only when marked `mutableViaOps: true`, require verified OTP, are encrypted at rest, and take effect after restart.
+
+#### 7.17.4 Core Ops Routes (existing)
+
+| Method | Path | Auth | Notes |
+|--------|------|------|-------|
+| GET | `/session` | Ops auth | Returns `{ user: { keyId, email, scopes } }`. Email-OTP verification required if `OPS_MFA_ENFORCE=true`. |
+| GET | `/metrics` | `x-ops-token` matching `OPS_METRICS_TOKEN` | Prometheus text format. Allowlist is defense-in-depth. |
+| POST | `/load-shed` | Ops auth (`ops:write`) + verified OTP | Body: `{ mode: 'normal'|'reduced'|'emergency' }`. Dual approval required if `OPS_DUAL_APPROVAL_WINDOW_MINUTES` is set. |
+| GET | `/approvals` | Ops auth (`ops:read`) | Pending dual-approval requests. |
+| POST | `/approvals/:requestId/confirm` | Ops auth (`ops:approve`) + verified OTP | Second-user approval for load-shed/config changes. |
+| POST | `/approvals/:requestId/reject` | Ops auth (`ops:approve`) + verified OTP | Rejection with audit reason. |
+| GET | `/audit/logs` | Ops auth (`ops:read`) | Tamper-evident audit timeline with `previousChainHash`. |
+
+#### 7.17.5 Ops Security Model
+
+**`[MUST]`** Ops authentication verifies in order:
+1. Source IP within `ipAllowlist` CIDR(s) stored on `OpsUser` → `403` if outside.
+2. `x-ops-key-id` exists and `isActive=true` → `401` if missing/inactive.
+3. `x-ops-api-key` bcrypt comparison with `OPS_API_KEY_SALT` → `401` if mismatch.
+4. For privileged scopes (`ops:write`, `ops:approve`): `x-ops-mfa-code` matches verified `OpsOtpChallenge` → `403` if missing/expired.
+
+**`[MUST]`** Audit logging captures for every ops action:
+- `actionType` (enum: `OPS_INVITE_CREATED`, `OPS_INVITE_CONSUMED`, `OPS_OTP_REQUESTED`, `OPS_OTP_VERIFIED`, `OPS_OTP_FAILED`, `OPS_CONFIG_SAVED`, `OPS_LOAD_SHED_CHANGED`, `OPS_APPROVAL_REQUESTED`, `OPS_APPROVAL_CONFIRMED`, `OPS_APPROVAL_REJECTED`, `OPS_CLEANUP_EXPIRED_INVITES`, `OPS_CLEANUP_EXPIRED_OTP`)
+- Actor `opsUserId` and IP
+- `previousChainHash` for tamper-evident chaining
+- `metadata` JSONB for action context
+
+---
+
+## 8. Module Technical Specifications
+
+### 8.1 Auth Module
+
+- Password hashing: `bcrypt` with cost factor **12**
+- OTP generation: `crypto.randomInt(100000, 999999)` — Node built-in
+- OTP hash: `crypto.createHash('sha256').update(otp).digest('hex')`
+- `jwtAuthGuard` attaches decoded payload to `request.user`
+
+### 8.2 Product Catalogue Module
+
+- Slug auto-generated from `name` using `slugify({ lower: true, strict: true })`
+- Slug uniqueness enforced at DB level (`@unique`) and service level
+- Category tree supports unlimited nesting depth
+- **`[SHOULD]`** Product listing results cached in Redis for 60 seconds. Cache key: `products:list:<hash_of_query_params>`. Invalidated on any product/variant update.
+
+### 8.3 Cart Module
+
+- Guest cart `sessionToken` is UUIDv4, set as `httpOnly, sameSite: strict, secure` cookie named `cart_session`
+- Cart APIs never echo `sessionToken` in response bodies; token remains cookie-only.
+- Cart merge algorithm on login:
+  1. Find guest cart by `sessionToken`
+  2. Find user cart by `userId`
+  3. For each guest `CartItem`: if variant exists in user cart — add quantities; else move the item
+  4. If user cart has no coupon and guest coupon is still valid for merged items, transfer coupon
+  5. Delete guest cart, clear `cart_session` cookie
+
+- Coupon validation `[MUST]` check synchronously before applying: active flag, date window, total usage, optional per-user usage, minimum order value, product/category scope
+- `maxUsesPerUser` may be `null` to represent no per-customer cap.
+
+### 8.4 Orders Module
+
+**`[MUST]`** Order creation `[MUST]` execute in a single `prisma.$transaction()`:
+
+```typescript
+await prisma.$transaction(async (tx) => {
+  // 1. Validate all variants have sufficient stock — throw INSUFFICIENT_STOCK if not
+  // 2. Create Order record
+  // 3. Create OrderItem records with all snapshot fields
+  // 4. Create initial OrderStatusHistory record (null → PENDING_PAYMENT)
+  // 5. Clear Cart
+  // Inventory decrement happens in order-processing `process-order-update` after captured payment
+  // (`deduct-inventory` and `confirm-order` are thin stubs that enqueue `process-order-update`)
+  // Atomic: any failure rolls back all changes
+})
+```
+
+**`[MUST]`** Order number format: `ORD-YYYY-{5-digit-seq}` (e.g. `ORD-2026-00001`). Use PostgreSQL sequence to prevent collision under concurrent inserts.
+
+**`[MUST]`** Minimum order subtotal enforcement:
+- Resolve `minOrderValuePaise` from admin shipping settings (`/api/v1/admin/settings/shipping`).
+- If cart subtotal is below configured minimum, reject order creation with validation error.
+- Do not create `Order` / `OrderItem` rows when this validation fails.
+
+**`[MUST]`** Valid state machine transitions — only these are permitted:
+
+```
+PENDING_PAYMENT  → CONFIRMED          (payment.captured webhook)
+PENDING_PAYMENT  → PAYMENT_FAILED     (payment.failed webhook)
+PAYMENT_FAILED   → PENDING_PAYMENT    (new payment attempt)
+PAYMENT_FAILED   → CANCELLED          (customer/admin cancellation)
+CONFIRMED        → PROCESSING         (admin)
+CONFIRMED        → CANCELLED          (customer or admin)
+CONFIRMED        → REFUNDED           (admin direct refund path)
+PROCESSING       → SHIPPED            (Delhivery shipment created)
+PROCESSING       → CANCELLED          (admin, before shipment)
+PROCESSING       → REFUNDED           (admin direct refund path)
+SHIPPED          → OUT_FOR_DELIVERY   (Delhivery webhook)
+OUT_FOR_DELIVERY → DELIVERED          (Delhivery webhook)
+DELIVERED        → REFUNDED           (admin post-delivery refund)
+CANCELLED        → REFUNDED           (refund.processed webhook)
+```
+
+Any invalid transition `[MUST]` throw `AppError('INVALID_STATUS_TRANSITION', 409)`.
+
+### 8.5 Payments Module
+
+**`[MUST]`** Razorpay webhook HMAC verification:
+
+```typescript
+import crypto from 'crypto'
+const expected = crypto
+  .createHmac('sha256', process.env.RAZORPAY_WEBHOOK_SECRET!)
+  .update(rawBody)    // rawBody is Buffer — NEVER parsed JSON
+  .digest('hex')
+if (expected !== received) throw new AppError('PAYMENT_VERIFICATION_FAILED', 401)
+```
+
+**`[MUST]`** Frontend payment verification:
+
+```typescript
+const expected = crypto
+  .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET!)
+  .update(`${razorpayOrderId}|${razorpayPaymentId}`)
+  .digest('hex')
+```
+
+**`[MUST]`** Webhook idempotency via Redis:
+
+```typescript
+const key = `rzp:webhook:${razorpayPaymentId}`
+const lock = await redis.set(key, '1', 'EX', 86400, 'NX')
+if (!lock) return   // duplicate — ignore silently
+```
+
+**`[MUST]`** Razorpay `createOrder` amount `[MUST]` be in paise (integer). `[NEVER]` send rupees to Razorpay.
+
+### 8.6 Shipping Module (Pluggable — `IShippingProvider`)
+
+#### Delhivery (active when `SHIPPING_PROVIDER=delhivery`)
+
+**`[MUST]`** Auth header: `Authorization: Token <DELHIVERY_API_KEY>` on every API call.
+
+**`[MUST]`** Order-to-Delhivery field mapping:
+
+| Internal | Delhivery Field | Note |
+|---|---|---|
+| `order.orderNumber` | `waybill` | or Delhivery-assigned AWB |
+| `order.total / 100` | `total_amount` | Delhivery expects rupees |
+| `order.shippingAddress.pincode` | `pin` | |
+| Admin `settings.shipping.pickupPincode` (fallback: `DELHIVERY_PICKUP_PINCODE` env) | `origin_pin` | |
+| sum of `variant.weight * qty` grams | `weight` | |
+| `payment.status === CAPTURED` | `payment_mode = Prepaid` | |
+
+**`[MUST]`** Delhivery shipment creation `[MUST]` use `multipart/form-data` with `data` field as JSON string.
+
+**`[MUST]`** Delhivery webhook ingress authentication `[MUST]` verify `Authorization: Token <secret>` using timing-safe comparison.
+Primary secret: `DELHIVERY_WEBHOOK_TOKEN`; fallback: `DELHIVERY_API_KEY`.
+
+#### Shiprocket (active when `SHIPPING_PROVIDER=shiprocket`)
+
+**`[MUST]`** Auth: JWT token (`Authorization: Bearer <token>`) obtained from `POST /auth/login`. Token is cached in-memory with 9-day TTL; on 401 the adapter auto-refreshes via `POST /auth/login` and retries the original request once.
+
+**`[MUST]`** Order-to-Shiprocket field mapping:
+
+| Internal | Shiprocket Field | Note |
+|---|---|---|
+| `order.orderNumber` | `order_id` | Used as custom order identifier |
+| `order.total / 100` | `sub_total` | Shiprocket expects rupees |
+| `order.shippingAddress.pincode` | `shipping_pincode` | |
+| Admin `settings.shipping.pickupPincode` (fallback: `SHIPROCKET_PICKUP_PINCODE` env) | `pickup_pincode` | |
+| sum of `variant.weight * qty` grams | `weight` | |
+| `payment.status === CAPTURED` | `payment_method = Prepaid` | |
+| `customer.email` | `email` | Required by Shiprocket |
+| `items` array | `order_items` | `{ name, sku, units, selling_price }` per item |
+
+**`[MUST]`** Shiprocket shipment creation `[MUST]` use `POST /orders/create/adhoc` with `application/json` body. On success, immediately call `POST /courier/assign/awb` to assign AWB.
+
+**`[MUST]`** Shiprocket webhook ingress authentication `[MUST]` verify `x-shiprocket-token` header against `SHIPROCKET_WEBHOOK_TOKEN` using timing-safe comparison. Falls back to `Authorization: Bearer <token>` header.
+
+**`[MUST]`** Shiprocket-specific admin endpoints (available when active provider is Shiprocket):
+- `POST /admin/orders/:id/schedule-pickup` — calls `POST /courier/generate/pickup` with `shipment_id`
+- `POST /admin/orders/:id/print-label` — calls `POST /courier/generate/label` with `shipment_id`; returns `{ labelUrl }`
+
+#### Webhook → ShipmentStatus mapping (shared across providers)
+
+| Provider Status | Internal Status | Notification Triggered |
+|---|---|---|
+| `Manifested` / `NEW` / `PICKUP SCHEDULED` | `BOOKED` | None |
+| `In Transit` / `PICKED UP` | `IN_TRANSIT` / `PICKED_UP` | SMS |
+| `Out For Delivery` | `OUT_FOR_DELIVERY` | SMS + WhatsApp (if enabled) |
+| `Delivered` | `DELIVERED` | Email + SMS |
+| `RTO Initiated` / `RTO-INITIATED` | `RTO_INITIATED` | Admin email |
+| `Failed Delivery` / `UNDELIVERED` | `FAILED_DELIVERY` | SMS |
+
+### 8.7 Notifications Module
+
+**`[MUST]`** Notifications `[MUST]` be dispatched via BullMQ — never inline in an HTTP handler.
+
+**`[MUST]`** Provider architecture follows flag-gated credential validation:
+- Email (Resend): validated when `NOTIFY_EMAIL_ENABLED=true` (defaults `true`)
+- SMS (MSG91): validated when `NOTIFY_SMS_ENABLED=true` (defaults `true`)
+- WhatsApp (Meta Cloud API): validated when `NOTIFY_WHATSAPP_ENABLED=true` (defaults `false`)
+
+**`[MUST]`** Disabled channels use unavailable adapters that throw `AppError` with descriptive message when invoked.
+
+**`[MUST]`** Meta WhatsApp webhook endpoint (`/api/v1/notifications/webhook/meta-whatsapp`) implements:
+- GET: Webhook verification challenge response using `META_WHATSAPP_WEBHOOK_VERIFY_TOKEN`
+  - Returns 200 with challenge string on success
+  - Returns 403 via `AppError` when `hub.mode !== 'subscribe'` or `hub.verify_token` mismatch
+- POST: Event ingestion for message status updates with raw-body schema + signature validation
+  - Requires `x-hub-signature-256` header
+  - Verifies HMAC SHA-256 signature against `META_WHATSAPP_APP_SECRET` using timing-safe comparison
+  - Returns 200 with `{ received: true }` on success
+  - Returns 403 via `AppError` on missing/malformed/invalid signature
+  - Logs event via `fastify.log.info` for observability
+- Rate limit: `webhook` tier with provider-signature keying
+- Error handling: Uses global error handler (`registerGlobalErrorHandler`) to transform `AppError` into structured error response
+
+**`[MUST]`** 8 required React Email templates:
+
+| Template | Trigger |
+|---|---|
+| `OrderConfirmed` | `order.status → CONFIRMED` |
+| `PaymentFailed` | `payment.status → FAILED` |
+| `OrderShipped` | `shipment.status → IN_TRANSIT` |
+| `OutForDelivery` | `shipment.status → OUT_FOR_DELIVERY` |
+| `OrderDelivered` | `shipment.status → DELIVERED` |
+| `OrderCancelled` | `order.status → CANCELLED` |
+| `LowStockAlert` | Inventory alert job (to admin) |
+| `PasswordReset` | Forgot password flow |
+
+**`[MUST]`** All SMS under **160 characters** to avoid multi-part charges.
+
+**`[MUST]`** Every notification attempt `[MUST]` create a `NotificationLog` record regardless of success or failure.
+
+### 8.8 GST Invoicing Module
+
+**`[MUST]`** Invoice PDF must contain: seller GSTIN + FSSAI (food), buyer details, invoice number, line items with HSN codes, tax breakdown (CGST+SGST for intra-state, IGST for inter-state), grand total in words (Indian numbering system).
+
+**`[MUST]`** Rendering baseline: server-side React PDF (`@react-pdf/renderer`) with template-style composition inspired by OSS `legions-developer/invoicely`, executed inside BullMQ worker context.
+
+**`[MUST]`** Tax type detection:
+```typescript
+const isInterState = sellerState !== buyerState
+const taxRate = product.attributes.gstRate ?? 0.12
+const igst  = isInterState  ? Math.round(subtotal * taxRate) : 0
+const cgst  = !isInterState ? Math.round(subtotal * taxRate / 2) : 0
+const sgst  = cgst
+```
+
+**`[MUST]`** PDF generated asynchronously via BullMQ — never in request cycle.
+
+**`[MUST]`** PDF stored on local filesystem and storage reference persisted in `Invoice` table.
+
+---
+
+## 9. Integration Specifications
+
+### 9.1 Razorpay
+
+| Property | Value |
+|---|---|
+| Base URL | `https://api.razorpay.com/v1` |
+| Auth | Basic: `RAZORPAY_KEY_ID:RAZORPAY_KEY_SECRET` |
+| SDK | `razorpay` npm (official) |
+| Currency | `INR` only |
+| Amount | Paise (integer) |
+| Webhook header | `X-Razorpay-Signature` |
+| Events handled | `payment.captured`, `payment.failed`, `refund.processed` |
+
+```typescript
+// Create order
+await razorpay.orders.create({
+  amount: totalPaise,         // integer paise
+  currency: 'INR',
+  receipt: order.orderNumber,
+  notes: { orderId: order.id }
+})
+
+// Refund
+await razorpay.payments.refund(providerPaymentId, {
+  amount: refundAmountPaise,
+  notes: { reason: 'Customer cancellation' }
+})
+```
+
+### 9.2 Delhivery (default when `SHIPPING_PROVIDER=delhivery`)
+
+| Property | Value |
+|---|---|
+| Base URL | `https://track.delhivery.com/api` |
+| Auth | `Authorization: Token <DELHIVERY_API_KEY>` |
+| Create shipment | `POST /cmu/create.json` (multipart/form-data) |
+| Track | `GET /v1/packages/json/?waybill=<awb>` |
+| Serviceability | `GET /c/api/pin-codes/json/?filter_codes=<pincode>` |
+| Rate calculator | `GET /api/kinko/v1/invoice/charges/?md=S&ss=Delivered&d_pin=<dest>&o_pin=<origin>&cgm=<weight>&pt=Pre-paid&cod=0` |
+
+### 9.3 Shiprocket (active when `SHIPPING_PROVIDER=shiprocket`)
+
+| Property | Value |
+|---|---|
+| Base URL | `https://apiv2.shiprocket.in/v1/external` |
+| Auth | JWT — `POST /auth/login` with `{ email, password }` → cache token 9 days |
+| Create shipment | `POST /orders/create/adhoc` (JSON) → `POST /courier/assign/awb` |
+| Track | `GET /courier/track/awb/<awb>` |
+| Serviceability | `GET /courier/serviceability/?pickup_postcode=<origin>&delivery_postcode=<dest>&weight=<grams>&cod=0` |
+| Rate calculator | `POST /courier/estimate` (JSON) |
+| Schedule pickup | `POST /courier/generate/pickup` (JSON, requires `shipment_id`) |
+| Generate label | `POST /courier/generate/label` (JSON, requires `shipment_id`) |
+| Webhook header | `x-shiprocket-token` or `Authorization: Bearer <token>` |
+
+**Token refresh strategy:** On any 401, the adapter auto-refreshes by calling `/auth/login`, updates the in-memory token, and retries the original request once. A BullMQ repeatable job (`shiprocket-token-refresh`, every 9 days) ensures the token stays warm across worker process restarts.
+
+### 9.3 Resend
+
+```typescript
+const html = await render(<OrderConfirmedEmail order={order} />)
+await resend.emails.send({
+  from: process.env.RESEND_FROM!,
+  to: customer.email,
+  subject: `Order Confirmed — ${order.orderNumber}`,
+  html
+})
+```
+
+### 9.4 MSG91
+
+| Property | Value |
+|---|---|
+| Base URL | `https://api.msg91.com/api/v5` |
+| Auth | `authkey: MSG91_AUTH_KEY` header |
+| OTP | `POST /otp` + `POST /otp/verify` |
+| Transactional | `POST /flow/` with `flow_id` |
+
+### 9.5 Meta WhatsApp (Meta Cloud API direct)
+
+**Architecture:** Direct Meta Graph API integration — no BSP (Business Solution Provider) like Interakt/Wati. This eliminates platform fees (~₹1,000-4,000/month) on top of Meta conversation charges.
+
+| Property | Value |
+|---|---|
+| Base URL | `https://graph.facebook.com/{version}/{phoneNumberId}` |
+| Version | `META_WHATSAPP_API_VERSION` (default: `v21.0`) |
+| Auth | `Authorization: Bearer {META_WHATSAPP_ACCESS_TOKEN}` |
+| Send endpoint | `POST /messages` |
+| Webhook endpoint | `GET/POST /api/v1/notifications/webhook/meta-whatsapp` |
+
+**Required environment:**
+- `META_WHATSAPP_ACCESS_TOKEN` — Permanent system user token with `whatsapp_business_messaging` permission
+- `META_WHATSAPP_PHONE_NUMBER_ID` — WhatsApp Business phone number ID
+- `META_WHATSAPP_API_VERSION` — Graph API version (default: `v21.0`)
+- `META_WHATSAPP_WEBHOOK_VERIFY_TOKEN` — Webhook verification token (must match Meta dashboard)
+- `META_WHATSAPP_APP_SECRET` — Meta app secret used for `x-hub-signature-256` webhook event signature verification
+
+**Template format (Meta approved templates required):**
+```typescript
+{
+  messaging_product: "whatsapp",
+  to: "+91XXXXXXXXXX",  // E.164 format
+  type: "template",
+  template: {
+    name: "order_shipped_notification",
+    language: { code: "en" },
+    components: [...]  // Parameterized components per template
+  }
+}
+```
+
+**Webhook handling:**
+- `GET /api/v1/notifications/webhook/meta-whatsapp` — Webhook verification (responds to Meta subscription challenge)
+- `POST /api/v1/notifications/webhook/meta-whatsapp` — Event ingestion (message status updates, delivery receipts)
+
+**Pricing (India 2026):**
+- Utility (order updates): ~₹0.11-0.12/message
+- Authentication (OTPs): ~₹0.11/message
+- Marketing: ~₹0.86/message
+- Service (customer-initiated): Free (first 1000/month)
+
+### 9.6 Invoice Storage
+
+| Property | Value |
+|---|---|
+| Upload from | Backend only — never direct browser upload |
+| Folder | `/{CLIENT_ID}/products/{productId}/` |
+| Formats | JPEG, PNG, WebP |
+| Max size | 5 MB per image |
+| Delivery | `quality: auto`, `fetch_format: auto` |
+
+### 9.6 Invoice PDF Rendering
+
+| Property | Value |
+|---|---|
+| Renderer | `@react-pdf/renderer` |
+| Execution context | Backend worker (`order-processing` queue), never request cycle |
+| Template baseline | Invoicely-style component composition (`legions-developer/invoicely`) |
+| Output | PDF buffer stored to local filesystem and persisted in `Invoice.pdfUrl` as storage reference |
+
+---
+
+## 10. Background Job Requirements
+
+### 10.1 BullMQ Default Job Options
+
+```typescript
+const defaultJobOptions = {
+  attempts: 3,
+  backoff: { type: 'exponential', delay: 2000 },  // 2s, 4s, 8s
+  removeOnComplete: { age: 86400 },                // keep 24h
+  removeOnFail:     { age: 604800 }                // keep 7 days for inspection
+}
+```
+
+**`[MUST]`** Bull Board UI mounted at `/api/v1/admin/queues` with admin JWT enforcement.
+
+### 10.2 Queue Registry
+
+#### `order-processing`
+
+| Job | Trigger | Action |
+|---|---|---|
+| `process-order-update` | Enqueued by `payment-webhook`, `deduct-inventory`, `confirm-order` stubs, or reconciliation auto-heal | **Canonical entry point.** Atomic CAS update of order/payment to `CONFIRMED`/`CAPTURED`, inventory deduction, coupon `usesCount` increment, reservation release, GST invoice generation, outbox analytics, customer notifications. Idempotent via `jobId`. |
+| `deduct-inventory` | `payment.captured` webhook or `/payments/verify` | **Thin stub.** Resolves `orderId` from payment record and enqueues `process-order-update` with `jobId: deduct-inventory:<orderId>`. No direct mutations. |
+| `confirm-order` | `payment.captured` webhook (legacy webhook payload shape) | **Thin stub.** Resolves `orderId` from payment record and enqueues `process-order-update` with `jobId: confirm-order:<orderId>`. No direct mutations. |
+| `payment-webhook` | Any Razorpay `payment.*` event | For `payment.captured`: enqueues `process-order-update`. For `payment.failed`: updates order/payment status directly. |
+| `generate-invoice` | After `process-order-update` confirms order | Generate PDF, store locally, create Invoice record |
+| `generate-credit-note` | Refund worker completion | Append structured `CREDIT_NOTE|{...}` note in `OrderStatusHistory` for refunded orders. `jobId` deterministic on both outbox and direct BullMQ paths. |
+
+#### `notifications`
+
+| Job | Data | Action |
+|---|---|---|
+| `send-email` | `{ to, template, data }` | Render React Email, send via Resend, log |
+| `send-sms` | `{ phone, template, data }` | Call MSG91 flow API, log |
+| `send-whatsapp` | `{ phone, template, data }` | Call MetaWhatsAppAdapter if enabled, log |
+
+**Channel provider mapping:**
+- Email: Resend (`ResendAdapter`) — requires `RESEND_API_KEY`, `RESEND_FROM`
+- SMS: MSG91 (`Msg91Adapter`) — requires `MSG91_AUTH_KEY`, `MSG91_SENDER_ID`, `MSG91_ROUTE`
+- WhatsApp: Meta Cloud API (`MetaWhatsAppAdapter`) — requires `META_WHATSAPP_ACCESS_TOKEN`, `META_WHATSAPP_PHONE_NUMBER_ID`
+
+**Toggle behavior:**
+- `NOTIFY_EMAIL_ENABLED` — defaults to `true` (if unset)
+- `NOTIFY_SMS_ENABLED` — defaults to `true` (if unset)
+- `NOTIFY_WHATSAPP_ENABLED` — defaults to `false` (if unset); must explicitly enable
+
+**Credential validation:**
+- Resend and MSG91 credentials are validated when respective channels are enabled
+- Meta WhatsApp credentials are only validated when `NOTIFY_WHATSAPP_ENABLED=true`
+- Disabled channels skip credential requirements at startup
+
+#### `shipping`
+
+| Job | Trigger | Action |
+|---|---|---|
+| `create-shipment` | Admin `POST /admin/orders/:id/ship` | Call active ShippingProviderAdapter, store AWB + provider-specific IDs |
+| `update-shipment-status` | Provider webhook | Update Shipment.status, create ShipmentEvent, enqueue notification |
+| `shipment-webhook` | Provider webhook (legacy alias) | Backward-compatible alias for `update-shipment-status` payload contract |
+| `shiprocket-token-refresh` | Repeatable (every 9 days) | Warm the JWT cache by calling a no-op API; prevents stale tokens after worker restarts |
+
+#### `inventory-alerts` (Repeatable — every 60 min)
+
+Find all `Inventory` where `quantity <= lowStockThreshold AND lowStockAlerted = false`. Enqueue `send-email` with `LowStockAlert` to admin. Set `lowStockAlerted = true`.
+
+#### `refunds`
+
+| Job | Trigger | Action |
+|---|---|---|
+| `initiate-razorpay-refund` | Order cancelled with `CAPTURED` payment | Call `RazorpayAdapter.initiateRefund()`, update statuses |
+
+#### `analytics`
+
+Records `AnalyticsEvent` from storefront events asynchronously.
+
+#### `cart-cleanup` (Repeatable — daily at 02:00)
+
+Deletes `Cart` records where `userId IS NULL AND expiresAt < NOW()`.
+
+#### `cart-cleanup` (Repeatable — every 60 sec)
+
+Releases expired `CartReservation` records (`expiresAt < NOW()`), making stock available again.
+
+#### `outbox-dispatch` (Repeatable — every 10 sec)
+
+Publishes pending `OutboxMessage` records to target queues and marks status (`PUBLISHED` / `FAILED`) with attempt/error metadata.
+
+#### `reconciliation` (Repeatable — every 60 min)
+
+Runs lifecycle integrity checks (order/payment/shipment/refund consistency) and records unresolved anomalies into `ReconciliationIssue`.
+
+### 10.3 Why BullMQ for Webhook Processing
+
+> Razorpay has a **5-second webhook response timeout**. The downstream chain after `payment.captured` — inventory decrement + order confirmation + invoice generation + notifications — can take 2–10 seconds. The webhook handler verifies the HMAC signature, enqueues BullMQ jobs, and responds `200 OK` in < 200ms. Redis idempotency prevents duplicate processing on Razorpay retries.
+
+---
+
+## 11. Security Requirements
+
+### 11.1 HTTP Security Headers
+
+**App layer (`@fastify/helmet`):**
+
+```typescript
+fastify.register(helmet, {
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc:  ["'self'"],
+      styleSrc:   ["'self'", "'unsafe-inline'"],
+      imgSrc:     ["'self'", "data:"]
+    }
+  },
+  crossOriginEmbedderPolicy: false   // required for Razorpay checkout iframe
+})
+```
+
+**Nginx layer (`nginx/client.conf.template`):**
+
+`[MUST]` The HTTPS server block `[MUST]` include these five security headers:
+- `Strict-Transport-Security: max-age=63072000; includeSubDomains; preload` (HSTS, 2-year max-age)
+- `X-Frame-Options: DENY`
+- `X-Content-Type-Options: nosniff`
+- `Referrer-Policy: strict-origin-when-cross-origin`
+- `X-XSS-Protection: 1; mode=block`
+
+### 11.2 CORS
+
+```typescript
+fastify.register(cors, {
+  origin:      [process.env.STOREFRONT_URL!, process.env.ADMIN_URL!],
+  methods:     ['GET', 'POST', 'PATCH', 'DELETE'],
+  credentials: true
+})
+```
+
+**`[NEVER]`** `origin: '*'` `[NEVER]` used.
+
+### 11.3 Rate Limits
+
+| Layer | Tool | Default Limit |
+|---|---|---|
+| Edge | Nginx `limit_req` | Route-class zones (auth/checkout/admin/catalog/cart/webhook/health/default) |
+| Application | `@fastify/rate-limit` | Tiered by endpoint criticality + per-route overrides |
+
+| Tier / Route Group | Application Limit |
+|---|---|
+| Auth sensitive (`/auth/send-otp`, `/auth/verify-otp`, `/auth/forgot-password`, `/auth/register`, `/auth/refresh`) | 6 per minute |
+| Auth login (`/auth/login`, `/auth/admin/login`) | 12 per minute + progressive lockout on failed credentials |
+| Catalogue reads (`/products*`, `/reviews/product/*`) | 300 per minute (route profile) |
+| Cart/user-session flows (`/cart*`, `/wishlist*`, `/users/me*`) | 90 per minute (route profile) |
+| Checkout/payment mutations (`/orders`, `/orders/:id/cancel`, `/payments/initiate`, `/payments/verify`) | 30 per minute (route profile) |
+| Webhook ingress (`/payments/webhook`, `/shipping/webhook`) | 400 per minute (dedicated profile) |
+| Admin read routes (`/api/v1/admin/*` reads) | 60 per minute (route profile) |
+| Admin write routes (`/api/v1/admin/*` mutations) | 40 per minute (route profile) |
+| Health | 30 per minute |
+
+### 11.4 Environment Variable Validation
+
+**`[MUST]`** App `[MUST]` fail fast on startup if any required env var is missing:
+
+```typescript
+// 1. Bootstrap env vars required before DB-backed ops config can load
+const bootstrapRequired = ['DATABASE_URL', 'REDIS_URL', 'OPS_DB_ENCRYPTION_KEY']
+for (const v of bootstrapRequired) {
+  if (!process.env[v]) throw new Error(`Missing required bootstrap env var: ${v}`)
+}
+
+// 2. Runtime env vars validated after DB-backed ops overlay is applied
+const required = ['JWT_SECRET', 'JWT_REFRESH_SECRET']
+for (const v of required) {
+  if (!process.env[v]) throw new Error(`Missing required env var: ${v}`)
+}
+
+// 3. Provider-conditional env vars (only required when that provider is active)
+const paymentProvider = (process.env.PAYMENT_PROVIDER ?? 'razorpay').trim().toLowerCase()
+if (paymentProvider === 'razorpay') {
+  requireEnv('RAZORPAY_KEY_ID')
+  requireEnv('RAZORPAY_KEY_SECRET')
+  requireEnv('RAZORPAY_WEBHOOK_SECRET')
+} else if (!['cod', 'noop'].includes(paymentProvider)) {
+  throw new Error(`Unsupported PAYMENT_PROVIDER: ${paymentProvider}. Allowed: razorpay, cod, noop`)
+}
+
+const shippingProvider = (process.env.SHIPPING_PROVIDER ?? 'delhivery').trim().toLowerCase()
+if (shippingProvider === 'delhivery') {
+  requireEnv('DELHIVERY_API_KEY')
+  if (isStrictProfile) requireEnv('DELHIVERY_WEBHOOK_TOKEN')
+} else if (shippingProvider === 'shiprocket') {
+  requireEnv('SHIPROCKET_EMAIL')
+  requireEnv('SHIPROCKET_PASSWORD')
+  if (isStrictProfile) requireEnv('SHIPROCKET_WEBHOOK_TOKEN')
+} else if (shippingProvider !== 'noop') {
+  throw new Error(`Unsupported SHIPPING_PROVIDER: ${shippingProvider}. Allowed: delhivery, shiprocket, noop`)
+}
+
+// 3. Redis URL protocol and password validation
+const redis = new URL(process.env.REDIS_URL!)
+if (!['redis:', 'rediss:'].includes(redis.protocol)) throw new Error('REDIS_URL must be redis:// or rediss://')
+if (isStrictProfile && !redis.password) {
+  throw new Error('REDIS_URL must include password in production-like profiles')
+}
+```
+
+> **Provider validation rules:**
+> - Razorpay env vars are only required when `PAYMENT_PROVIDER=razorpay` (not when `cod` or `noop`).
+> - Unrecognised provider values (typos) are rejected immediately at startup in all profiles.
+> - `noop` providers are allowed in development-like profiles only; production-like profiles reject `noop` with a hard error (see `validateProductionProviderSafetyEnv()`).
+> - `database.config.ts` and `redis.config.ts` use `requireEnv()` (not `as string`) to fail fast on missing URLs.
+> - `redis.plugin.ts` enforces a 20-second readiness timeout (`REDIS_READY_TIMEOUT_MS`) — startup fails fast with clear error if Redis is unavailable instead of hanging indefinitely.
+> - `auth.service.ts` uses `resolveRefreshSecret()` to fail fast on missing/empty `JWT_REFRESH_SECRET` at runtime (not `as string`).
+> - All external provider adapters enforce `AbortSignal.timeout()` on fetch calls (10s for Delhivery/Razorpay/Resend/MSG91) to prevent hanging threads.
+> - Prisma global client cache is scoped to development-like runtime only (`development`/`test`); production-like profiles always create a fresh client.
+> - Fastify request type declarations (`src/types/fastify.d.ts`) import canonical permission types from `admin-permissions.ts` and `ops-permissions.ts` — no inline string-literal unions.
+
+Optional secure-flow envs:
+- `DELHIVERY_WEBHOOK_TOKEN` (required in production-like profiles when `SHIPPING_PROVIDER=delhivery`; dev/test may fallback to `DELHIVERY_API_KEY`)
+- `SHIPROCKET_WEBHOOK_TOKEN` (required in production-like profiles when `SHIPPING_PROVIDER=shiprocket`)
+- `SHIPROCKET_PICKUP_PINCODE` / `DELHIVERY_PICKUP_PINCODE` (bootstrap fallback; admin can override via settings)
+- `ADMIN_SCOPE_ENFORCEMENT` (`false` alone does not disable checks; bypass requires development profile + `ALLOW_ADMIN_SCOPE_BYPASS=true`; production remains fail-closed/enforced)
+- `ALLOW_ADMIN_SCOPE_BYPASS` (dev-only emergency toggle used with `ADMIN_SCOPE_ENFORCEMENT=false`)
+- `REPLAY_APPROVAL_TOKEN` (required in non-dev/test profiles; replay endpoints fail closed when missing)
+- `ADMIN_DEFAULT_PERMISSIONS` (comma-separated override for default admin permission claims)
+- `IDEMPOTENCY_SCOPE_SECRET` (HMAC secret for persisted idempotency scope fingerprinting)
+- `ENABLE_VERBOSE_VALIDATION_ERRORS` (`true` enables detailed validation errors in API responses; default is redacted/minimal)
+
+**`[NEVER]`** `console.log` `[NEVER]` logs tokens, passwords, OTPs, or raw webhook payloads.
+
+### 11.6 Atomic Operations & Concurrency Control (TOCTOU Prevention)
+
+**`[MUST]`** All critical state transitions `[MUST]` use Prisma `updateMany` with guard conditions to prevent Time-of-Check-to-Time-of-Use (TOCTOU) race conditions.
+
+**CAS (Compare-And-Swap) Pattern:**
+
+```typescript
+// Atomic: only update if status hasn't changed since read
+const result = await prisma.order.updateMany({
+  where: {
+    id: orderId,
+    status: 'PENDING_PAYMENT'  // Guard condition — row-level optimistic lock
+  },
+  data: { status: 'CANCELLED' }
+})
+
+// Verify the update actually happened
+if (result.count === 0) {
+  throw new AppError(ERROR_CODES.CONFLICT, 'Order state changed concurrently', 409)
+}
+```
+
+**Required CAS Surfaces:**
+
+| Surface | Pattern | Guard Field(s) |
+|---------|---------|------------------|
+| Idempotency first-write | `create` + unique-conflict catch + `updateMany` | `status: PROCESSING` → final state |
+| Admin invite expiry | `updateMany` | `status in ['CREATED', 'EMAIL_SENT']` |
+| Admin invite consumption | `updateMany` | `status in ['CREATED', 'EMAIL_SENT']` |
+| Refresh token consume | `updateMany` | `consumedAt: null` |
+| Ops OTP verify | `updateMany` | `status = PENDING AND attempts < max` |
+| Ops invite cleanup | `deleteMany` | `status in ['CREATED', 'EMAIL_SENT']` |
+| Dual-approval transition | `updateMany` inside transaction | `status = PENDING` |
+| Order reconciliation | `updateMany` | `status` guards per transition |
+| Webhook inbox claim | `create` + unique-violation + `updateMany` | `status = FAILED` → `PROCESSING` |
+| Analytics replay | `updateMany` | `status = PENDING ↔ FAILED` |
+| Audit chain append | Redis lock + `create` | `withOpsAuditChainLock()` acquires 5000ms lock |
+
+**Compatibility with Test Mocks:**
+
+**`[MUST]`** All CAS implementations `[MUST]` detect mock delegates and fall back gracefully:
+
+```typescript
+const preferUpdateForMock =
+  typeof delegate.update === 'function' &&
+  'mock' in (delegate.update as unknown as Record<string, unknown>)
+
+if (delegate.updateMany && !preferUpdateForMock) {
+  await delegate.updateMany({ where: { id, status: 'PENDING' }, data: { status: 'DONE' } })
+} else {
+  await delegate.update({ where: { id }, data: { status: 'DONE' } }) // Fallback for tests
+}
+```
+
+**Distributed Locking for Audit Chains:**
+
+**`[MUST]`** Audit chain writes (`OpsAuditLog`, `CouponAuditLog`) `[MUST]` use Redis distributed locks to serialize chain-head updates:
+
+- Lock key pattern: `audit:ops:chain:lock` / `audit:coupon:{id}:lock`
+- TTL: 5000ms (`OPS_AUDIT_LOCK_TTL_MS`)
+- Wait timeout: 2000ms (`OPS_AUDIT_LOCK_WAIT_TIMEOUT_MS`)
+- Failed lock acquisition returns structured `503 ops_audit_chain_lock_timeout` for safe caller retry
+
+### 11.5 Storefront payment pages, CSP, SRI, and WAF (PCI SAQ-A intent)
+
+This backend exposes **JSON APIs only**; HTML checkout and payment flows run in the **storefront** (Next.js) and are served behind **Nginx/CDN** per [ECOM_MASTER.md](ECOM_MASTER.md). Merchants using PSP-hosted checkout typically target **SAQ-A-style** scope for card data, but remain responsible for **script and supply-chain risk on pages they control** (e.g. third-party JavaScript on the parent page around an iframe).
+
+**`[SHOULD]`** Own these controls in the **storefront / edge** repo or Nginx config—not in this Fastify service:
+
+| Control | Owner |
+|---|---|
+| Content-Security-Policy (start with Report-Only, then enforce) | Storefront + Nginx headers |
+| Subresource Integrity on third-party script tags where applicable | Storefront |
+| Minimize third-party scripts on checkout paths | Storefront |
+| WAF / bot rules at CDN or reverse proxy | Operations |
+
+The API process applies **Helmet** CSP for JSON responses (see §11.1); that does **not** replace storefront CSP on pages that load Razorpay Checkout or other scripts. See `docs/DECISIONS.md` for the deferral of checkout-page CSP to the storefront deployment.
+
+---
+
+## 12. Frontend Technical Requirements
+
+### 12.1 Storefront (Next.js)
+
+- App Router (not Pages Router)
+- Product detail pages: ISR via `generateStaticParams` + `revalidate`
+- Cart state: React Context + `useReducer`, fetched from API on mount
+- Razorpay Checkout loaded via CDN (not npm) for PCI compliance:
+  ```html
+  <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+  ```
+
+### 12.2 Admin Dashboard (Next.js + Refine)
+
+- Custom Refine data provider mapping CRUD methods to `/api/v1/admin/*`
+- Auth provider: `POST /api/v1/auth/admin/login`, auto refresh token handling
+- All charts: **Recharts** (LineChart for sales, FunnelChart for conversion, PieChart for categories)
+- Admin `[MUST]` build to static output served by Nginx — no Next.js server process
+
+**`[MUST]`** Admin pages and their key features:
+
+| Page | Required Features |
+|---|---|
+| Dashboard | KPI cards (today/7d/30d), Recharts LineChart, top 5 products, low stock alerts, recent orders |
+| Orders | Status filter tabs, date range picker, search by order number or customer name |
+| Order Detail | Status timeline, payment info, ShipmentEvent list, "Create Shipment" button, manual status update |
+| Products | Search, category filter, active toggle, "New Product" button |
+| Product Editor | Name, slug (auto + editable), description, category select, variant table, image drag-drop |
+| Inventory | All variants with inline-editable quantity, low-stock badge |
+| Customers | Search by name/phone/email, click-through to profile + order history |
+| Analytics | Revenue chart, conversion funnel, category breakdown, notification delivery rates |
+| Settings | Store name, GSTIN, FSSAI, logo upload, notification toggles, low-stock threshold |
+| Queue Monitor | Bull Board UI embedded — job status, retry failed, inspect dead-letter |
+
+---
+
+## 13. Performance Requirements
+
+### 13.1 API Response Time Targets
+
+| Endpoint Category | P50 | P95 | P99 |
+|---|---|---|---|
+| Health check | < 10ms | < 20ms | < 50ms |
+| Product listing (cached) | < 30ms | < 80ms | < 150ms |
+| Product listing (uncached) | < 100ms | < 250ms | < 500ms |
+| Order creation | < 300ms | < 600ms | < 1000ms |
+| Razorpay initiate | < 500ms | < 800ms | < 1500ms |
+| Webhook handlers | < 50ms | < 100ms | < 200ms |
+| Admin dashboard KPIs | < 200ms | < 500ms | < 1000ms |
+
+### 13.2 Concurrency Target
+
+**`[MUST]`** Each client instance `[MUST]` handle **200 concurrent users** without degradation on 4 vCPU / 8 GB VPS hosting up to 10 clients.
+
+**`[SHOULD]`** Load test before Phase 5 sign-off:
+```bash
+autocannon -c 200 -d 30 https://staging-client.com/api/v1/products
+```
+
+### 13.3 Database Optimisation Rules
+
+**`[MUST]`** All FK columns `[MUST]` have `@@index` in Prisma schema.
+
+**`[MUST]`** Composite index on `Order(status, createdAt)` for admin date-filtered queries.
+
+**`[MUST]`** `EXPLAIN ANALYZE` run on every query touching > 2 tables before Phase 5 sign-off. Sequential scans on tables > 1000 rows `[MUST]` be eliminated.
+
+---
+
+## 14. Testing Requirements
+
+### 14.1 Coverage Thresholds (Phase 5 sign-off)
+
+| Scope | Minimum |
+|---|---|
+| Global unit lines (ratchet floor) | 43% |
+| Orders domain lines (ratchet floor) | 40.5% |
+| Auth domain lines (ratchet floor) | 16.0% |
+| Webhooks domain lines (ratchet floor) | 42% |
+| Non-regression lock | Current baseline must not regress (`observability/coverage-baseline.json`) |
+
+### 14.2 Unit Tests
+
+Framework: **Vitest**.
+
+**Worker testing pattern:** All `queues/workers/*.worker.test.ts` files **MUST** use dependency injection instead of `vi.mock`. Each `createXWorker(connection, deps?)` function accepts an optional `deps` bag containing mock constructors (e.g., `Worker`, `PrismaClient`, `Queue`, provider factories). Tests instantiate local mock classes, pass them via `deps`, and invoke the captured processor function directly. **`vi.mock` MUST NOT be used** on BullMQ or `@prisma/client` modules — it is incompatible with the `vmForks` pool and causes "No test suite found" errors in `threads`/`forks` pools.
+
+**Service testing pattern:** Service tests that exercise a service method which internally calls another service (e.g. `OrdersService.createOrder` calling `CartService.checkPincodeServiceability`) **MUST** use `vi.spyOn(ServiceClass.prototype, 'methodName')` to mock the prototype method rather than `vi.mock` on the module path. The `vmForks` pool does not reliably intercept cross-service module boundaries with `vi.mock`, causing the real service to be instantiated and fail on missing infrastructure (e.g. empty env vars for provider adapters).
+
+**Route testing pattern:** Route tests (`src/modules/**/*.routes.test.ts`) **MUST** use a real Fastify instance with decorated mocks (`request.jwtVerify`, `prisma` delegates, `redis`) rather than `vi.mock`.
+
+**`[MUST]`** Must cover:
+- All valid and invalid order state transitions
+- Razorpay HMAC verification (valid, tampered payload, wrong secret)
+- Shipping provider webhook token verification (Delhivery or Shiprocket)
+- Cart merge (all 4 scenarios: both exist, guest only, user only, neither)
+- Coupon validation (expired, limit exceeded, min order not met, scope mismatch)
+- Money arithmetic with paise rounding (GST calculations)
+- OTP generation, hashing, TTL, and rate limit logic
+- CAS race-condition paths: inventory update `409 CONFLICT` on stale-read, inventory alert skip on duplicate claim, outbox dispatch skip on duplicate claim, coupon `usesCount` cap enforcement, admin MFA enable/disable guarded `updateMany` and concurrent `409 CONFLICT` scenario
+
+### 14.3 End-to-End Tests
+
+Framework: **Supertest** against running Fastify with a dedicated test database.
+
+**`[MUST]`** Must cover:
+
+| Flow | Scenarios |
+|---|---|
+| OTP login | Send → verify → receive JWT pair |
+| Auth-required prepaid checkout | Add item as guest or logged-in user → login/signup before checkout → place order → pay via Razorpay → webhook confirm |
+| Prepaid checkout | Add item → initiate Razorpay → simulate `payment.captured` webhook → confirmed → notifications enqueued |
+| Insufficient stock | Order more than available → `INSUFFICIENT_STOCK` error → no DB changes |
+| Coupon application | Valid coupon applied; expired coupon rejected |
+| Duplicate webhook | Same `payment.captured` twice → second is a no-op |
+| Admin order flow | Admin creates shipment → Delhivery webhook → status updates → customer notified |
+
+**`[MUST]`** Test DB reset between suites: `prisma migrate reset --force` in test setup.
+
+---
+
+## 15. Observability Requirements
+
+### 15.1 Logging
+
+**`[MUST]`** All logging via Fastify's built-in **Pino** logger. No `console.log` in production.
+
+| Environment | Log Level |
+|---|---|
+| Development | `debug` |
+| Staging | `info` |
+| Production | `warn` |
+
+**`[MUST]`** Every HTTP request logged with: method, route, status code, response time, request ID.
+
+**`[MUST]`** Every BullMQ job logged with: job name, ID, queue, attempt number, success/failure, duration.
+
+**`[NEVER]`** Logs `[NEVER]` contain passwords, OTPs, JWT tokens, or raw webhook payloads.
+
+### 15.2 Request Tracing
+
+**`[SHOULD]`** A `requestId` (UUID) `[SHOULD]` be generated per request, included in all logs and error response bodies.
+
+### 15.3 Metrics and SLO Baseline
+
+**`[MUST]`** Expose Prometheus metrics at `GET /api/v1/ops/metrics` for reliability operations.
+Metrics endpoint exposure is restricted by default: production requires matching `x-ops-token` (`OPS_METRICS_TOKEN`), while `OPS_METRICS_ALLOWLIST` remains defense-in-depth.
+
+**`[MUST]`** Capture and track these metrics:
+- HTTP latency histogram by route/method/status (`http_request_duration_seconds`)
+- Webhook ingress outcomes and latency (`webhook_events_total`, `webhook_processing_duration_seconds`)
+- Queue execution outcomes and duration (`queue_jobs_total`, `queue_job_duration_seconds`)
+- Checkout/payment critical-path outcomes (`checkout_requests_total`)
+- Reliability mode state (`app_reliability_mode`)
+- Dynamic labels are bounded to controlled enums/buckets (`webhook event`, `queue`, `job_name`, `auth action`) to prevent high-cardinality leakage.
+
+**`[MUST]`** Baseline SLI evidence recorded per release:
+- Verification gates: `typecheck`, `test:unit`, `test:e2e`, `build`, `contract:admin`, deep smoke all passing.
+- Deep endpoint smoke and route totals are release artifacts and may vary by additive endpoints.
+- Reliability mode baseline is expected to be `normal` unless incident controls are active.
+- Checkout path counters active for critical mutation routes.
+- Outbox lag and dead-letter depth gauges active (`outbox_oldest_pending_lag_seconds`, `outbox_dead_letter_depth`) for queue backlog SLO tracking.
+- Queue dead-letter depth recording rule is active (`slo:queue_dlq_total_depth:max_5m` from `queue_waiting_depth{queue="dead-letter"}`) for `QueueDLQDepthHigh` alert evaluation.
+- Auth challenge outcomes are observable (`auth_challenge_total`) for abuse-defense conversion tracking.
+
+**`[MUST]`** Flash-sale API stress evidence (`npm run stress:flash-sale:api:matrix`) is valid only when fixture preconditions are met. Runs where all requests are rejected at client layer (`fixturePreconditionMet=false`, commonly `rejected_client` saturation) must fail invariant enforcement and are not acceptable release evidence.
+
+**Documentation SLO alignment (non-code):** Constraint **C-05** requires webhook handlers to acknowledge successfully in **under 200 ms** before async work. Executable alerting in `observability/slo-rules.yml` currently monitors `slo:webhook_latency:p95_5m` with a burn threshold at **0.5s**; queue backlog is monitored via outbox lag / dead-letter metrics above.
+
+### 15.4 Implemented vs Roadmap Boundary
+
+**`[MUST]`** Treat these controls as implemented runtime capabilities:
+- Metrics endpoint contract (`/api/v1/ops/metrics`) with protected exposure.
+- Versioned SLO rule + promtool test artifacts.
+- Release policy state + release guard scripts.
+- Flash-sale and DR drill evidence scripts.
+
+**`[MUST]`** Treat these as deployment-specific roadmap/enablement work unless explicitly configured:
+- Live Prometheus credential wiring for `RELEASE_POLICY_MODE=live_required`.
+- Production DR `DR_*_HOOK` orchestration commands against ephemeral infrastructure.
+- Full observability stack rollout (Prometheus/Alertmanager/Grafana provisioning).
+
+### 15.5 SLO Burn-Rate Automation
+
+**`[MUST]`** SLO recording and burn-rate alert expressions are versioned in `observability/slo-rules.yml`.
+**`[MUST]`** `promtool` test harness file is versioned at `observability/slo-rules.test.yml` and executed via `npm run test:slo-rules`.
+**`[MUST]`** Synthetic burn-rate sanity checks are executable via `npm run simulate:burnrate`.
+
+**`[MUST]`** Deployment pipelines run `npm run release:guard` and block non-hotfix deploys whenever release freeze or unresolved critical reliability incidents are active.
+**`[MUST]`** `release:guard` may read both environment values and a JSON state source (`RELIABILITY_STATE_FILE`) for freeze/incident truth.
+
+### 15.6 Compliance evidence starter (SOC2/ISO/DPIA readiness)
+
+This section is an evidence-oriented implementation starter, not legal certification advice.
+
+| Domain | Primary control intent | Existing evidence source(s) |
+|---|---|---|
+| Access control | Role + permission enforcement for admin operations | `src/common/guards/admin-permissions.guard.ts`, `src/common/auth/admin-permissions.ts`, `test:security` |
+| Change management | Controlled CI gates before merge/deploy | `.github/workflows/ci.yml`, `package.json` scripts (`ci:reliability-gates`, `typecheck`, tests) |
+| Logging/monitoring | Redacted logs + bounded-cardinality metrics | `src/main.ts` redaction config, `src/common/observability/metrics.ts`, `observability/slo-rules.yml` |
+| Incident/recovery | DR checks and release freeze controls | `scripts/dr-*.js`, `scripts/reliability-release-guard.js`, CI reliability job |
+| Data protection/privacy | Token hashing, webhook verification, idempotency, response minimization | auth/orders services, security tests, TRD §7.10–§7.13, §16 C-06/C-12/C-13 |
+| Vendor/integration controls | Adapter boundaries + webhook defensive checks | `src/common/interfaces/*.ts`, webhook allowlist/skew env controls, `docs/DECISIONS.md` |
+
+**Evidence run cadence**
+- Monthly: `npm run typecheck`, `npm run test:unit`, `npm run test:security`, `npm run test:e2e`, `npm run route:discipline-check`, `npm run serializer:exposure-check`.
+- Quarterly: dependency/security evidence (`security.yml` workflow results, `npm audit` policy output), DR drill evidence (`dr:drill:*`), and release guard evidence.
+- Retention target: archive CI logs + generated artifacts for at least 12 months (or stricter client/legal requirement).
+- Sign-off owners: engineering owner + operations owner per deployment.
+
+**DPIA-lite deployment template (process starter)**
+- Processing activity: `<checkout / orders / notifications / analytics replay>`
+- Data categories: `<customer profile, address, order metadata, payment references>`
+- Lawful basis placeholder: `<contract / legitimate interests / consent as applicable>`
+- Retention and deletion path: `<db tables, queue payloads, logs, archive duration>`
+- Risk summary: `<high-level privacy/security risks>`
+- Mitigations and linked controls: `<TRD constraints/tests/scripts>`
+- Residual risk + owner approval: `<accepted / follow-up action>`
+
+### 15.4 Queue Monitoring
+
+**`[MUST]`** Bull Board at `/api/v1/admin/queues` (admin JWT) provides: active/waiting/completed/failed/delayed jobs, retry capability, dead-letter inspection, job data and error stacks.
+
+---
+
+## 16. Constraint Registry
+
+> Consolidated hard constraints. Zero tolerance for violations.
+
+| ID | Constraint | Category |
+|---|---|---|
+| C-01 | Money stored as `Int` (paise) everywhere — no `Float`, `Decimal`, or rupee strings | Data Integrity |
+| C-02 | UUID primary keys throughout — no sequential integer IDs exposed | Security |
+| C-03 | Snapshot fields on `OrderItem` — never join live product data for historical orders | Data Integrity |
+| C-04 | Order creation in single `prisma.$transaction()` — atomic or nothing | Data Integrity |
+| C-05 | Webhook handlers respond `200 OK` in < 200ms — all processing via BullMQ | Performance |
+| C-06 | HMAC verification on raw `Buffer` — never on parsed JSON body | Security |
+| C-07 | Webhook idempotency enforced via Redis `providerPaymentId` key | Reliability |
+| C-08 | Secrets only in `.env` — never in source code or Git history | Security |
+| C-09 | Modules never import each other's internal files — only public service interfaces | Architecture |
+| C-10 | `PAYMENT_PROVIDER` and `SHIPPING_PROVIDER` are the only change required to swap adapters | Architecture |
+| C-11 | All notifications dispatched via BullMQ — never synchronous in the request cycle | Reliability |
+| C-12 | Refresh token stored as bcrypt hash in DB — never the raw token | Security |
+| C-13 | `additionalProperties: false` on all request body JSON schemas | Security |
+| C-14 | TypeScript `strict: true` — no `any` without documented justification | Code Quality |
+| C-15 | No two clients share Redis instance, database, JWT secret, or API keys | Isolation |
+| C-16 | PostgreSQL runs on host; Redis runs per-client in Docker | Infrastructure |
+| C-17 | Nginx enforces HTTPS — no API served over plain HTTP in production | Security |
+| C-18 | Rate limiting at both Nginx edge and Fastify application layer | Security |
+| C-19 | Soft delete only on `Product` — hard deletes corrupt order history | Data Integrity |
+| C-20 | `cart_session` and refresh token cookies: `httpOnly`, `secure`, `sameSite` enforced | Security |
+| C-21 | Inventory stock updates use CAS `updateMany` with `variantId + updatedAt` guard — no stale-read overwrite | Reliability |
+| C-22 | Low-stock alert dispatch uses per-item atomic claim (`lowStockAlerted: false` guard) — no duplicate alerts under concurrent workers | Reliability |
+| C-23 | Outbox event enqueue uses per-message atomic claim (`status = 'PUBLISHED'` guard) — no duplicate BullMQ publishes under concurrent dispatchers | Reliability |
+| C-24 | Coupon `usesCount` increment uses CAS `updateMany` with `usesCount < maxUses` guard — cap cannot be overshot under concurrent order confirmations | Data Integrity |
+| C-25 | CI scripts (`admin-contract-check.js`) read credentials from env vars (`ADMIN_EMAIL`/`ADMIN_PASSWORD`) — no hardcoded credentials in script source | Security |
+| C-26 | All raw SQL uses parameterized tagged-template `prisma.$executeRaw\`...\`` / `prisma.$queryRaw\`...\`` — never `$executeRawUnsafe` or `$queryRawUnsafe`. CI gate `security:sql-injection-guard` fails build on unsafe patterns | Security |
+
+---
+
+*Derived from `ECOM_MASTER.md`. All decisions trace to that document.*
+
+---
+
+> **Deploying for a client?** The infrastructure requirements (§2–§3), API contract (§4, §7), auth model (§6), webhook specs (§7.10–§7.12), and constraint table (§13) are all enforced as evidence gates in the client onboarding process. The full sequenced runbook — from infra provisioning and secret management through domain/TLS wiring, frontend integration, and go-live validation — is **[`docs/CLIENT_ONBOARDING_EXECUTION_ORDER.md`](docs/CLIENT_ONBOARDING_EXECUTION_ORDER.md)**.

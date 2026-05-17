@@ -1,0 +1,76 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { getAccessTokenExpiryMs } from "@/lib/jwt-utils";
+import { useAuthStore } from "@/stores/auth";
+
+const WARNING_LEAD_MS = 2 * 60 * 1000;
+
+export function AdminSessionWarning() {
+  const router = useRouter();
+  const accessToken = useAuthStore((state) => state.accessToken);
+  const clearSession = useAuthStore((state) => state.clearSession);
+  const [nowMs, setNowMs] = useState(() => Date.now());
+
+  const expiryMs = accessToken ? getAccessTokenExpiryMs(accessToken) : null;
+
+  useEffect(() => {
+    if (!accessToken || !expiryMs) {
+      return;
+    }
+
+    const warnAt = expiryMs - WARNING_LEAD_MS;
+    const scheduleRefresh = (targetMs: number) => {
+      const delay = Math.max(0, targetMs - Date.now());
+      return window.setTimeout(() => setNowMs(Date.now()), delay);
+    };
+
+    const warnTimer = scheduleRefresh(warnAt);
+    const expiryTimer = scheduleRefresh(expiryMs);
+
+    return () => {
+      window.clearTimeout(warnTimer);
+      window.clearTimeout(expiryTimer);
+    };
+  }, [accessToken, expiryMs]);
+
+  const visible =
+    expiryMs !== null && nowMs >= expiryMs - WARNING_LEAD_MS && nowMs < expiryMs;
+
+  if (!visible) {
+    return null;
+  }
+
+  return (
+    <div
+      className="mb-6 rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm"
+      role="status"
+      aria-live="polite"
+    >
+      <p className="font-medium text-foreground">Admin session expiring soon</p>
+      <p className="mt-1 text-muted-foreground">
+        Your access token expires in about two minutes. Save work, then refresh or sign in again.
+      </p>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <button
+          type="button"
+          className="h-9 rounded-md bg-primary px-3 text-xs font-medium text-primary-foreground"
+          onClick={() => window.location.reload()}
+        >
+          Refresh session
+        </button>
+        <button
+          type="button"
+          className="h-9 rounded-md border border-border px-3 text-xs font-medium"
+          onClick={() => {
+            clearSession();
+            router.replace("/admin/login");
+          }}
+        >
+          Sign in again
+        </button>
+      </div>
+    </div>
+  );
+}

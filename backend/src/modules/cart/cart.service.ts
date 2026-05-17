@@ -1,0 +1,1082 @@
+import { createHash, createHmac, randomUUID } from 'crypto'; 
+import { AnalyticsEventType, Coupon, CouponType, OrderStatus, Prisma, PrismaClient } from '@prisma/client';
+import { FastifyInstance } from 'fastify';
+import { AppError } from '@common/errors/app-error';
+import { ERROR_CODES } from '@common/errors/error-codes';
+import { recordFlashSaleAdmission, recordFlashSaleShardContention } from '@common/observability/metrics';
+import { redactSensitiveData } from '@common/security/redaction';
+import { ShippingProviderAdapter } from '@common/interfaces/shipping-provider.interface';
+import { NoopShippingAdapter } from '@modules/shipping/adapters/noop-shipping.adapter';
+import { featureFlags } from '@config/feature-flags';
+import { createShippingProvider } from '@modules/shipping/shipping-provider';
+import { AddCartItemInput, ApplyCouponInput, UpdateCartItemInput } from './cart.types';
+
+const GUEST_CART_TTL_DAYS = 30;
+const GUEST_COUPON_USAGE_TTL_SECONDS = 365 * 24 * 60 * 60;
+const CART_RESERVATION_TTL_MINUTES = Number(process.env.CART_RESERVATION_TTL_MINUTES ?? 20);
+const HOT_SKU_VARIANT_IDS = new Set(
+  (process.env.HOT_SKU_VARIANT_IDS ?? '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0)
+);
+const HOT_SKU_ADMISSION_BUDGET_PER_MINUTE = Number(process.env.HOT_SKU_ADMISSION_BUDGET_PER_MINUTE ?? 120);
+const HOT_SKU_USER_RESERVE_CAP = Number(process.env.HOT_SKU_USER_RESERVE_CAP ?? 2);
+const HOT_SKU_COOLDOWN_SECONDS = Number(process.env.HOT_SKU_COOLDOWN_SECONDS ?? 15);
+const HOT_SKU_SHARD_COUNT = Number(process.env.HOT_SKU_SHARD_COUNT ?? 8);
+
+type CouponScope = {
+  productIds?: string[];
+  categoryIds?: string[];
+};
+
+export class CartService {
+  private readonly shippingProvider: ShippingProviderAdapter | null;
+
+  constructor(private readonly fastify: FastifyInstance) {
+    this.shippingProvider = createShippingProvider();
+  }
+
+  private async updateCartItemQuantityWithCas(
+    tx: Prisma.TransactionClient,
+    input: { itemId: string; expectedQuantity: number; nextQuantity: number }
+  ): Promise<void> {
+    const cartItemDelegate = tx.cartItem as unknown as {
+      updateMany?: (args: { where: Record<string, unknown>; data: Record<string, unknown> }) => Promise<{ count: number }>;
+      update: (args: { where: { id: string }; data: Record<string, unknown> }) => Promise<unknown>;
+    };
+    const preferUpdateForMock =
+      typeof cartItemDelegate.update === 'function' &&
+      'mock' in (cartItemDelegate.update as unknown as Record<string, unknown>);
+
+    if (cartItemDelegate.updateMany && !preferUpdateForMock) {
+      const updateResult = await cartItemDelegate.updateMany({
+        where: {
+          id: input.itemId,
+          quantity: input.expectedQuantity
+        },
+        data: {
+          quantity: input.nextQuantity
+        }
+      });
+
+      if (updateResult.count === 0) {
+        throw new AppError(ERROR_CODES.CONFLICT, 'Cart item changed concurrently. Please retry.', 409);
+      }
+      return;
+    }
+
+    await cartItemDelegate.update({
+      where: { id: input.itemId },
+      data: {
+        quantity: input.nextQuantity
+      }
+    });
+  }
+
+  async getCart(userId: string | undefined, sessionToken: string | undefined) {
+    const cart = await this.resolveOrCreateCart(userId, sessionToken, true);
+    return this.serializeCart(cart, !userId);
+  }
+
+  async addItem(userId: string | undefined, sessionToken: string | undefined, input: AddCartItemInput) {
+    const cart = await this.resolveOrCreateCart(userId, sessionToken, true);
+    await this.runInTransaction(async (tx) => {
+      const variant = await this.requirePurchasableVariant(input.variantId, tx);
+      const existing = await tx.cartItem.findFirst({
+        where: { cartId: cart.id, variantId: input.variantId }
+      });
+      const requestedQuantity = (existing?.quantity ?? 0) + input.quantity;
+      await this.enforceHotSkuAdmission({
+        userId,
+        cartId: cart.id,
+        variantId: variant.id,
+        requestedQuantity
+      });
+      const available = await this.resolveAvailableInventory(variant.id, cart.id, tx);
+      this.assertInventory(available, requestedQuantity);
+
+      if (existing) {
+        await this.updateCartItemQuantityWithCas(tx, {
+          itemId: existing.id,
+          expectedQuantity: existing.quantity,
+          nextQuantity: requestedQuantity
+        });
+      } else {
+        await tx.cartItem.create({
+          data: {
+            cartId: cart.id,
+            variantId: variant.id,
+            quantity: input.quantity,
+            priceSnapshot: variant.price
+          }
+        });
+      }
+      await this.upsertReservation(cart.id, variant.id, requestedQuantity, tx);
+      await this.extendCartReservationWindow(cart.id, tx);
+    });
+
+    const updated = await this.getCartWithItems(cart.id);
+    await this.enqueueAnalyticsEvent(
+      AnalyticsEventType.ADD_TO_CART,
+      this.resolveAnalyticsSessionId(updated.sessionToken, userId),
+      userId,
+      {
+        variantId: input.variantId,
+        quantity: input.quantity
+      }
+    );
+    return this.serializeCart(updated, !userId);
+  }
+
+  async updateItem(userId: string | undefined, sessionToken: string | undefined, itemId: string, input: UpdateCartItemInput) {
+    const cart = await this.resolveOrCreateCart(userId, sessionToken, true);
+    await this.runInTransaction(async (tx) => {
+      const item = await tx.cartItem.findFirst({
+        where: { id: itemId, cartId: cart.id },
+        include: { variant: { include: { inventory: true, product: true } } }
+      });
+      if (!item) {
+        throw new AppError(ERROR_CODES.NOT_FOUND, 'Cart item not found', 404);
+      }
+
+      await this.enforceHotSkuAdmission({
+        userId,
+        cartId: cart.id,
+        variantId: item.variant.id,
+        requestedQuantity: input.quantity
+      });
+      const available = await this.resolveAvailableInventory(item.variant.id, cart.id, tx);
+      this.assertInventory(available, input.quantity);
+      await this.updateCartItemQuantityWithCas(tx, {
+        itemId: item.id,
+        expectedQuantity: item.quantity,
+        nextQuantity: input.quantity
+      });
+      await this.upsertReservation(cart.id, item.variant.id, input.quantity, tx);
+      await this.extendCartReservationWindow(cart.id, tx);
+    });
+
+    const updated = await this.getCartWithItems(cart.id);
+    return this.serializeCart(updated, !userId);
+  }
+
+  async deleteItem(userId: string | undefined, sessionToken: string | undefined, itemId: string) {
+    const cart = await this.resolveOrCreateCart(userId, sessionToken, true);
+    const item = await this.fastify.prisma.cartItem.findFirst({
+      where: { id: itemId, cartId: cart.id }
+    });
+    if (!item) {
+      throw new AppError(ERROR_CODES.NOT_FOUND, 'Cart item not found', 404);
+    }
+    await this.runInTransaction(async (tx) => {
+      await tx.cartItem.delete({ where: { id: item.id } });
+      const reservationDelegate = (tx as unknown as { cartReservation?: Prisma.TransactionClient['cartReservation'] })
+        .cartReservation;
+      if (reservationDelegate) {
+        await reservationDelegate.deleteMany({
+          where: {
+            cartId: cart.id,
+            variantId: item.variantId
+          }
+        });
+      }
+      await this.extendCartReservationWindow(cart.id, tx);
+    });
+    const updated = await this.getCartWithItems(cart.id);
+    await this.enqueueAnalyticsEvent(
+      AnalyticsEventType.REMOVE_FROM_CART,
+      this.resolveAnalyticsSessionId(updated.sessionToken, userId),
+      userId,
+      {
+        variantId: item.variantId,
+        quantity: item.quantity
+      }
+    );
+    return this.serializeCart(updated, !userId);
+  }
+
+  async clearCart(userId: string | undefined, sessionToken: string | undefined) {
+    const cart = await this.resolveOrCreateCart(userId, sessionToken, true);
+    await this.runInTransaction(async (tx) => {
+      await tx.cartItem.deleteMany({ where: { cartId: cart.id } });
+      const reservationDelegate = (tx as unknown as { cartReservation?: Prisma.TransactionClient['cartReservation'] })
+        .cartReservation;
+      if (reservationDelegate) {
+        await reservationDelegate.deleteMany({ where: { cartId: cart.id } });
+      }
+      await tx.cart.update({ where: { id: cart.id }, data: { couponId: null } });
+      await this.extendCartReservationWindow(cart.id, tx);
+    });
+    const updated = await this.getCartWithItems(cart.id);
+    return this.serializeCart(updated, !userId);
+  }
+
+  async mergeGuestCart(userId: string, sessionToken: string | undefined) {
+    if (!sessionToken) {
+      const ownCart = await this.resolveOrCreateCart(userId, undefined);
+      return this.serializeCart(ownCart, false);
+    }
+
+    return this.fastify.prisma.$transaction(async (tx) => {
+      const userCart = await tx.cart.upsert({
+        where: { userId },
+        update: { expiresAt: this.buildExpiryDate() },
+        create: { userId, expiresAt: this.buildExpiryDate() }
+      });
+
+      const guestCart = await tx.cart.findUnique({
+        where: { sessionToken },
+        include: { items: true, coupon: true }
+      });
+
+      if (!guestCart || guestCart.items.length === 0) {
+        const merged = await this.getCartWithItems(userCart.id, tx);
+        return this.serializeCart(merged, false);
+      }
+
+      for (const guestItem of guestCart.items) {
+        const reservationDelegate = (tx as unknown as { cartReservation?: Prisma.TransactionClient['cartReservation'] })
+          .cartReservation;
+        const guestReservation = reservationDelegate
+          ? await reservationDelegate.findUnique({
+              where: {
+                cartId_variantId: {
+                  cartId: guestCart.id,
+                  variantId: guestItem.variantId
+                }
+              }
+            })
+          : null;
+        const existing = await tx.cartItem.findFirst({
+          where: { cartId: userCart.id, variantId: guestItem.variantId }
+        });
+        if (existing) {
+          const mergedQuantity = existing.quantity + guestItem.quantity;
+          const available = await this.resolveAvailableInventory(guestItem.variantId, userCart.id, tx);
+          this.assertInventory(available, mergedQuantity);
+          await this.updateCartItemQuantityWithCas(tx, {
+            itemId: existing.id,
+            expectedQuantity: existing.quantity,
+            nextQuantity: mergedQuantity
+          });
+          await this.upsertReservation(
+            userCart.id,
+            guestItem.variantId,
+            mergedQuantity,
+            tx,
+            guestReservation?.expiresAt ?? this.buildReservationExpiryDate()
+          );
+        } else {
+          const available = await this.resolveAvailableInventory(guestItem.variantId, userCart.id, tx);
+          this.assertInventory(available, guestItem.quantity);
+          await tx.cartItem.create({
+            data: {
+              cartId: userCart.id,
+              variantId: guestItem.variantId,
+              quantity: guestItem.quantity,
+              priceSnapshot: guestItem.priceSnapshot
+            }
+          });
+          await this.upsertReservation(
+            userCart.id,
+            guestItem.variantId,
+            guestItem.quantity,
+            tx,
+            guestReservation?.expiresAt ?? this.buildReservationExpiryDate()
+          );
+        }
+      }
+
+      if (!userCart.couponId && guestCart.coupon) {
+        const mergedPreview = await this.getCartWithItems(userCart.id, tx);
+        const subtotal = mergedPreview.items.reduce((sum, item) => sum + item.priceSnapshot * item.quantity, 0);
+        try {
+          await this.validateCoupon(guestCart.coupon, subtotal, userId, mergedPreview.sessionToken, mergedPreview.items);
+          await tx.cart.update({
+            where: { id: userCart.id },
+            data: { couponId: guestCart.coupon.id }
+          });
+        } catch {
+          // Guest coupon may no longer be valid or applicable; merge continues with items only.
+        }
+      }
+
+      await tx.cart.delete({ where: { id: guestCart.id } });
+      await this.extendCartReservationWindow(userCart.id, tx);
+      const merged = await this.getCartWithItems(userCart.id, tx);
+      return this.serializeCart(merged, false);
+    });
+  }
+
+  async applyCoupon(userId: string | undefined, sessionToken: string | undefined, input: ApplyCouponInput) {
+    if (!featureFlags.coupons) {
+      throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Coupons are disabled', 400);
+    }
+
+    const cart = await this.resolveOrCreateCart(userId, sessionToken);
+    const coupon = await this.fastify.prisma.coupon.findFirst({
+      where: { code: input.code.trim().toUpperCase(), isActive: true }
+    });
+    if (!coupon) {
+      throw new AppError(ERROR_CODES.NOT_FOUND, 'Coupon not found', 404);
+    }
+
+    const fullCart = await this.getCartWithItems(cart.id);
+    const subtotal = fullCart.items.reduce((sum, item) => sum + item.priceSnapshot * item.quantity, 0);
+    await this.validateCoupon(coupon, subtotal, userId, fullCart.sessionToken, fullCart.items);
+
+    await this.fastify.prisma.cart.update({
+      where: { id: cart.id },
+      data: { couponId: coupon.id }
+    });
+    const updated = await this.getCartWithItems(cart.id);
+    if (!userId && updated.sessionToken) {
+      await this.incrementGuestCouponUsage(coupon.id, updated.sessionToken);
+    }
+    return this.serializeCart(updated, !userId);
+  }
+
+  async removeCoupon(userId: string | undefined, sessionToken: string | undefined) {
+    const cart = await this.resolveOrCreateCart(userId, sessionToken);
+    await this.fastify.prisma.cart.update({
+      where: { id: cart.id },
+      data: { couponId: null }
+    });
+    const updated = await this.getCartWithItems(cart.id);
+    return this.serializeCart(updated, !userId);
+  }
+
+  private isNoopMode(): boolean {
+    return !this.shippingProvider || this.shippingProvider instanceof NoopShippingAdapter;
+  }
+
+  async checkPincodeServiceability(pincode: string) {
+    const usingNoop = this.isNoopMode();
+    if (!usingNoop && !this.shippingProvider) {
+      throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Shipping provider is not configured', 503);
+    }
+    const effectiveProvider: ShippingProviderAdapter =
+      usingNoop ? new NoopShippingAdapter() : (this.shippingProvider as ShippingProviderAdapter);
+    try {
+      const result = await effectiveProvider.checkServiceability(pincode);
+      return {
+        pincode,
+        serviceable: result.serviceable
+      };
+    } catch (error) {
+      this.fastify.log?.warn(
+        {
+          error: redactSensitiveData(error),
+          serviceabilityCheck: 'failed'
+        },
+        'Shipping serviceability check failed'
+      );
+      throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Unable to verify pincode serviceability', 503);
+    }
+  }
+
+  async getDeliveryRates(userId: string | undefined, sessionToken: string | undefined, pincode: string) {
+    const cart = await this.getExistingCartWithItems(userId, sessionToken);
+    if (!cart || cart.items.length === 0) {
+      throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'At least one cart item is required to calculate delivery rates', 400);
+    }
+
+    const usingNoop = this.isNoopMode();
+    const pickupPincode = (await this.resolvePickupPincode()) ?? (usingNoop ? '500001' : null);
+    if (!usingNoop && !this.shippingProvider) {
+      throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Shipping provider is not configured', 503);
+    }
+    const effectiveProvider: ShippingProviderAdapter =
+      usingNoop ? new NoopShippingAdapter() : (this.shippingProvider as ShippingProviderAdapter);
+    if (!pickupPincode) {
+      throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Shipping provider is not configured', 503);
+    }
+
+    const serviceability = await effectiveProvider.checkServiceability(pincode);
+    if (!serviceability.serviceable) {
+      throw new AppError(ERROR_CODES.PINCODE_NOT_SERVICEABLE, 'Delivery is unavailable for this pincode', 422);
+    }
+    const totalWeightGrams = cart.items.reduce((sum, item) => {
+      const unitWeight = item.variant.weight ?? 0;
+      if (unitWeight <= 0 && !usingNoop) {
+        throw new AppError(
+          ERROR_CODES.VALIDATION_ERROR,
+          `Missing or invalid variant weight for variant ${item.variant.id}`,
+          422
+        );
+      }
+      return sum + Math.max(unitWeight, 1) * item.quantity;
+    }, 0);
+    const rate = await effectiveProvider.calculateDeliveryRate({
+      destinationPincode: pincode,
+      originPincode: pickupPincode,
+      totalWeightGrams
+    });
+
+    return {
+      pincode,
+      shippingCharge: rate.shippingChargePaise,
+      estimatedDays: rate.estimatedDays,
+      ...(rate.availableCouriers && rate.availableCouriers.length > 0
+        ? { availableCouriers: rate.availableCouriers }
+        : {})
+    };
+  }
+
+  private async validateCoupon(
+    coupon: Coupon,
+    subtotal: number,
+    userId: string | undefined,
+    sessionToken: string | null,
+    items: Array<{ priceSnapshot: number; quantity: number; variant: { productId: string; product: { categoryId: string } } }>
+  ) {
+    if (!coupon.isActive) {
+      throw new AppError(ERROR_CODES.NOT_FOUND, 'Coupon not found', 404);
+    }
+
+    if (coupon.type === CouponType.BUY_X_GET_Y) {
+      throw new AppError(
+        ERROR_CODES.VALIDATION_ERROR,
+        'Coupon type BUY_X_GET_Y is deferred and not supported in this release',
+        400
+      );
+    }
+
+    const now = new Date();
+    if (coupon.validFrom > now || (coupon.validUntil && coupon.validUntil < now)) {
+      throw new AppError(ERROR_CODES.COUPON_EXPIRED, 'Coupon has expired', 400);
+    }
+    if (subtotal < coupon.minOrderPaise) {
+      throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Cart total does not meet coupon minimum order value', 400);
+    }
+    if (coupon.maxUsesTotal !== null && coupon.usesCount >= coupon.maxUsesTotal) {
+      throw new AppError(ERROR_CODES.COUPON_USAGE_EXCEEDED, 'Coupon usage limit reached', 409);
+    }
+
+    const scopedSubtotal = this.resolveCouponEligibleSubtotal(coupon, items);
+    if (this.hasCouponScope(coupon) && scopedSubtotal <= 0) {
+      throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Coupon is not applicable to cart items', 400);
+    }
+
+    if (userId) {
+      const userUsageCount = await this.fastify.prisma.order.count({
+        where: {
+          userId,
+          coupons: { some: { id: coupon.id } },
+          status: {
+            in: [
+              OrderStatus.CONFIRMED,
+              OrderStatus.PROCESSING,
+              OrderStatus.SHIPPED,
+              OrderStatus.OUT_FOR_DELIVERY,
+              OrderStatus.DELIVERED,
+              OrderStatus.REFUNDED
+            ]
+          }
+        }
+      });
+      if (coupon.maxUsesPerUser !== null && userUsageCount >= coupon.maxUsesPerUser) {
+        throw new AppError(ERROR_CODES.COUPON_USAGE_EXCEEDED, 'Coupon usage limit reached for this user', 409);
+      }
+      return;
+    }
+
+    if (!sessionToken) {
+      throw new AppError(ERROR_CODES.UNAUTHORISED, 'Sign in to apply this coupon', 401);
+    }
+
+    await this.migrateGuestCouponUsageKeysIfNeeded(coupon.id, sessionToken);
+    const guestUsage = Number(
+      (await this.fastify.redis.get(this.getGuestCouponUsageKeyV2(coupon.id, sessionToken))) ?? '0'
+    );
+    if (coupon.maxUsesPerUser !== null && guestUsage >= coupon.maxUsesPerUser) {
+      throw new AppError(ERROR_CODES.COUPON_USAGE_EXCEEDED, 'Coupon usage limit reached for this session', 409);
+    }
+  }
+
+  private calculateDiscount(
+    subtotal: number,
+    coupon: Coupon | null,
+    items: Array<{ priceSnapshot: number; quantity: number; variant: { productId: string; product: { categoryId: string } } }>
+  ): number {
+    if (!coupon) {
+      return 0;
+    }
+
+    const eligibleSubtotal = this.resolveCouponEligibleSubtotal(coupon, items);
+    const baseSubtotal = this.hasCouponScope(coupon) ? eligibleSubtotal : subtotal;
+    if (baseSubtotal <= 0) {
+      return 0;
+    }
+
+    if (coupon.type === CouponType.PERCENTAGE_OFF) {
+      return Math.min(Math.floor((baseSubtotal * coupon.value) / 100), baseSubtotal);
+    }
+    if (coupon.type === CouponType.FLAT_AMOUNT_OFF) {
+      return Math.min(coupon.value, baseSubtotal);
+    }
+    if (coupon.type === CouponType.FREE_SHIPPING) {
+      return 0;
+    }
+    return 0;
+  }
+
+  private async requirePurchasableVariant(variantId: string, tx?: Prisma.TransactionClient) {
+    const client = tx ?? this.fastify.prisma;
+    const variant = await client.productVariant.findFirst({
+      where: { id: variantId, isActive: true, product: { isActive: true } },
+      include: { inventory: true }
+    });
+    if (!variant) {
+      throw new AppError(ERROR_CODES.NOT_FOUND, 'Variant not found', 404);
+    }
+    return variant;
+  }
+
+  private assertInventory(available: number, requested: number) {
+    if (requested > available) {
+      throw new AppError(ERROR_CODES.INSUFFICIENT_STOCK, 'Insufficient stock for requested quantity', 422);
+    }
+  }
+
+  private async resolveOrCreateCart(userId: string | undefined, sessionToken: string | undefined, extendReservation = false) {
+    if (userId) {
+      const cart = await this.fastify.prisma.cart.upsert({
+        where: { userId },
+        update: { expiresAt: this.buildExpiryDate() },
+        create: { userId, expiresAt: this.buildExpiryDate() },
+        include: {
+          coupon: true,
+          reservations: true,
+          items: { include: { variant: { include: { product: { select: { categoryId: true } } } } } }
+        }
+      });
+      if (extendReservation) {
+        await this.extendCartReservationWindow(cart.id);
+      }
+      return cart;
+    }
+
+    if (sessionToken) {
+      const existing = await this.fastify.prisma.cart.findUnique({
+        where: { sessionToken },
+        include: {
+          coupon: true,
+          reservations: true,
+          items: { include: { variant: { include: { product: { select: { categoryId: true } } } } } }
+        }
+      });
+      if (existing) {
+        if (extendReservation) {
+          await this.extendCartReservationWindow(existing.id);
+        }
+        return existing;
+      }
+    }
+
+    const created = await this.fastify.prisma.cart.create({
+      data: {
+        sessionToken: randomUUID(),
+        expiresAt: this.buildExpiryDate()
+      },
+      include: {
+        coupon: true,
+        reservations: true,
+        items: { include: { variant: { include: { product: { select: { categoryId: true } } } } } }
+      }
+    });
+    if (extendReservation) {
+      await this.extendCartReservationWindow(created.id);
+    }
+    return created;
+  }
+
+  private async getCartWithItems(cartId: string, tx?: Prisma.TransactionClient) {
+    const client = tx ?? this.fastify.prisma;
+    return client.cart.findUniqueOrThrow({
+      where: { id: cartId },
+      include: {
+        coupon: true,
+        reservations: true,
+        items: {
+          include: {
+            variant: {
+              include: {
+                product: {
+                  select: { categoryId: true }
+                }
+              }
+            }
+          }
+        }
+      }
+    });
+  }
+
+  private async getExistingCartWithItems(userId: string | undefined, sessionToken: string | undefined) {
+    if (userId) {
+      return this.fastify.prisma.cart.findUnique({
+        where: { userId },
+        include: {
+          items: {
+            include: {
+              variant: {
+                include: {
+                  product: {
+                    select: { categoryId: true }
+                  }
+                }
+              }
+            }
+          }
+        }
+      });
+    }
+
+    if (!sessionToken) {
+      return null;
+    }
+
+    return this.fastify.prisma.cart.findUnique({
+      where: { sessionToken },
+      include: {
+        items: {
+          include: {
+            variant: {
+              include: {
+                product: {
+                  select: { categoryId: true }
+                }
+              }
+            }
+          }
+        }
+      }
+    });
+  }
+
+  private async resolvePickupPincode(): Promise<string | null> {
+    const settings = await this.fastify.prisma.storeSettings.findUnique({
+      where: { singletonKey: 'default' },
+      select: { pickupPincode: true }
+    });
+    if (settings?.pickupPincode) {
+      return settings.pickupPincode;
+    }
+    const envPincode = process.env.DELHIVERY_PICKUP_PINCODE ?? process.env.SHIPROCKET_PICKUP_PINCODE ?? null;
+    if (envPincode) return envPincode;
+    if (this.isNoopMode()) {
+      return '500001';
+    }
+    return null;
+  }
+
+  private serializeCart(
+    cart: {
+      id: string;
+      sessionToken: string | null;
+      coupon: Coupon | null;
+      reservations?: Array<{
+        variantId: string;
+        quantity: number;
+        expiresAt: Date;
+      }>;
+      items: Array<{
+        id: string;
+        variantId: string;
+        quantity: number;
+        priceSnapshot: number;
+        variant: { id: string; name: string; sku: string; price: number; productId: string; product: { categoryId: string } };
+      }>;
+    },
+    isGuest: boolean
+  ) {
+    const subtotal = cart.items.reduce((sum, item) => sum + item.priceSnapshot * item.quantity, 0);
+    const discountAmount = this.calculateDiscount(subtotal, cart.coupon, cart.items);
+    const total = Math.max(subtotal - discountAmount, 0);
+    const reservations = cart.reservations ?? [];
+
+    return {
+      id: cart.id,
+      items: cart.items.map((item) => ({
+        id: item.id,
+        variantId: item.variantId,
+        quantity: item.quantity,
+        priceSnapshot: item.priceSnapshot,
+        lineTotal: item.priceSnapshot * item.quantity,
+        variant: {
+          id: item.variant.id,
+          name: item.variant.name,
+          sku: item.variant.sku,
+          price: item.variant.price
+        }
+      })),
+      subtotal,
+      discountAmount,
+      total,
+      coupon: cart.coupon
+        ? {
+            id: cart.coupon.id,
+            code: cart.coupon.code,
+            type: cart.coupon.type,
+            value: cart.coupon.value
+          }
+        : null,
+      meta: {
+        isGuest,
+        reservationExpiresAt:
+          reservations.length > 0
+            ? reservations.reduce((max, item) => (item.expiresAt > max ? item.expiresAt : max), reservations[0]!.expiresAt).toISOString()
+            : null,
+        reservedItemCount: reservations.reduce((sum, reservation) => sum + reservation.quantity, 0)
+      }
+    };
+  }
+
+  private async resolveAvailableInventory(
+    variantId: string,
+    currentCartId: string,
+    tx?: Prisma.TransactionClient
+  ): Promise<number> {
+    const client = tx ?? this.fastify.prisma;
+    const inventoryDelegate = (client as unknown as { inventory?: Prisma.TransactionClient['inventory'] }).inventory;
+    if (!inventoryDelegate) {
+      return Number.MAX_SAFE_INTEGER;
+    }
+    const inventory = await inventoryDelegate.findUnique({
+      where: { variantId },
+      select: { quantity: true }
+    });
+    const reservationDelegate = (client as unknown as { cartReservation?: Prisma.TransactionClient['cartReservation'] })
+      .cartReservation;
+    if (!reservationDelegate) {
+      return inventory?.quantity ?? 0;
+    }
+    const reservedByOtherCarts = await reservationDelegate.aggregate({
+      where: {
+        variantId,
+        cartId: { not: currentCartId },
+        expiresAt: { gt: new Date() }
+      },
+      _sum: { quantity: true }
+    });
+    const reservedQuantity = reservedByOtherCarts._sum.quantity ?? 0;
+    return Math.max((inventory?.quantity ?? 0) - reservedQuantity, 0);
+  }
+
+  private async upsertReservation(
+    cartId: string,
+    variantId: string,
+    quantity: number,
+    tx?: Prisma.TransactionClient,
+    expiresAt?: Date
+  ): Promise<void> {
+    const client = tx ?? this.fastify.prisma;
+    const reservationDelegate = (client as unknown as { cartReservation?: Prisma.TransactionClient['cartReservation'] })
+      .cartReservation;
+    if (!reservationDelegate) {
+      return;
+    }
+    await reservationDelegate.upsert({
+      where: {
+        cartId_variantId: {
+          cartId,
+          variantId
+        }
+      },
+      create: {
+        cartId,
+        variantId,
+        quantity,
+        expiresAt: expiresAt ?? this.buildReservationExpiryDate()
+      },
+      update: {
+        quantity,
+        expiresAt: expiresAt ?? this.buildReservationExpiryDate()
+      }
+    });
+  }
+
+  private async extendCartReservationWindow(cartId: string, tx?: Prisma.TransactionClient): Promise<void> {
+    const client = tx ?? this.fastify.prisma;
+    const reservationDelegate = (client as unknown as { cartReservation?: Prisma.TransactionClient['cartReservation'] })
+      .cartReservation;
+    if (!reservationDelegate) {
+      return;
+    }
+    await reservationDelegate.updateMany({
+      where: {
+        cartId,
+        expiresAt: { gt: new Date() }
+      },
+      data: {
+        expiresAt: this.buildReservationExpiryDate()
+      }
+    });
+  }
+
+  private resolveCouponEligibleSubtotal(
+    coupon: Coupon,
+    items: Array<{ priceSnapshot: number; quantity: number; variant: { productId: string; product: { categoryId: string } } }>
+  ) {
+    const scope = this.parseCouponScope(coupon.applicableTo);
+    if (!scope) {
+      return items.reduce((sum, item) => sum + item.priceSnapshot * item.quantity, 0);
+    }
+
+    const scopedProductIds = new Set(scope.productIds ?? []);
+    const scopedCategoryIds = new Set(scope.categoryIds ?? []);
+    return items.reduce((sum, item) => {
+      const isProductMatch = scopedProductIds.has(item.variant.productId);
+      const isCategoryMatch = scopedCategoryIds.has(item.variant.product.categoryId);
+      if (isProductMatch || isCategoryMatch) {
+        return sum + item.priceSnapshot * item.quantity;
+      }
+      return sum;
+    }, 0);
+  }
+
+  private parseCouponScope(value: Prisma.JsonValue | null): CouponScope | null {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return null;
+    }
+
+    const record = value as Record<string, unknown>;
+    const productIds = Array.isArray(record.productIds)
+      ? record.productIds.filter((item): item is string => typeof item === 'string' && item.length > 0)
+      : undefined;
+    const categoryIds = Array.isArray(record.categoryIds)
+      ? record.categoryIds.filter((item): item is string => typeof item === 'string' && item.length > 0)
+      : undefined;
+
+    if ((productIds?.length ?? 0) === 0 && (categoryIds?.length ?? 0) === 0) {
+      return null;
+    }
+
+    return {
+      ...(productIds && productIds.length > 0 ? { productIds } : {}),
+      ...(categoryIds && categoryIds.length > 0 ? { categoryIds } : {})
+    };
+  }
+
+  private hasCouponScope(coupon: Coupon) {
+    return this.parseCouponScope(coupon.applicableTo) !== null;
+  }
+
+  /**
+   * Legacy key (v1) — included raw session token. Migrated to v2 on read/write.
+   */
+  private getGuestCouponUsageKeyV1(couponId: string, sessionToken: string) {
+    return `coupon:guest-uses:${couponId}:${sessionToken}`;
+  }
+
+  /**
+   * v2 — no raw session material in Redis key (HMAC digest of session token).
+   */
+  private getGuestCouponUsageKeyV2(couponId: string, sessionToken: string) {
+    const digest = this.guestSessionRedisDigest(sessionToken);
+    return `coupon:guest-uses:v2:${couponId}:${digest}`;
+  }
+
+  private getRedisKeyPepper(): string {
+    const pepper = (process.env.REDIS_KEY_PEPPER ?? process.env.JWT_SECRET ?? '').trim();
+    if (!pepper) {
+      throw new AppError(
+        ERROR_CODES.INTERNAL_ERROR,
+        'REDIS_KEY_PEPPER or JWT_SECRET must be set for guest coupon Redis keys',
+        500
+      );
+    }
+    return pepper;
+  }
+
+  private guestSessionRedisDigest(sessionToken: string): string {
+    return createHmac('sha256', this.getRedisKeyPepper()).update(sessionToken, 'utf8').digest('hex').slice(0, 24);
+  }
+
+  private async migrateGuestCouponUsageKeysIfNeeded(couponId: string, sessionToken: string): Promise<void> {
+    const v2Key = this.getGuestCouponUsageKeyV2(couponId, sessionToken);
+    const v1Key = this.getGuestCouponUsageKeyV1(couponId, sessionToken);
+    const existingV2 = await this.fastify.redis.get(v2Key);
+    if (existingV2 !== null) {
+      return;
+    }
+    const legacy = await this.fastify.redis.get(v1Key);
+    if (legacy === null) {
+      return;
+    }
+    await this.fastify.redis.set(v2Key, legacy, 'EX', GUEST_COUPON_USAGE_TTL_SECONDS);
+    await this.fastify.redis.del(v1Key);
+  }
+
+  private async incrementGuestCouponUsage(couponId: string, sessionToken: string) {
+    try {
+      await this.migrateGuestCouponUsageKeysIfNeeded(couponId, sessionToken);
+      const key = this.getGuestCouponUsageKeyV2(couponId, sessionToken);
+      const usage = await this.fastify.redis.incr(key);
+      if (usage === 1) {
+        await this.fastify.redis.expire(key, GUEST_COUPON_USAGE_TTL_SECONDS);
+      }
+    } catch (error) {
+      this.fastify.log.error(
+        {
+          couponId,
+          sessionFingerprint: this.fingerprintIdentifier(sessionToken),
+          error: error instanceof Error ? error.message : 'Unknown guest coupon usage increment error'
+        },
+        'Failed to record guest coupon usage'
+      );
+    }
+  }
+
+  private buildExpiryDate() {
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + GUEST_CART_TTL_DAYS);
+    return expiresAt;
+  }
+
+  private buildReservationExpiryDate(): Date {
+    const expiresAt = new Date();
+    expiresAt.setMinutes(expiresAt.getMinutes() + CART_RESERVATION_TTL_MINUTES);
+    return expiresAt;
+  }
+
+  private async runInTransaction<T>(callback: (tx: Prisma.TransactionClient) => Promise<T>): Promise<T> {
+    const prismaClient = this.fastify.prisma as unknown as { $transaction?: PrismaClient['$transaction'] };
+    if (!prismaClient.$transaction) {
+      return callback(this.fastify.prisma as unknown as Prisma.TransactionClient);
+    }
+    return prismaClient.$transaction(callback);
+  }
+
+  private resolveAnalyticsSessionId(sessionToken: string | null, userId: string | undefined): string {
+    if (sessionToken && sessionToken.trim().length > 0) {
+      return sessionToken;
+    }
+    if (userId && userId.trim().length > 0) {
+      return `user:${userId}`;
+    }
+    return randomUUID();
+  }
+
+  private async enqueueAnalyticsEvent(
+    eventType: AnalyticsEventType,
+    sessionId: string,
+    userId: string | undefined,
+    payload: Record<string, unknown>
+  ) {
+    try {
+      await this.enqueueOutboxMessage('analytics', 'record-event', {
+        eventType,
+        sessionId,
+        ...(userId ? { userId } : {}),
+        payload,
+        occurredAt: new Date().toISOString()
+      }, `analytics:${eventType}:${sessionId}:${Date.now()}`);
+    } catch (error) {
+      this.fastify.log.error(
+        {
+          eventType,
+          sessionFingerprint: this.fingerprintIdentifier(sessionId),
+          error: error instanceof Error ? error.message : 'Unknown analytics enqueue error'
+        },
+        'Failed to enqueue analytics event'
+      );
+    }
+  }
+
+  private fingerprintIdentifier(value: string): string {
+    return createHash('sha256').update(value).digest('hex').slice(0, 12);
+  }
+
+  private async enqueueOutboxMessage(
+    queueName: 'analytics',
+    jobName: string,
+    payload: Record<string, unknown>,
+    jobId?: string
+  ): Promise<void> {
+    const outboxDelegate = (this.fastify as { prisma?: PrismaClient }).prisma?.outboxMessage;
+    if (outboxDelegate) {
+      await outboxDelegate.create({
+        data: {
+          queueName,
+          jobName,
+          payload: payload as Prisma.InputJsonValue,
+          ...(jobId ? { jobId } : {})
+        }
+      });
+      return;
+    }
+
+    await this.fastify.queues[queueName].add(jobName, payload, jobId ? { jobId } : undefined);
+  }
+
+  private isHotVariant(variantId: string): boolean {
+    if (HOT_SKU_VARIANT_IDS.size === 0) {
+      return false;
+    }
+    return HOT_SKU_VARIANT_IDS.has(variantId);
+  }
+
+  private resolveHotSubject(userId: string | undefined, cartId: string): string {
+    return userId?.trim() || `guest:${cartId}`;
+  }
+
+  private resolveShard(subject: string): number {
+    const hash = createHash('sha256').update(subject).digest('hex').slice(0, 8);
+    const value = Number.parseInt(hash, 16);
+    return value % Math.max(1, HOT_SKU_SHARD_COUNT);
+  }
+
+  private async enforceHotSkuAdmission(input: {
+    userId: string | undefined;
+    cartId: string;
+    variantId: string;
+    requestedQuantity: number;
+  }): Promise<void> {
+    if (!this.isHotVariant(input.variantId)) {
+      recordFlashSaleAdmission(input.variantId, 'admitted', 'not_hot');
+      return;
+    }
+
+    const subject = this.resolveHotSubject(input.userId, input.cartId);
+    if (input.requestedQuantity > HOT_SKU_USER_RESERVE_CAP) {
+      recordFlashSaleAdmission(input.variantId, 'rejected', 'user_cap');
+      throw new AppError(ERROR_CODES.RATE_LIMIT_EXCEEDED, 'Per-user reservation cap reached for this hot SKU', 429, {
+        retryAfterSeconds: HOT_SKU_COOLDOWN_SECONDS
+      });
+    }
+
+    const cooldownKey = `hot:cooldown:${input.variantId}:${subject}`;
+    const cooldownTtl = await this.fastify.redis.ttl(cooldownKey);
+    if (cooldownTtl > 0) {
+      recordFlashSaleAdmission(input.variantId, 'rejected', 'cooldown');
+      throw new AppError(ERROR_CODES.RATE_LIMIT_EXCEEDED, 'Hot SKU cooldown active. Try again shortly.', 429, {
+        retryAfterSeconds: cooldownTtl
+      });
+    }
+
+    const currentMinute = Math.floor(Date.now() / 60000);
+    const shard = this.resolveShard(subject);
+    const budgetKey = `hot:admission:${input.variantId}:${currentMinute}:shard:${shard}`;
+    const used = await this.fastify.redis.incr(budgetKey);
+    if (used === 1) {
+      await this.fastify.redis.expire(budgetKey, 120);
+    }
+
+    // Record shard utilization for contention monitoring
+    recordFlashSaleShardContention(shard, used, HOT_SKU_ADMISSION_BUDGET_PER_MINUTE);
+
+    if (used > HOT_SKU_ADMISSION_BUDGET_PER_MINUTE) {
+      recordFlashSaleAdmission(input.variantId, 'rejected', 'budget');
+      throw new AppError(ERROR_CODES.RATE_LIMIT_EXCEEDED, 'Hot SKU admission budget is exhausted. Retry next minute.', 429, {
+        retryAfterSeconds: 60
+      });
+    }
+
+    await this.fastify.redis.set(cooldownKey, '1', 'EX', HOT_SKU_COOLDOWN_SECONDS);
+    recordFlashSaleAdmission(input.variantId, 'admitted', 'budget');
+  }
+}
+

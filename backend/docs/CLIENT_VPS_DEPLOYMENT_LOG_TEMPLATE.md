@@ -1,0 +1,327 @@
+# Client VPS Deployment Log — [CLIENT_NAME]
+
+> **Scope:** Phases 6–14 — VPS deployment and go-live execution.
+>
+> **Usage:** Copy to `client-<client-id>/CLIENT_VPS_DEPLOYMENT_LOG.md` once Phase 5 is cleared.
+>
+> **Master runbook:** `../backend/docs/CLIENT_ONBOARDING_EXECUTION_ORDER.md` (Phases 6–14)
+
+---
+
+## Project Identity (copy from CLIENT_DEV_LOG.md)
+
+| Field | Value |
+|---|---|
+| Client name | [CLIENT_NAME] |
+| `CLIENT_ID` slug | |
+| Domain | |
+| Admin path | |
+| Backend port | |
+| Storefront port | |
+| VPS IP | |
+| Deploy user | |
+| Backend repo path on VPS | `/var/www/<client-id>/backend` |
+| Frontend repo path on VPS | `/var/www/<client-id>/frontend` |
+| Phase 5 cleared on | [DATE from CLIENT_DEV_LOG.md] |
+| Phase 6 start date | [DATE] |
+| Last updated | [DATE] |
+
+---
+
+## Phase 6 — VPS Baseline Provisioning
+
+> First time the VPS is touched for this client.
+
+**Status:** `[ ]` not started · `[~]` in progress · `[x]` done
+
+- [ ] Ubuntu 22.04 LTS confirmed
+- [ ] Docker Engine + Compose plugin installed and version verified
+- [ ] Nginx 1.24+ installed and version verified
+- [ ] Certbot (nginx plugin) installed
+- [ ] PostgreSQL 16 running on host (not only in Docker)
+- [ ] Node.js 22 installed
+- [ ] `jq` installed
+- [ ] Non-root deploy user exists with sudo
+- [ ] Firewall: ports 80 and 443 open inbound
+- [ ] Firewall: backend/storefront ports (3001–3099, 3101–3199) NOT publicly exposed
+- [ ] NTP / time sync active (`timedatectl status` shows synchronized)
+- [ ] Per-client directories created:
+  - `/var/www/<client-id>/backend`
+  - `/var/www/<client-id>/frontend`
+  - Ownership set to deploy user
+
+**Phase 6 cleared on:** —
+
+**Notes:**
+
+---
+
+## Phase 7 — VPS Backend Deployment
+
+**Status:** `[ ]` not started · `[~]` in progress · `[x]` done
+
+### 7.1 Database
+
+- [ ] PostgreSQL user created: `<client-db-user>`
+- [ ] PostgreSQL database created: `<client-db-name>`, owned by `<client-db-user>`
+
+| Field | Value |
+|---|---|
+| DB user | |
+| DB name | |
+| DB password | (in vault — not here) |
+
+### 7.2 Backend deployment
+
+- [ ] Backend repo cloned / updated at `/var/www/<client-id>/backend`
+- [ ] `.env` copied from secure source (not git) — no `replace_with` placeholders
+- [ ] `.env` includes ops config encryption key (`OPS_DB_ENCRYPTION_KEY`) and invoice storage root (`INVOICE_STORAGE_ROOT`)
+- [ ] `npm ci --omit=dev` — passes
+- [ ] `npm run prisma:migrate:deploy` — passes (all migrations applied)
+- [ ] `docker compose -p <client-id> up -d --build` — all containers start
+- [ ] `docker ps` shows all containers `Up`
+
+### 7.3 Nginx configuration
+
+- [ ] Nginx config file created at `/etc/nginx/sites-available/<client-id>.conf`
+- [ ] All template variables replaced: `<domain>`, `<BACKEND_PORT>`, `<STOREFRONT_PORT>`, `<client-id>`
+- [ ] Security headers present in HTTPS server block:
+  - [ ] `Strict-Transport-Security` (2-year max-age, `includeSubDomains`, `preload`)
+  - [ ] `X-Frame-Options: DENY`
+  - [ ] `X-Content-Type-Options: nosniff`
+  - [ ] `Referrer-Policy: strict-origin-when-cross-origin`
+  - [ ] `X-XSS-Protection: 1; mode=block`
+  - [ ] `Permissions-Policy: camera=(), microphone=(), geolocation=(), interest-cohort=()`
+- [ ] TLS hardening: ECDHE-only ciphers, `ssl_session_tickets off`, `ssl_stapling on`
+- [ ] `limit_req_zone` directives in top-level `nginx.conf` `http {}` block (not in `server {}`)
+- [ ] Site symlinked: `/etc/nginx/sites-enabled/<client-id>.conf`
+- [ ] `sudo nginx -t` — passes
+- [ ] `sudo systemctl reload nginx` — succeeds
+
+### 7.4 TLS certificate
+
+- [ ] Certificate obtained via Certbot for `<domain>` and `www.<domain>`
+- [ ] `certbot.timer` active (auto-renewal confirmed)
+- [ ] HTTPS loads in browser without warnings
+- [ ] HTTP → HTTPS redirect confirmed
+
+### 7.5 Post-deploy smoke test
+
+- [ ] `curl https://<domain>/api/v1/health` — returns 200
+- [ ] `curl -H "x-ops-token: <OPS_METRICS_TOKEN>" https://<domain>/api/v1/ops/metrics` — returns 200 with Prometheus text
+- [ ] Authenticated invoice download routes validated:
+  - `GET /api/v1/orders/:id/invoice.pdf` (owner-only)
+  - `GET /api/v1/admin/orders/:id/invoice.pdf` (admin `orders:read`)
+- [ ] No errors in backend container logs (`docker compose -p <client-id> logs backend --tail=50`)
+- [ ] No errors in workers container logs (`docker compose -p <client-id> logs workers --tail=50`)
+
+**Phase 7 cleared on:** —
+
+**Notes:**
+
+---
+
+## Phase 8 — Ops Control Plane Invite Bootstrap
+
+**Status:** `[ ]` not started · `[~]` in progress · `[x]` done
+
+**Prerequisite:** Client frontend `/ops/setup` page must be deployed and functional (invite expires in 10 minutes).
+
+- [ ] Invite created via `npm run ops:newuser` with `--email`, `--name`, `--ip-allowlist`, `--setup-base-url`
+- [ ] Invite email received and setup link clicked within 10 minutes
+- [ ] Setup completed at `https://<domain>/ops/setup` — API credentials issued
+- [ ] `keyId` captured and stored in vault
+- [ ] `apiKey` captured and stored in vault (shown once at setup completion)
+- [ ] Email OTP MFA verified during setup — enrollment confirmed
+- [ ] Ops status endpoint tested: `GET /api/v1/ops/session` returns 200 with email-OTP verification
+- [ ] Ops config save hardening validated: `POST /api/v1/ops/config/save` requires OTP and returns masked/encrypted persistence metadata
+- [ ] IP allowlist enforcement confirmed: non-allowed IP returns 403
+- [ ] Expired invite cleanup verified: `POST /api/v1/ops/invites/cleanup-expired` accessible to ops users
+- [ ] Ops user recorded in `docs/CLIENT_INTEGRATION_CREDENTIAL_REGISTER_TEMPLATE.md`
+
+| Field | Value |
+|---|---|
+| Ops user email | |
+| IP allowlist | |
+| Vault path for keyId/apiKey | |
+| MFA enrolled on | |
+| Invite consumed at | |
+
+**Phase 8 cleared on:** —
+
+**Notes:**
+
+---
+
+## Phase 9 — Admin Provisioning
+
+**Status:** `[ ]` not started · `[~]` in progress · `[x]` done
+
+- [ ] Merchant admin invite created from ops-authenticated context: `POST /api/v1/admin/invites`
+- [ ] `/admin/setup?token=...` completed before 10-minute expiry using `POST /api/v1/admin/invites/consume`
+- [ ] Admin permissions explicitly granted by invite consumption (`AdminPermissionGrant`; fail-closed — zero implicit permissions)
+- [ ] Admin login tested: `POST /api/v1/auth/admin/login` returns token with expected `permissions` claim
+- [ ] Admin MFA enrolled (if `ADMIN_MFA_ENFORCE=true`)
+- [ ] Expired invite cleanup route verified from ops context: `POST /api/v1/admin/invites/cleanup-expired`
+
+| Field | Value |
+|---|---|
+| Admin email | |
+| Invite created by ops user | |
+| Invite consumed at | |
+| Password stored in vault | |
+| Permissions granted | |
+| Cleanup verification | |
+
+**Phase 9 cleared on:** —
+
+**Notes:**
+
+---
+
+## Phase 10 — Frontend Deployment and Domain Wiring
+
+**Status:** `[ ]` not started · `[~]` in progress · `[x]` done
+
+- [ ] Frontend `.env.local` updated to production values:
+  - [ ] `NEXT_PUBLIC_API_BASE_URL=https://<domain>/api/v1` (not localhost)
+  - [ ] `NEXT_PUBLIC_STOREFRONT_URL=https://<domain>`
+  - [ ] `NEXT_PUBLIC_RAZORPAY_KEY_ID=rzp_live_xxx` (live key, not test key)
+- [ ] `npm run build` passes with production env values
+- [ ] Frontend deployed to VPS (or Vercel/Netlify)
+- [ ] Nginx updated to proxy storefront port — `sudo nginx -t && reload` passes
+- [ ] `https://<domain>/` loads storefront
+- [ ] `https://<domain>/api/v1/health` returns 200
+- [ ] `https://<domain>/admin` loads admin UI
+- [ ] No `localhost` references visible in page source or network tab
+
+**Phase 10 cleared on:** —
+
+**Notes:**
+
+---
+
+## Phase 11 — Provider Webhook Endpoint Registration
+
+**Status:** `[ ]` not started · `[~]` in progress · `[x]` done
+
+| Provider | Live webhook URL registered | Webhook secret matches `.env`? | Test webhook received? |
+|---|---|---|---|
+| Razorpay | `https://<domain>/api/v1/payments/webhook` [ ] | [ ] | [ ] |
+| Delhivery | `https://<domain>/api/v1/shipping/webhook` [ ] | [ ] | [ ] |
+| Shiprocket | `https://<domain>/api/v1/shipping/webhook` [ ] | [ ] | [ ] |
+
+- [ ] No webhook URL still pointing to `localhost` or staging URL
+
+**Phase 11 cleared on:** —
+
+**Notes:**
+
+---
+
+## Phase 12 — Go-Live Validation
+
+> Both checklists run again against the **live VPS** (they were also run in Phase 5 against localhost).
+
+**Status:** `[ ]` not started · `[~]` in progress · `[x]` done
+
+### Release record
+
+| Field | Value |
+|---|---|
+| Client name | |
+| Environment | production / staging |
+| Backend git SHA | |
+| Storefront git SHA | |
+| Deploy timestamp | |
+| On-call owner | |
+
+### Checklist execution
+
+- [ ] `docs/BACKEND_GO_LIVE_CHECKLIST.md` — fully ticked (VPS environment, live domain)
+- [ ] `docs/FRONTEND_AI_GO_LIVE_CHECKLIST.md` — fully ticked (VPS environment, live domain)
+- [ ] Release record filled in `docs/CLIENT_GO_LIVE_VALIDATION_GUIDE.md`
+- [ ] Provider credential register attached — all fields complete
+- [ ] Race-condition hardening verified on VPS: CAS-hardened service tests pass (`ops.service.test.ts`, `auth.service.mfa-refresh.test.ts`, `admin-invites.service.test.ts`, `reconciliation.worker.test.ts`, `idempotency.test.ts`)
+
+### Contract smoke tests on live domain
+
+- [ ] Storefront: catalog → cart → PREPAID checkout (Razorpay test payment on staging / live on production) → confirmation page → confirmation email received
+- [ ] Storefront: COD checkout → order immediately `CONFIRMED` (if enabled)
+- [ ] Admin: order appears in admin panel → ship action → AWB returned → webhook → status updated
+- [ ] Ops: 200 from allowed IP, 403 from non-allowed IP
+
+### Observability
+
+- [ ] Prometheus scraping `/api/v1/ops/metrics` with auth token
+- [ ] At least one alert rule configured and tested
+- [ ] `process_crash_total` series visible in metrics
+
+**Phase 12 cleared on:** —  
+**Signed off by:** —
+
+---
+
+## Phase 13 — DNS Cutover
+
+**Status:** `[ ]` not started · `[~]` in progress · `[x]` done
+
+- [ ] DNS `A` record for `<domain>` → VPS IP updated
+- [ ] DNS `A` record for `www.<domain>` → VPS IP (or CNAME) updated
+- [ ] Admin subdomain DNS updated (if applicable)
+- [ ] DNS propagation confirmed globally (dnschecker.org)
+- [ ] `https://<domain>/` loads storefront via HTTPS
+- [ ] `https://<domain>/api/v1/health` returns 200 on live domain
+- [ ] TLS certificate valid — no browser warnings
+- [ ] HTTP → HTTPS redirect confirmed
+- [ ] Client notified that site is live
+- [ ] Logs monitored for first 24 hours — no critical errors
+
+**Phase 13 cleared on:** —
+
+**Notes:**
+
+---
+
+## Phase 14 — Post-Go-Live Handoff and Maintenance Setup
+
+**Status:** `[ ]` not started · `[~]` in progress · `[x]` done
+
+### Artifacts filed
+
+- [ ] `docs/CLIENT_GO_LIVE_VALIDATION_GUIDE.md` — completed and filed
+- [ ] `docs/BACKEND_GO_LIVE_CHECKLIST.md` — completed copy archived
+- [ ] `docs/FRONTEND_AI_GO_LIVE_CHECKLIST.md` — completed copy archived
+- [ ] `docs/CLIENT_INTEGRATION_CREDENTIAL_REGISTER_TEMPLATE.md` — completed and filed
+- [ ] Nginx config backed up
+- [ ] DB connection info (name, user, host) in vault
+
+### Maintenance setup
+
+- [ ] 90-day credential rotation calendar set (all providers, primary + backup owners assigned)
+- [ ] Quarterly compromise drill scheduled
+- [ ] Prometheus alerting configured — alert delivery channel confirmed (email/Slack/PagerDuty)
+- [ ] Client slot documented in agency ops register: `CLIENT_ID`, ports, DB name, ops user email, on-call
+
+### Client briefing
+
+- [ ] Admin panel URL and login process explained
+- [ ] MFA requirement explained
+- [ ] Manual ship action workflow explained
+- [ ] Async refund behaviour explained
+- [ ] Incident contact protocol established
+
+**Phase 14 cleared on:** —  
+**Project go-live confirmed:** —
+
+---
+
+## Notes
+
+### [DATE]
+
+-
+
+---
+
+<!-- Add new session entries above this line -->

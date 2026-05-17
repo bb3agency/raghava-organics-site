@@ -1,0 +1,163 @@
+import Fastify from 'fastify';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('@common/guards/jwt-auth.guard', () => ({
+  jwtAuthGuard: vi.fn(async () => undefined)
+}));
+vi.mock('@common/guards/roles.guard', () => ({
+  rolesGuard: vi.fn(() => async () => undefined)
+}));
+vi.mock('@common/guards/admin-permissions.guard', () => ({
+  adminPermissionGuard: vi.fn(() => async () => undefined)
+}));
+
+const couponsServiceState = vi.hoisted(() => ({
+  adminCouponAnalytics: vi.fn(async () => ({ totals: { totalCoupons: 0, activeCoupons: 0, expiredCoupons: 0, pausedCoupons: 0 } })),
+  adminListCoupons: vi.fn(async () => ({ items: [], meta: { page: 1, limit: 20, total: 0, totalPages: 0 } })),
+  adminCreateCoupon: vi.fn(async () => ({
+    id: 'coupon_1',
+    code: 'WELCOME10',
+    type: 'PERCENTAGE_OFF',
+    value: 10,
+    minOrderPaise: 0,
+    maxUsesTotal: null,
+    maxUsesPerUser: null,
+    usesCount: 0,
+    isActive: true,
+    validFrom: new Date().toISOString(),
+    validUntil: null,
+    status: 'active',
+    applicableTo: null,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  })),
+  adminUpdateCoupon: vi.fn(async () => ({
+    id: 'coupon_1',
+    code: 'WELCOME10',
+    type: 'PERCENTAGE_OFF',
+    value: 10,
+    minOrderPaise: 0,
+    maxUsesTotal: null,
+    maxUsesPerUser: null,
+    usesCount: 0,
+    isActive: true,
+    validFrom: new Date().toISOString(),
+    validUntil: null,
+    status: 'active',
+    applicableTo: null,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  })),
+  adminUpdateCouponStatus: vi.fn(async () => ({
+    id: 'coupon_1',
+    code: 'WELCOME10',
+    type: 'PERCENTAGE_OFF',
+    value: 10,
+    minOrderPaise: 0,
+    maxUsesTotal: null,
+    maxUsesPerUser: null,
+    usesCount: 0,
+    isActive: true,
+    validFrom: new Date().toISOString(),
+    validUntil: null,
+    status: 'active',
+    applicableTo: null,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  })),
+  adminDeleteCoupon: vi.fn(async () => ({ message: 'Coupon deleted' })),
+  adminRestoreCoupon: vi.fn(async () => ({
+    id: 'coupon_1',
+    code: 'WELCOME10',
+    type: 'PERCENTAGE_OFF',
+    value: 10,
+    minOrderPaise: 0,
+    maxUsesTotal: null,
+    maxUsesPerUser: null,
+    usesCount: 0,
+    isActive: true,
+    validFrom: new Date().toISOString(),
+    validUntil: null,
+    status: 'active',
+    applicableTo: null,
+    createdBy: null,
+    updatedBy: null,
+    deletedAt: null,
+    deletedBy: null,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  })),
+  getCouponAuditLogs: vi.fn(async () => ({
+    items: [],
+    meta: { page: 1, limit: 20, total: 0, totalPages: 0 }
+  }))
+}));
+
+vi.mock('./coupons.service', () => {
+  class MockCouponsService {
+    adminCouponAnalytics = couponsServiceState.adminCouponAnalytics;
+    adminListCoupons = couponsServiceState.adminListCoupons;
+    adminCreateCoupon = couponsServiceState.adminCreateCoupon;
+    adminUpdateCoupon = couponsServiceState.adminUpdateCoupon;
+    adminUpdateCouponStatus = couponsServiceState.adminUpdateCouponStatus;
+    adminDeleteCoupon = couponsServiceState.adminDeleteCoupon;
+    adminRestoreCoupon = couponsServiceState.adminRestoreCoupon;
+    getCouponAuditLogs = couponsServiceState.getCouponAuditLogs;
+    constructor(_fastify: unknown) {}
+
+    static getInstance(fastify: unknown) {
+      return new MockCouponsService(fastify);
+    }
+  }
+
+  return { CouponsService: MockCouponsService };
+});
+
+import { registerCouponsRoutes } from './coupons.routes';
+
+describe('coupons routes', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('registers admin coupon routes with schema and guards', async () => {
+    const app = Fastify();
+    const routes: Array<{ method: string | string[]; url: string; schema?: unknown; preHandler?: unknown }> = [];
+
+    app.addHook('onRoute', (routeOptions) => {
+      routes.push({
+        method: routeOptions.method,
+        url: routeOptions.url,
+        schema: routeOptions.schema,
+        preHandler: routeOptions.preHandler
+      });
+    });
+
+    await registerCouponsRoutes(app);
+
+    const analytics = routes.find((route) => route.url === '/api/v1/admin/coupons/analytics' && route.method === 'GET');
+    expect(analytics).toBeDefined();
+    expect(analytics?.preHandler).toBeDefined();
+    expect((analytics?.schema as { response?: Record<number, unknown> }).response?.[200]).toBeDefined();
+
+    const list = routes.find((route) => route.url === '/api/v1/admin/coupons' && route.method === 'GET');
+    expect(list).toBeDefined();
+    expect(list?.preHandler).toBeDefined();
+
+    const create = routes.find((route) => route.url === '/api/v1/admin/coupons' && route.method === 'POST');
+    expect(create).toBeDefined();
+    expect((create?.schema as { body?: unknown }).body).toBeDefined();
+
+    const update = routes.find((route) => route.url === '/api/v1/admin/coupons/:id' && route.method === 'PATCH');
+    expect(update).toBeDefined();
+    expect((update?.schema as { body?: unknown }).body).toBeDefined();
+
+    const status = routes.find((route) => route.url === '/api/v1/admin/coupons/:id/status' && route.method === 'PATCH');
+    expect(status).toBeDefined();
+
+    const del = routes.find((route) => route.url === '/api/v1/admin/coupons/:id' && route.method === 'DELETE');
+    expect(del).toBeDefined();
+
+    await app.close();
+  });
+});

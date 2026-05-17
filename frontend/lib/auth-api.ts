@@ -1,0 +1,108 @@
+import { apiClient } from "@/lib/api";
+import type { User } from "@/types/user";
+import {
+  emailLoginInputSchema,
+  forgotPasswordInputSchema,
+  sendOtpInputSchema,
+  signupPhoneInputSchema,
+  verifyOtpInputSchema,
+} from "@/lib/validators";
+
+export interface RefreshTokenResponse {
+  accessToken: string;
+}
+
+export interface AuthSessionResponse {
+  accessToken: string;
+  user: User;
+}
+
+export interface SendOtpInput {
+  phone: string;
+  turnstileToken?: string;
+}
+
+export interface VerifyOtpInput {
+  phone: string;
+  otp: string;
+}
+
+export interface SignupPhoneInput {
+  phone: string;
+  otp: string;
+  firstName?: string;
+  lastName?: string;
+  email?: string;
+}
+
+export interface EmailLoginInput {
+  email: string;
+  password: string;
+  turnstileToken?: string;
+}
+
+export interface ForgotPasswordInput {
+  email: string;
+  turnstileToken?: string;
+}
+
+export async function refreshAccessToken(): Promise<RefreshTokenResponse> {
+  return apiClient<RefreshTokenResponse>("/auth/refresh", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export async function sendOtp(input: SendOtpInput): Promise<{ message: string }> {
+  const body = sendOtpInputSchema.parse(input);
+  return apiClient<{ message: string }>("/auth/send-otp", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function verifyOtp(input: VerifyOtpInput): Promise<AuthSessionResponse> {
+  const body = verifyOtpInputSchema.parse(input);
+  return apiClient<AuthSessionResponse>("/auth/verify-otp", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function verifyOtpAndSignup(
+  input: SignupPhoneInput,
+): Promise<AuthSessionResponse> {
+  const body = signupPhoneInputSchema.parse(input);
+  return apiClient<AuthSessionResponse>("/auth/signup-phone", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function loginWithEmail(
+  input: EmailLoginInput,
+): Promise<AuthSessionResponse> {
+  const body = emailLoginInputSchema.parse(input);
+  return apiClient<AuthSessionResponse>("/auth/login", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function requestPasswordReset(
+  input: ForgotPasswordInput,
+): Promise<{ message: string }> {
+  const body = forgotPasswordInputSchema.parse(input);
+  return apiClient<{ message: string }>("/auth/forgot-password", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function logoutSession(accessToken: string | null): Promise<void> {
+  await apiClient<void>("/auth/logout", {
+    method: "POST",
+    accessToken,
+    body: JSON.stringify({}),
+  });
+}

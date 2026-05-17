@@ -1,0 +1,616 @@
+# Next.js Frontends — Integration Guide (Storefront + Admin)
+
+This guide describes how a **single Next.js frontend app** serving storefront and admin routes should integrate with **this** Fastify API. **Endpoint index:** `docs/API_ENDPOINT_INDEX.md`. **API contract source of truth:** `TRD.md` section 7 (all paths), section 4.4 (response envelope), section 4.5 (error codes), section 6 (auth), section 12 (frontend technical requirements), section 11.5 (PCI / CSP ownership). **Business flows:** `BRD.md`. **Architecture context:** `ECOM_MASTER.md` (modular monolith, per-client isolation, Nginx routing). All routes are under **`/api/v1/`** (`TRD.md` §7.1).
+
+**Lifecycle:** This is a **build-time integration document**. After development/go-live, use `docs/CLIENT_HANDOFF_INDEX.md` and linked Client-Main docs as primary client-facing references.
+
+---
+
+## 1. Base URLs and environment variables
+
+| Variable | Example | Use |
+| --- | --- | --- |
+| `NEXT_PUBLIC_STOREFRONT_URL` | `https://client1.com` | Canonical browser origin; redirects, links, Razorpay `callback_url` context |
+| `NEXT_PUBLIC_API_BASE_URL` | `https://client1.com/api/v1` **or** dedicated API host | Browser-facing API prefix (**must** include `/api/v1`) |
+| `NEXT_PUBLIC_RAZORPAY_KEY_ID` | `rzp_live_xxx` | **Public** key only — never put key secret in Next bundle |
+| Server-only `INTERNAL_API_BASE_URL` | `http://127.0.0.1:<BACKEND_PORT>/api/v1` | Optional SSR/server-actions bypass of public DNS (same machine as Nginx/backend) |
+
+**Cookie domains:** backend sets **`refresh_token`** and **`cart_session`** with `httpOnly`, `secure`, `sameSite: 'strict'` (`TRD.md` §8.3, constraint C-20 in `.cursor/rules`). Frontends **must** call the API on the **same site** or a configuration that allows cookies (avoid cross-site cookie contexts unless you explicitly design for them).
+
+### 1.1 Frontend AI implementation brief (mandatory)
+
+For any AI agent generating frontend code, enforce these constraints:
+
+1. Use only `NEXT_PUBLIC_API_BASE_URL` (with `/api/v1`) and `NEXT_PUBLIC_STOREFRONT_URL`.
+2. Build API client parsers that accept both success modes (enveloped + raw) controlled by `FEATURE_RESPONSE_ENVELOPE_ENABLED`.
+3. For critical mutations, send `idempotency-key` header.
+4. Use PREPAID vs COD checkout split exactly as documented; never call `/payments/initiate` for COD orders.
+5. Never call `/payments/webhook` or `/shipping/webhook` from browser code.
+6. Branch UX on `error.code` only; never parse free-form `error.message`.
+7. Treat `PAYMENT_PROVIDER=noop` and `SHIPPING_PROVIDER=noop` as dev-only, never production.
+8. Treat shipment booking as manual-only admin action (`POST /api/v1/admin/orders/:id/ship`) and use backend ship-state fields (`canShipNow`, `shipBlockReason`, `shippingMode`) to drive button enablement and messaging.
+9. If frontend work reveals a reusable backend fix, classify it as template-worthy and follow the manual upstream command protocol in `docs/MASTER_DEPLOYMENT_PLAYBOOK.md` §3.2.2.
+
+Before release sign-off, execute `docs/FRONTEND_AI_GO_LIVE_CHECKLIST.md` and attach it with `docs/BACKEND_GO_LIVE_CHECKLIST.md` in the deployment evidence package. The backend checklist must cover full environment-to-implementation parity for all required backend env groups, not only payment/shipping provider checks. It also includes audit-hardened gates: Nginx security headers verification, JSON schema `additionalProperties: false` enforcement, SLO alert test coverage, JWT fail-fast validation, script credential env var usage, and admin route rate-limit/load-shed guards.
+
+Also include provider lifecycle evidence from `docs/CLIENT_INTEGRATION_CREDENTIAL_REGISTER_TEMPLATE.md` (owner, vault path, created/rotated/expiry, last-tested) and ensure frontend rules sync is verified (`frontend-agent-rules.md` -> `.agents/rules/dev-rules.md`).
+
+For provider onboarding, frontend/public-vs-secret env boundaries, and key rotation/incident procedures, follow `docs/THIRD_PARTY_INTEGRATIONS_SETUP_AND_KEY_MANAGEMENT_GUIDE.md`.
+
+Operational semantics to preserve in frontend behavior:
+- **Admin permission changes are token-issuance scoped.** If permissions are granted/revoked, force token refresh or logout/re-auth before expecting immediate UI/API permission changes.
+- **Admin refund status requests are deferred.** UI should show an in-progress/pending-refund state until worker/provider confirmation finalizes `REFUNDED`.
+- **Idempotency key collisions are now atomic-safe.** Backend uses CAS (Compare-And-Swap) patterns for idempotent request recording. Frontend can safely retry mutations with the same `Idempotency-Key` header on 503/504 errors; concurrent identical requests result in one execution, others return cached response (no double-charge).
+- **Concurrent mutation handling:** Backend state transitions are guarded by atomic checks (e.g., invite consumption, token refresh, dual-approval). If two users/requests race, one wins and the other receives `409 CONFLICT` with descriptive code. Frontend should handle `409` by refreshing state and retrying if appropriate, not blindly repeating the mutation.
+- **Audit chain lock contention:** Under very high concurrent ops activity, ops write endpoints may return `503 ops_audit_chain_lock_timeout`. Frontend should treat this as retryable after a short backoff (1–2 seconds), not a failure.
+
+### 1.2 Recommended delivery model: simultaneous build + integration (mandatory practice)
+
+For this stack, the most reliable way to ship with an **ops/admin-first implementation and storefront-last rollout** is **contract-first vertical slices**.
+
+Do **not** build all pages first and integrate APIs later.
+
+Build each capability as one slice:
+
+1. lock API contract for the slice,
+2. build typed API client methods,
+3. build UI,
+4. integrate with real backend module,
+5. add targeted tests,
+6. mark slice done only after behavior + permissions + error handling are validated.
+
+#### 1.2.1 Why this is required in this backend
+
+- Backend behavior includes asynchronous transitions (webhook -> queue -> worker -> final status), so UI-only completion is misleading.
+- Permission outcomes are layered (`admin/*` vs `ops/*`) and can look correct visually while still failing at runtime if integrated late.
+- Idempotency and reconciliation behaviors can only be trusted when tested against real module paths.
+
+#### 1.2.2 Delivery sequence (execution order)
+
+Use this order unless there is a strong project-specific reason to change it:
+
+1. **Foundation slice**
+   - API client, auth state, refresh-on-401, global error mapper (`error.code` driven), permission-aware navigation.
+   - Zustand stores for auth and cart. Response envelope parser that handles both enveloped `{ success, data, meta? }` and raw shapes.
+
+2. **Ops control plane slices**
+   - Session bootstrap (`GET /ops/session`), load-shed request flow (`POST /ops/load-shed` creates `202 PENDING_APPROVAL`), approvals queue (`GET /ops/approvals`), confirm/reject (`POST /ops/approvals/:requestId/confirm|reject`), audit timeline (`GET /ops/audit/logs`).
+   - Ops config surfaces (`/ops/config/overview`, `/ops/config/stored`, `/ops/config/save`) with masked secret behavior and restart semantics.
+   - Ops UI **must** model load-shed as two explicit steps: request (tier A) → separate approve/reject (tier B). Never auto-confirm.
+   - Ops surfaces are platform staff only (`/api/v1/ops/*`) — never proxy merchant actions through ops APIs.
+
+3. **Admin read slices**
+   - Dashboard KPIs/charts, orders list/detail, inventory list, product list + categories, customer index + CRM view.
+   - Build these before mutations so you have real data to validate mutation outcomes against.
+
+4. **Admin mutation slices (high-risk)**
+   - Order status updates, ship action (triggers shipping provider — run provider dry-run simultaneously), cancel/refund (async — UI must show pending-refund state until worker finalises), stock adjustment, settings updates.
+   - Razorpay checkout (PREPAID) and COD checkout slices belong here — run the Razorpay test payment dry-run during this tier.
+   - COD fulfilment via Shiprocket (`ship` → `schedule-pickup` → `print-label`); payment `CAPTURED` on `DELIVERED` webhook — **no** `cod-collected` route. Return request approval/rejection.
+   - Coupon lifecycle (create/edit/disable, verify application at checkout, verify expired coupon errors).
+
+5. **Reliability/operations slices**
+   - Reconciliation issues, outbox dead-letter replay-preview → replay, inbox failures replay-preview → replay, analytics (revenue, funnel, category breakdown, inventory alerts, notification delivery), Bull Board queue visibility.
+
+6. **Storefront customer journey slices (build after ops + admin tiers are solid)**
+   - Catalogue: product list, category pages, search, product detail (`/products`, `/products/:slug`, `/products/categories`).
+   - Cart: guest session, item CRUD, coupon apply/remove, pincode check, merge-on-login (`POST /cart/merge`).
+   - Checkout: full PREPAID Razorpay sequence (`POST /orders` → `POST /payments/initiate` → Razorpay modal → `POST /payments/verify`) and COD path (`POST /orders` with `paymentMode: 'COD'`).
+   - Order history, order detail, return request creation, shipment tracking (`GET /shipping/track/:awb`).
+   - Customer auth: OTP flow, email login, forgot-password, refresh loop, logout.
+   - User profile + addresses CRUD.
+   - Feature-flagged slices (wishlist, reviews, coupons) only if `FEATURE_*_ENABLED` is active for this client.
+   - Run the email (Resend) dry-run during checkout slice — trigger order confirmation, confirm email arrives at test inbox.
+
+#### 1.2.2A Shipping capability guardrails for future iterations
+
+Current behavior and future extension constraints:
+
+- Shipment booking remains **manual-only**: merchant/admin explicitly clicks **Ship Order**; payment confirmation never auto-creates shipments.
+- Keep using admin ship-state fields (`canShipNow`, `shipBlockReason`, `shippingMode`) as the frontend contract for ship-action eligibility.
+
+If shipping capability is extended in future (for example stricter fulfillment checks or configurable SOP templates), preserve the following invariants:
+
+- Never bypass `canShipNow` / `shipBlockReason` eligibility checks.
+- Never place long-running external shipping-provider calls inside DB transactions.
+- Keep shipment booking idempotent to prevent duplicate AWB creation on retries.
+- Keep atomic CAS transitions (`updateMany` with guard conditions) for race safety.
+
+Recommended future iteration targets:
+
+- Add stricter fulfillment readiness checks (packaging/warehouse checklist gates) before enabling ship action.
+- Add explicit admin audit-reason capture when shipment is booked.
+- Add per-merchant configurable ship-action SOP templates in admin settings.
+- If any auto-dispatch mode is introduced, gate it behind explicit feature flags and keep manual mode as default-safe behavior.
+
+Methodology requirement for any future shipping UI/API work:
+
+1. Freeze route contract and request/response schema before UI work.
+2. Build typed API client methods for new shipping endpoints.
+3. Build UI states (`loading` / `empty` / `error` / `success`) and integrate with real backend routes.
+4. Validate permission boundaries (`/admin/*` scope enforcement) and shipment-booking idempotency.
+5. Close slice only after happy-path + negative-path integration and UI interaction tests pass.
+
+#### 1.2.3 Definition of done per slice (strict)
+
+A slice is not complete until all of the following are true:
+
+- UI renders correct happy-path and failure-path states.
+- API integration is against real backend routes (not mocks only).
+- Permissions are enforced twice:
+  - proactive UI hide/disable by scope,
+  - backend rejection handling (`401/403`) with clear recovery.
+- Critical writes send `idempotency-key` and retries reuse the same key for same intent.
+- Envelope/raw success parsing works for that route.
+- At least one integration test and one UI interaction test pass for the slice.
+
+#### 1.2.4 Admin + Ops boundary rules (non-negotiable)
+
+- Merchant operations stay on `/api/v1/admin/*`.
+- Platform runtime controls stay on `/api/v1/ops/*`.
+- Do not route merchant actions through ops APIs to “make UI easier”.
+- Do not expose ops credentials in browser storage, logs, query strings, or shared client config files.
+- Ops dual-approval actions must be modeled as explicit two-step UX (`request` -> `approve/reject`), never auto-confirmed in one click.
+
+#### 1.2.5 Test cadence while building (continuous, not end-only)
+
+**Per slice (before marking a slice done):**
+
+- One route-level integration check against real local backend (not mocked).
+- One permission negative-case check (`401/403` handled correctly, UI disables/hides before backend rejects).
+- One idempotency/retry behavior check for critical mutations (order create, payment initiate, payment verify, admin ship, cancel).
+- One UI interaction test (happy path + primary failure path).
+- Targeted backend checklist subset from `docs/BACKEND_GO_LIVE_CHECKLIST.md` when the slice touches risk-critical modules (payments, shipping, auth, ops).
+
+**At milestone boundaries (every 4–6 slices):**
+
+- Run the full backend validation script subset used in release gates.
+- Re-check BRD AC coverage mapping in §12.2 of this guide — confirm each AC row has evidence for the slices delivered so far.
+- Run the full `docs/BACKEND_GO_LIVE_CHECKLIST.md` (not just the subset).
+
+**When all slices are complete (before Phase 5 local gate):**
+
+- `docs/FRONTEND_AI_GO_LIVE_CHECKLIST.md` must be fully ticked — every row, not deferred.
+- `docs/BACKEND_GO_LIVE_CHECKLIST.md` must be fully ticked — full environment-to-implementation parity, not only provider checks.
+- Full Postman E2E collection folders 0→1→2→3 pass.
+- Manual browser walk of every user-facing flow passes (see `docs/CLIENT_ONBOARDING_EXECUTION_ORDER.md` Phase 5 execution steps for the full list).
+
+---
+
+## 2. Response envelope and errors (mandatory handling)
+
+**Error responses** always use the standard envelope (`TRD.md` §4.4):
+
+**Error:** `{ "success": false, "error": { "code", "message", "statusCode", "details"? } }`
+
+**Success responses** depend on `FEATURE_RESPONSE_ENVELOPE_ENABLED`:
+- **When `true`:** All 2xx JSON responses are wrapped: `{ "success": true, "data": <T>, "meta"?: { page, limit, total, totalPages } }`
+- **When `false` (default):** Success responses return route-specific payloads directly (no outer `success`/`data` wrapper).
+
+> **Frontend recommendation:** Build your API client to handle both shapes — check for `response.data` (envelope mode) and fall back to the raw response body (direct mode). This lets you toggle the flag without frontend changes.
+
+**Exception:** CSV / binary downloads always bypass JSON envelope (`TRD.md` §4.4).
+
+**Error codes** are **only** from `TRD.md` §4.5 — map UI copy to `error.code` (e.g. `INSUFFICIENT_STOCK`, `PINCODE_NOT_SERVICEABLE`, `COUPON_EXPIRED`, `RATE_LIMIT_EXCEEDED`). Do **not** branch on free-form `message` strings.
+
+### 2.1 Frontend error-code handling matrix (required)
+
+Use this matrix for both storefront and admin/ops frontend clients:
+
+| HTTP | `error.code` | Frontend handling |
+| --- | --- | --- |
+| 400 | `VALIDATION_ERROR` | Show field-level validation errors; do not retry automatically. |
+| 401 | `TOKEN_EXPIRED` | Run refresh-once flow (`/api/v1/auth/refresh`), retry original request once, then force login if refresh fails. |
+| 401 | `UNAUTHORISED` / `INVALID_CREDENTIALS` | Show auth error; redirect/login prompt for protected pages. |
+| 403 | `FORBIDDEN` | Hide/disable unauthorized actions and show access-denied state. |
+| 404 | `NOT_FOUND` | Render not-found state/page; avoid destructive retries. |
+| 409 | `CONFLICT`, `INVALID_STATUS_TRANSITION`, `INSUFFICIENT_STOCK` | Refresh relevant state and show actionable conflict message. |
+| 409 | `CONFLICT` (identity boundary) | For admin/ops/customer signup/invite flows, show hard-stop "email already used in another account domain" guidance. |
+| 422 | `PINCODE_NOT_SERVICEABLE` | Block checkout continuation for that address and prompt alternate pincode/address. |
+| 429 | `RATE_LIMIT_EXCEEDED` | Show retry/backoff messaging; disable repeat actions for cooldown window. |
+| 500/502/503 | `INTERNAL_ERROR` and upstream failures | Show generic retry-safe error, record telemetry, and provide support escalation path. |
+
+Operational safety rule: webhook endpoints are not browser calls; frontend should never attempt client-side retries against `/api/v1/payments/webhook`, `/api/v1/shipping/webhook`, or `/api/v1/notifications/webhook/*`.
+
+For provider-facing retry/backoff boundaries (timeouts, retry eligibility, and non-idempotent safeguards), follow `docs/THIRD_PARTY_INTEGRATIONS_SETUP_AND_KEY_MANAGEMENT_GUIDE.md` section `2.1`.
+
+---
+
+## 3. Authentication (customer)
+
+| Step | Endpoint | Notes |
+| --- | --- | --- |
+| Register | `POST /api/v1/auth/register` | Body per `TRD.md` §7.2 |
+| Forgot password | `POST /api/v1/auth/forgot-password` | Initiates reset flow; map errors via `error.code` |
+| OTP send | `POST /api/v1/auth/send-otp` | |
+| OTP verify | `POST /api/v1/auth/verify-otp` | Returns `accessToken` + `user`; sets **refresh cookie** |
+| Email login | `POST /api/v1/auth/login` | |
+| Refresh | `POST /api/v1/auth/refresh` | Uses **cookie**, returns new access token |
+| Logout | `POST /api/v1/auth/logout` | Customer auth required |
+
+**Frontend pattern (`TRD.md` §12 + §6.4):**
+
+1. Keep **`accessToken`** in memory (or short-lived server session) — **not** long-lived `localStorage` for refresh-grade persistence.
+2. Attach **`Authorization: Bearer <accessToken>`** to customer routes.
+3. On **401** from a protected call: call **`/api/v1/auth/refresh`** once, retry once, then force login.
+4. **Guest cart** uses **`cart_session`** cookie (`TRD.md` §8.3) — never echo session token from API bodies.
+
+---
+
+## 4. Authentication (admin)
+
+| Endpoint | Notes |
+| --- | --- |
+| `POST /api/v1/auth/admin/login` | Returns admin JWT + sets cookies; admin UI **must** use role + permission scopes on every `/api/v1/admin/*` call (`TRD.md` §6.3, §7.9) |
+| `POST /api/v1/admin/invites` | Ops-authenticated merchant admin invite creation. Requires `ops:write`, Layer C policy mapping, and ops auth headers; backend appends `/admin/setup?token=...` to provided `setupBaseUrl` (base origin only), expires in 10 minutes. |
+| `POST /api/v1/admin/invites/consume` | Public but rate-limited one-time setup-token completion route for `/admin/setup`; creates `User(role=ADMIN)` and merchant `AdminPermissionGrant` rows only after valid unexpired token verification. |
+| `POST /api/v1/admin/invites/cleanup-expired` | Ops-authenticated cleanup route for expired unconsumed merchant admin invites. Requires `ops:write`; do not expose in merchant UI. |
+
+Admin UI is served as routes within the same frontend deployment (for example `/admin`), with permissions enforced by backend admin JWT scopes. Do not create a separate admin deployment/domain in the canonical model.
+
+`/admin/setup` UX contract: read the `token` query param, render a password creation form, call `POST /api/v1/admin/invites/consume`, clear the token from UI state after success, then redirect to admin login or admin MFA setup according to the returned `mfaRequired` flag. Do not store invite tokens in localStorage/sessionStorage/logs. Treat invalid, consumed, or expired tokens as terminal and ask the operator to issue a new invite. This flow grants merchant ecommerce permissions only; do not display or request `ops:*`, `queues:inspect`, `developer:*`, provider-secret, database, Redis, or ops-control permissions from merchant setup screens.
+
+Identity boundary contract: normal customer/admin `User` emails and `OpsUser` emails are mutually exclusive. Frontend must surface backend `409 CONFLICT` responses for duplicate cross-domain email attempts as hard-stop validation errors.
+
+### 4.1 Layer ownership model (backend-enforced)
+
+| Layer | Frontend visibility | Who can mutate |
+|---|---|---|
+| Layer A | Merchant admin UI (`/admin/*`) | `merchant` |
+| Layer B | Merchant admin UI (`/admin/*`) | `merchant` (permission-gated sensitive actions) |
+| Layer C | Optional read-only diagnostics in merchant UI | `developer` via `/api/v1/ops/*` only |
+
+Treat `/api/v1/ops/*` as platform operations API, not merchant control-surface API.
+Compatibility note: legacy backend grant scopes are still accepted during transition and mapped to `merchant` / `developer`.
+
+### 4.2 Ops UI integration surface (`/api/v1/ops/*`)
+
+Use the following backend routes when building a dedicated ops frontend (or ops section in admin UI):
+
+**Invite onboarding prerequisite:**
+- Implement `/ops/setup` page in frontend before ops invite rollout.
+- `/ops/setup` must parse `token` from URL and call `POST /api/v1/ops/invites/consume`.
+- Backend invite CLI (`ops:newuser`) should be run only after `/ops/setup` is live on client domain.
+- For ops/admin invite creation routes, pass `setupBaseUrl` as frontend base origin only (for example, `https://example.com`), not `/ops/setup` or `/admin/setup` path URLs. Backend appends setup paths.
+
+- `GET /ops/session` — bootstrap operator profile + permissions + MFA/IP posture
+- `GET /ops/config/stored` — masked DB-backed config metadata
+- `POST /ops/config/save` — validated + OTP-authorized config save
+- `POST /ops/otp/request` — email OTP challenge for privileged writes
+- `POST /ops/otp/verify` — verify OTP challenge
+- `POST /ops/invites` — issue invite link to new ops user
+- `POST /ops/invites/consume` — public but rate-limited one-time setup-token route; consume setup link token and provision ops credentials only after valid unexpired token verification
+- `POST /ops/invites/cleanup-expired` — cleanup expired unconsumed invites
+- `GET /ops/load-shed` — fetch current runtime load-shed mode
+- `POST /ops/load-shed` — request critical mode change (`202 PENDING_APPROVAL`)
+- `GET /ops/approvals` — list approval queue for pending/executed actions
+- `POST /ops/approvals/:requestId/confirm` — approve and execute pending request
+- `POST /ops/approvals/:requestId/reject` — reject pending request with reason
+- `GET /ops/audit/logs` — paginated operational audit timeline for UI history views
+
+Ops UI should treat `POST /ops/load-shed` as a two-step workflow:
+1. create request (`ops:write`),
+2. approve/reject (`ops:approve`) in a separate operator action.
+
+For full operational setup and security requirements, follow `docs/OPS_CONTROL_PLANE_GUIDE.md`.
+
+---
+
+## 5. Customer journey — route checklist
+
+Paths below are **exact prefixes**; always use **`/api/v1`**.
+
+### 5.1 Catalogue (`TRD.md` §7.4)
+
+- `GET /products` — query: `category`, `search`, `minPrice`, `maxPrice`, `tags`, `sort`, `inStock`, `page`, `limit` (`sort`: `price_asc`, `price_desc`, `newest`, `popularity`; default `inStock=true` when omitted)
+- `GET /products/:slug` — detail; reviews only when feature enabled
+- `GET /products/categories`
+- `GET /products/categories/:slug/products`
+
+**Money:** all amounts are **integer paise** (`TRD.md` §5.3). Display as `₹ (paise/100).toFixed(2)` in UI only.
+
+Storefront rendering model (`TRD.md` §12.1): use ISR patterns (`generateStaticParams`, `revalidate`) for catalogue/detail routes and keep cart UX state in a client store (Context + reducer) synchronized with API responses.
+
+### 5.2 Wishlist (`§7.5`) — if `FEATURE_WISHLIST_ENABLED`
+
+- `GET /wishlist`, `POST /wishlist/items`, `DELETE /wishlist/items/:productId`
+
+### 5.3 Cart (`§7.6`)
+
+- `GET /cart`, `POST /cart/items`, `PATCH /cart/items/:id`, `DELETE /cart/items/:id`, `DELETE /cart`, `POST /cart/merge` (**after login**), `POST /cart/coupon`, `DELETE /cart/coupon`
+- `POST /cart/check-pincode` (public) — `{ pincode }`
+- `GET /cart/delivery-rates` — needs cart + destination context per API schema
+
+### 5.4 Reviews (`§7.7`) — if `FEATURE_REVIEWS_ENABLED`
+
+- `GET /reviews/product/:slug` (public, moderated list)
+- `GET /reviews/me`, `POST /reviews` (purchase validation server-side)
+
+### 5.5 Orders & payments (`§7.8`)
+
+- `POST /orders` — single DB transaction; body accepts optional `paymentMode: 'PREPAID' | 'COD'` (default `PREPAID`)
+- `GET /orders/:id` — **own orders only**; response includes `paymentMode` field
+- `GET /orders/:id/invoice.pdf` — authenticated customer invoice PDF download (attachment response)
+- `POST /orders/:id/cancel` — allowed states per business rules; enforces `cancellationWindowHours` from store settings
+- `POST /payments/initiate` — `{ orderId }` → Razorpay order id (**PREPAID only**)
+- `POST /payments/verify` — `{ orderId, razorpayPaymentId, razorpaySignature }` after checkout
+- `POST /payments/retry` — retry for `PAYMENT_FAILED` / `PENDING_PAYMENT` orders; returns `409` for COD orders
+- `POST /orders/:id/return-requests` — create return request for `DELIVERED` orders; body: `{ items: [{ orderItemId, quantity, reason? }], reason }`
+- `GET /shipping/track/:awb` — tracking for **customer-owned** orders only
+
+Invoice response contract notes:
+- Order payload invoice metadata now uses `invoice.hasPdf` (boolean) instead of exposing direct `pdfUrl`.
+- Frontend should show download CTA only when `invoice?.hasPdf === true`.
+- Admin invoice download uses `GET /api/v1/admin/orders/:id/invoice.pdf` with standard admin auth/permissions.
+
+**COD flow:** when `paymentMode: 'COD'` is sent, the backend checks `isCodEnabled` in store settings, skips the Razorpay payment step, and returns the order already in `CONFIRMED` status. Do **not** call `/payments/initiate` for COD orders — it will fail with `VALIDATION_ERROR`.
+
+### 5.6 Customer profile and addresses (`§7.3`)
+
+- `GET /users/me`, `PATCH /users/me`
+- `GET /users/me/addresses`, `POST /users/me/addresses`, `PATCH /users/me/addresses/:id`, `DELETE /users/me/addresses/:id`
+- `GET /users/me/orders`
+
+UI should treat these as authenticated customer-only resources and apply the same refresh-retry policy as other protected routes.
+
+**You cannot call webhooks from the browser** — Razorpay / shipping provider POST to the backend. Storefront must treat **`/payments/verify`** + polling order status as **best-effort**; **final truth** is webhook-driven confirmation (`TRD.md` §10.3, `BRD.md` AC-04–AC-06).
+
+---
+
+## 6. Checkout sequences
+
+### 6.1 Razorpay (PREPAID) sequence
+
+1. **`POST /orders`** with `paymentMode: 'PREPAID'` (or omitted) → order in **`PENDING_PAYMENT`**.
+2. **`POST /payments/initiate`** → receive Razorpay **`order_id`** (provider id).
+3. Load **`https://checkout.razorpay.com/v1/checkout.js`** from Razorpay CDN (**not** bundled npm — `TRD.md` §12.1 PCI note).
+4. Open Razorpay Checkout with **`key` = `NEXT_PUBLIC_RAZORPAY_KEY_ID`** and **`order_id`** from step 2.
+5. On client success callback → **`POST /payments/verify`** with signature fields.
+6. Show **pending / confirmed** UI from **`GET /orders/:id`**; if still pending, poll briefly until workers process webhook (`BRD.md` AC-04).
+
+For steps 1, 2, and 5, send an `idempotency-key` header from frontend to prevent duplicate side effects on retries/network replays.
+
+**Never treat UI callback alone as proof of payment** (`BRD.md` AC-06).
+
+Optional **`RISK_VELOCITY_ENABLED`** may throttle initiate per user/hour (`TRD.md` §7.13) — handle **429** / business errors gracefully.
+
+### 6.2 COD (Cash on Delivery) sequence
+
+1. Check `GET /api/v1/admin/settings/cod` (or rely on feature-flag derived from settings at storefront build) to decide whether to show the COD option at checkout.
+2. **`POST /orders`** with `paymentMode: 'COD'` → order immediately returns in **`CONFIRMED`** status — **no Razorpay steps needed**.
+3. Display order confirmation with payment note "Cash on Delivery".
+4. COD payment record semantics: backend creates COD payment as `CREATED` (`provider: COD`). It transitions to **`CAPTURED`** when Shiprocket sends a **`DELIVERED`** webhook (`shipping.worker.ts`) — **not** via `POST /admin/orders/:id/cod-collected` (route does not exist).
+5. Fulfilment (manual): admin **`POST /api/v1/admin/orders/:id/ship`** → optional **`schedule-pickup`** → **`print-label`**. Gate with `canShipNow` / `shipBlockReason` from **`GET /admin/orders/:id`**.
+6. On error **`VALIDATION_ERROR`** with message mentioning COD disabled → hide COD option and prompt for prepaid.
+
+**Payment retry for COD:** not applicable — `POST /payments/retry` returns `400 VALIDATION_ERROR` for COD orders. Do not render the retry UI affordance for orders where `paymentMode === 'COD'`.
+
+---
+
+## 7. Pagination and lists
+
+All list endpoints: **`page`** (default **1**), **`limit`** (default **20**, max **100**), plus **`meta`** (`TRD.md` §4.7, constraint C-10). Drive infinite scroll / page controls from **`meta.total`** and **`meta.totalPages`**.
+
+---
+
+## 8. Feature flags (must align with backend `.env`)
+
+Mirror backend toggles (`ECOM_MASTER.md` §12.2, `.env.example`):
+
+- `FEATURE_COUPONS_ENABLED`
+- `FEATURE_REVIEWS_ENABLED`
+- `FEATURE_WISHLIST_ENABLED`
+- `FEATURE_GST_INVOICING_ENABLED`
+- `FEATURE_RESPONSE_ENVELOPE_ENABLED` — when `true`, all success JSON is wrapped in `{ success, data, meta? }`
+
+Hide UI affordances when disabled; backend still returns safe defaults (e.g. empty review lists).
+
+---
+
+## 9. Admin dashboard — full operational control (`TRD.md` §7.9, §12.2)
+
+Leading commerce and SaaS products treat the **admin app as the control plane**: merchants resolve almost every day‑two operation without SSH, Postman, or database consoles. For this template, that means the **admin UI should expose a discoverable, permission‑gated surface for every capability the backend already implements** under **`/api/v1/admin/*`**, plus embedded or linked **queue observability** (`TRD.md` §10.1, §10.2).
+
+**Design rules (match how top-tier admin UIs behave):**
+
+| Rule | Why |
+| --- | --- |
+| **No API-only levers** | If `TRD.md` §7.9 exposes an endpoint, the admin product should either ship a screen for it or document an intentional exception (for example ultra‑rare ops-only flows gated to platform staff). |
+| **Permission-first navigation** | Mint JWTs with **operation-level scopes** (`TRD.md` §6.3). Hide or disable nav and actions the current admin cannot perform — do not rely on **403** as the first line of UX. |
+| **Destructive actions need context** | Cancel order, refund, delete coupon, replay inbox/outbox — use confirmations, show entity identifiers, surface **error.code** from the envelope. |
+| **Bulk and export parity** | Operators expect CSV import **and** export where the API provides them — same tier as Shopify/Stripe ops tooling. |
+| **Observability in-product** | Revenue and funnel charts are not enough: reconciliation issues, inbox/outbox failures, and queue depth belong in admin **before** escalation (`BRD.md` AC‑13 ties KPI truth to admin views). |
+| **Replay and remediation UX** | Preview (`replay-preview`) before execute (`replay`) for dead‑letter and inbox failures; collect **`approvalToken`** where **`REPLAY_APPROVAL_TOKEN`** is required (`TRD.md` §7.9 analytics routes). |
+
+Custom **Refine** (or equivalent) data providers should map HTTP verbs, pagination, and filters **one‑to‑one** with §7.9 — no “stub pages” for production clients.
+
+---
+
+### 9.1 Admin control matrix — map every §7.9 route to UI
+
+Prefix all paths with **`/api/v1/admin`**. All require **ADMIN JWT** + permission guards.
+
+#### Dashboard & merchandising
+
+| Admin UI module | API | Operator capability |
+| --- | --- | --- |
+| **Overview / KPIs** | `GET .../dashboard/kpis` (`period`, custom `from`/`to`) | Today / 7d / 30d / custom revenue and order KPIs |
+| **Sales chart** | `GET .../dashboard/sales-chart` (`granularity`) | Hour / day / week trends |
+| **Top products** | `GET .../dashboard/top-products` (`limit`) | Best sellers slice |
+| **Product list** | `GET .../products` | Paginated catalogue management |
+| **Product create / edit** | `POST .../products`, `GET/PATCH .../products/:id`, `DELETE .../products/:id` | Full lifecycle; **DELETE** is **soft-delete** only (`TRD.md` §5.5) |
+| **Variants** | `POST .../products/:id/variants`, `PATCH .../products/:id/variants/:variantId` | Variant CRUD + inventory fields on variant |
+| **Bulk catalog** | `POST .../products/import-csv` | Multipart CSV — optional variant columns per `TRD.md` §7.9 |
+| **Categories** | `GET/POST .../categories`, `PATCH .../categories/:id`, `DELETE .../categories/:id` | Tree list, create, update, deactivate |
+| **Stock overview** | `GET .../inventory` | All variants + quantities |
+| **Stock adjustment** | `PATCH .../inventory/:variantId` | Quantity + **lowStockThreshold** |
+| **Low-stock lens** | `GET .../inventory/low-stock` | Focus queue for replenishment (`BRD.md` AC‑11) |
+
+#### Orders, payments, fulfilment, communications
+
+| Admin UI module | API | Operator capability |
+| --- | --- | --- |
+| **Order pipeline** | `GET .../orders` (`status`, `from`, `to`, `search`) | Operational queue with filters |
+| **Order 360°** | `GET .../orders/:id` | Items, payment, shipment, history, invoice metadata; `paymentMode` field distinguishes COD vs PREPAID |
+| **Manual status** | `PATCH .../orders/:id/status` | Controlled transitions — surface **`INVALID_STATUS_TRANSITION`** clearly |
+| **Create shipment** | `POST .../orders/:id/ship` | Triggers shipment via active provider — **AC‑08**; Shiprocket uses `payment_method: COD` for COD orders |
+| **Schedule pickup / label** | `POST .../schedule-pickup`, `POST .../print-label` | After AWB exists — gate on shipment metadata from order 360° |
+| **Cancel + refund** | `POST .../orders/:id/cancel` | Paid path refund orchestration — **AC‑10** |
+| **COD payment capture (system)** | *(webhook)* | On `DELIVERED`, worker sets COD `Payment.status` → `CAPTURED` — no admin "mark collected" API |
+| **Return requests** | `GET .../return-requests` | List with status/pagination filters |
+| **Return request action** | `PATCH .../return-requests/:id` | Approve / reject / update with `adminNote` |
+| **Customer comms** | `POST .../orders/:id/notifications/retrigger` | Channel pick **`EMAIL` / `SMS` / `WHATSAPP`** |
+| **Reporting export** | `GET .../orders/export` | CSV for period + filters |
+
+#### Growth, trust, configuration
+
+| Admin UI module | API | Operator capability |
+| --- | --- | --- |
+| **Coupons** | `GET/POST .../coupons`, `PATCH .../coupons/:id`, `PATCH .../coupons/:id/status`, `DELETE .../coupons/:id`, `POST .../coupons/:id/restore`, `GET .../coupons/:id/audit` | Full promo lifecycle including soft-delete + restore. Hard delete is never allowed. Audit log per coupon with tamper-evident chain. Write mutations enforce per-admin rate limits — surface `RATE_LIMIT_EXCEEDED` (429) to operator. Respect **`BUY_X_GET_Y`** rejection until v2.2. |
+| **Coupon analytics** | `GET .../coupons/analytics` | Redemption count + total discount totals |
+| **Reviews** | `GET .../reviews`, `PATCH .../reviews/:id/moderate` | Moderation queue when **`FEATURE_REVIEWS_ENABLED`** |
+| **Shipping settings** | `GET/PATCH .../settings/shipping` | Pickup pincode + MOV |
+| **Store profile** | `GET/PATCH .../settings/store` | Identity, GSTIN, FSSAI, branding inputs supported by API |
+| **Notification toggles** | `GET/PATCH .../settings/notifications` | Channel on/off |
+| **Inventory defaults** | `GET/PATCH .../settings/inventory` | Default low-stock threshold for new variants |
+| **COD & cancellation settings** | `GET/PATCH .../settings/cod` | Enable/disable COD, cancellation window hours, seller state |
+
+#### Customers
+
+| Admin UI module | API | Operator capability |
+| --- | --- | --- |
+| **Customer index** | `GET .../users` | Search + aggregates |
+| **Customer CRM view** | `GET .../users/:id` | Profile, addresses, order history |
+
+#### Analytics, reliability, compliance tooling
+
+| Admin UI module | API | Operator capability |
+| --- | --- | --- |
+| **Revenue analytics** | `GET .../analytics/revenue` | Series by granularity |
+| **Revenue export** | `GET .../analytics/revenue/export` | CSV download |
+| **Funnel** | `GET .../analytics/funnel` | Conversion funnel |
+| **Inventory alerts history** | `GET .../analytics/inventory-alerts` | 30‑day low-stock events |
+| **Notification delivery** | `GET .../analytics/notifications` | Rates per channel |
+| **Category economics** | `GET .../analytics/category-breakdown` | Revenue by category |
+| **Reconciliation** | `GET .../analytics/reconciliation-issues` | Investigate integrity anomalies (`TRD.md` §10.2 `reconciliation`) |
+| **Outbox dead-letter** | `GET .../analytics/outbox-dead-letter` | List failed outbox messages |
+| **Outbox replay preview** | `POST .../analytics/outbox-dead-letter/:id/replay-preview` | Side‑effect preview |
+| **Outbox replay** | `POST .../analytics/outbox-dead-letter/:id/replay` | Enqueue replay — **`approvalToken`** when enforced |
+| **Inbox failures** | `GET .../analytics/inbox-failures` | Webhook inbox remediation queue |
+| **Inbox replay preview** | `POST .../analytics/inbox-failures/:id/replay-preview` | Preview |
+| **Inbox replay** | `POST .../analytics/inbox-failures/:id/replay` | Execute — schema‑specific fields per `TRD.md` |
+
+#### Queue operations
+
+| Admin UI module | API | Operator capability |
+| --- | --- | --- |
+| **Bull Board** | `GET .../queues` | Embedded iframe or new tab — inspect jobs, retries, dead letters (`TRD.md` §10.1) |
+
+---
+
+### 9.2 TRD §12.2 required pages vs matrix
+
+The **`TRD.md` §12.2** page list is the **minimum** bar; the matrix above is the **complete** bar. Every §12.2 row should link to the endpoints in §9.1 (for example **Settings** must cover **shipping**, **store**, **notifications**, and **inventory defaults**, not only branding).
+
+Deployment interpretation for this repo: those pages are delivered through the same frontend host and route space (for example `/admin/*`), not through a separate admin subdomain deployment.
+
+Analytics/chart implementation should match TRD expectations (Recharts primitives such as `LineChart`, `FunnelChart`, and `PieChart`) for dashboard/revenue/funnel/category views.
+
+---
+
+### 9.3 Merchant admin vs developer ops surfaces
+
+| Surface | Reason |
+| --- | --- |
+| **Provider secrets / PSP key secret** | Never in merchant admin/browser storage. These are editable only in the developer Ops UI through `/api/v1/ops/config/*`, with ops auth, `ops:write`, verified OTP, encrypted DB persistence, and restart-required semantics. |
+| **Core runtime and infra secrets** | `DATABASE_URL`, initial `REDIS_URL`, and `OPS_DB_ENCRYPTION_KEY` are bootstrap-only deployment env values and must be rendered read-only if shown. JWT secrets, provider keys, ops salts, and invoice storage root are DB-overlay eligible only when `mutableViaOps: true`; never expose plaintext values to storefront/customer or merchant admin surfaces. |
+| **Ops Prometheus scrape** | **`/api/v1/ops/metrics`** is network/token gated — typically SRE scrapers, not merchant UI. |
+| **Database shell** | Not exposed — use reconciliation + replay tools first. |
+
+---
+
+## 10. Security rules for frontend engineers
+
+| Rule | Reference |
+| --- | --- |
+| No secret keys in browser bundles | `TRD.md` §7.11 PCI |
+| No PAN/CVV in your app — Razorpay hosted fields only | §7.11 |
+| CSP / SRI / WAF on **storefront** HTML pages that load Razorpay script | §11.5 |
+| Validate and encode user-controlled query params | XSS prevention |
+| Do not leak internal IDs meant to be admin-only — public serializers omit sensitive fields (`TRD.md` §7.11) | |
+
+---
+
+## 11. Backend module registration (for debugging)
+
+Route modules register in **`src/app.ts`** in this order: health → auth → cart → users → products → wishlist → reviews → inventory → settings → coupons → orders → dashboard → analytics → queues → ops. **Checkout risk** adapter may be decorated before orders if customised (`TRD.md` §7.13).
+
+---
+
+## 12. Testing matrix (storefront + admin)
+
+### 12.1 Local smoke vs monitor-based remote validation
+
+| Mode | Scope | Notes |
+| --- | --- | --- |
+| Local smoke | `localhost`/`127.0.0.1` during active development | Run app-level scripts and direct API checks |
+| Monitor remote | Postman monitor runs from cloud infra | Must use reachable non-local `baseUrl`; localhost monitor failures are config/env blockers |
+
+### 12.2 BRD AC matrix coverage (one row per AC)
+
+| AC | Frontend/admin validation case |
+| --- | --- |
+| AC-01 | OTP send + verify produces authenticated customer session and protected profile read |
+| AC-02 | Guest cart survives session and merges correctly on login (`POST /api/v1/cart/merge`) |
+| AC-03 | `POST /api/v1/cart/check-pincode` distinguishes serviceable vs `PINCODE_NOT_SERVICEABLE` |
+| AC-04 | Coupon + checkout + Razorpay (UPI/card) + verify + confirmation comms + GST invoice attachment evidence |
+| AC-05 | Duplicate payment webhook deliveries do not duplicate user-visible confirmations/invoices |
+| AC-06 | UI never treats callback alone as final; order remains pending until backend confirmation path completes |
+| AC-07 | `INSUFFICIENT_STOCK` renders correctly; no optimistic UI showing successful placement |
+| AC-08 | Admin shipment action (`POST /api/v1/admin/orders/:id/ship`) surfaces AWB and success/error states |
+| AC-09 | Customer sees tracking timeline consistent with `GET /api/v1/shipping/track/:awb` |
+| AC-10 | Admin cancel/refund flow reaches `REFUNDED` with communication trail |
+| AC-11 | Setting variant quantity to `0` yields low-stock alert visibility in admin experience |
+| AC-12 | Invoice rendering/download path preserves GST detail correctness for customer support workflows |
+| AC-13 | Dashboard KPI values reconcile with exports/manual roll-ups |
+| AC-14 | Cross-client access attempts fail for data, admin views, and configuration surfaces |
+| AC-15 | Second-client admin/storefront integration can be validated inside expected deployment time budget |
+
+### 12.3 Route-level contract checks (storefront + admin)
+
+| Area | Cases |
+| --- | --- |
+| Auth | OTP flow, email login, forgot-password trigger, refresh loop, logout |
+| Profile | `/users/me` and addresses CRUD permissions + envelope consistency |
+| Cart | Guest session, merge after login, coupon errors |
+| Checkout | Initiate -> verify -> order status transition; duplicate callback idempotency |
+| Orders | Customer own-order boundaries; admin list/detail and status actions |
+| Admin coverage | For each row in **§9.1**, smoke test list -> detail -> primary action -> error envelope |
+| Admin reliability | Reconciliation list, replay preview -> replay, Bull Board visibility with admin JWT |
+| Rate-limit UX | Handle `429 RATE_LIMIT_EXCEEDED` with retry/backoff messaging for auth/checkout hot paths |
+| Auth failure UX | Handle `401/403` with refresh-once logic and permission-aware UI disable/hide behavior |
+
+---
+
+## 13. Anti-patterns (avoid)
+
+- Calling **`/payments/webhook`** from the browser (impossible to sign correctly; wrong layer).
+- Storing refresh tokens in **`localStorage`**.
+- Parsing **`error.message`** instead of **`error.code`** for branching.
+- Assuming **`/payments/verify`** alone guarantees capture — webhook + worker pipeline is authoritative.
+- Hardcoding **`localhost`** API URLs in production client bundles.
+- **Admin:** shipping only the **`TRD.md` §12.2** minimum pages while leaving **`§7.9`** capabilities without UI — forces operators into ad‑hoc API clients and breaks the “industry control plane” standard described in **§9**.
+- **Admin:** using **403** as the only signal for **unauthorised** features — permissions should **hide or disable** actions up front.
+
+---
+
+## 14. Related docs
+
+- **`docs/FRONTEND_DEV_LOG_TEMPLATE.md`** — **copy to `docs/FRONTEND_DEV_LOG.md` in the frontend repo at project start** — frontend slice tracker for completion, provider dry-run status, milestone test records, and Phase 5 gate readiness
+- **`docs/CLIENT_ONBOARDING_EXECUTION_ORDER.md`** — **master sequenced runbook** — Phase 4 (frontend build, this guide) and Phase 10 (frontend deploy and domain wiring) live here; use it to understand what precedes and follows the frontend build in the full deployment sequence
+- **`docs/CLIENT_VPS_SETUP_GUIDE.md`** — Nginx, TLS, multi-client ports  
+- **`docs/CLIENT_GO_LIVE_VALIDATION_GUIDE.md`** — BRD Phase 6 acceptance mapping  
+- **`docs/BACKEND_GO_LIVE_CHECKLIST.md`** — backend release gate checklist (reusable)  
+- **`docs/FRONTEND_AI_GO_LIVE_CHECKLIST.md`** — frontend AI release gate checklist (reusable)  
+- **`TRD.md`** §7, §12 — exhaustive route and UI requirements  
+- **`BRD.md`** §12 — acceptance criteria checklist  

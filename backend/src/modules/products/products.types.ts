@@ -1,0 +1,88 @@
+export type ProductListQuery = {
+  category?: string;
+  search?: string;
+  minPrice?: number;
+  maxPrice?: number;
+  tags?: string;
+  sort?: 'price_asc' | 'price_desc' | 'newest' | 'popularity';
+  inStock?: boolean;
+  page?: number;
+  limit?: number;
+};
+
+export type CreateProductInput = {
+  name: string;
+  slug: string;
+  description: string;
+  categoryId: string;
+  tags?: string[];
+  attributes?: Record<string, unknown>;
+  metaTitle?: string;
+  metaDescription?: string;
+  isFeatured?: boolean;
+  images?: Array<{
+    url: string;
+    altText: string;
+    sortOrder: number;
+  }>;
+  variants?: Array<{
+    sku: string;
+    name: string;
+    price: number;
+    compareAtPrice?: number;
+    weight?: number;
+    quantity?: number;
+    lowStockThreshold?: number;
+    attributes?: Record<string, unknown>;
+    isActive?: boolean;
+  }>;
+};
+
+export type UpdateProductInput = Partial<CreateProductInput> & {
+  isActive?: boolean;
+};
+
+export type CreateCategoryInput = {
+  name: string;
+  slug: string;
+  parentId?: string;
+  imageUrl?: string;
+};
+
+export type UpdateCategoryInput = Partial<CreateCategoryInput> & {
+  isActive?: boolean;
+};
+
+export type AdminCategoryListQuery = {
+  page?: number;
+  limit?: number;
+};
+
+export type ProductCsvImportInput = {
+  csv: string;
+};
+
+export type CreateProductVariantInput = {
+  sku: string;
+  name: string;
+  price: number;
+  compareAtPrice?: number;
+  weight?: number;
+  quantity?: number;
+  lowStockThreshold?: number;
+  attributes?: Record<string, unknown>;
+  isActive?: boolean;
+};
+
+export type UpdateProductVariantInput = Partial<CreateProductVariantInput>;
+
+export type CreateProductImageInput = {
+  url: string;
+  altText: string;
+  sortOrder: number;
+};
+
+export type ReorderProductImagesInput = {
+  images: Array<{ id: string; sortOrder: number }>;
+};
+

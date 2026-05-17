@@ -1,0 +1,41 @@
+# Documentation Context Map (Low-Noise Entry)
+
+Use this map to keep AI/developer context small while ensuring no detail is lost.
+
+## Development-time minimal load set (read first)
+
+1. `docs/MASTER_DEPLOYMENT_PLAYBOOK.md` — end-to-end build/deploy SOP (now shortened; detailed hardening moved out).
+2. `docs/CLIENT_ONBOARDING_EXECUTION_ORDER.md` — strict phase sequencing and evidence gates.
+3. `docs/NEXTJS_FRONTEND_INTEGRATION_GUIDE.md` — frontend contract + slice methodology.
+4. `docs/API_ENDPOINT_INDEX.md` — endpoint inventory mapped to frontend/admin/ops UI surfaces.
+5. `docs/BACKEND_GO_LIVE_CHECKLIST.md` — backend release/parity gate.
+6. `docs/FRONTEND_AI_GO_LIVE_CHECKLIST.md` — frontend release gate.
+
+## Development-time supporting references (read only when needed)
+
+- `docs/THIRD_PARTY_INTEGRATIONS_SETUP_AND_KEY_MANAGEMENT_GUIDE.md` — provider setup/rotation/incident policy.
+- `docs/CLIENT_INTEGRATION_CREDENTIAL_REGISTER_TEMPLATE.md` — credential ownership artifact.
+- `docs/CLIENT_DEV_LOG_TEMPLATE.md` — client build log template.
+- `docs/FRONTEND_DEV_LOG_TEMPLATE.md` — frontend slice-tracker template.
+- `docs/CLIENT_VPS_DEPLOYMENT_LOG_TEMPLATE.md` — VPS-phase execution log template.
+- `docs/OPS_CONTROL_PLANE_GUIDE.md` — detailed ops control-plane behavior.
+- Error handling canon: `docs/NEXTJS_FRONTEND_INTEGRATION_GUIDE.md` section `2.1` (frontend error-code handling matrix) + `docs/CLIENT_VPS_SETUP_GUIDE.md` section `19.1` (VPS/API error triage matrix).
+- `docs/HARDENING_HISTORY.md` — full engineering hardening narrative (reference-only during active delivery).
+- `docs/DECISIONS.md` — architectural decision ledger.
+
+## Post-development primary set
+
+- `docs/CLIENT_HANDOFF_INDEX.md` (entrypoint)
+- `docs/CLIENT_ONBOARDING_EXECUTION_ORDER.md`
+- `docs/NEXTJS_FRONTEND_INTEGRATION_GUIDE.md`
+- `docs/API_ENDPOINT_INDEX.md`
+- `.env.example`
+- `docs/THIRD_PARTY_INTEGRATIONS_SETUP_AND_KEY_MANAGEMENT_GUIDE.md`
+- Completed client artifacts (`CLIENT_DEV_LOG.md`, `FRONTEND_DEV_LOG.md`, `CLIENT_VPS_DEPLOYMENT_LOG.md`)
+
+## Consolidation notes (to reduce file sprawl without detail loss)
+
+- Co-development command ownership is consolidated into `CO_DEVELOPMENT_SYNC_GUIDE.md`; other docs keep short pointers only.
+- Future shipping extension guidance is consolidated into `docs/NEXTJS_FRONTEND_INTEGRATION_GUIDE.md` section `1.2.2A`.
+- Detailed hardening narrative is consolidated into `docs/HARDENING_HISTORY.md`; master playbook keeps only operational highlights.
+- Duplicate decision entries are removed from `docs/DECISIONS.md` where exact same decision already existed earlier.

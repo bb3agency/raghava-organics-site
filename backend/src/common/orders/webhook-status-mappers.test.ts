@@ -1,0 +1,48 @@
+import { describe, expect, it } from 'vitest';
+import {
+  mapPaymentEventToStatuses,
+  mapShipmentStatusToOrderStatus,
+  mapShipmentWebhookStatus
+} from './webhook-status-mappers';
+
+describe('webhook status mappers', () => {
+  it('maps payment.failed event to failed statuses', () => {
+    const result = mapPaymentEventToStatuses('payment.failed');
+    expect(result).not.toBeNull();
+    expect(result?.paymentStatus).toBe('FAILED');
+    expect(result?.orderStatus).toBe('PAYMENT_FAILED');
+  });
+
+  it('maps payment.captured event to captured and confirmed', () => {
+    const result = mapPaymentEventToStatuses('payment.captured');
+    expect(result?.paymentStatus).toBe('CAPTURED');
+    expect(result?.orderStatus).toBe('CONFIRMED');
+  });
+
+  it('maps refund.processed event to refunded statuses', () => {
+    const result = mapPaymentEventToStatuses('refund.processed');
+    expect(result?.paymentStatus).toBe('REFUNDED');
+    expect(result?.orderStatus).toBe('REFUNDED');
+  });
+
+  it('returns null for unknown payment events', () => {
+    const result = mapPaymentEventToStatuses('payment.authorized');
+    expect(result).toBeNull();
+  });
+
+  it('normalizes shipment status strings and rejects unknown statuses', () => {
+    expect(mapShipmentWebhookStatus(' delivered ')).toBe('DELIVERED');
+    expect(mapShipmentWebhookStatus('OUT_FOR_DELIVERY')).toBe('OUT_FOR_DELIVERY');
+    expect(mapShipmentWebhookStatus('Out For Delivery')).toBe('OUT_FOR_DELIVERY');
+    expect(mapShipmentWebhookStatus('Manifested')).toBe('BOOKED');
+    expect(mapShipmentWebhookStatus('unknown_vendor_state')).toBeNull();
+  });
+
+  it('maps shipment status to order status only for meaningful milestones', () => {
+    expect(mapShipmentStatusToOrderStatus('OUT_FOR_DELIVERY')).toBe('OUT_FOR_DELIVERY');
+    expect(mapShipmentStatusToOrderStatus('DELIVERED')).toBe('DELIVERED');
+    expect(mapShipmentStatusToOrderStatus('RTO_INITIATED')).toBeNull();
+    expect(mapShipmentStatusToOrderStatus('BOOKED')).toBeNull();
+  });
+});
+

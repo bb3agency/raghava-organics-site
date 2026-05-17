@@ -1,0 +1,101 @@
+type OrderStatus =
+  | 'PENDING_PAYMENT'
+  | 'PAYMENT_FAILED'
+  | 'CONFIRMED'
+  | 'PROCESSING'
+  | 'SHIPPED'
+  | 'OUT_FOR_DELIVERY'
+  | 'DELIVERED'
+  | 'CANCELLED'
+  | 'REFUNDED';
+
+type PaymentStatus = 'CREATED' | 'CAPTURED' | 'FAILED' | 'REFUNDED' | 'PARTIALLY_REFUNDED';
+
+type ShipmentStatus =
+  | 'PENDING'
+  | 'BOOKED'
+  | 'PICKED_UP'
+  | 'IN_TRANSIT'
+  | 'OUT_FOR_DELIVERY'
+  | 'DELIVERED'
+  | 'FAILED_DELIVERY'
+  | 'RTO_INITIATED'
+  | 'RTO_DELIVERED'
+  | 'CANCELLED';
+
+const ORDER_STATUS = {
+  PAYMENT_FAILED: 'PAYMENT_FAILED',
+  CONFIRMED: 'CONFIRMED',
+  OUT_FOR_DELIVERY: 'OUT_FOR_DELIVERY',
+  DELIVERED: 'DELIVERED',
+  REFUNDED: 'REFUNDED'
+} as const;
+
+const PAYMENT_STATUS = {
+  CAPTURED: 'CAPTURED',
+  FAILED: 'FAILED',
+  REFUNDED: 'REFUNDED'
+} as const;
+
+const SHIPMENT_STATUS = {
+  BOOKED: 'BOOKED',
+  PICKED_UP: 'PICKED_UP',
+  IN_TRANSIT: 'IN_TRANSIT',
+  OUT_FOR_DELIVERY: 'OUT_FOR_DELIVERY',
+  DELIVERED: 'DELIVERED',
+  FAILED_DELIVERY: 'FAILED_DELIVERY',
+  RTO_INITIATED: 'RTO_INITIATED',
+  RTO_DELIVERED: 'RTO_DELIVERED',
+  CANCELLED: 'CANCELLED'
+} as const;
+
+export function mapPaymentEventToStatuses(event: string): {
+  paymentStatus: PaymentStatus;
+  orderStatus: OrderStatus;
+} | null {
+  const normalized = event.trim().toLowerCase();
+  if (normalized === 'payment.captured') {
+    return {
+      paymentStatus: PAYMENT_STATUS.CAPTURED,
+      orderStatus: ORDER_STATUS.CONFIRMED
+    };
+  }
+
+  if (normalized === 'payment.failed') {
+    return {
+      paymentStatus: PAYMENT_STATUS.FAILED,
+      orderStatus: ORDER_STATUS.PAYMENT_FAILED
+    };
+  }
+
+  if (normalized === 'refund.processed') {
+    return {
+      paymentStatus: PAYMENT_STATUS.REFUNDED,
+      orderStatus: ORDER_STATUS.REFUNDED
+    };
+  }
+
+  return null;
+}
+
+export function mapShipmentWebhookStatus(status: string): ShipmentStatus | null {
+  const normalized = status.trim().toUpperCase().replace(/\s+/g, '_');
+  // Delhivery + Shiprocket shared mappings
+  if (normalized === 'BOOKED' || normalized === 'MANIFESTED') return SHIPMENT_STATUS.BOOKED;
+  if (normalized === 'PICKED_UP' || normalized === 'PICKUP_SCHEDULED') return SHIPMENT_STATUS.PICKED_UP;
+  if (normalized === 'IN_TRANSIT') return SHIPMENT_STATUS.IN_TRANSIT;
+  if (normalized === 'OUT_FOR_DELIVERY') return SHIPMENT_STATUS.OUT_FOR_DELIVERY;
+  if (normalized === 'DELIVERED') return SHIPMENT_STATUS.DELIVERED;
+  if (normalized === 'FAILED_DELIVERY' || normalized === 'UNDELIVERED') return SHIPMENT_STATUS.FAILED_DELIVERY;
+  if (normalized === 'RTO_INITIATED' || normalized === 'RTO-INITIATED') return SHIPMENT_STATUS.RTO_INITIATED;
+  if (normalized === 'RTO_DELIVERED' || normalized === 'RTO-DELIVERED') return SHIPMENT_STATUS.RTO_DELIVERED;
+  if (normalized === 'CANCELLED') return SHIPMENT_STATUS.CANCELLED;
+  return null;
+}
+
+export function mapShipmentStatusToOrderStatus(shipmentStatus: ShipmentStatus): OrderStatus | null {
+  if (shipmentStatus === SHIPMENT_STATUS.OUT_FOR_DELIVERY) return ORDER_STATUS.OUT_FOR_DELIVERY;
+  if (shipmentStatus === SHIPMENT_STATUS.DELIVERED) return ORDER_STATUS.DELIVERED;
+  return null;
+}
+

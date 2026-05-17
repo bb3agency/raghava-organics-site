@@ -1,0 +1,157 @@
+import Fastify from 'fastify';
+import { Role } from '@prisma/client';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { registerAuthRoutes } from './auth.routes';
+
+interface MockError {
+  statusCode?: number;
+  code?: string;
+  message?: string;
+}
+
+function createApp() {
+  const app = Fastify();
+  app.setErrorHandler((err, _request, reply) => {
+    const error = err as MockError;
+    const statusCode =
+      typeof error.statusCode === 'number'
+        ? error.statusCode
+        : 500;
+    reply.status(statusCode).send({
+      success: false,
+      error: {
+        code: error.code ?? 'INTERNAL_ERROR',
+        message: error.message,
+        statusCode,
+        details: { kind: 'internal', hintKey: 'unknown', retryable: false, remediation: '' }
+      }
+    });
+  });
+  const refreshFindMany = vi.fn(async () => []);
+  const refreshUpdateMany = vi.fn(async () => ({ count: 1 }));
+  app.decorate('prisma', {
+    refreshToken: {
+      findMany: refreshFindMany,
+      updateMany: refreshUpdateMany
+    },
+    user: {},
+    adminPermissionGrant: { findMany: vi.fn(async () => []) }
+  } as unknown as NonNullable<Parameters<typeof app.decorate>[1]>);
+  app.decorate('redis', {
+    get: vi.fn(async () => null),
+    set: vi.fn(async () => 'OK'),
+    del: vi.fn(async () => 1),
+    ttl: vi.fn(async () => -1),
+    incr: vi.fn(async () => 1),
+    expire: vi.fn(async () => 1)
+  } as unknown as NonNullable<Parameters<typeof app.decorate>[1]>);
+  app.decorate('jwt', { sign: vi.fn(() => 'token') } as unknown as NonNullable<Parameters<typeof app.decorate>[1]>);
+  app.decorateRequest('jwtVerify', async function () {
+    const req = this as unknown as { headers: Record<string, unknown>; user?: unknown };
+    const roleHeader = req.headers['x-role'];
+    const role = roleHeader === 'ADMIN' ? Role.ADMIN : Role.CUSTOMER;
+    req.user = {
+      sub: 'user-1',
+      role,
+      permissions: role === Role.ADMIN ? ['users:read', 'users:write'] : []
+    };
+  });
+  return { app, mocks: { refreshFindMany, refreshUpdateMany } };
+}
+
+describe('auth routes logout role handling', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('allows customer logout', async () => {
+    const { app } = createApp();
+    await registerAuthRoutes(app);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/logout',
+      headers: {
+        'x-role': 'CUSTOMER',
+        cookie: 'refresh_token=abc'
+      },
+      payload: {}
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ message: 'Logged out successfully' });
+    expect(response.headers['set-cookie']).toContain('refresh_token=');
+
+    await app.close();
+  });
+
+  it('allows admin logout', async () => {
+    const { app } = createApp();
+    await registerAuthRoutes(app);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/logout',
+      headers: {
+        'x-role': 'ADMIN',
+        cookie: 'refresh_token=def'
+      },
+      payload: {}
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ message: 'Logged out successfully' });
+    expect(response.headers['set-cookie']).toContain('Max-Age=0');
+
+    await app.close();
+  });
+
+  it('protects admin MFA routes with operation-level permission guard', async () => {
+    const { app } = createApp();
+    await registerAuthRoutes(app);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/admin/mfa/setup/start',
+      headers: { 'x-role': 'CUSTOMER' },
+      payload: {}
+    });
+    expect(response.statusCode).toBe(403);
+
+    await app.close();
+  });
+
+  it('registers merchant admin invite setup routes', async () => {
+    const { app } = createApp();
+    await registerAuthRoutes(app);
+
+    const createResponse = await app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/invites',
+      payload: {}
+    });
+    const consumeResponse = await app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/invites/consume',
+      payload: {}
+    });
+    const cleanupResponse = await app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/invites/cleanup-expired',
+      payload: {}
+    });
+    const signupPhoneResponse = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/signup-phone',
+      payload: {}
+    });
+
+    expect(createResponse.statusCode).not.toBe(404);
+    expect(consumeResponse.statusCode).not.toBe(404);
+    expect(cleanupResponse.statusCode).not.toBe(404);
+    expect(signupPhoneResponse.statusCode).not.toBe(404);
+
+    await app.close();
+  });
+});

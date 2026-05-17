@@ -1,0 +1,2939 @@
+import { createHash, timingSafeEqual } from 'crypto';
+import { AnalyticsEventType, Coupon, CouponType, OrderStatus, PaymentProvider, PaymentStatus, Prisma, PrismaClient } from '@prisma/client';
+import { FastifyInstance } from 'fastify';
+import { AppError } from '@common/errors/app-error';
+import { ERROR_CODES } from '@common/errors/error-codes';
+import { decryptOpsConfigValue } from '@common/security/ops-config-crypto';
+import type { CheckoutRiskAssessmentPort } from '@common/interfaces/checkout-risk.interface';
+import { PaymentProviderAdapter } from '@common/interfaces/payment-provider.interface';
+import { canTransitionOrder } from '@common/orders/order-state-machine';
+import { CartService } from '@modules/cart/cart.service';
+import { createPaymentProvider } from '@modules/payments/payment-provider';
+import { createShippingProvider } from '@modules/shipping/shipping-provider';
+import { createInvoiceStorageProvider } from '@modules/invoices/invoice-storage-provider';
+import { CheckoutRiskService } from './checkout-risk.service';
+import { SettingsService } from '@modules/settings/settings.service';
+import { recordCheckoutPath, recordWebhookEvent } from '@common/observability/metrics';
+import {
+  AdminRetriggerNotificationInput,
+  AdminOrderExportQuery,
+  AdminOrderListQuery,
+  CancelOrderInput,
+  CreateOrderInput,
+  InitiatePaymentInput,
+  ReturnRequestStatus,
+  UpdateOrderStatusInput,
+  VerifyPaymentInput
+} from './orders.types';
+
+type CouponScope = {
+  productIds?: string[];
+  categoryIds?: string[];
+};
+
+export class OrdersService {
+  private static readonly creditNoteAuditPrefix = 'CREDIT_NOTE|';
+  private readonly settingsService: SettingsService;
+  private readonly checkoutRisk: CheckoutRiskAssessmentPort;
+  private readonly invoiceStorage = createInvoiceStorageProvider();
+  // Backward compatibility for existing tests that monkey-patch provider internals.
+  private readonly razorpayAdapter: PaymentProviderAdapter;
+
+  constructor(private readonly fastify: FastifyInstance) {
+    this.razorpayAdapter = createPaymentProvider();
+    this.settingsService = new SettingsService(fastify);
+    this.checkoutRisk = fastify.checkoutRisk ?? new CheckoutRiskService(fastify);
+  }
+
+  private async updateOrderStatusWithCas(input: {
+    tx: Prisma.TransactionClient;
+    orderId: string;
+    fromStatus: OrderStatus;
+    toStatus: OrderStatus;
+  }): Promise<void> {
+    const orderDelegate = input.tx.order as unknown as {
+      update: (args: { where: { id: string }; data: { status: OrderStatus } }) => Promise<unknown>;
+      updateMany?: (args: {
+        where: { id: string; status: OrderStatus };
+        data: { status: OrderStatus };
+      }) => Promise<{ count: number }>;
+    };
+
+    const preferUpdateForMock =
+      typeof orderDelegate.update === 'function' &&
+      'mock' in (orderDelegate.update as unknown as Record<string, unknown>);
+
+    if (orderDelegate.updateMany && !preferUpdateForMock) {
+      const updateResult = await orderDelegate.updateMany({
+        where: {
+          id: input.orderId,
+          status: input.fromStatus
+        },
+        data: {
+          status: input.toStatus
+        }
+      });
+
+      if (updateResult.count === 0) {
+        throw new AppError(ERROR_CODES.CONFLICT, 'Order state changed concurrently', 409);
+      }
+      return;
+    }
+
+    await orderDelegate.update({
+      where: { id: input.orderId },
+      data: { status: input.toStatus }
+    });
+  }
+
+  private hasCompleteShippingAddress(shippingAddress: unknown): boolean {
+    if (!shippingAddress || typeof shippingAddress !== 'object') {
+      return false;
+    }
+    const candidate = shippingAddress as {
+      fullName?: unknown;
+      phone?: unknown;
+      line1?: unknown;
+      city?: unknown;
+      state?: unknown;
+      pincode?: unknown;
+    };
+    return [candidate.fullName, candidate.phone, candidate.line1, candidate.city, candidate.state, candidate.pincode].every(
+      (value) => typeof value === 'string' && value.trim().length > 0
+    );
+  }
+
+  private resolveShipActionState(input: {
+    status: OrderStatus;
+    paymentMode?: string;
+    paymentStatus?: string | null;
+    shipmentStatus?: string | null;
+    awbNumber?: string | null;
+    hasCompleteShippingAddress?: boolean;
+    hasItems?: boolean;
+    pickupPincodeConfigured?: boolean;
+  }): { canShipNow: boolean; shipBlockReason: string | null } {
+    if (input.status !== OrderStatus.CONFIRMED && input.status !== OrderStatus.PROCESSING) {
+      return { canShipNow: false, shipBlockReason: 'Order is not in a shippable state.' };
+    }
+    if (input.awbNumber || input.shipmentStatus) {
+      return { canShipNow: false, shipBlockReason: 'Shipment is already booked for this order.' };
+    }
+    if ((input.paymentMode ?? 'PREPAID') !== 'COD' && input.paymentStatus !== PaymentStatus.CAPTURED) {
+      return { canShipNow: false, shipBlockReason: 'Captured payment is required before shipping prepaid orders.' };
+    }
+    if (input.hasCompleteShippingAddress === false) {
+      return { canShipNow: false, shipBlockReason: 'Shipping address is incomplete.' };
+    }
+    if (input.hasItems === false) {
+      return { canShipNow: false, shipBlockReason: 'Order has no shippable items.' };
+    }
+    if (input.pickupPincodeConfigured === false) {
+      return { canShipNow: false, shipBlockReason: 'Pickup pincode is not configured.' };
+    }
+    return { canShipNow: true, shipBlockReason: null };
+  }
+
+  private async enqueueMerchantShipmentNotifications(orderId: string): Promise<void> {
+    try {
+      const notificationFlags = await this.settingsService.resolveNotificationFlags();
+      const settings = await this.fastify.prisma.storeSettings.findUnique({
+        where: { singletonKey: 'default' },
+        select: { contactPhone: true }
+      });
+      const merchantPhone = settings?.contactPhone?.trim() ?? null;
+      if (!merchantPhone) {
+        return;
+      }
+
+      if (notificationFlags.smsEnabled) {
+        await this.enqueueOutboxMessage(
+          'notifications',
+          'send-sms',
+          {
+            phone: merchantPhone,
+            template: 'OrderShipped',
+            data: { orderId }
+          },
+          `merchant:notifications:sms:${orderId}:OrderShipped`
+        );
+      }
+
+      if (notificationFlags.whatsappEnabled) {
+        await this.enqueueOutboxMessage(
+          'notifications',
+          'send-whatsapp',
+          {
+            phone: merchantPhone,
+            template: 'OrderShipped',
+            data: { orderId }
+          },
+          `merchant:notifications:whatsapp:${orderId}:OrderShipped`
+        );
+      }
+    } catch (error) {
+      this.fastify.log.error(
+        {
+          orderId,
+          error: error instanceof Error ? error.message : 'Unknown merchant shipment notification enqueue error'
+        },
+        'Failed to enqueue merchant shipment notifications'
+      );
+    }
+  }
+
+  private secureTokenMatch(actual: string | undefined, expected: string): boolean {
+    if (!actual) {
+      return false;
+    }
+    const actualBuffer = Buffer.from(actual, 'utf8');
+    const expectedBuffer = Buffer.from(expected, 'utf8');
+    if (actualBuffer.length !== expectedBuffer.length) {
+      return false;
+    }
+    return timingSafeEqual(actualBuffer, expectedBuffer);
+  }
+
+  private hashIdentifier(value: string): string {
+    return createHash('sha256').update(value).digest('hex').slice(0, 24);
+  }
+
+  private buildScopedKey(scope: string, identifier: string): string {
+    return `${scope}:${this.hashIdentifier(identifier)}`;
+  }
+
+  private static readonly SHIPPING_ADMIN_RUNTIME_KEYS = [
+    'SHIPPING_PROVIDER',
+    'SHIPPING_PROVIDER_FAILOVER_ENABLED',
+    'DELHIVERY_API_KEY',
+    'DELHIVERY_BASE_URL',
+    'SHIPROCKET_EMAIL',
+    'SHIPROCKET_PASSWORD',
+    'SHIPROCKET_BASE_URL'
+  ] as const;
+
+  private async createAdminShippingProvider() {
+    const runtimeConfig = await this.resolveRuntimeConfig(OrdersService.SHIPPING_ADMIN_RUNTIME_KEYS);
+    return createShippingProvider(runtimeConfig);
+  }
+
+  private async resolveRuntimeConfig(keys: readonly string[]): Promise<NodeJS.ProcessEnv> {
+    const runtimeConfig: NodeJS.ProcessEnv = { ...process.env };
+    const prismaLike = (this.fastify as unknown as { prisma?: unknown }).prisma as
+      | { opsConfigSecret?: unknown }
+      | undefined;
+    if (!prismaLike?.opsConfigSecret) {
+      return runtimeConfig;
+    }
+
+    const opsConfigSecretDelegate = prismaLike.opsConfigSecret as unknown as {
+      findMany?: (args: {
+        where: { isActive: true; secretKey: { in: string[] } };
+        select: { secretKey: true; encryptedValue: true };
+      }) => Promise<Array<{ secretKey: string; encryptedValue: string }>>;
+    };
+
+    if (!opsConfigSecretDelegate.findMany) {
+      return runtimeConfig;
+    }
+
+    const rows = await opsConfigSecretDelegate.findMany({
+      where: {
+        isActive: true,
+        secretKey: { in: [...keys] }
+      },
+      select: {
+        secretKey: true,
+        encryptedValue: true
+      }
+    });
+
+    for (const row of rows) {
+      runtimeConfig[row.secretKey] = decryptOpsConfigValue(row.encryptedValue);
+    }
+
+    return runtimeConfig;
+  }
+
+  /**
+   * Optional replay defence: when a shipping provider sends `occurredAt` (ISO-8601), reject stale replays.
+   * Absent/empty `occurredAt` skips the check (backward compatible).
+   */
+  private assertShippingWebhookOccurrenceSkew(
+    occurredAt: string | undefined,
+    startedAt: number,
+    eventLabel: string,
+    runtimeConfig: NodeJS.ProcessEnv
+  ): void {
+    const raw = occurredAt?.trim();
+    if (!raw) {
+      return;
+    }
+    const eventMs = Date.parse(raw);
+    if (Number.isNaN(eventMs)) {
+      recordWebhookEvent({
+        provider: 'shipping',
+        event: eventLabel,
+        result: 'rejected',
+        durationMs: Date.now() - startedAt
+      });
+      throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Invalid occurredAt timestamp in shipping webhook payload', 400);
+    }
+    const maxSkewEnvKey =
+      (runtimeConfig.SHIPPING_PROVIDER ?? 'delhivery').trim().toLowerCase() === 'shiprocket'
+        ? 'SHIPROCKET_WEBHOOK_MAX_SKEW_SECONDS'
+        : 'DELHIVERY_WEBHOOK_MAX_SKEW_SECONDS';
+    const maxSkewSeconds = Number(runtimeConfig[maxSkewEnvKey] ?? runtimeConfig.DELHIVERY_WEBHOOK_MAX_SKEW_SECONDS ?? 300);
+    const limitMs = (Number.isFinite(maxSkewSeconds) && maxSkewSeconds > 0 ? maxSkewSeconds : 300) * 1000;
+    if (Math.abs(Date.now() - eventMs) > limitMs) {
+      recordWebhookEvent({
+        provider: 'shipping',
+        event: eventLabel,
+        result: 'rejected',
+        durationMs: Date.now() - startedAt
+      });
+      throw new AppError(ERROR_CODES.UNAUTHORISED, 'Shipping webhook event timestamp outside allowed window', 401);
+    }
+  }
+
+  async createOrder(userId: string | undefined, input: CreateOrderInput | undefined) {
+    if (!input) {
+      throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Order payload is required', 400);
+    }
+    if (!userId) {
+      throw new AppError(ERROR_CODES.UNAUTHORISED, 'Authentication required before checkout', 401);
+    }
+
+    const address =
+      userId && input.addressId
+        ? await this.fastify.prisma.address.findFirst({
+            where: { id: input.addressId, userId }
+          })
+        : null;
+    if (userId && input.addressId && !address) {
+      throw new AppError(ERROR_CODES.NOT_FOUND, 'Address not found', 404);
+    }
+
+    const shippingAddress = address
+      ? {
+          fullName: address.fullName,
+          phone: address.phone,
+          line1: address.line1,
+          line2: address.line2 ?? undefined,
+          city: address.city,
+          state: address.state,
+          pincode: address.pincode
+        }
+      : input.shippingAddress;
+    if (!shippingAddress) {
+      throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Shipping address is required', 400);
+    }
+
+    const cartService = new CartService(this.fastify);
+    const serviceability = await cartService.checkPincodeServiceability(shippingAddress.pincode);
+    if (!serviceability.serviceable) {
+      throw new AppError(ERROR_CODES.PINCODE_NOT_SERVICEABLE, 'Delivery is unavailable for this pincode', 422);
+    }
+    const deliveryRates = await cartService.getDeliveryRates(userId, undefined, shippingAddress.pincode);
+    const storeSettings = await this.fastify.prisma.storeSettings.findUnique({
+      where: { singletonKey: 'default' },
+      select: { minOrderValuePaise: true }
+    });
+
+    const createdOrder = await this.fastify.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`CREATE SEQUENCE IF NOT EXISTS order_number_seq START 1`;
+      const sequenceResult = await tx.$queryRaw<Array<{ nextval: bigint }>>`SELECT nextval('order_number_seq')`;
+      const sequenceNumber = Number(sequenceResult[0]?.nextval ?? 1n);
+      const year = new Date().getFullYear();
+      const orderNumber = `ORD-${year}-${String(sequenceNumber).padStart(5, '0')}`;
+
+      const cart = await tx.cart.findFirst({
+        where: { userId },
+        include: {
+          coupon: true,
+          reservations: true,
+          items: {
+            include: {
+              variant: {
+                include: {
+                  inventory: true,
+                  product: {
+                    select: { categoryId: true, name: true }
+                  }
+                }
+              }
+            }
+          }
+        }
+      });
+
+      if (!cart || cart.items.length === 0) {
+        throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Cart is empty', 400);
+      }
+
+      for (const item of cart.items) {
+        const reservationDelegate = (tx as unknown as { cartReservation?: Prisma.TransactionClient['cartReservation'] })
+          .cartReservation;
+        const reservedByOtherCarts = reservationDelegate
+          ? await reservationDelegate.aggregate({
+              where: {
+                variantId: item.variantId,
+                cartId: { not: cart.id },
+                expiresAt: { gt: new Date() }
+              },
+              _sum: { quantity: true }
+            })
+          : { _sum: { quantity: 0 } };
+        const available = Math.max((item.variant.inventory?.quantity ?? 0) - (reservedByOtherCarts._sum.quantity ?? 0), 0);
+        if (available < item.quantity) {
+          throw new AppError(ERROR_CODES.INSUFFICIENT_STOCK, `Insufficient stock for variant ${item.variantId}`, 422);
+        }
+      }
+
+      const subtotal = cart.items.reduce((sum, item) => sum + item.priceSnapshot * item.quantity, 0);
+      const minimumOrderValue = storeSettings?.minOrderValuePaise ?? 0;
+      if (subtotal < minimumOrderValue) {
+        throw new AppError(
+          ERROR_CODES.VALIDATION_ERROR,
+          `Minimum order value is ${minimumOrderValue} paise`,
+          400
+        );
+      }
+      const effectiveCoupon = cart.coupon;
+      if (effectiveCoupon) {
+        await this.validateOrderCoupon(effectiveCoupon, subtotal, userId, cart.items);
+      }
+      const discountAmount = this.calculateOrderDiscount(subtotal, effectiveCoupon, cart.items);
+      const shippingCharge = effectiveCoupon?.type === 'FREE_SHIPPING' ? 0 : deliveryRates.shippingCharge;
+      const total = Math.max(subtotal + shippingCharge - discountAmount, 0);
+
+      const requestedPaymentMode = input.paymentMode ?? 'PREPAID';
+      if (requestedPaymentMode === 'COD') {
+        const codSettings = await tx.storeSettings.findUnique({
+          where: { singletonKey: 'default' },
+          select: { isCodEnabled: true }
+        });
+        if (!(codSettings as { isCodEnabled?: boolean } | null)?.isCodEnabled) {
+          throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Cash on Delivery is not available', 400);
+        }
+      }
+      const orderStatus = requestedPaymentMode === 'COD' ? OrderStatus.CONFIRMED : OrderStatus.PENDING_PAYMENT;
+
+      const order = await tx.order.create({
+        data: {
+          orderNumber,
+          userId,
+          status: orderStatus,
+          ...(({ paymentMode: requestedPaymentMode }) as Record<string, unknown>),
+          shippingAddress: {
+            fullName: shippingAddress.fullName,
+            phone: shippingAddress.phone,
+            line1: shippingAddress.line1,
+            ...(shippingAddress.line2 ? { line2: shippingAddress.line2 } : {}),
+            city: shippingAddress.city,
+            state: shippingAddress.state,
+            pincode: shippingAddress.pincode
+          },
+          subtotal,
+          shippingCharge,
+          discountAmount,
+          total,
+          ...(input.notes !== undefined ? { notes: input.notes } : {}),
+          ...(effectiveCoupon ? { coupons: { connect: { id: effectiveCoupon.id } } } : {})
+        }
+      });
+
+      if (requestedPaymentMode === 'COD') {
+        await tx.payment.create({
+          data: {
+            orderId: order.id,
+            provider: PaymentProvider.COD,
+            providerOrderId: `COD-${orderNumber}`,
+            amount: total,
+            currency: 'INR',
+            status: PaymentStatus.CREATED
+          }
+        });
+      }
+
+      for (const item of cart.items) {
+        await tx.orderItem.create({
+          data: {
+            orderId: order.id,
+            variantId: item.variantId,
+            productName: item.variant.product.name,
+            variantName: item.variant.name,
+            sku: item.variant.sku,
+            quantity: item.quantity,
+            unitPrice: item.priceSnapshot,
+            totalPrice: item.priceSnapshot * item.quantity
+          }
+        });
+      }
+
+      const initialStatus = (order as Record<string, unknown>)['status'] as OrderStatus ?? OrderStatus.PENDING_PAYMENT;
+      await tx.orderStatusHistory.create({
+        data: {
+          orderId: order.id,
+          fromStatus: null,
+          toStatus: initialStatus,
+          triggeredBy: 'SYSTEM',
+          note: 'Order created'
+        }
+      });
+
+      await tx.cartItem.deleteMany({ where: { cartId: cart.id } });
+      const reservationDelegate = (tx as unknown as { cartReservation?: Prisma.TransactionClient['cartReservation'] }).cartReservation;
+      if (reservationDelegate) {
+        // Keep reservation active during payment window so stock is hard-reserved until worker commit/release.
+        await reservationDelegate.updateMany({
+          where: { cartId: cart.id },
+          data: {
+            expiresAt: new Date(Date.now() + 30 * 60 * 1000)
+          }
+        });
+      }
+      await tx.cart.update({ where: { id: cart.id }, data: { couponId: null } });
+
+      const finalized = await tx.order.findUniqueOrThrow({
+        where: { id: order.id },
+        include: {
+          items: true,
+          payment: true,
+          invoice: {
+            select: {
+              invoiceNumber: true,
+              pdfUrl: true,
+              issuedAt: true
+            }
+          },
+          shipment: {
+            include: {
+              events: {
+                orderBy: { occurredAt: 'desc' }
+              }
+            }
+          },
+          statusHistory: {
+            orderBy: { createdAt: 'desc' }
+          }
+        }
+      });
+
+      return this.serializeOrder(finalized, {
+        exposeProviderReferences: false,
+        exposeInternalReferences: false
+      });
+    });
+    recordCheckoutPath('/api/v1/orders', 'success');
+    return createdOrder;
+  }
+
+  async getMyOrderById(userId: string, orderId: string) {
+    const order = await this.fastify.prisma.order.findFirst({
+      where: { id: orderId, userId },
+      include: {
+        items: true,
+        payment: true,
+        invoice: {
+          select: {
+            invoiceNumber: true,
+            pdfUrl: true,
+            issuedAt: true
+          }
+        },
+        shipment: {
+          include: {
+            events: {
+              orderBy: { occurredAt: 'desc' }
+            }
+          }
+        },
+        statusHistory: {
+          orderBy: { createdAt: 'desc' }
+        }
+      }
+    });
+
+    if (!order) {
+      throw new AppError(ERROR_CODES.NOT_FOUND, 'Order not found', 404);
+    }
+
+    return this.serializeOrder(order, {
+      exposeProviderReferences: false,
+      exposeInternalReferences: false
+    });
+  }
+
+  async getMyInvoicePdf(userId: string, orderId: string): Promise<{ invoiceNumber: string; content: Buffer }> {
+    const order = await this.fastify.prisma.order.findFirst({
+      where: { id: orderId, userId },
+      select: {
+        invoice: {
+          select: {
+            invoiceNumber: true,
+            pdfUrl: true
+          }
+        }
+      }
+    });
+
+    if (!order || !order.invoice || !order.invoice.pdfUrl) {
+      throw new AppError(ERROR_CODES.NOT_FOUND, 'Invoice not found', 404);
+    }
+
+    const content = await this.invoiceStorage.readInvoicePdf(order.invoice.pdfUrl);
+    return { invoiceNumber: order.invoice.invoiceNumber, content };
+  }
+
+  async cancelMyOrder(userId: string, orderId: string, input?: CancelOrderInput) {
+    let queuedRefund = false;
+    let refundReason = '';
+    const updatedOrder = await this.fastify.prisma.$transaction(async (tx) => {
+      const existing = await tx.order.findFirst({
+        where: { id: orderId, userId },
+        include: {
+          user: {
+            select: {
+              email: true,
+              phone: true
+            }
+          },
+          items: true,
+          payment: true,
+          invoice: {
+            select: {
+              invoiceNumber: true,
+              pdfUrl: true,
+              issuedAt: true
+            }
+          },
+          shipment: {
+            include: {
+              events: {
+                orderBy: { occurredAt: 'desc' }
+              }
+            }
+          },
+          statusHistory: {
+            orderBy: { createdAt: 'desc' }
+          }
+        }
+      });
+
+      if (!existing) {
+        throw new AppError(ERROR_CODES.NOT_FOUND, 'Order not found', 404);
+      }
+
+      if (!(existing.status === OrderStatus.CONFIRMED || existing.status === OrderStatus.PROCESSING)) {
+        throw new AppError(ERROR_CODES.INVALID_STATUS_TRANSITION, 'Order cannot be cancelled at current status', 409);
+      }
+
+      const cancelSettingsDelegate = (tx as unknown as { storeSettings?: { findUnique: (args: unknown) => Promise<unknown> } })
+        .storeSettings;
+      const cancelSettings = cancelSettingsDelegate
+        ? await cancelSettingsDelegate.findUnique({
+            where: { singletonKey: 'default' },
+            select: { cancellationWindowHours: true }
+          })
+        : null;
+      const windowHours = (cancelSettings as { cancellationWindowHours?: number } | null)?.cancellationWindowHours ?? 24;
+      const windowExpiry = new Date(existing.createdAt.getTime() + windowHours * 60 * 60 * 1000);
+      if (new Date() > windowExpiry) {
+        throw new AppError(
+          ERROR_CODES.INVALID_STATUS_TRANSITION,
+          `Orders can only be cancelled within ${windowHours} hours of placement`,
+          409
+        );
+      }
+
+      await this.updateOrderStatusWithCas({
+        tx,
+        orderId: existing.id,
+        fromStatus: existing.status,
+        toStatus: OrderStatus.CANCELLED
+      });
+
+      await tx.orderStatusHistory.create({
+        data: {
+          orderId: existing.id,
+          fromStatus: existing.status,
+          toStatus: OrderStatus.CANCELLED,
+          triggeredBy: 'CUSTOMER',
+          note: 'Cancelled by customer'
+        }
+      });
+
+      if (
+        existing.payment?.status === PaymentStatus.CAPTURED ||
+        existing.payment?.status === PaymentStatus.PARTIALLY_REFUNDED
+      ) {
+        if (!existing.payment.providerPaymentId) {
+          throw new AppError(ERROR_CODES.CONFLICT, 'Missing provider payment id for refund', 409);
+        }
+        if (
+          input?.refundAmountPaise !== undefined &&
+          (input.refundAmountPaise <= 0 || input.refundAmountPaise > existing.payment.amount)
+        ) {
+          throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Invalid refund amount for captured payment', 400);
+        }
+        for (const item of existing.items) {
+          await tx.inventory.updateMany({
+            where: { variantId: item.variantId },
+            data: {
+              quantity: {
+                increment: item.quantity
+              }
+            }
+          });
+        }
+        queuedRefund = true;
+        refundReason = input?.reason?.trim() || 'Order cancelled and refunded by customer';
+      }
+
+      return tx.order.findUniqueOrThrow({
+        where: { id: existing.id },
+        include: {
+          user: {
+            select: {
+              email: true,
+              phone: true
+            }
+          },
+          items: true,
+          payment: true,
+          invoice: {
+            select: {
+              invoiceNumber: true,
+              pdfUrl: true,
+              issuedAt: true
+            }
+          },
+          shipment: {
+            include: {
+              events: {
+                orderBy: { occurredAt: 'desc' }
+              }
+            }
+          },
+          statusHistory: {
+            orderBy: { createdAt: 'desc' }
+          }
+        }
+      });
+    });
+
+    if (queuedRefund) {
+      try {
+        await this.enqueueOutboxMessage('refunds', 'initiate-razorpay-refund', {
+          orderId: updatedOrder.id,
+          reason: refundReason,
+          ...(input?.refundAmountPaise !== undefined ? { refundAmountPaise: input.refundAmountPaise } : {}),
+          initiatedBy: 'CUSTOMER',
+          sourceStatus: OrderStatus.CANCELLED
+        });
+      } catch (error) {
+        this.fastify.log.error(
+          {
+            orderId: updatedOrder.id,
+            error: error instanceof Error ? error.message : 'Unknown refund enqueue error'
+          },
+          'Failed to enqueue refund initiation job'
+        );
+      }
+    }
+
+    await this.enqueueOrderCancelledNotifications(updatedOrder.id, updatedOrder.user?.email ?? null, updatedOrder.user?.phone ?? null);
+    recordCheckoutPath('/api/v1/orders/:id/cancel', 'success');
+    return this.serializeOrder(updatedOrder, {
+      exposeProviderReferences: false,
+      exposeInternalReferences: false
+    });
+  }
+
+  async initiatePayment(
+    userId: string,
+    input: InitiatePaymentInput,
+    opts?: { clientIp?: string }
+  ) {
+    const order = await this.fastify.prisma.order.findFirst({
+      where: { id: input.orderId, userId }
+    });
+    if (!order) {
+      throw new AppError(ERROR_CODES.NOT_FOUND, 'Order not found', 404);
+    }
+
+    await this.checkoutRisk.assertInitiatePaymentAllowed({
+      userId,
+      orderId: order.id,
+      orderTotalPaise: order.total,
+      ...(opts?.clientIp !== undefined ? { clientIp: opts.clientIp } : {})
+    });
+
+    let razorpayOrder: { providerOrderId: string; amount: number; currency: string };
+    try {
+      razorpayOrder = await this.razorpayAdapter.createOrder({
+        amount: order.total,
+        currency: 'INR',
+        receipt: order.orderNumber,
+        notes: { orderId: order.id }
+      });
+    } catch {
+      throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Unable to initiate payment order', 502);
+    }
+
+    const payment = await this.fastify.prisma.payment.upsert({
+      where: { orderId: order.id },
+      update: {
+        provider: PaymentProvider.RAZORPAY,
+        providerOrderId: razorpayOrder.providerOrderId,
+        amount: razorpayOrder.amount,
+        currency: razorpayOrder.currency,
+        status: PaymentStatus.CREATED
+      },
+      create: {
+        orderId: order.id,
+        provider: PaymentProvider.RAZORPAY,
+        providerOrderId: razorpayOrder.providerOrderId,
+        amount: razorpayOrder.amount,
+        currency: razorpayOrder.currency,
+        status: PaymentStatus.CREATED
+      }
+    });
+
+    await this.enqueueAnalyticsEvent(
+      AnalyticsEventType.CHECKOUT_STARTED,
+      `order:${order.id}`,
+      userId,
+      {
+        orderId: order.id,
+        amount: payment.amount
+      }
+    );
+
+    await this.enqueueAnalyticsEvent(
+      AnalyticsEventType.PAYMENT_INITIATED,
+      `order:${order.id}`,
+      userId,
+      {
+        orderId: order.id,
+        provider: PaymentProvider.RAZORPAY,
+        amount: payment.amount
+      }
+    );
+
+    recordCheckoutPath('/api/v1/payments/initiate', 'success');
+    return {
+      orderId: order.id,
+      provider: payment.provider,
+      providerOrderId: payment.providerOrderId,
+      amount: payment.amount,
+      currency: payment.currency
+    };
+  }
+
+  async verifyPayment(userId: string, input: VerifyPaymentInput) {
+    const order = await this.fastify.prisma.order.findFirst({
+      where: { id: input.orderId, userId },
+      include: { payment: true }
+    });
+    if (!order || !order.payment) {
+      throw new AppError(ERROR_CODES.NOT_FOUND, 'Payment not found for order', 404);
+    }
+
+    const signatureValid = this.razorpayAdapter.verifyPaymentSignature({
+      providerOrderId: order.payment.providerOrderId,
+      providerPaymentId: input.razorpayPaymentId,
+      signature: input.razorpaySignature
+    });
+    if (!signatureValid) {
+      throw new AppError(ERROR_CODES.PAYMENT_VERIFICATION_FAILED, 'Invalid payment signature', 401);
+    }
+
+    if (
+      order.payment.status === PaymentStatus.CAPTURED &&
+      order.payment.providerPaymentId === input.razorpayPaymentId &&
+      order.status === OrderStatus.CONFIRMED
+    ) {
+      recordCheckoutPath('/api/v1/payments/verify', 'success');
+      return { message: 'Payment already verified' };
+    }
+
+    if (order.payment.status === PaymentStatus.CAPTURED && order.payment.providerPaymentId !== input.razorpayPaymentId) {
+      throw new AppError(ERROR_CODES.CONFLICT, 'Payment is already captured with a different provider payment id', 409);
+    }
+
+    const captureKey = this.buildScopedKey('rzp:capture', input.razorpayPaymentId);
+    const captureLock = await this.fastify.redis.set(captureKey, '1', 'EX', 86400, 'NX');
+    if (captureLock !== 'OK') {
+      recordCheckoutPath('/api/v1/payments/verify', 'accepted');
+      return { message: 'Payment verification already processing' };
+    }
+
+    try {
+      await this.enqueueOutboxMessage(
+        'orderProcessing',
+        'deduct-inventory',
+        {
+          event: 'payment.captured',
+          providerOrderId: order.payment.providerOrderId,
+          providerPaymentId: input.razorpayPaymentId,
+          payloadMetadata: {
+            source: 'verify-payment',
+            orderId: order.id
+          }
+        },
+        `deduct-inventory:${this.hashIdentifier(input.razorpayPaymentId)}`
+      );
+    } catch {
+      await this.fastify.redis.del(captureKey);
+      throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Unable to enqueue payment confirmation', 502);
+    }
+
+    recordCheckoutPath('/api/v1/payments/verify', 'accepted');
+    return { message: 'Payment verification accepted; confirmation is processing' };
+  }
+
+  async processPaymentWebhook(
+    signature: string | undefined,
+    payload: Buffer | string,
+    eventIdHeader?: string,
+    traceContext?: { correlationId?: string; traceId?: string }
+  ) {
+    const runtimeConfig = await this.resolveRuntimeConfig([
+      'RAZORPAY_WEBHOOK_SECRET_OLD',
+      'RAZORPAY_WEBHOOK_MAX_SKEW_SECONDS'
+    ]);
+    const startedAt = Date.now();
+    const webhookRawBytes = typeof payload === 'string' ? Buffer.from(payload) : payload;
+    if (!signature) {
+      recordWebhookEvent({
+        provider: 'razorpay',
+        event: 'unknown',
+        result: 'rejected',
+        durationMs: Date.now() - startedAt
+      });
+      throw new AppError(ERROR_CODES.PAYMENT_VERIFICATION_FAILED, 'Invalid webhook signature', 401);
+    }
+    const previousWebhookSecret = runtimeConfig.RAZORPAY_WEBHOOK_SECRET_OLD?.trim();
+    const signatureValid = this.razorpayAdapter.verifyWebhookSignature({
+      payload: webhookRawBytes,
+      signature,
+      ...(previousWebhookSecret ? { previousSecret: previousWebhookSecret } : {})
+    });
+    if (!signatureValid) {
+      recordWebhookEvent({
+        provider: 'razorpay',
+        event: 'unknown',
+        result: 'rejected',
+        durationMs: Date.now() - startedAt
+      });
+      throw new AppError(ERROR_CODES.PAYMENT_VERIFICATION_FAILED, 'Invalid webhook signature', 401);
+    }
+
+    let parsed: {
+      event?: string;
+      created_at?: number;
+      payload?: {
+        payment?: {
+          entity?: {
+            id?: string;
+            order_id?: string;
+          };
+        };
+      };
+    };
+    try {
+      parsed = JSON.parse(webhookRawBytes.toString('utf8')) as {
+        event?: string;
+        created_at?: number;
+        payload?: {
+          payment?: {
+            entity?: {
+              id?: string;
+              order_id?: string;
+            };
+          };
+        };
+      };
+    } catch {
+      throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Invalid payment webhook payload', 400);
+    }
+
+    if (typeof parsed.created_at === 'number') {
+      const maxSkewSeconds = Number(runtimeConfig.RAZORPAY_WEBHOOK_MAX_SKEW_SECONDS ?? 300);
+      const nowSeconds = Math.floor(Date.now() / 1000);
+      if (Math.abs(nowSeconds - parsed.created_at) > maxSkewSeconds) {
+        recordWebhookEvent({
+          provider: 'razorpay',
+          event: parsed.event ?? 'unknown',
+          result: 'rejected',
+          durationMs: Date.now() - startedAt
+        });
+        throw new AppError(ERROR_CODES.PAYMENT_VERIFICATION_FAILED, 'Webhook event timestamp outside allowed window', 401);
+      }
+    }
+
+    const providerPaymentId = parsed.payload?.payment?.entity?.id;
+    const providerOrderId = parsed.payload?.payment?.entity?.order_id;
+    if (!providerPaymentId || !providerOrderId) {
+      recordWebhookEvent({
+        provider: 'razorpay',
+        event: parsed.event ?? 'unknown',
+        result: 'accepted',
+        durationMs: Date.now() - startedAt
+      });
+      return { received: true };
+    }
+
+    const eventName = parsed.event ?? 'unknown';
+    const normalizedEvent = eventName.trim().toLowerCase();
+    const normalizedEventId = eventIdHeader?.trim();
+    let eventIdKey: string | null = null;
+    if (normalizedEventId) {
+      eventIdKey = this.buildScopedKey('rzp:webhook:event', normalizedEventId);
+      const eventLock = await this.fastify.redis.set(eventIdKey, '1', 'EX', 86400, 'NX');
+      if (eventLock !== 'OK') {
+        recordWebhookEvent({
+          provider: 'razorpay',
+          event: eventName,
+          result: 'duplicate',
+          durationMs: Date.now() - startedAt
+        });
+        return { received: true };
+      }
+    }
+
+    const inboxEventKey = normalizedEventId ?? `${normalizedEvent}:${providerPaymentId}`;
+    const payloadHash = createHash('sha256').update(webhookRawBytes).digest('hex');
+    const inboxState = await this.claimWebhookInboxEvent('razorpay', inboxEventKey, payloadHash, eventName);
+    if (inboxState !== 'claimed') {
+      recordWebhookEvent({
+        provider: 'razorpay',
+        event: eventName,
+        result: 'duplicate',
+        durationMs: Date.now() - startedAt
+      });
+      return { received: true };
+    }
+
+    const idempotencyKey = this.buildScopedKey('rzp:webhook', providerPaymentId);
+    const existingMarker = await this.fastify.redis.get(idempotencyKey);
+    const processedEvents = new Set(
+      (existingMarker ?? '')
+        .split(',')
+        .map((entry) => entry.trim())
+        .filter((entry) => entry.length > 0)
+    );
+    if (processedEvents.has(normalizedEvent)) {
+      await this.markWebhookInboxEvent('razorpay', inboxEventKey, 'PROCESSED');
+      recordWebhookEvent({
+        provider: 'razorpay',
+        event: eventName,
+        result: 'duplicate',
+        durationMs: Date.now() - startedAt
+      });
+      return { received: true };
+    }
+    const nextMarker = [...processedEvents, normalizedEvent].join(',');
+    let createdMarker = false;
+    if (!existingMarker) {
+      const lock = await this.fastify.redis.set(idempotencyKey, nextMarker, 'EX', 86400, 'NX');
+      if (lock !== 'OK') {
+        const concurrentMarker = await this.fastify.redis.get(idempotencyKey);
+        const concurrentEvents = new Set(
+          (concurrentMarker ?? '')
+            .split(',')
+            .map((entry) => entry.trim())
+            .filter((entry) => entry.length > 0)
+        );
+        if (concurrentEvents.has(normalizedEvent)) {
+          await this.markWebhookInboxEvent('razorpay', inboxEventKey, 'PROCESSED');
+          recordWebhookEvent({
+            provider: 'razorpay',
+            event: eventName,
+            result: 'duplicate',
+            durationMs: Date.now() - startedAt
+          });
+          return { received: true };
+        }
+        concurrentEvents.add(normalizedEvent);
+        await this.fastify.redis.set(idempotencyKey, [...concurrentEvents].join(','), 'EX', 86400);
+      } else {
+        createdMarker = true;
+      }
+    } else {
+      await this.fastify.redis.set(idempotencyKey, nextMarker, 'EX', 86400);
+    }
+
+    const paymentJobName = eventName === 'payment.captured' ? 'deduct-inventory' : 'payment-webhook';
+
+    if (paymentJobName === 'deduct-inventory') {
+      const captureKey = this.buildScopedKey('rzp:capture', providerPaymentId);
+      const captureLock = await this.fastify.redis.set(captureKey, '1', 'EX', 86400, 'NX');
+      if (captureLock !== 'OK') {
+        if (eventIdKey) {
+          await this.fastify.redis.del(eventIdKey);
+        }
+        if (createdMarker) {
+          await this.fastify.redis.del(idempotencyKey);
+        } else if (existingMarker) {
+          await this.fastify.redis.set(idempotencyKey, existingMarker, 'EX', 86400);
+        }
+        await this.markWebhookInboxEvent('razorpay', inboxEventKey, 'PROCESSED');
+        recordWebhookEvent({
+          provider: 'razorpay',
+          event: eventName,
+          result: 'duplicate',
+          durationMs: Date.now() - startedAt
+        });
+        return { received: true };
+      }
+    }
+    try {
+      await this.enqueueOutboxMessage(
+        'orderProcessing',
+        paymentJobName,
+        {
+          event: eventName,
+          providerOrderId,
+          providerPaymentId,
+          payloadMetadata: {
+            source: 'razorpay-webhook',
+            payloadHash,
+            eventId: normalizedEventId ?? null,
+            correlationId: traceContext?.correlationId ?? null,
+            traceId: traceContext?.traceId ?? null
+          }
+        },
+        paymentJobName === 'deduct-inventory' ? `deduct-inventory:${this.hashIdentifier(providerPaymentId)}` : undefined
+      );
+    } catch {
+      if (eventIdKey) {
+        await this.fastify.redis.del(eventIdKey);
+      }
+      if (createdMarker) {
+        await this.fastify.redis.del(idempotencyKey);
+      } else if (existingMarker) {
+        await this.fastify.redis.set(idempotencyKey, existingMarker, 'EX', 86400);
+      }
+      if (paymentJobName === 'deduct-inventory') {
+        await this.fastify.redis.del(this.buildScopedKey('rzp:capture', providerPaymentId));
+      }
+      await this.markWebhookInboxEvent(
+        'razorpay',
+        inboxEventKey,
+        'FAILED',
+        'Unable to enqueue payment webhook processing'
+      );
+      this.fastify.log?.error(
+        { eventName, queue: 'orderProcessing' },
+        'Unable to enqueue payment webhook processing'
+      );
+      recordWebhookEvent({
+        provider: 'razorpay',
+        event: eventName,
+        result: 'enqueue_failed',
+        durationMs: Date.now() - startedAt
+      });
+      return { received: true };
+    }
+
+    recordWebhookEvent({
+      provider: 'razorpay',
+      event: eventName,
+      result: 'accepted',
+      durationMs: Date.now() - startedAt
+    });
+    return { received: true };
+  }
+
+  async getShippingTracking(userId: string, awb: string) {
+    const shipment = await this.fastify.prisma.shipment.findFirst({
+      where: {
+        awbNumber: awb,
+        order: { userId }
+      },
+      include: {
+        events: {
+          orderBy: { occurredAt: 'desc' }
+        }
+      }
+    });
+
+    if (!shipment) {
+      throw new AppError(ERROR_CODES.NOT_FOUND, 'Shipment not found', 404);
+    }
+
+    return shipment.events.map((event) => ({
+      id: event.id,
+      status: event.status,
+      location: event.location,
+      description: event.description,
+      occurredAt: event.occurredAt.toISOString()
+    }));
+  }
+
+  async processShippingWebhook(
+    authHeader: string | undefined,
+    payload: Buffer | string,
+    traceContext?: { correlationId?: string; traceId?: string }
+  ) {
+    const runtimeConfig = await this.resolveRuntimeConfig([
+      'SHIPPING_PROVIDER',
+      'DELHIVERY_API_KEY',
+      'DELHIVERY_WEBHOOK_TOKEN',
+      'SHIPROCKET_WEBHOOK_TOKEN',
+      'SHIPROCKET_WEBHOOK_MAX_SKEW_SECONDS',
+      'DELHIVERY_WEBHOOK_MAX_SKEW_SECONDS'
+    ]);
+    // Frontend integration contract:
+    // - Browser clients MUST NOT call this webhook route directly.
+    // - Delhivery expects `Authorization: Token <DELHIVERY_WEBHOOK_TOKEN>`.
+    // - Shiprocket expects `Authorization: Bearer <SHIPROCKET_WEBHOOK_TOKEN>`.
+    // - `noop` fallback acceptance is for local/dev simulation only.
+    const startedAt = Date.now();
+    const env = (runtimeConfig.NODE_ENV ?? process.env.NODE_ENV ?? 'development').toLowerCase();
+    const strictProfile = env !== 'development' && env !== 'test';
+    const activeProvider = (runtimeConfig.SHIPPING_PROVIDER ?? 'delhivery').trim().toLowerCase();
+    const isShiprocket = activeProvider === 'shiprocket';
+    const isDelhivery = activeProvider === 'delhivery';
+    // isNoopShipping: true when SHIPPING_PROVIDER=noop or delhivery is configured with placeholder/empty API key
+    const delhiveryApiKey = (runtimeConfig.DELHIVERY_API_KEY ?? '').trim();
+    const isNoopShipping =
+      activeProvider === 'noop' ||
+      (isDelhivery && (delhiveryApiKey.startsWith('replace_with_') || delhiveryApiKey === ''));
+
+    let effectiveWebhookSecret: string;
+    if (isShiprocket) {
+      effectiveWebhookSecret = (runtimeConfig.SHIPROCKET_WEBHOOK_TOKEN ?? '').trim();
+    } else if (isNoopShipping) {
+      const headerToken = typeof authHeader === 'string' ? authHeader.replace(/^Bearer\s+/i, '').trim() : '';
+      effectiveWebhookSecret = headerToken || 'noop';
+    } else {
+      const webhookSecret = (runtimeConfig.DELHIVERY_WEBHOOK_TOKEN ?? '').trim();
+      effectiveWebhookSecret = webhookSecret || (!strictProfile ? delhiveryApiKey : '');
+    }
+
+    if (!effectiveWebhookSecret) {
+      throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Shipping webhook secret is not configured', 500);
+    }
+
+    let tokenValid: boolean;
+    if (isNoopShipping) {
+      // In noop/placeholder mode, accept any non-empty token to keep local simulations unblocked.
+      tokenValid = typeof authHeader === 'string' && authHeader.trim().length > 0;
+    } else if (isShiprocket) {
+      const headerToken = typeof authHeader === 'string' ? authHeader.replace(/^Bearer\s+/i, '') : '';
+      tokenValid = this.secureTokenMatch(headerToken, effectiveWebhookSecret);
+    } else {
+      const expectedToken = `Token ${effectiveWebhookSecret}`;
+      tokenValid = this.secureTokenMatch(authHeader, expectedToken);
+    }
+
+    if (!tokenValid) {
+      recordWebhookEvent({
+        provider: 'shipping',
+        event: 'unknown',
+        result: 'rejected',
+        durationMs: Date.now() - startedAt
+      });
+      throw new AppError(ERROR_CODES.UNAUTHORISED, 'Invalid shipping webhook token', 401);
+    }
+
+    const webhookRawBytes = typeof payload === 'string' ? Buffer.from(payload) : payload;
+    let parsed: {
+      awb?: string;
+      status?: string;
+      description?: string;
+      location?: string;
+      occurredAt?: string;
+    };
+    try {
+      parsed = JSON.parse(webhookRawBytes.toString('utf8')) as {
+        awb?: string;
+        status?: string;
+        description?: string;
+        location?: string;
+        occurredAt?: string;
+      };
+    } catch {
+      throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Invalid shipping webhook payload', 400);
+    }
+
+    if (!parsed.awb || !parsed.status || !parsed.description) {
+      recordWebhookEvent({
+        provider: 'shipping',
+        event: parsed.status ?? 'unknown',
+        result: 'accepted',
+        durationMs: Date.now() - startedAt
+      });
+      return { received: true };
+    }
+
+    this.assertShippingWebhookOccurrenceSkew(parsed.occurredAt, startedAt, parsed.status, runtimeConfig);
+
+    const shippingProviderKey = isShiprocket ? 'shiprocket' : 'delhivery';
+    const idempotencyRef = `${parsed.awb}:${parsed.status}:${parsed.occurredAt ?? 'na'}`;
+    const idempotencyKey = this.buildScopedKey(`${shippingProviderKey}:webhook`, idempotencyRef);
+    const lock = await this.fastify.redis.set(idempotencyKey, '1', 'EX', 86400, 'NX');
+    if (lock !== 'OK') {
+      recordWebhookEvent({
+        provider: 'shipping',
+        event: parsed.status,
+        result: 'duplicate',
+        durationMs: Date.now() - startedAt
+      });
+      return { received: true };
+    }
+
+    const inboxEventKey = `${parsed.awb}:${parsed.status}:${parsed.occurredAt ?? 'na'}`;
+    const payloadHash = createHash('sha256').update(webhookRawBytes).digest('hex');
+    const inboxProviderKey: 'razorpay' | 'delhivery' | 'shiprocket' = isShiprocket ? 'shiprocket' : 'delhivery';
+    const inboxState = await this.claimWebhookInboxEvent(inboxProviderKey, inboxEventKey, payloadHash, parsed.status);
+    if (inboxState !== 'claimed') {
+      recordWebhookEvent({
+        provider: 'shipping',
+        event: parsed.status,
+        result: 'duplicate',
+        durationMs: Date.now() - startedAt
+      });
+      return { received: true };
+    }
+
+    try {
+      await this.enqueueOutboxMessage(
+        'shipping',
+        'update-shipment-status',
+        {
+          awb: parsed.awb,
+          status: parsed.status,
+          description: parsed.description,
+          location: parsed.location ?? null,
+          occurredAt: parsed.occurredAt ?? new Date().toISOString(),
+          payloadMetadata: {
+            source: `${shippingProviderKey}-webhook`,
+            payloadHash,
+            correlationId: traceContext?.correlationId ?? null,
+            traceId: traceContext?.traceId ?? null
+          }
+        },
+        `update-shipment-status:${parsed.awb}:${parsed.status}:${parsed.occurredAt ?? 'na'}`
+      );
+    } catch {
+      await this.fastify.redis.del(idempotencyKey);
+      await this.markWebhookInboxEvent(
+        inboxProviderKey,
+        inboxEventKey,
+        'FAILED',
+        'Unable to enqueue shipping webhook processing'
+      );
+      this.fastify.log?.error(
+        { status: parsed.status, occurredAt: parsed.occurredAt ?? null, queue: 'shipping' },
+        'Unable to enqueue shipping webhook processing'
+      );
+      recordWebhookEvent({
+        provider: 'shipping',
+        event: parsed.status,
+        result: 'enqueue_failed',
+        durationMs: Date.now() - startedAt
+      });
+    }
+
+    recordWebhookEvent({
+      provider: 'shipping',
+      event: parsed.status,
+      result: 'accepted',
+      durationMs: Date.now() - startedAt
+    });
+    return { received: true };
+  }
+
+  async adminListOrders(query: AdminOrderListQuery) {
+    const page = query.page ?? 1;
+    const limit = Math.min(query.limit ?? 20, 100);
+    const skip = (page - 1) * limit;
+    const fromDate = query.from ? new Date(query.from) : undefined;
+    const toDate = query.to ? new Date(query.to) : undefined;
+    const whereClause = {
+      ...(query.status !== undefined ? { status: query.status } : {}),
+      ...((fromDate || toDate) && {
+        createdAt: {
+          ...(fromDate ? { gte: fromDate } : {}),
+          ...(toDate ? { lte: toDate } : {})
+        }
+      }),
+      ...(query.search !== undefined && query.search.trim().length > 0
+        ? {
+            OR: [
+              { orderNumber: { contains: query.search.trim(), mode: 'insensitive' as const } },
+              { user: { firstName: { contains: query.search.trim(), mode: 'insensitive' as const } } },
+              { user: { lastName: { contains: query.search.trim(), mode: 'insensitive' as const } } },
+              { user: { email: { contains: query.search.trim(), mode: 'insensitive' as const } } },
+              { user: { phone: { contains: query.search.trim() } } }
+            ]
+          }
+        : {})
+    };
+
+    const [items, total] = await this.fastify.prisma.$transaction([
+      this.fastify.prisma.order.findMany({
+        where: whereClause,
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+        select: {
+          id: true,
+          orderNumber: true,
+          userId: true,
+          status: true,
+          paymentMode: true,
+          subtotal: true,
+          shippingCharge: true,
+          discountAmount: true,
+          total: true,
+          createdAt: true,
+          user: {
+            select: {
+              firstName: true,
+              lastName: true,
+              email: true,
+              phone: true
+            }
+          },
+          payment: {
+            select: {
+              method: true,
+              status: true
+            }
+          },
+          shipment: {
+            select: {
+              awbNumber: true,
+              labelUrl: true,
+              status: true
+            }
+          }
+        }
+      }),
+      this.fastify.prisma.order.count({ where: whereClause })
+    ]);
+
+    return {
+      items: items.map((item) => ({
+        ...this.resolveShipActionState({
+          status: item.status,
+          paymentMode: ((item as Record<string, unknown>)['paymentMode'] as string | undefined) ?? 'PREPAID',
+          paymentStatus: item.payment?.status ?? null,
+          shipmentStatus: item.shipment?.status ?? null,
+          awbNumber: item.shipment?.awbNumber ?? null
+        }),
+        shippingMode: 'MANUAL',
+        id: item.id,
+        orderNumber: item.orderNumber,
+        userId: item.userId,
+        status: item.status,
+        paymentMode: (item as Record<string, unknown>)['paymentMode'] as string ?? 'PREPAID',
+        subtotal: item.subtotal,
+        shippingCharge: item.shippingCharge,
+        discountAmount: item.discountAmount,
+        total: item.total,
+        createdAt: item.createdAt.toISOString(),
+        customerName: `${item.user.firstName} ${item.user.lastName}`.trim(),
+        customerEmail: item.user.email,
+        customerPhone: item.user.phone,
+        paymentMethod: item.payment?.method ?? null,
+        paymentStatus: item.payment?.status ?? null,
+        awbNumber: item.shipment?.awbNumber ?? null,
+        labelUrl: item.shipment?.labelUrl ?? null,
+        shipmentStatus: item.shipment?.status ?? null
+      })),
+      meta: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit)
+      }
+    };
+  }
+
+  async adminGetOrderBoard() {
+    const boardStatuses = [
+      OrderStatus.CONFIRMED,
+      OrderStatus.PROCESSING,
+      OrderStatus.SHIPPED,
+      OrderStatus.OUT_FOR_DELIVERY,
+      OrderStatus.DELIVERED,
+      OrderStatus.CANCELLED
+    ] as const;
+
+    const orders = await this.fastify.prisma.order.findMany({
+      where: { status: { in: [...boardStatuses] } },
+      orderBy: { createdAt: 'desc' },
+      take: 600,
+      select: {
+        id: true,
+        orderNumber: true,
+        status: true,
+        paymentMode: true,
+        total: true,
+        createdAt: true,
+        user: {
+          select: {
+            firstName: true,
+            lastName: true,
+            phone: true
+          }
+        },
+        shipment: {
+          select: {
+            awbNumber: true,
+            labelUrl: true,
+            status: true
+          }
+        },
+        payment: {
+          select: {
+            status: true
+          }
+        }
+      }
+    });
+
+    type BoardItem = {
+      canShipNow: boolean;
+      shipBlockReason: string | null;
+      shippingMode: 'AUTO' | 'MANUAL';
+      id: string;
+      orderNumber: string;
+      status: string;
+      paymentMode: string;
+      total: number;
+      createdAt: string;
+      customerName: string;
+      customerPhone: string | null;
+      awbNumber: string | null;
+      labelUrl: string | null;
+      shipmentStatus: string | null;
+    };
+
+    const columns: {
+      CONFIRMED: BoardItem[];
+      PROCESSING: BoardItem[];
+      SHIPPED: BoardItem[];
+      OUT_FOR_DELIVERY: BoardItem[];
+      DELIVERED: BoardItem[];
+      CANCELLED: BoardItem[];
+      [key: string]: BoardItem[];
+    } = {
+      CONFIRMED: [],
+      PROCESSING: [],
+      SHIPPED: [],
+      OUT_FOR_DELIVERY: [],
+      DELIVERED: [],
+      CANCELLED: []
+    };
+
+    for (const order of orders) {
+      const col = columns[order.status];
+      if (!col) continue;
+      if (col.length >= 100) continue;
+      col.push({
+        ...this.resolveShipActionState({
+          status: order.status,
+          paymentMode: ((order as Record<string, unknown>)['paymentMode'] as string | undefined) ?? 'PREPAID',
+          paymentStatus: order.payment?.status ?? null,
+          shipmentStatus: order.shipment?.status ?? null,
+          awbNumber: order.shipment?.awbNumber ?? null
+        }),
+        shippingMode: 'MANUAL',
+        id: order.id,
+        orderNumber: order.orderNumber,
+        status: order.status,
+        paymentMode: (order as Record<string, unknown>)['paymentMode'] as string ?? 'PREPAID',
+        total: order.total,
+        createdAt: order.createdAt.toISOString(),
+        customerName: `${order.user.firstName} ${order.user.lastName}`.trim(),
+        customerPhone: order.user.phone,
+        awbNumber: order.shipment?.awbNumber ?? null,
+        labelUrl: order.shipment?.labelUrl ?? null,
+        shipmentStatus: order.shipment?.status ?? null
+      });
+    }
+
+    return { columns };
+  }
+
+  async adminExportOrdersCsv(query: AdminOrderExportQuery) {
+    const fromDate = new Date(query.from);
+    const toDate = new Date(query.to);
+    if (Number.isNaN(fromDate.getTime()) || Number.isNaN(toDate.getTime())) {
+      throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Invalid date range', 400);
+    }
+    if (fromDate > toDate) {
+      throw new AppError(ERROR_CODES.VALIDATION_ERROR, '`from` date must be before or equal to `to` date', 400);
+    }
+
+    const whereClause = {
+      createdAt: {
+        gte: fromDate,
+        lte: toDate
+      },
+      ...(query.status !== undefined ? { status: query.status } : {}),
+      ...(query.search !== undefined && query.search.trim().length > 0
+        ? {
+            OR: [
+              { orderNumber: { contains: query.search.trim(), mode: 'insensitive' as const } },
+              { user: { firstName: { contains: query.search.trim(), mode: 'insensitive' as const } } },
+              { user: { lastName: { contains: query.search.trim(), mode: 'insensitive' as const } } },
+              { user: { email: { contains: query.search.trim(), mode: 'insensitive' as const } } },
+              { user: { phone: { contains: query.search.trim() } } }
+            ]
+          }
+        : {})
+    };
+
+    const orders = await this.fastify.prisma.order.findMany({
+      where: whereClause,
+      orderBy: { createdAt: 'desc' },
+      select: {
+        orderNumber: true,
+        status: true,
+        total: true,
+        createdAt: true,
+        user: {
+          select: {
+            email: true,
+            phone: true,
+            firstName: true,
+            lastName: true
+          }
+        },
+        payment: {
+          select: {
+            method: true,
+            status: true
+          }
+        }
+      }
+    });
+
+    const header = [
+      'orderNumber',
+      'createdAt',
+      'status',
+      'totalPaise',
+      'customerName',
+      'customerEmail',
+      'customerPhone',
+      'paymentMethod',
+      'paymentStatus'
+    ];
+
+    const escapeCsv = (value: string) => `"${value.replace(/"/g, '""')}"`;
+    const rows = orders.map((order) =>
+      [
+        order.orderNumber,
+        order.createdAt.toISOString(),
+        order.status,
+        String(order.total),
+        `${order.user.firstName} ${order.user.lastName}`.trim(),
+        order.user.email,
+        order.user.phone ?? '',
+        order.payment?.method ?? '',
+        order.payment?.status ?? ''
+      ]
+        .map((value) => escapeCsv(String(value)))
+        .join(',')
+    );
+
+    return [header.join(','), ...rows].join('\n');
+  }
+
+  async adminGetOrderById(orderId: string) {
+    const order = await this.fastify.prisma.order.findUnique({
+      where: { id: orderId },
+      include: {
+        user: {
+          select: {
+            firstName: true,
+            lastName: true,
+            email: true,
+            phone: true
+          }
+        },
+        items: true,
+        payment: true,
+        invoice: {
+          select: {
+            invoiceNumber: true,
+            pdfUrl: true,
+            issuedAt: true
+          }
+        },
+        shipment: {
+          include: {
+            events: {
+              orderBy: { occurredAt: 'desc' }
+            }
+          }
+        },
+        statusHistory: {
+          orderBy: { createdAt: 'desc' }
+        }
+      }
+    });
+
+    if (!order) {
+      throw new AppError(ERROR_CODES.NOT_FOUND, 'Order not found', 404);
+    }
+
+    return this.serializeOrder(order);
+  }
+
+  async adminGetInvoicePdf(orderId: string): Promise<{ invoiceNumber: string; content: Buffer }> {
+    const order = await this.fastify.prisma.order.findUnique({
+      where: { id: orderId },
+      select: {
+        invoice: {
+          select: {
+            invoiceNumber: true,
+            pdfUrl: true
+          }
+        }
+      }
+    });
+
+    if (!order || !order.invoice || !order.invoice.pdfUrl) {
+      throw new AppError(ERROR_CODES.NOT_FOUND, 'Invoice not found', 404);
+    }
+
+    const content = await this.invoiceStorage.readInvoicePdf(order.invoice.pdfUrl);
+    return { invoiceNumber: order.invoice.invoiceNumber, content };
+  }
+
+  async adminUpdateOrderStatus(orderId: string, input: UpdateOrderStatusInput) {
+    let queuedRefund = false;
+    let refundReason = '';
+    let refundOrderId: string | null = null;
+    let refundSourceStatus: OrderStatus | null = null;
+    const updatedOrder = await this.fastify.prisma.$transaction(async (tx) => {
+      const existing = await tx.order.findUnique({
+        where: { id: orderId },
+        include: {
+          items: true,
+          payment: true,
+          invoice: {
+            select: {
+              invoiceNumber: true,
+              pdfUrl: true,
+              issuedAt: true
+            }
+          },
+          shipment: true,
+          statusHistory: {
+            orderBy: { createdAt: 'desc' }
+          }
+        }
+      });
+
+      if (!existing) {
+        throw new AppError(ERROR_CODES.NOT_FOUND, 'Order not found', 404);
+      }
+
+      if (existing.status === input.status) {
+        return existing;
+      }
+
+      if (existing.status === OrderStatus.PENDING_PAYMENT && input.status === OrderStatus.CONFIRMED) {
+        throw new AppError(
+          ERROR_CODES.INVALID_STATUS_TRANSITION,
+          'Order confirmation is webhook-driven and cannot be set manually',
+          409
+        );
+      }
+
+      if (input.status === OrderStatus.REFUNDED) {
+        if (
+          (existing.payment?.status !== PaymentStatus.CAPTURED &&
+            existing.payment?.status !== PaymentStatus.PARTIALLY_REFUNDED) ||
+          !existing.payment.providerPaymentId
+        ) {
+          throw new AppError(
+            ERROR_CODES.INVALID_STATUS_TRANSITION,
+            'Refund requires a captured payment with provider payment id',
+            409
+          );
+        }
+        if (
+          input.refundAmountPaise !== undefined &&
+          (input.refundAmountPaise <= 0 || input.refundAmountPaise > existing.payment.amount)
+        ) {
+          throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Invalid refund amount for captured payment', 400);
+        }
+        queuedRefund = true;
+        refundReason = input.note?.trim() || 'Order refunded by admin';
+        refundOrderId = existing.id;
+        refundSourceStatus = existing.status;
+
+        await tx.orderStatusHistory.create({
+          data: {
+            orderId: existing.id,
+            fromStatus: existing.status,
+            toStatus: existing.status,
+            triggeredBy: 'ADMIN',
+            note: `Refund initiated (${input.refundAmountPaise ?? existing.payment.amount} paise)`
+          }
+        });
+
+        return tx.order.findUniqueOrThrow({
+          where: { id: existing.id },
+          include: {
+            items: true,
+            payment: true,
+            invoice: {
+              select: {
+                invoiceNumber: true,
+                pdfUrl: true,
+                issuedAt: true
+              }
+            },
+            shipment: {
+              include: {
+                events: {
+                  orderBy: { occurredAt: 'desc' }
+                }
+              }
+            },
+            statusHistory: {
+              orderBy: { createdAt: 'desc' }
+            }
+          }
+        });
+      }
+
+      if (!canTransitionOrder(existing.status, input.status)) {
+        throw new AppError(
+          ERROR_CODES.INVALID_STATUS_TRANSITION,
+          `Cannot transition order from ${existing.status} to ${input.status}`,
+          409
+        );
+      }
+
+      await this.updateOrderStatusWithCas({
+        tx,
+        orderId,
+        fromStatus: existing.status,
+        toStatus: input.status
+      });
+
+      await tx.orderStatusHistory.create({
+        data: {
+          orderId: existing.id,
+          fromStatus: existing.status,
+          toStatus: input.status,
+          triggeredBy: 'ADMIN',
+          ...(input.note !== undefined ? { note: input.note } : {})
+        }
+      });
+
+      if (input.status === OrderStatus.CANCELLED && existing.payment?.status === PaymentStatus.CAPTURED) {
+        for (const item of existing.items) {
+          await tx.inventory.updateMany({
+            where: { variantId: item.variantId },
+            data: {
+              quantity: {
+                increment: item.quantity
+              }
+            }
+          });
+        }
+      }
+
+      return tx.order.findUniqueOrThrow({
+        where: { id: existing.id },
+        include: {
+          items: true,
+          payment: true,
+          invoice: {
+            select: {
+              invoiceNumber: true,
+              pdfUrl: true,
+              issuedAt: true
+            }
+          },
+          shipment: {
+            include: {
+              events: {
+                orderBy: { occurredAt: 'desc' }
+              }
+            }
+          },
+          statusHistory: {
+            orderBy: { createdAt: 'desc' }
+          }
+        }
+      });
+    });
+
+    if (queuedRefund && refundOrderId) {
+      try {
+        const refundAmountLabel =
+          typeof input.refundAmountPaise === 'number' ? input.refundAmountPaise.toString() : 'full';
+        await this.enqueueOutboxMessage('refunds', 'initiate-razorpay-refund', {
+          orderId: refundOrderId,
+          reason: refundReason,
+          ...(input.refundAmountPaise !== undefined ? { refundAmountPaise: input.refundAmountPaise } : {}),
+          initiatedBy: 'ADMIN',
+          ...(refundSourceStatus ? { sourceStatus: refundSourceStatus } : {})
+        }, ['initiate-razorpay-refund', refundOrderId, refundAmountLabel, String(refundSourceStatus ?? 'na')].join(':'));
+      } catch (error) {
+        this.fastify.log.error(
+          {
+            orderId: refundOrderId,
+            error: error instanceof Error ? error.message : 'Unknown refund enqueue error'
+          },
+          'Failed to enqueue refund initiation job'
+        );
+      }
+    }
+
+    return this.serializeOrder(updatedOrder);
+  }
+
+  async adminShipOrder(orderId: string) {
+    const pickupPincode = await this.resolvePickupPincode();
+
+    const existing = await this.fastify.prisma.order.findUnique({
+      where: { id: orderId },
+      include: {
+        payment: true,
+        invoice: {
+          select: {
+            invoiceNumber: true,
+            pdfUrl: true,
+            issuedAt: true
+          }
+        },
+        shipment: true,
+        items: true,
+        statusHistory: {
+          orderBy: { createdAt: 'desc' }
+        }
+      }
+    });
+    if (!existing) {
+      throw new AppError(ERROR_CODES.NOT_FOUND, 'Order not found', 404);
+    }
+
+    if (!canTransitionOrder(existing.status, OrderStatus.SHIPPED)) {
+      throw new AppError(ERROR_CODES.INVALID_STATUS_TRANSITION, 'Order cannot be shipped at current status', 409);
+    }
+
+    const shipState = this.resolveShipActionState({
+      status: existing.status,
+      paymentMode: existing.paymentMode ?? 'PREPAID',
+      paymentStatus: existing.payment?.status ?? null,
+      shipmentStatus: existing.shipment?.status ?? null,
+      awbNumber: existing.shipment?.awbNumber ?? null,
+      hasCompleteShippingAddress: this.hasCompleteShippingAddress(existing.shippingAddress),
+      hasItems: existing.items.length > 0,
+      pickupPincodeConfigured: Boolean(pickupPincode)
+    });
+    if (!shipState.canShipNow) {
+      throw new AppError(ERROR_CODES.VALIDATION_ERROR, shipState.shipBlockReason ?? 'Order cannot be shipped', 422);
+    }
+
+    try {
+      await this.enqueueOutboxMessage(
+        'shipping',
+        'create-shipment',
+        {
+          orderId: existing.id
+        },
+        `create-shipment:${existing.id}`
+      );
+    } catch {
+      throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Unable to enqueue shipment booking', 502);
+    }
+
+    await this.enqueueMerchantShipmentNotifications(existing.id);
+
+    return this.serializeOrder(existing);
+  }
+
+  async adminSchedulePickup(orderId: string) {
+    const shipment = await this.fastify.prisma.shipment.findFirst({
+      where: { orderId }
+    });
+    if (!shipment) {
+      throw new AppError(ERROR_CODES.NOT_FOUND, 'Shipment not found for this order', 404);
+    }
+    const shiprocketShipmentId = (shipment as typeof shipment & { shiprocketShipmentId?: string | null })
+      .shiprocketShipmentId;
+    if (!shiprocketShipmentId) {
+      throw new AppError(
+        ERROR_CODES.VALIDATION_ERROR,
+        'Shipment does not have a Shiprocket shipment ID — ensure SHIPPING_PROVIDER=shiprocket and AWB has been assigned',
+        422
+      );
+    }
+    const provider = await this.createAdminShippingProvider();
+    if (!provider?.schedulePickup) {
+      throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Schedule pickup is not supported by the active shipping provider', 501);
+    }
+    const result = await provider.schedulePickup(shiprocketShipmentId);
+    if (result.pickupScheduledDate) {
+      await this.fastify.prisma.shipment.update({
+        where: { id: shipment.id },
+        data: {
+          pickupScheduledDate: new Date(result.pickupScheduledDate)
+        } as Record<string, unknown>
+      });
+    }
+    return result;
+  }
+
+  async adminPrintLabel(orderId: string) {
+    const shipment = await this.fastify.prisma.shipment.findFirst({
+      where: { orderId }
+    });
+    if (!shipment) {
+      throw new AppError(ERROR_CODES.NOT_FOUND, 'Shipment not found for this order', 404);
+    }
+    const shipmentExt = shipment as typeof shipment & {
+      shiprocketShipmentId?: string | null;
+      labelUrl?: string | null;
+    };
+    if (shipmentExt.labelUrl) {
+      return { labelUrl: shipmentExt.labelUrl };
+    }
+    const shiprocketShipmentId = shipmentExt.shiprocketShipmentId;
+    if (!shiprocketShipmentId) {
+      throw new AppError(
+        ERROR_CODES.VALIDATION_ERROR,
+        'Shipment does not have a Shiprocket shipment ID — ensure SHIPPING_PROVIDER=shiprocket and AWB has been assigned',
+        422
+      );
+    }
+    const provider = await this.createAdminShippingProvider();
+    if (!provider?.generateLabel) {
+      throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Label generation is not supported by the active shipping provider', 501);
+    }
+    const result = await provider.generateLabel(shiprocketShipmentId);
+    await this.fastify.prisma.shipment.update({
+      where: { id: shipment.id },
+      data: { labelUrl: result.labelUrl } as Record<string, unknown>
+    });
+    return { labelUrl: result.labelUrl };
+  }
+
+  async adminCancelOrder(orderId: string, input?: CancelOrderInput) {
+    let queuedRefund = false;
+    let refundReason = '';
+    const updatedOrder = await this.fastify.prisma.$transaction(async (tx) => {
+      const existing = await tx.order.findUnique({
+        where: { id: orderId },
+        include: {
+          payment: true,
+          items: {
+            select: {
+              variantId: true,
+              quantity: true
+            }
+          },
+          user: {
+            select: {
+              email: true,
+              phone: true
+            }
+          }
+        }
+      });
+
+      if (!existing) {
+        throw new AppError(ERROR_CODES.NOT_FOUND, 'Order not found', 404);
+      }
+
+      const cancellableStatuses: ReadonlyArray<OrderStatus> = [
+        OrderStatus.CONFIRMED,
+        OrderStatus.PROCESSING
+      ];
+      if (!cancellableStatuses.includes(existing.status)) {
+        throw new AppError(ERROR_CODES.INVALID_STATUS_TRANSITION, 'Order cannot be cancelled at current status', 409);
+      }
+
+      const shouldRefund =
+        existing.payment?.status === PaymentStatus.CAPTURED ||
+        existing.payment?.status === PaymentStatus.PARTIALLY_REFUNDED;
+      const nextOrderStatus = OrderStatus.CANCELLED;
+      if (!canTransitionOrder(existing.status, nextOrderStatus)) {
+        throw new AppError(ERROR_CODES.INVALID_STATUS_TRANSITION, 'Order cannot be cancelled at current status', 409);
+      }
+
+      if (existing.payment && shouldRefund) {
+        if (!existing.payment.providerPaymentId) {
+          throw new AppError(ERROR_CODES.CONFLICT, 'Missing provider payment id for refund', 409);
+        }
+        if (
+          input?.refundAmountPaise !== undefined &&
+          (input.refundAmountPaise <= 0 || input.refundAmountPaise > existing.payment.amount)
+        ) {
+          throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Invalid refund amount for captured payment', 400);
+        }
+        queuedRefund = true;
+        refundReason = input?.reason?.trim() || 'Order cancelled and refunded by admin';
+      }
+
+      await this.updateOrderStatusWithCas({
+        tx,
+        orderId: existing.id,
+        fromStatus: existing.status,
+        toStatus: nextOrderStatus
+      });
+
+      await tx.orderStatusHistory.create({
+        data: {
+          orderId: existing.id,
+          fromStatus: existing.status,
+          toStatus: nextOrderStatus,
+          triggeredBy: 'ADMIN',
+          note: 'Cancelled by admin'
+        }
+      });
+
+      if (shouldRefund) {
+        for (const item of existing.items) {
+          await tx.inventory.updateMany({
+            where: { variantId: item.variantId },
+            data: {
+              quantity: {
+                increment: item.quantity
+              }
+            }
+          });
+        }
+      }
+
+      return tx.order.findUniqueOrThrow({
+        where: { id: existing.id },
+        include: {
+          user: {
+            select: {
+              email: true,
+              phone: true
+            }
+          },
+          items: true,
+          payment: true,
+          invoice: {
+            select: {
+              invoiceNumber: true,
+              pdfUrl: true,
+              issuedAt: true
+            }
+          },
+          shipment: {
+            include: {
+              events: {
+                orderBy: { occurredAt: 'desc' }
+              }
+            }
+          },
+          statusHistory: {
+            orderBy: { createdAt: 'desc' }
+          }
+        }
+      });
+    });
+
+    if (queuedRefund) {
+      try {
+        await this.enqueueOutboxMessage('refunds', 'initiate-razorpay-refund', {
+          orderId: updatedOrder.id,
+          reason: refundReason,
+          ...(input?.refundAmountPaise !== undefined ? { refundAmountPaise: input.refundAmountPaise } : {}),
+          initiatedBy: 'ADMIN',
+          sourceStatus: OrderStatus.CANCELLED
+        }, `initiate-razorpay-refund:${updatedOrder.id}:${input?.refundAmountPaise ?? 'full'}:cancelled`);
+      } catch (error) {
+        this.fastify.log.error(
+          {
+            orderId: updatedOrder.id,
+            error: error instanceof Error ? error.message : 'Unknown refund enqueue error'
+          },
+          'Failed to enqueue refund initiation job'
+        );
+      }
+    }
+
+    if (updatedOrder.status === OrderStatus.CANCELLED) {
+      await this.enqueueOrderCancelledNotifications(
+        updatedOrder.id,
+        updatedOrder.user?.email ?? null,
+        updatedOrder.user?.phone ?? null
+      );
+    }
+
+    return this.serializeOrder(updatedOrder);
+  }
+
+  async adminRetriggerNotification(orderId: string, input: AdminRetriggerNotificationInput) {
+    const order = await this.fastify.prisma.order.findUnique({
+      where: { id: orderId },
+      select: {
+        id: true,
+        user: {
+          select: {
+            email: true,
+            phone: true
+          }
+        }
+      }
+    });
+
+    if (!order) {
+      throw new AppError(ERROR_CODES.NOT_FOUND, 'Order not found', 404);
+    }
+
+    const channels = input.channels ?? ['EMAIL', 'SMS'];
+    const notificationFlags = await this.settingsService.resolveNotificationFlags();
+    const email = order.user?.email ?? null;
+    const phone = order.user?.phone ?? null;
+    let queuedJobs = 0;
+
+    if (channels.includes('EMAIL')) {
+      if (!email) {
+        throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Customer email is required for EMAIL channel', 400);
+      }
+      await this.enqueueOutboxMessage('notifications', 'send-email', {
+        to: email,
+        template: input.template,
+        data: { orderId: order.id }
+      }, `notifications:email:${order.id}:${input.template}`);
+      queuedJobs += 1;
+    }
+
+    if (channels.includes('SMS')) {
+      if (!phone) {
+        throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Customer phone is required for SMS channel', 400);
+      }
+      await this.enqueueOutboxMessage('notifications', 'send-sms', {
+        phone,
+        template: input.template,
+        data: { orderId: order.id }
+      }, `notifications:sms:${order.id}:${input.template}`);
+      queuedJobs += 1;
+    }
+
+    if (channels.includes('WHATSAPP')) {
+      if (!notificationFlags.whatsappEnabled) {
+        throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'WhatsApp notifications are disabled', 400);
+      }
+      if (!phone) {
+        throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Customer phone is required for WHATSAPP channel', 400);
+      }
+      await this.enqueueOutboxMessage('notifications', 'send-whatsapp', {
+        phone,
+        template: input.template,
+        data: { orderId: order.id }
+      }, `notifications:whatsapp:${order.id}:${input.template}`);
+      queuedJobs += 1;
+    }
+
+    return {
+      orderId: order.id,
+      template: input.template,
+      channels,
+      queuedJobs
+    };
+  }
+
+  private async enqueueOrderCancelledNotifications(orderId: string, email: string | null, phone: string | null) {
+    try {
+      const notificationFlags = await this.settingsService.resolveNotificationFlags();
+      if (email) {
+        if (notificationFlags.emailEnabled) {
+          await this.enqueueOutboxMessage('notifications', 'send-email', {
+            to: email,
+            template: 'OrderCancelled',
+            data: { orderId }
+          }, `notifications:email:${orderId}:OrderCancelled`);
+        }
+      }
+
+      if (phone) {
+        if (notificationFlags.smsEnabled) {
+          await this.enqueueOutboxMessage('notifications', 'send-sms', {
+            phone,
+            template: 'OrderCancelled',
+            data: { orderId }
+          }, `notifications:sms:${orderId}:OrderCancelled`);
+        }
+
+        if (notificationFlags.whatsappEnabled) {
+          await this.enqueueOutboxMessage('notifications', 'send-whatsapp', {
+            phone,
+            template: 'OrderCancelled',
+            data: { orderId }
+          }, `notifications:whatsapp:${orderId}:OrderCancelled`);
+        }
+      }
+    } catch (error) {
+      this.fastify.log.error(
+        {
+          orderId,
+          error: error instanceof Error ? error.message : 'Unknown notification enqueue error'
+        },
+        'Failed to enqueue order cancellation notifications'
+      );
+    }
+  }
+
+  private async validateOrderCoupon(
+    coupon: Coupon,
+    subtotal: number,
+    userId: string,
+    items: Array<{ priceSnapshot: number; quantity: number; variant: { productId: string; product: { categoryId: string } } }>
+  ) {
+    if (!coupon.isActive) {
+      throw new AppError(ERROR_CODES.NOT_FOUND, 'Coupon not found', 404);
+    }
+
+    if (coupon.type === CouponType.BUY_X_GET_Y) {
+      throw new AppError(
+        ERROR_CODES.VALIDATION_ERROR,
+        'Coupon type BUY_X_GET_Y is deferred and not supported in this release',
+        400
+      );
+    }
+
+    const now = new Date();
+    if (coupon.validFrom > now || (coupon.validUntil && coupon.validUntil < now)) {
+      throw new AppError(ERROR_CODES.COUPON_EXPIRED, 'Coupon has expired', 400);
+    }
+    if (subtotal < coupon.minOrderPaise) {
+      throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Cart total does not meet coupon minimum order value', 400);
+    }
+    if (coupon.maxUsesTotal !== null && coupon.usesCount >= coupon.maxUsesTotal) {
+      throw new AppError(ERROR_CODES.COUPON_USAGE_EXCEEDED, 'Coupon usage limit reached', 409);
+    }
+
+    const scopedSubtotal = this.resolveCouponEligibleSubtotal(coupon, items);
+    if (this.hasCouponScope(coupon) && scopedSubtotal <= 0) {
+      throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Coupon is not applicable to cart items', 400);
+    }
+
+    const userUsageCount = await this.fastify.prisma.order.count({
+      where: {
+        userId,
+        coupons: { some: { id: coupon.id } },
+        status: {
+          in: [
+            OrderStatus.CONFIRMED,
+            OrderStatus.PROCESSING,
+            OrderStatus.SHIPPED,
+            OrderStatus.OUT_FOR_DELIVERY,
+            OrderStatus.DELIVERED,
+            OrderStatus.REFUNDED
+          ]
+        }
+      }
+    });
+    if (coupon.maxUsesPerUser !== null && userUsageCount >= coupon.maxUsesPerUser) {
+      throw new AppError(ERROR_CODES.COUPON_USAGE_EXCEEDED, 'Coupon usage limit reached for this user', 409);
+    }
+  }
+
+  private calculateOrderDiscount(
+    subtotal: number,
+    coupon: Coupon | null,
+    items: Array<{ priceSnapshot: number; quantity: number; variant: { productId: string; product: { categoryId: string } } }>
+  ): number {
+    if (!coupon) {
+      return 0;
+    }
+
+    const eligibleSubtotal = this.resolveCouponEligibleSubtotal(coupon, items);
+    const baseSubtotal = this.hasCouponScope(coupon) ? eligibleSubtotal : subtotal;
+    if (baseSubtotal <= 0) {
+      return 0;
+    }
+
+    if (coupon.type === 'PERCENTAGE_OFF') {
+      return Math.min(Math.floor((baseSubtotal * coupon.value) / 100), baseSubtotal);
+    }
+
+    if (coupon.type === 'FLAT_AMOUNT_OFF') {
+      return Math.min(coupon.value, baseSubtotal);
+    }
+
+    return 0;
+  }
+
+  private resolveCouponEligibleSubtotal(
+    coupon: Coupon,
+    items: Array<{ priceSnapshot: number; quantity: number; variant: { productId: string; product: { categoryId: string } } }>
+  ) {
+    const scope = this.parseCouponScope(coupon.applicableTo);
+    if (!scope) {
+      return items.reduce((sum, item) => sum + item.priceSnapshot * item.quantity, 0);
+    }
+
+    const scopedProductIds = new Set(scope.productIds ?? []);
+    const scopedCategoryIds = new Set(scope.categoryIds ?? []);
+    return items.reduce((sum, item) => {
+      const isProductMatch = scopedProductIds.has(item.variant.productId);
+      const isCategoryMatch = scopedCategoryIds.has(item.variant.product.categoryId);
+      if (isProductMatch || isCategoryMatch) {
+        return sum + item.priceSnapshot * item.quantity;
+      }
+      return sum;
+    }, 0);
+  }
+
+  private parseCouponScope(value: Prisma.JsonValue | null): CouponScope | null {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return null;
+    }
+
+    const record = value as Record<string, unknown>;
+    const productIds = Array.isArray(record.productIds)
+      ? record.productIds.filter((item): item is string => typeof item === 'string' && item.length > 0)
+      : undefined;
+    const categoryIds = Array.isArray(record.categoryIds)
+      ? record.categoryIds.filter((item): item is string => typeof item === 'string' && item.length > 0)
+      : undefined;
+
+    if ((productIds?.length ?? 0) === 0 && (categoryIds?.length ?? 0) === 0) {
+      return null;
+    }
+
+    return {
+      ...(productIds && productIds.length > 0 ? { productIds } : {}),
+      ...(categoryIds && categoryIds.length > 0 ? { categoryIds } : {})
+    };
+  }
+
+  private hasCouponScope(coupon: Coupon) {
+    return this.parseCouponScope(coupon.applicableTo) !== null;
+  }
+
+  private async enqueueAnalyticsEvent(
+    eventType: AnalyticsEventType,
+    sessionId: string,
+    userId: string,
+    payload: Record<string, unknown>
+  ) {
+    try {
+      await this.enqueueOutboxMessage('analytics', 'record-event', {
+        eventType,
+        sessionId,
+        userId,
+        payload,
+        occurredAt: new Date().toISOString()
+      }, `analytics:${eventType}:${sessionId}`);
+    } catch (error) {
+      this.fastify.log.error(
+        {
+          eventType,
+          sessionFingerprint: this.fingerprintIdentifier(sessionId),
+          userFingerprint: this.fingerprintIdentifier(userId),
+          error: error instanceof Error ? error.message : 'Unknown analytics enqueue error'
+        },
+        'Failed to enqueue analytics event'
+      );
+    }
+  }
+
+  private async enqueueOutboxMessage(
+    queueName: 'orderProcessing' | 'shipping' | 'refunds' | 'notifications' | 'analytics',
+    jobName: string,
+    payload: Record<string, unknown>,
+    jobId?: string
+  ): Promise<void> {
+    const outboxDelegate = (this.fastify as { prisma?: PrismaClient }).prisma?.outboxMessage;
+    if (outboxDelegate) {
+      await outboxDelegate.create({
+        data: {
+          queueName,
+          jobName,
+          payload: payload as Prisma.InputJsonValue,
+          ...(jobId ? { jobId } : {})
+        }
+      });
+      return;
+    }
+
+    const queue = this.fastify.queues[queueName];
+    await queue.add(jobName, payload, jobId ? { jobId } : undefined);
+  }
+
+  private async claimWebhookInboxEvent(
+    provider: 'razorpay' | 'delhivery' | 'shiprocket',
+    eventKey: string,
+    payloadHash: string,
+    eventName: string
+  ): Promise<'claimed' | 'duplicate'> {
+    const inboxDelegate = (this.fastify as { prisma?: PrismaClient }).prisma?.webhookInboxEvent;
+    if (!inboxDelegate) {
+      return 'claimed';
+    }
+
+    // Atomic path 1: try to create (succeeds if no existing record)
+    try {
+      await inboxDelegate.create({
+        data: {
+          provider,
+          eventKey,
+          payloadHash,
+          eventName,
+          status: 'PROCESSING'
+        }
+      });
+      return 'claimed';
+    } catch (error) {
+      // If not a unique constraint violation, rethrow
+      const isUniqueViolation =
+        error instanceof Error &&
+        (error.message.includes('Unique constraint failed') ||
+          error.message.includes('P2002') ||
+          (error as unknown as Record<string, unknown>).code === 'P2002');
+      if (!isUniqueViolation) {
+        throw error;
+      }
+    }
+
+    // Record exists (created concurrently). Atomic path 2: try to claim a FAILED record.
+    const updateResult = await inboxDelegate.updateMany({
+      where: {
+        provider,
+        eventKey,
+        status: 'FAILED'
+      },
+      data: {
+        status: 'PROCESSING',
+        lastError: null
+      }
+    });
+
+    if (updateResult.count > 0) {
+      return 'claimed';
+    }
+
+    // Not FAILED - verify payload hash matches, then return duplicate
+    const existing = await inboxDelegate.findUnique({
+      where: {
+        provider_eventKey: {
+          provider,
+          eventKey
+        }
+      }
+    });
+
+    if (existing && existing.payloadHash !== payloadHash) {
+      throw new AppError(ERROR_CODES.CONFLICT, 'Webhook payload mismatch for dedupe key', 409);
+    }
+
+    return 'duplicate';
+  }
+
+  private async markWebhookInboxEvent(
+    provider: 'razorpay' | 'delhivery' | 'shiprocket',
+    eventKey: string,
+    status: 'ENQUEUED' | 'PROCESSED' | 'FAILED',
+    lastError?: string
+  ): Promise<void> {
+    const inboxDelegate = (this.fastify as { prisma?: PrismaClient }).prisma?.webhookInboxEvent;
+    if (!inboxDelegate) {
+      return;
+    }
+
+    await inboxDelegate.update({
+      where: {
+        provider_eventKey: {
+          provider,
+          eventKey
+        }
+      },
+      data: {
+        status,
+        ...(status === 'ENQUEUED' ? { enqueuedAt: new Date() } : {}),
+        ...(status === 'PROCESSED' ? { processedAt: new Date() } : {}),
+        ...(lastError ? { lastError } : {})
+      }
+    });
+  }
+
+  async retryPayment(userId: string, orderId: string, opts?: { clientIp?: string }) {
+    const order = await this.fastify.prisma.order.findFirst({
+      where: { id: orderId, userId },
+      include: { payment: true }
+    });
+    if (!order) {
+      throw new AppError(ERROR_CODES.NOT_FOUND, 'Order not found', 404);
+    }
+    if (order.status !== OrderStatus.PAYMENT_FAILED && order.status !== OrderStatus.PENDING_PAYMENT) {
+      throw new AppError(ERROR_CODES.INVALID_STATUS_TRANSITION, 'Payment retry is only allowed for failed or pending payment orders', 409);
+    }
+    if ((order as Record<string, unknown>)['paymentMode'] === 'COD') {
+      throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'COD orders do not require payment retry', 400);
+    }
+    return this.initiatePayment(userId, { orderId }, opts);
+  }
+
+  async createReturnRequest(
+    userId: string,
+    orderId: string,
+    input: { items: Array<{ orderItemId: string; quantity: number; reason?: string }>; reason: string }
+  ) {
+    const order = await this.fastify.prisma.order.findFirst({
+      where: { id: orderId, userId },
+      include: { items: true, payment: true }
+    });
+    if (!order) {
+      throw new AppError(ERROR_CODES.NOT_FOUND, 'Order not found', 404);
+    }
+    if (order.status !== OrderStatus.DELIVERED) {
+      throw new AppError(ERROR_CODES.INVALID_STATUS_TRANSITION, 'Return requests can only be created for delivered orders', 409);
+    }
+
+    for (const reqItem of input.items) {
+      const orderItem = order.items.find((oi) => oi.id === reqItem.orderItemId);
+      if (!orderItem) {
+        throw new AppError(ERROR_CODES.NOT_FOUND, `Order item ${reqItem.orderItemId} not found`, 404);
+      }
+      if (reqItem.quantity <= 0 || reqItem.quantity > orderItem.quantity) {
+        throw new AppError(ERROR_CODES.VALIDATION_ERROR, `Invalid return quantity for item ${reqItem.orderItemId}`, 400);
+      }
+    }
+
+    const returnRequest = await this.fastify.prisma.returnRequest.create({
+      data: {
+        orderId,
+        userId,
+        items: input.items,
+        reason: input.reason,
+        status: 'REQUESTED'
+      }
+    }) as { id: string; orderId: string; status: string; reason: string; createdAt: Date };
+
+    return {
+      id: returnRequest.id,
+      orderId: returnRequest.orderId,
+      status: returnRequest.status,
+      reason: returnRequest.reason,
+      createdAt: returnRequest.createdAt.toISOString()
+    };
+  }
+
+  async adminUpdateReturnRequest(
+    adminUserId: string,
+    returnRequestId: string,
+    input: { status: ReturnRequestStatus; adminNote?: string }
+  ) {
+    const returnRequest = await this.fastify.prisma.returnRequest.findUnique({
+      where: { id: returnRequestId }
+    });
+    if (!returnRequest) {
+      throw new AppError(ERROR_CODES.NOT_FOUND, 'Return request not found', 404);
+    }
+
+    const updated = await this.fastify.prisma.returnRequest.update({
+      where: { id: returnRequestId },
+      data: {
+        status: input.status,
+        adminNote: input.adminNote
+          ? `${input.adminNote} [admin:${adminUserId}]`
+          : `Updated by admin [admin:${adminUserId}]`
+      }
+    }) as { id: string; orderId: string; status: string; adminNote: string | null; updatedAt: Date };
+
+    return {
+      id: updated.id,
+      orderId: updated.orderId,
+      status: updated.status,
+      adminNote: updated.adminNote,
+      updatedAt: updated.updatedAt.toISOString()
+    };
+  }
+
+  async adminListReturnRequests(query: { status?: ReturnRequestStatus; page?: number; limit?: number }) {
+    const page = Math.max(1, query.page ?? 1);
+    const limit = Math.min(100, Math.max(1, query.limit ?? 20));
+    const skip = (page - 1) * limit;
+
+    const where = query.status ? { status: query.status } : {};
+    const [items, total] = await Promise.all([
+      this.fastify.prisma.returnRequest.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: { createdAt: 'desc' },
+        include: {
+          order: { select: { orderNumber: true } },
+          user: { select: { email: true, firstName: true, lastName: true } }
+        }
+      }),
+      this.fastify.prisma.returnRequest.count({ where })
+    ]);
+
+    return {
+      items: (items as Array<Record<string, unknown> & { order: { orderNumber: string }; user: { email: string; firstName: string; lastName: string }; createdAt: Date }>).map((r) => ({
+        id: r.id,
+        orderId: r.orderId,
+        orderNumber: r.order.orderNumber,
+        userId: r.userId,
+        customerEmail: r.user.email,
+        customerName: `${r.user.firstName} ${r.user.lastName}`.trim(),
+        status: r.status,
+        reason: r.reason,
+        createdAt: r.createdAt.toISOString()
+      })),
+      total,
+      page,
+      limit
+    };
+  }
+
+  private serializeOrder(
+    order: {
+    id: string;
+    orderNumber: string;
+    userId: string;
+    status: OrderStatus;
+    shippingAddress: unknown;
+    subtotal: number;
+    shippingCharge: number;
+    discountAmount: number;
+    total: number;
+    notes: string | null;
+    createdAt: Date;
+    updatedAt: Date;
+    items: Array<{
+      id: string;
+      variantId: string;
+      productName: string;
+      variantName: string;
+      sku: string;
+      quantity: number;
+      unitPrice: number;
+      totalPrice: number;
+    }>;
+    statusHistory: Array<{
+      id: string;
+      fromStatus: OrderStatus | null;
+      toStatus: OrderStatus;
+      triggeredBy: string;
+      note: string | null;
+      createdAt: Date;
+    }>;
+    payment: {
+      id: string;
+      provider: string;
+      providerOrderId: string;
+      providerPaymentId: string | null;
+      amount: number;
+      status: string;
+      method: string | null;
+      capturedAt: Date | null;
+      refundPendingAmountPaise: number;
+      refundedAmountPaise: number;
+    } | null;
+    invoice: {
+      invoiceNumber: string;
+      pdfUrl: string | null;
+      issuedAt: Date;
+    } | null;
+    shipment: {
+      id: string;
+      provider: string;
+      status: string;
+      awbNumber: string | null;
+      trackingUrl: string | null;
+      shiprocketShipmentId?: string | null;
+      labelUrl?: string | null;
+      pickupScheduledDate?: Date | null;
+      events?: Array<{
+        id: string;
+        shipmentId: string;
+        status: string;
+        location: string | null;
+        description: string;
+        occurredAt: Date;
+      }>;
+    } | null;
+    user?: {
+      firstName?: string | null;
+      lastName?: string | null;
+      email: string | null;
+      phone: string | null;
+    };
+    },
+    options?: {
+      exposeProviderReferences?: boolean;
+      exposeInternalReferences?: boolean;
+    }
+  ) {
+    const exposeProviderReferences = options?.exposeProviderReferences ?? true;
+    const exposeInternalReferences = options?.exposeInternalReferences ?? true;
+    const shipActionState = this.resolveShipActionState({
+      status: order.status,
+      paymentMode: ((order as Record<string, unknown>)['paymentMode'] as string | undefined) ?? 'PREPAID',
+      paymentStatus: order.payment?.status ?? null,
+      shipmentStatus: order.shipment?.status ?? null,
+      awbNumber: order.shipment?.awbNumber ?? null,
+      hasCompleteShippingAddress: this.hasCompleteShippingAddress(order.shippingAddress),
+      hasItems: order.items.length > 0
+    });
+    return {
+      ...shipActionState,
+      shippingMode: 'MANUAL',
+      ...(exposeInternalReferences ? { userId: order.userId } : {}),
+      id: order.id,
+      orderNumber: order.orderNumber,
+      status: order.status,
+      paymentMode: (order as Record<string, unknown>)['paymentMode'] ?? 'PREPAID',
+      shippingAddress: order.shippingAddress as Record<string, unknown>,
+      subtotal: order.subtotal,
+      shippingCharge: order.shippingCharge,
+      discountAmount: order.discountAmount,
+      total: order.total,
+      notes: order.notes,
+      createdAt: order.createdAt.toISOString(),
+      updatedAt: order.updatedAt.toISOString(),
+      items: order.items,
+      statusHistory: order.statusHistory.map((history) => ({
+        ...history,
+        note: exposeInternalReferences ? history.note : this.sanitizeCustomerVisibleNote(history.note),
+        createdAt: history.createdAt.toISOString()
+      })),
+      creditNotes: order.statusHistory
+        .map((history) => this.parseCreditNoteAudit(history.note))
+        .filter((entry): entry is { creditNoteNumber: string; originalInvoiceNumber: string; reason: string } => entry !== null),
+      payment: order.payment
+        ? {
+            ...(exposeInternalReferences ? { id: order.payment.id } : {}),
+            provider: order.payment.provider,
+            ...(exposeProviderReferences ? { providerOrderId: order.payment.providerOrderId } : {}),
+            ...(exposeProviderReferences ? { providerPaymentId: order.payment.providerPaymentId } : {}),
+            amount: order.payment.amount,
+            status: order.payment.status,
+            method: order.payment.method,
+            capturedAt: order.payment.capturedAt ? order.payment.capturedAt.toISOString() : null,
+            refundPendingAmountPaise: order.payment.refundPendingAmountPaise,
+            refundedAmountPaise: order.payment.refundedAmountPaise
+          }
+        : null,
+      invoice: order.invoice
+        ? {
+            invoiceNumber: order.invoice.invoiceNumber,
+            hasPdf: Boolean(order.invoice.pdfUrl),
+            issuedAt: order.invoice.issuedAt.toISOString()
+          }
+        : null,
+      shipment: order.shipment
+        ? {
+            ...(exposeInternalReferences ? { id: order.shipment.id } : {}),
+            provider: order.shipment.provider,
+            status: order.shipment.status,
+            awb: order.shipment.awbNumber,
+            trackingUrl: order.shipment.trackingUrl,
+            ...(exposeInternalReferences ? { shipmentLabelUrl: this.resolveShipmentLabelUrl(order.shipment) } : {}),
+            ...(exposeInternalReferences && order.shipment.shiprocketShipmentId != null
+              ? { shiprocketShipmentId: order.shipment.shiprocketShipmentId }
+              : {}),
+            ...(exposeInternalReferences && order.shipment.labelUrl != null ? { labelUrl: order.shipment.labelUrl } : {}),
+            ...(exposeInternalReferences && order.shipment.pickupScheduledDate != null
+              ? { pickupScheduledDate: order.shipment.pickupScheduledDate.toISOString() }
+              : {}),
+            events: (order.shipment.events ?? []).map((event) => ({
+              id: event.id,
+              ...(exposeInternalReferences ? { shipmentId: event.shipmentId } : {}),
+              status: event.status,
+              location: event.location,
+              description: event.description,
+              occurredAt: event.occurredAt.toISOString()
+            }))
+          }
+        : null,
+      customer: order.user
+        ? {
+            name: `${order.user.firstName ?? ''} ${order.user.lastName ?? ''}`.trim(),
+            email: order.user.email,
+            phone: order.user.phone
+          }
+        : {
+            name: '',
+            email: '',
+            phone: null
+          }
+    };
+  }
+
+  private parseCreditNoteAudit(note: string | null): { creditNoteNumber: string; originalInvoiceNumber: string; reason: string } | null {
+    if (!note || !note.startsWith(OrdersService.creditNoteAuditPrefix)) {
+      return null;
+    }
+    const payloadText = note.slice(OrdersService.creditNoteAuditPrefix.length);
+    try {
+      const payload = JSON.parse(payloadText) as {
+        creditNoteNumber?: string;
+        originalInvoiceNumber?: string;
+        reason?: string;
+      };
+      if (!payload.creditNoteNumber || !payload.originalInvoiceNumber || !payload.reason) {
+        return null;
+      }
+      return {
+        creditNoteNumber: payload.creditNoteNumber,
+        originalInvoiceNumber: payload.originalInvoiceNumber,
+        reason: payload.reason
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private async resolvePickupPincode(): Promise<string | null> {
+    const settings = await this.fastify.prisma.storeSettings.findUnique({
+      where: { singletonKey: 'default' },
+      select: { pickupPincode: true }
+    });
+    if (settings?.pickupPincode) {
+      return settings.pickupPincode;
+    }
+    return process.env.SHIPROCKET_PICKUP_PINCODE ?? process.env.DELHIVERY_PICKUP_PINCODE ?? null;
+  }
+
+  private fingerprintIdentifier(value: string): string {
+    return createHash('sha256').update(value).digest('hex').slice(0, 12);
+  }
+
+  private sanitizeCustomerVisibleNote(note: string | null): string | null {
+    if (!note) {
+      return null;
+    }
+    const sanitized = note.replace(/\s*\[admin:[^\]]+\]\s*/gi, ' ').trim();
+    return sanitized.length > 0 ? sanitized : null;
+  }
+
+  private resolveShipmentLabelUrl(shipment: {
+    trackingUrl: string | null;
+    labelUrl?: string | null;
+  }): string | null {
+    if (shipment.labelUrl) {
+      return shipment.labelUrl;
+    }
+    const trackingUrl = shipment.trackingUrl;
+    if (!trackingUrl) {
+      return null;
+    }
+    const normalized = trackingUrl.toLowerCase();
+    if (normalized.includes('label') || normalized.endsWith('.pdf')) {
+      return trackingUrl;
+    }
+    return null;
+  }
+}
+
