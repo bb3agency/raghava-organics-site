@@ -99,44 +99,69 @@ if (!appPort) {
 
 const paymentProviderRaw = (env.PAYMENT_PROVIDER ?? "").trim().toLowerCase();
 const paymentProvider = paymentProviderRaw || "razorpay";
+const razorpayEnvKeys = ["RAZORPAY_KEY_ID", "RAZORPAY_KEY_SECRET", "RAZORPAY_WEBHOOK_SECRET"];
+const hasRazorpayEnvKeys = razorpayEnvKeys.some((key) => (env[key] ?? "").trim());
+
 if (!["razorpay", "cod", "noop"].includes(paymentProvider)) {
   errors.push(`Unsupported PAYMENT_PROVIDER='${paymentProvider}'. Allowed: razorpay, cod, noop.`);
 }
 
 if (!paymentProviderRaw) {
   warnings.push(
-    "PAYMENT_PROVIDER is not set. First bootstrap is allowed, but set PAYMENT_PROVIDER=cod or full razorpay keys before prepaid go-live."
+    "PAYMENT_PROVIDER is not set — OK for Phase 1. Configure razorpay via Ops UI before prepaid go-live."
+  );
+} else if (paymentProvider === "razorpay" && !hasRazorpayEnvKeys) {
+  errors.push(
+    "PAYMENT_PROVIDER=razorpay is set in .env but Razorpay keys are not in .env. " +
+      "For VPS Phase 1 bootstrap, remove PAYMENT_PROVIDER from .env and configure payment provider + keys via Ops UI after login."
   );
 } else if (paymentProvider === "razorpay") {
-  for (const key of ["RAZORPAY_KEY_ID", "RAZORPAY_KEY_SECRET", "RAZORPAY_WEBHOOK_SECRET"]) {
+  for (const key of razorpayEnvKeys) {
     requireKey(key);
     if (/replace_with|change_me/i.test(env[key] ?? "")) {
       errors.push(`${key} still contains placeholder text`);
     }
   }
+} else if (paymentProvider === "cod") {
+  warnings.push(
+    "PAYMENT_PROVIDER=cod in .env is optional for bootstrap. Prefer omitting it and setting payment mode via Ops UI before prepaid go-live."
+  );
 }
 
 const shippingProviderRaw = (env.SHIPPING_PROVIDER ?? "").trim().toLowerCase();
 const shippingProvider = shippingProviderRaw || "delhivery";
+const delhiveryEnvKeys = ["DELHIVERY_API_KEY", "DELHIVERY_WEBHOOK_TOKEN"];
+const shiprocketEnvKeys = ["SHIPROCKET_EMAIL", "SHIPROCKET_PASSWORD", "SHIPROCKET_WEBHOOK_TOKEN"];
+const hasDelhiveryEnvKeys = delhiveryEnvKeys.some((key) => (env[key] ?? "").trim());
+const hasShiprocketEnvKeys = shiprocketEnvKeys.some((key) => (env[key] ?? "").trim());
+
 if (!["delhivery", "shiprocket", "noop"].includes(shippingProvider)) {
   errors.push(`Unsupported SHIPPING_PROVIDER='${shippingProvider}'. Allowed: delhivery, shiprocket, noop.`);
 }
 
 if (!shippingProviderRaw) {
   warnings.push(
-    "SHIPPING_PROVIDER is not set. First bootstrap is allowed, but set SHIPPING_PROVIDER and provider keys before shipping flows."
+    "SHIPPING_PROVIDER is not set — OK for Phase 1. Configure shipping provider + keys via Ops UI before shipping flows."
+  );
+} else if (shippingProvider === "delhivery" && !hasDelhiveryEnvKeys) {
+  errors.push(
+    "SHIPPING_PROVIDER=delhivery is set in .env but Delhivery keys are not in .env. " +
+      "For VPS Phase 1 bootstrap, remove SHIPPING_PROVIDER from .env and configure via Ops UI after login."
+  );
+} else if (shippingProvider === "shiprocket" && !hasShiprocketEnvKeys) {
+  errors.push(
+    "SHIPPING_PROVIDER=shiprocket is set in .env but Shiprocket keys are not in .env. " +
+      "For VPS Phase 1 bootstrap, remove SHIPPING_PROVIDER from .env and configure via Ops UI after login."
   );
 } else if (shippingProvider === "delhivery") {
-  for (const key of ["DELHIVERY_API_KEY", "DELHIVERY_WEBHOOK_TOKEN"]) {
+  for (const key of delhiveryEnvKeys) {
     requireKey(key);
     if (/replace_with|change_me/i.test(env[key] ?? "")) {
       errors.push(`${key} still contains placeholder text`);
     }
   }
-}
-
-if (shippingProvider === "shiprocket") {
-  for (const key of ["SHIPROCKET_EMAIL", "SHIPROCKET_PASSWORD", "SHIPROCKET_WEBHOOK_TOKEN"]) {
+} else if (shippingProvider === "shiprocket") {
+  for (const key of shiprocketEnvKeys) {
     requireKey(key);
     if (/replace_with|change_me/i.test(env[key] ?? "")) {
       errors.push(`${key} still contains placeholder text`);
@@ -154,12 +179,6 @@ if (!(env.REPLAY_APPROVAL_TOKEN ?? "").trim()) {
 
 if (!(env.OPS_METRICS_TOKEN ?? "").trim()) {
   warnings.push("OPS_METRICS_TOKEN is not set — /ops/metrics will be inaccessible until configured.");
-}
-
-if (paymentProvider === "cod") {
-  warnings.push(
-    "PAYMENT_PROVIDER=cod detected. This is valid for bootstrap, but switch to razorpay before prepaid go-live."
-  );
 }
 
 if (warnings.length) {
