@@ -11,6 +11,7 @@ describe('CartService delivery utility methods', () => {
   });
 
   it('returns serviceability from provider when Delhivery key is configured', async () => {
+    vi.stubEnv('SHIPPING_PROVIDER', 'delhivery');
     vi.stubEnv('DELHIVERY_API_KEY', 'delhivery_key');
     vi.stubEnv('DELHIVERY_PICKUP_PINCODE', '110001');
     vi.stubEnv('DELHIVERY_BASE_URL', DELHIVERY_TEST_BASE_URL);
@@ -30,6 +31,7 @@ describe('CartService delivery utility methods', () => {
   });
 
   it('falls back to noop serviceability when shipping provider is not configured', async () => {
+    vi.stubEnv('SHIPPING_PROVIDER', '');
     vi.stubEnv('DELHIVERY_API_KEY', '');
     vi.stubEnv('DELHIVERY_PICKUP_PINCODE', '');
     vi.stubEnv('DELHIVERY_BASE_URL', '');
@@ -41,6 +43,7 @@ describe('CartService delivery utility methods', () => {
   });
 
   it('throws when provider serviceability check fails', async () => {
+    vi.stubEnv('SHIPPING_PROVIDER', 'delhivery');
     vi.stubEnv('DELHIVERY_API_KEY', 'delhivery_key');
     vi.stubEnv('DELHIVERY_PICKUP_PINCODE', '110001');
     vi.stubEnv('DELHIVERY_BASE_URL', DELHIVERY_TEST_BASE_URL);
@@ -61,6 +64,7 @@ describe('CartService delivery utility methods', () => {
   });
 
   it('falls back to noop delivery rates when shipping provider is not configured', async () => {
+    vi.stubEnv('SHIPPING_PROVIDER', '');
     vi.stubEnv('DELHIVERY_API_KEY', '');
     vi.stubEnv('DELHIVERY_PICKUP_PINCODE', '');
     vi.stubEnv('DELHIVERY_BASE_URL', '');
@@ -112,6 +116,7 @@ describe('CartService delivery utility methods', () => {
   });
 
   it('returns computed delivery rate for serviceable pincode', async () => {
+    vi.stubEnv('SHIPPING_PROVIDER', 'delhivery');
     vi.stubEnv('DELHIVERY_API_KEY', 'delhivery_key');
     vi.stubEnv('DELHIVERY_PICKUP_PINCODE', '110001');
     vi.stubEnv('DELHIVERY_BASE_URL', DELHIVERY_TEST_BASE_URL);
@@ -162,6 +167,7 @@ describe('CartService delivery utility methods', () => {
   });
 
   it('rejects delivery-rate request for unserviceable pincode', async () => {
+    vi.stubEnv('SHIPPING_PROVIDER', 'delhivery');
     vi.stubEnv('DELHIVERY_API_KEY', 'delhivery_key');
     vi.stubEnv('DELHIVERY_PICKUP_PINCODE', '110001');
     vi.stubEnv('DELHIVERY_BASE_URL', DELHIVERY_TEST_BASE_URL);
