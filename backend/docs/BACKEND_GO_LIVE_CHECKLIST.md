@@ -50,14 +50,15 @@ This checklist validates both:
 - [ ] Admin permission snapshot behavior is acknowledged in runbook and operator SOP: admin access tokens embed permissions at issuance and mid-window grant/revoke changes require token revocation/logout to take immediate effect.
 
 ### 2.4 Payment and shipping providers
-- [ ] `PAYMENT_PROVIDER` is valid for business mode (`razorpay` or `cod`). Unrecognised values are rejected at startup in all profiles.
-- [ ] `SHIPPING_PROVIDER` is valid (`delhivery` or `shiprocket`). Unrecognised values are rejected at startup in all profiles.
+- [ ] `PAYMENT_PROVIDER` is valid for business mode (`razorpay` or `cod`). Invalid/missing runtime config yields call-time `CONFIG_NOT_READY` and must be resolved before launch.
+- [ ] `SHIPPING_PROVIDER` is valid (`delhivery` or `shiprocket`). Invalid/missing runtime config yields call-time `CONFIG_NOT_READY` and must be resolved before launch.
 - [ ] `PAYMENT_PROVIDER=noop` is not used in production-like profiles (startup guard rejects it).
 - [ ] `SHIPPING_PROVIDER=noop` is not used in production-like profiles (startup guard rejects it).
 - [ ] Production-like startup guard rejects placeholder secrets (`replace_with_*`, `change_me*`, `<...>`) for JWT, ops, Razorpay, and shipping provider credentials.
 - [ ] All external provider adapters have fetch timeouts configured (10s for Delhivery/Razorpay/Resend/MSG91).
 - [ ] Razorpay env vars are only required when `PAYMENT_PROVIDER=razorpay` (COD-only stores skip them).
 - [ ] Provider credentials are real, non-placeholder, and validated with live/sandbox handshake tests.
+- [ ] `GET /api/v1/health/ready` reports `runtimeConfigMissingKeys: []` before opening production traffic.
 - [ ] Client credential register exists and is filled with owner, vault path, created on, rotated on, expiry/next rotation, and last-tested values (`docs/CLIENT_INTEGRATION_CREDENTIAL_REGISTER_TEMPLATE.md`).
 - [ ] Circuit breaker behavior is understood in multi-replica deployments: payment/shipping circuit breaker state is process-local and not shared across replicas unless explicitly redesigned with shared Redis state.
 
@@ -248,6 +249,7 @@ Pass criteria:
 - [ ] Frontend/admin/ops execution evidence confirms simultaneous build + integration via vertical slices (contract freeze -> typed client -> UI -> real route integration -> tests), not deferred API integration after page completion.
 - [ ] Admin provisioning evidence shows fail-closed posture for fresh admins (no `AdminPermissionGrant` rows => no effective permissions) and explicit permission grant workflow before first privileged operation.
 - [ ] Crash-boundary observability evidence archived: `process_crash_total{reason}` appears in metrics snapshot and alerting stack scrape path is verified.
+- [ ] Phase 7 deploy hardening evidence archived: `docs/PHASE7_VPS_DEPLOY_INCIDENT_PLAYBOOK.md` preflight gates passed (strict env check, host DB routing checks, compose overlay usage).
 
 ---
 

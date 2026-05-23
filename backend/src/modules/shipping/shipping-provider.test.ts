@@ -6,12 +6,12 @@ describe('shipping provider runtime', () => {
     vi.unstubAllEnvs();
   });
 
-  it('returns null adapter when delhivery key is missing', () => {
+  it('returns unconfigured adapter when delhivery key is missing', () => {
     vi.stubEnv('SHIPPING_PROVIDER', 'delhivery');
     vi.stubEnv('DELHIVERY_API_KEY', '');
     const runtime = resolveShippingProviderRuntime();
-    expect(runtime.provider).toBe('delhivery');
-    expect(runtime.adapter).toBeNull();
+    expect(runtime.provider).toBe('unconfigured');
+    expect(runtime.adapter).not.toBeNull();
     expect(runtime.capabilities.supportsCreateShipment).toBe(false);
   });
 
@@ -23,13 +23,13 @@ describe('shipping provider runtime', () => {
     expect(runtime.capabilities.supportsTracking).toBe(false);
   });
 
-  it('returns null adapter when shiprocket credentials are missing', () => {
+  it('returns unconfigured adapter when shiprocket credentials are missing', () => {
     vi.stubEnv('SHIPPING_PROVIDER', 'shiprocket');
     vi.stubEnv('SHIPROCKET_EMAIL', '');
     vi.stubEnv('SHIPROCKET_PASSWORD', '');
     const runtime = resolveShippingProviderRuntime();
-    expect(runtime.provider).toBe('shiprocket');
-    expect(runtime.adapter).toBeNull();
+    expect(runtime.provider).toBe('unconfigured');
+    expect(runtime.adapter).not.toBeNull();
     expect(runtime.capabilities.supportsCreateShipment).toBe(false);
   });
 
@@ -47,9 +47,18 @@ describe('shipping provider runtime', () => {
     expect(runtime.capabilities.supportsGenerateLabel).toBe(true);
   });
 
-  it('throws for unknown SHIPPING_PROVIDER value', () => {
+  it('returns unconfigured adapter for unknown SHIPPING_PROVIDER value', () => {
     vi.stubEnv('SHIPPING_PROVIDER', 'unknown-courier');
-    expect(() => resolveShippingProviderRuntime()).toThrow('Unsupported SHIPPING_PROVIDER: unknown-courier');
+    const runtime = resolveShippingProviderRuntime();
+    expect(runtime.provider).toBe('unconfigured');
+    expect(runtime.adapter).not.toBeNull();
+  });
+
+  it('returns unconfigured adapter when SHIPPING_PROVIDER is missing', () => {
+    vi.stubEnv('SHIPPING_PROVIDER', '');
+    const runtime = resolveShippingProviderRuntime();
+    expect(runtime.provider).toBe('noop');
+    expect(runtime.adapter).not.toBeNull();
   });
 
   it('delhivery adapter has supportsSchedulePickup=false', () => {

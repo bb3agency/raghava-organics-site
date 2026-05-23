@@ -366,6 +366,9 @@ export class CartService {
         serviceable: result.serviceable
       };
     } catch (error) {
+      if (error instanceof AppError && error.code === ERROR_CODES.CONFIG_NOT_READY) {
+        throw error;
+      }
       this.fastify.log?.warn(
         {
           error: redactSensitiveData(error),

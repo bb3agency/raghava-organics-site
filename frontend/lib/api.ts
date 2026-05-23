@@ -5,6 +5,7 @@ export class ApiError extends Error {
     public code: string,
     message: string,
     public status: number,
+    public details?: ApiErrorBody["details"],
   ) {
     super(message);
     this.name = "ApiError";
@@ -43,6 +44,7 @@ function parseApiError(body: unknown, status: number): ApiError {
       err?.code ?? "UNKNOWN_ERROR",
       err?.message ?? "Request failed",
       status,
+      err?.details,
     );
   }
   return new ApiError("UNKNOWN_ERROR", "Request failed", status);

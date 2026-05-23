@@ -198,6 +198,7 @@ Tier 6 contract-specific checks:
 - [ ] No `noop` providers in `.env` (Razorpay, Delhivery/Shiprocket must be real test credentials)
 - [ ] No placeholder secrets — all provider keys confirmed real
 - [ ] All provider dry-run evidence logged in `CLIENT_INTEGRATION_CREDENTIAL_REGISTER_TEMPLATE.md`
+- [ ] Backend Phase 7 readiness confirms `docs/PHASE7_VPS_DEPLOY_INCIDENT_PLAYBOOK.md` gates are green before frontend VPS deploy begins
 - [ ] `frontend-agent-rules.md` diff vs `.agents/rules/dev-rules.md` is clean
 
 **Phase 5 gate cleared on:** [DATE] — signed off by: [NAME]

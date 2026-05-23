@@ -51,6 +51,14 @@ function isPlaceholderValue(value: string | undefined): boolean {
   );
 }
 
+function resolveProviderMode(
+  key: 'PAYMENT_PROVIDER' | 'SHIPPING_PROVIDER',
+  fallback: string
+): string {
+  const raw = (process.env[key] ?? '').trim().toLowerCase();
+  return raw || fallback;
+}
+
 function assertEnvNotPlaceholder(name: string): void {
   const value = requireEnv(name);
   if (isPlaceholderValue(value)) {
@@ -61,9 +69,6 @@ function assertEnvNotPlaceholder(name: string): void {
 function validateSecureFlowEnv(): void {
   const nodeEnv = getNormalizedNodeEnv();
   const isStrictProfile = isProductionLikeProfile(nodeEnv);
-  if (isStrictProfile && !process.env.REPLAY_APPROVAL_TOKEN?.trim()) {
-    throw new Error('Missing required env var: REPLAY_APPROVAL_TOKEN (secure replay approval)');
-  }
   const redisUrl = process.env.REDIS_URL?.trim();
   if (!redisUrl) {
     return;
@@ -85,9 +90,12 @@ function validateSecureFlowEnv(): void {
 function validateConditionalEnv(): void {
   const nodeEnv = getNormalizedNodeEnv();
   const isStrictProfile = isProductionLikeProfile(nodeEnv);
-  const paymentProvider = (process.env.PAYMENT_PROVIDER ?? 'razorpay').trim().toLowerCase();
+  const paymentProviderRaw = (process.env.PAYMENT_PROVIDER ?? '').trim().toLowerCase();
+  const paymentProvider = resolveProviderMode('PAYMENT_PROVIDER', 'razorpay');
 
-  if (paymentProvider === 'razorpay') {
+  if (!paymentProviderRaw) {
+    // Allow first bootstrap without provider mode set in env.
+  } else if (paymentProvider === 'razorpay') {
     requireEnv('RAZORPAY_KEY_ID');
     requireEnv('RAZORPAY_KEY_SECRET');
     requireEnv('RAZORPAY_WEBHOOK_SECRET');
@@ -125,8 +133,11 @@ function validateConditionalEnv(): void {
     requireEnv('OTEL_EXPORTER_OTLP_ENDPOINT');
   }
 
-  const shippingProvider = (process.env.SHIPPING_PROVIDER ?? 'delhivery').trim().toLowerCase();
-  if (shippingProvider === 'delhivery') {
+  const shippingProviderRaw = (process.env.SHIPPING_PROVIDER ?? '').trim().toLowerCase();
+  const shippingProvider = resolveProviderMode('SHIPPING_PROVIDER', 'delhivery');
+  if (!shippingProviderRaw) {
+    // Allow first bootstrap without provider mode set in env.
+  } else if (shippingProvider === 'delhivery') {
     requireEnv('DELHIVERY_API_KEY');
     if (isStrictProfile) {
       requireEnv('DELHIVERY_WEBHOOK_TOKEN');
@@ -142,7 +153,6 @@ function validateConditionalEnv(): void {
   }
 
   if (isStrictProfile) {
-    requireEnv('OPS_METRICS_TOKEN');
     requireEnv('OPS_DB_ENCRYPTION_KEY');
   }
 }
@@ -154,33 +164,32 @@ function validateProductionProviderSafetyEnv(): void {
     return;
   }
 
-  const paymentProvider = (process.env.PAYMENT_PROVIDER ?? 'razorpay').trim().toLowerCase();
-  const shippingProvider = (process.env.SHIPPING_PROVIDER ?? 'delhivery').trim().toLowerCase();
+  const paymentProviderRaw = (process.env.PAYMENT_PROVIDER ?? '').trim().toLowerCase();
+  const shippingProviderRaw = (process.env.SHIPPING_PROVIDER ?? '').trim().toLowerCase();
 
-  if (paymentProvider === 'noop') {
+  if (paymentProviderRaw === 'noop') {
     throw new Error(
       `Invalid PAYMENT_PROVIDER=noop when NODE_ENV=${nodeEnv}. 'noop' is allowed only in development-like profiles (development/test).`
     );
   }
-  if (shippingProvider === 'noop') {
+  if (shippingProviderRaw === 'noop') {
     throw new Error(
       `Invalid SHIPPING_PROVIDER=noop when NODE_ENV=${nodeEnv}. 'noop' is allowed only in development-like profiles (development/test).`
     );
   }
 
-  if (!['razorpay', 'cod'].includes(paymentProvider)) {
-    throw new Error(`Unsupported PAYMENT_PROVIDER in production-like profile: ${paymentProvider}`);
+  if (paymentProviderRaw && !['razorpay', 'cod'].includes(paymentProviderRaw)) {
+    throw new Error(`Unsupported PAYMENT_PROVIDER in production-like profile: ${paymentProviderRaw}`);
   }
-  if (!['delhivery', 'shiprocket'].includes(shippingProvider)) {
-    throw new Error(`Unsupported SHIPPING_PROVIDER in production-like profile: ${shippingProvider}`);
+  if (shippingProviderRaw && !['delhivery', 'shiprocket'].includes(shippingProviderRaw)) {
+    throw new Error(`Unsupported SHIPPING_PROVIDER in production-like profile: ${shippingProviderRaw}`);
   }
 
   assertEnvNotPlaceholder('JWT_SECRET');
   assertEnvNotPlaceholder('JWT_REFRESH_SECRET');
-  assertEnvNotPlaceholder('OPS_METRICS_TOKEN');
   assertEnvNotPlaceholder('OPS_DB_ENCRYPTION_KEY');
 
-  if (paymentProvider === 'razorpay') {
+  if (paymentProviderRaw === 'razorpay') {
     assertEnvNotPlaceholder('RAZORPAY_KEY_ID');
     assertEnvNotPlaceholder('RAZORPAY_KEY_SECRET');
     assertEnvNotPlaceholder('RAZORPAY_WEBHOOK_SECRET');
@@ -189,11 +198,11 @@ function validateProductionProviderSafetyEnv(): void {
     }
   }
 
-  if (shippingProvider === 'delhivery') {
+  if (shippingProviderRaw === 'delhivery') {
     assertEnvNotPlaceholder('DELHIVERY_API_KEY');
     assertEnvNotPlaceholder('DELHIVERY_WEBHOOK_TOKEN');
   }
-  if (shippingProvider === 'shiprocket') {
+  if (shippingProviderRaw === 'shiprocket') {
     assertEnvNotPlaceholder('SHIPROCKET_EMAIL');
     assertEnvNotPlaceholder('SHIPROCKET_PASSWORD');
     assertEnvNotPlaceholder('SHIPROCKET_WEBHOOK_TOKEN');

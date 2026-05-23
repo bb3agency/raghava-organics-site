@@ -331,9 +331,9 @@ Use **`migrate deploy`** in production (not `migrate dev`). Migration SQL lives 
 Now build and start the Node application services:
 
 ```bash
-docker compose up -d --build
-docker compose logs -f backend
-docker compose logs -f workers
+docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml up -d --build backend workers
+docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml logs -f backend
+docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml logs -f workers
 ```
 
 Verify:
@@ -835,7 +835,7 @@ git push origin main
 # Option B: manual on VPS (immediate, bypasses pipeline)
 cd /var/www/<client-id>/backend
 git checkout <previous-good-sha>
-docker compose up -d --build
+docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml up -d --build backend workers
 ```
 
 ### Downtime expectation
@@ -930,3 +930,18 @@ STOREFRONT_PORT=3101
 ---
 
 > **Starting a new client deployment?** Use **[`docs/CLIENT_ONBOARDING_EXECUTION_ORDER.md`](CLIENT_ONBOARDING_EXECUTION_ORDER.md)** as the top-level sequenced runbook. It covers all 13 phases (intake → credentials → VPS baseline → backend config → dry-runs → frontend build → VPS deploy → ops bootstrap → admin provisioning → frontend deploy → webhook registration → go-live validation → DNS cutover → post-handoff) with evidence gates and links back to this guide and every other canonical doc. Do not use this VPS guide alone to sequence a first-time deployment.
+
+---
+
+## Phase 7 live incident reference (May 2026)
+
+If backend/workers enter restart loops during initial VPS bootstrap, use:
+
+- `docs/PHASE7_VPS_DEPLOY_INCIDENT_PLAYBOOK.md`
+
+This incident playbook includes exact signatures and remediations for:
+- Prisma CLI version mismatch (`npx prisma` pulling v7),
+- host PostgreSQL routing from containers (`host.docker.internal` / bridge IP / `pg_hba.conf`),
+- compose postgres bind conflict on `5432`,
+- DB-overlay runtime config readiness gaps (surfaced via `/api/v1/health/ready` `runtimeConfigMissingKeys`),
+- production-safe compose command sequence.

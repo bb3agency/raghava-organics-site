@@ -53,18 +53,24 @@ export async function registerHealthRoutes(fastify: FastifyInstance): Promise<vo
     async (_request, reply) => {
       const payload = await healthService.checkReadiness();
       if (payload.status !== 'ready') {
+        const runtimeMissingFields = payload.runtimeConfigMissingKeys.map((key) => ({
+          field: key,
+          rule: 'runtime_required_before_launch',
+          message: `${key} must be configured in Ops runtime overlay before go-live`
+        }));
         return reply.code(503).send({
           success: false,
           error: {
             code: ERROR_CODES.INTERNAL_ERROR,
-            message: 'Readiness check failed: dependencies or worker freshness degraded',
+            message: 'Readiness check failed: dependencies, queue freshness, or runtime config are not ready',
             statusCode: 503,
             details: {
               kind: 'dependency',
               hintKey: 'readiness_not_ready',
               retryable: true,
               retryAfterSeconds: 15,
-              remediation: 'Inspect dependency status and queue worker freshness.'
+              remediation: 'Inspect dependency status, queue worker freshness, and runtime config completeness.',
+              fields: runtimeMissingFields
             }
           }
         });

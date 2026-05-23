@@ -51,7 +51,7 @@ export const healthReadinessSchema = {
     200: {
       type: 'object',
       additionalProperties: false,
-      required: ['status', 'timestamp', 'version', 'database', 'redis', 'degradationMode', 'queues'],
+      required: ['status', 'timestamp', 'version', 'database', 'redis', 'degradationMode', 'queues', 'runtimeConfigMissingKeys'],
       properties: {
         status: { type: 'string', maxLength: 20 },
         timestamp: { type: 'string', maxLength: 64 },
@@ -69,6 +69,11 @@ export const healthReadinessSchema = {
             oldestWaitingAgeSeconds: { type: 'number', minimum: 0, maximum: 10000000 },
             workerFreshness: { type: 'string', maxLength: 20 }
           }
+        },
+        runtimeConfigMissingKeys: {
+          type: 'array',
+          maxItems: 200,
+          items: { type: 'string', maxLength: 128 }
         }
       }
     },

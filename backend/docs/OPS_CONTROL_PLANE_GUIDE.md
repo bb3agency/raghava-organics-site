@@ -792,3 +792,13 @@ Before deploying ops UI:
 **Document Status:** Complete and verified for production deployment.
 **Last Updated:** June 2026
 **Security Verification:** All gates passing
+
+---
+
+### Phase 7 deploy dependency note (May 2026)
+
+Ops UI configuration happens after the first successful API/worker bootstrap. If strict startup keys or provider mode prerequisites are missing, the stack may restart-loop before Ops login is possible. Use:
+
+- `docs/PHASE7_VPS_DEPLOY_INCIDENT_PLAYBOOK.md`
+
+to complete env/network/compose preflight before entering Ops bootstrap.

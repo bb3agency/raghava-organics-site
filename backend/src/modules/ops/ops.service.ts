@@ -1242,8 +1242,9 @@ export class OpsService {
       }
     }
 
-    const paymentProvider = (draftEnv.PAYMENT_PROVIDER ?? 'razorpay').trim().toLowerCase();
-    if (!['razorpay', 'cod', 'noop'].includes(paymentProvider)) {
+    const paymentProviderRaw = (draftEnv.PAYMENT_PROVIDER ?? '').trim().toLowerCase();
+    const paymentProvider = paymentProviderRaw || 'razorpay';
+    if (paymentProviderRaw && !['razorpay', 'cod', 'noop'].includes(paymentProvider)) {
       errors.push({
         key: 'PAYMENT_PROVIDER',
         code: 'UNSUPPORTED_PROVIDER',
@@ -1251,8 +1252,9 @@ export class OpsService {
       });
     }
 
-    const shippingProvider = (draftEnv.SHIPPING_PROVIDER ?? 'delhivery').trim().toLowerCase();
-    if (!['delhivery', 'shiprocket', 'noop'].includes(shippingProvider)) {
+    const shippingProviderRaw = (draftEnv.SHIPPING_PROVIDER ?? '').trim().toLowerCase();
+    const shippingProvider = shippingProviderRaw || 'delhivery';
+    if (shippingProviderRaw && !['delhivery', 'shiprocket', 'noop'].includes(shippingProvider)) {
       errors.push({
         key: 'SHIPPING_PROVIDER',
         code: 'UNSUPPORTED_PROVIDER',

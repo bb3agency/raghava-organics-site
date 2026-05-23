@@ -1814,3 +1814,5 @@ This section is an evidence-oriented implementation starter, not legal certifica
 ---
 
 > **Deploying for a client?** The infrastructure requirements (§2–§3), API contract (§4, §7), auth model (§6), webhook specs (§7.10–§7.12), and constraint table (§13) are all enforced as evidence gates in the client onboarding process. The full sequenced runbook — from infra provisioning and secret management through domain/TLS wiring, frontend integration, and go-live validation — is **[`docs/CLIENT_ONBOARDING_EXECUTION_ORDER.md`](docs/CLIENT_ONBOARDING_EXECUTION_ORDER.md)**.
+
+> **Phase 7 runtime incident companion:** `docs/PHASE7_VPS_DEPLOY_INCIDENT_PLAYBOOK.md` (startup failure signatures and remediation sequence).

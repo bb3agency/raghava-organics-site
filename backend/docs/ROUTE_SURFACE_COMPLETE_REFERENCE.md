@@ -64,7 +64,7 @@ Full health check — checks DB, Redis, queue connectivity. Returns structured s
 Liveness probe only. Returns `{ status: 'ok' }` as long as the process is alive.
 
 ### `GET /api/v1/health/ready`
-Readiness probe — checks all dependencies are reachable. Used by load balancer / K8s.
+Readiness probe — checks dependencies, worker freshness, and runtime config completeness. Response includes `runtimeConfigMissingKeys`; go-live requires this array to be empty.
 
 ### `GET /api/v1/products`
 Public product listing with filters. Query params: `page`, `limit`, `search`, `category`, `minPrice`, `maxPrice`, `sort`. Returns paginated product list.
@@ -964,3 +964,11 @@ All POST/PATCH/DELETE routes support `Idempotency-Key` header:
 ---
 
 *Source files: `src/modules/**/*.routes.ts` — this document is derived from a full read of all route files and is accurate as of the time of writing. Re-derive from source if routes change.*
+
+---
+
+### Phase 7 incident note (May 2026)
+
+No route signatures changed during the Phase 7 VPS deploy incident. The outage pattern was purely runtime/deployment configuration (env strictness, compose strategy, host DB routing). For remediation flow, see:
+
+- `docs/PHASE7_VPS_DEPLOY_INCIDENT_PLAYBOOK.md`

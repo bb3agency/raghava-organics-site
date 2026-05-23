@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { OpsConfigForms } from "@/components/ops/OpsConfigForms";
+import { OpsRuntimeReadinessCard } from "@/components/ops/OpsRuntimeReadinessCard";
 import { getApiErrorMessageWithHint } from "@/lib/error-messages";
 import {
   getOpsConfigOverviewClient,
@@ -23,6 +24,7 @@ function OpsConfigContent() {
   const [overview, setOverview] = useState<OpsConfigOverview | null>(null);
   const [stored, setStored] = useState<OpsStoredConfig | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [refreshSignal, setRefreshSignal] = useState(0);
 
   useEffect(() => {
     void Promise.all([getOpsConfigOverviewClient(), getOpsStoredConfigClient()])
@@ -52,7 +54,8 @@ function OpsConfigContent() {
           Bootstrap keys are read-only in ops UI — change via deployment env.
         </p>
       </header>
-      <OpsConfigForms />
+      <OpsRuntimeReadinessCard refreshSignal={refreshSignal} />
+      <OpsConfigForms onConfigSaved={() => setRefreshSignal((prev) => prev + 1)} />
       <pre className="max-h-96 overflow-auto rounded-md border bg-muted/30 p-3 text-xs">
         {JSON.stringify({ overview, stored }, null, 2)}
       </pre>

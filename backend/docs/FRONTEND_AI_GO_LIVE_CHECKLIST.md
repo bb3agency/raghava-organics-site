@@ -271,6 +271,7 @@ All security gates passing:
 - `npm run ci:reliability-gates` → exit 0
 - Security tests → all pass
 - E2E tests → all pass
+- Backend VPS Phase 7 stabilization evidence references `docs/PHASE7_VPS_DEPLOY_INCIDENT_PLAYBOOK.md` (strict env/startup + DB routing gates)
 
 ---
 

@@ -358,6 +358,7 @@ Optional evidence: short screen recording walking **dashboard → order → ship
 | --- | --- |
 | **Full onboarding execution order (start here)** | **`docs/CLIENT_ONBOARDING_EXECUTION_ORDER.md`** |
 | VPS / Docker / Nginx | `ECOM_MASTER.md` §5, `docs/CLIENT_VPS_SETUP_GUIDE.md` |
+| Phase 7 restart-loop triage | `docs/PHASE7_VPS_DEPLOY_INCIDENT_PLAYBOOK.md` |
 | All routes & envelopes | `TRD.md` §4, §7 |
 | Queues & webhooks | `TRD.md` §10 |
 | Provider setup and key lifecycle | `docs/THIRD_PARTY_INTEGRATIONS_SETUP_AND_KEY_MANAGEMENT_GUIDE.md` |

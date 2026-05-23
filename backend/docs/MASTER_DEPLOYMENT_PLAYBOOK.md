@@ -700,16 +700,16 @@ Use this section as the final release candidate sign-off artifact before deploym
 If release validation regresses after deploy:
 
 ```bash
-# 1) Roll back app image/container to previous known-good tag
-docker compose pull backend workers
-docker compose up -d backend workers
+# 1) Roll back app image/container to previous known-good tag (VPS)
+docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml pull backend workers
+docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml up -d backend workers
 
 # 2) Verify health + metrics
-curl -f http://localhost:3000/api/v1/health
-curl -f http://localhost:3000/api/v1/ops/metrics
+curl -f http://127.0.0.1:<BACKEND_PORT>/api/v1/health
+curl -f http://127.0.0.1:<BACKEND_PORT>/api/v1/health/ready
 
 # 3) Validate queue processing resumes
-docker compose logs workers --tail 200
+docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml logs workers --tail 200
 
 # 4) Re-run critical smoke checks
 npm run release:guard
@@ -877,8 +877,8 @@ npx prisma migrate deploy
 # If this DB was previously built from the old incremental migrations (pre-squash):
 # npx prisma migrate resolve --applied 0_init
 
-# 7. Start backend Docker stack
-docker compose up -d --build
+# 7. Start backend Docker stack (VPS host-Postgres mode)
+docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml up -d --build backend workers
 curl http://127.0.0.1:3001/api/v1/health  # verify
 
 # 7. Build and start frontend (FIRST-TIME BOOTSTRAP ONLY)
@@ -940,7 +940,7 @@ Perform these steps on staging before switching traffic:
 
 ### 5.5 Production `.env` checklist
 
-> **Pre-launch audit.** Verify each bootstrap variable below before running `docker compose up -d --build`.
+> **Pre-launch audit.** Verify each bootstrap variable below before running `docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml up -d --build backend workers`.
 > All application env vars are injected via `env_file: .env`. See §2.2.1 for how that works.
 >
 > **DB-overlay keys (provider credentials, webhook tokens, ops-security params) are NOT set here** — they are stored in `OpsConfigSecret` via the Ops UI after Phase 5.6 ops bootstrap. They appear as commented stubs in `.env.example`.
@@ -975,7 +975,7 @@ All provider credentials, webhook tokens, and ops-security parameters are stored
 | Webhook security | `RAZORPAY_WEBHOOK_ALLOWLIST_CIDR`, `DELHIVERY_WEBHOOK_TOKEN`, `SHIPROCKET_WEBHOOK_TOKEN`, skew windows | Strict-profile requires non-empty |
 | Notifications | `RESEND_API_KEY`, `RESEND_FROM`, `MSG91_AUTH_KEY`, `FAST2SMS_API_KEY`, `META_WHATSAPP_*`, `SMS_PROVIDER` | `RESEND_FROM` must use verified domain |
 | Invoice | `INVOICE_STORAGE_ROOT` | PDF storage path — must be writable |
-| Ops security | `OPS_METRICS_TOKEN`, `REPLAY_APPROVAL_TOKEN`, `TRUSTED_PROXY_ALLOWLIST_CIDR` | Strict-profile requires these |
+| Ops security | `OPS_METRICS_TOKEN`, `REPLAY_APPROVAL_TOKEN`, `TRUSTED_PROXY_ALLOWLIST_CIDR` | DB-overlay runtime keys; enforce before go-live via `/health/ready` |
 
 **After editing `.env`:**
 
@@ -2328,6 +2328,12 @@ docker exec ecom-postgres psql -U postgres -d ecom_template -c "SELECT 1;"
 *End of Master Deployment Playbook — this document is the single source of truth for building and deploying client e-commerce projects.*
 
 ---
+
+### Phase 7 incident companion (May 2026)
+
+For real-world failure signatures and copy/paste remediations observed during live VPS deploy (Prisma version drift, host-vs-container DB routing, compose postgres port collision, missing strict env keys, restart-loop triage), see:
+
+- `docs/PHASE7_VPS_DEPLOY_INCIDENT_PLAYBOOK.md`
 
 > **New to onboarding a client?** The sequenced, phase-by-phase execution order — intake → third-party accounts → VPS baseline → backend clone/configure → staging dry-runs → frontend build → VPS deploy → ops bootstrap → admin provisioning → frontend deploy → webhook registration → go-live validation → DNS cutover → post-handoff — is consolidated in **[`docs/CLIENT_ONBOARDING_EXECUTION_ORDER.md`](CLIENT_ONBOARDING_EXECUTION_ORDER.md)**. Use that runbook as the top-level execution checklist; it references this playbook and all other canonical docs for detail.
 

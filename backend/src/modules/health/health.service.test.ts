@@ -38,6 +38,7 @@ describe('HealthService queue freshness threshold', () => {
     expect(result.queues.workerFreshness).toBe('stale');
     expect(result.status).toBe('not_ready');
     expect(result.degradationMode).toBe('queue_stale');
+    expect(result.runtimeConfigMissingKeys).toEqual([]);
   });
 
   it('uses configured threshold when env is valid', async () => {
@@ -50,5 +51,26 @@ describe('HealthService queue freshness threshold', () => {
     expect(result.queues.workerFreshness).toBe('fresh');
     expect(result.status).toBe('ready');
     expect(result.degradationMode).toBe('none');
+    expect(result.runtimeConfigMissingKeys).toEqual([]);
+  });
+
+  it('reports runtime config missing in production-like profile', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('PAYMENT_PROVIDER', '');
+    vi.stubEnv('SHIPPING_PROVIDER', '');
+    vi.stubEnv('SMS_PROVIDER', '');
+    vi.stubEnv('OPS_METRICS_TOKEN', '');
+    vi.stubEnv('REPLAY_APPROVAL_TOKEN', '');
+    const fastify = buildFastify(10);
+    const service = new HealthService(fastify as never);
+
+    const result = await service.checkReadiness();
+
+    expect(result.status).toBe('not_ready');
+    expect(result.degradationMode).toBe('runtime_config_missing');
+    expect(result.runtimeConfigMissingKeys).toContain('PAYMENT_PROVIDER');
+    expect(result.runtimeConfigMissingKeys).toContain('SHIPPING_PROVIDER');
+    expect(result.runtimeConfigMissingKeys).toContain('OPS_METRICS_TOKEN');
+    expect(result.runtimeConfigMissingKeys).toContain('REPLAY_APPROVAL_TOKEN');
   });
 });

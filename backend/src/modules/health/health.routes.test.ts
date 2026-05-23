@@ -66,8 +66,11 @@ describe('health routes', () => {
     const response = await app.inject({ method: 'GET', url: '/api/v1/health/ready' });
 
     expect(response.statusCode).toBe(503);
-    const payload = response.json() as { error: { message: string } };
+    const payload = response.json() as {
+      error: { message: string; details: { fields?: Array<{ field: string }> } };
+    };
     expect(payload.error.message).toContain('Readiness check failed');
+    expect(Array.isArray(payload.error.details.fields)).toBe(true);
 
     await app.close();
   });

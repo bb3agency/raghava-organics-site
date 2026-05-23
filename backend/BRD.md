@@ -767,3 +767,5 @@ Execution evidence for this section must include:
 ---
 
 > **Deploying for a client?** The AC-01–AC-18 acceptance criteria are validated during Phase 11 (go-live validation) of the client onboarding process. The full sequenced runbook that gets you to that gate — covering infra provisioning, secret management, domain/TLS wiring, frontend build, and validation — is **[`docs/CLIENT_ONBOARDING_EXECUTION_ORDER.md`](docs/CLIENT_ONBOARDING_EXECUTION_ORDER.md)**.
+
+> **Phase 7 deployment reliability note:** Use **[`docs/PHASE7_VPS_DEPLOY_INCIDENT_PLAYBOOK.md`](docs/PHASE7_VPS_DEPLOY_INCIDENT_PLAYBOOK.md)** as mandatory troubleshooting context for VPS backend bootstrap/startup failures.

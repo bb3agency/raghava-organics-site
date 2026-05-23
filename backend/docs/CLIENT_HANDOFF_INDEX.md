@@ -13,9 +13,10 @@ Use this document as the primary entrypoint after development and go-live for cl
 1. `docs/PRODUCTION_FIRST_DEPLOY_CHECKLIST.md` — **start here for first deploy**: Phase 1/2 model, bootstrap keys (incl. `RESEND_API_KEY`), ops-newuser flow, Ops UI config.
 2. `docs/CLIENT_GO_LIVE_VALIDATION_GUIDE.md` — final validation and acceptance walkthrough.
 3. `docs/CLIENT_VPS_SETUP_GUIDE.md` — VPS/runtime setup and operations baseline.
-4. `docs/THIRD_PARTY_INTEGRATIONS_SETUP_AND_KEY_MANAGEMENT_GUIDE.md` — provider keys, rotation, and incident drill policy.
-5. `docs/CLIENT_INTEGRATION_CREDENTIAL_REGISTER_TEMPLATE.md` — instantiate and maintain credential ownership trail.
-6. `docs/BACKEND_GO_LIVE_CHECKLIST.md` and `docs/FRONTEND_AI_GO_LIVE_CHECKLIST.md` — release evidence gates.
+4. `docs/PHASE7_VPS_DEPLOY_INCIDENT_PLAYBOOK.md` — incident-derived Phase 7 troubleshooting and hardening gates.
+5. `docs/THIRD_PARTY_INTEGRATIONS_SETUP_AND_KEY_MANAGEMENT_GUIDE.md` — provider keys, rotation, and incident drill policy.
+6. `docs/CLIENT_INTEGRATION_CREDENTIAL_REGISTER_TEMPLATE.md` — instantiate and maintain credential ownership trail.
+7. `docs/BACKEND_GO_LIVE_CHECKLIST.md` and `docs/FRONTEND_AI_GO_LIVE_CHECKLIST.md` — release evidence gates.
 
 ## Delivery Records (Client-Specific Artifacts)
 

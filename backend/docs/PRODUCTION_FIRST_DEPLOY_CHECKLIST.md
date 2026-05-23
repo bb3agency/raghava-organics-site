@@ -295,6 +295,9 @@ All provider credentials and runtime config are set via **Ops UI → Config**. N
 # Health check
 curl https://your-domain.com/api/v1/health/live
 
+# Runtime readiness (must be empty before go-live)
+curl https://your-domain.com/api/v1/health/ready
+
 # Admin login flow (should return 200)
 curl -X POST https://your-domain.com/api/v1/auth/admin/request-otp \
   -H "Content-Type: application/json" \
@@ -308,6 +311,7 @@ curl -X POST https://your-domain.com/api/v1/auth/admin/request-otp \
 - `OPS_DB_ENCRYPTION_KEY` — **never rotate without a migration plan** — all ops secrets are encrypted with this key
 - `NODE_ENV=production` — must be set in production; disables dev-only behaviours (plaintext OTP in Redis, verbose errors)
 - After Phase 2, `RESEND_API_KEY` in `.env` becomes a fallback only — Ops UI value takes precedence
+- Backend can boot with DB-overlay runtime keys missing, but go-live is blocked until `/api/v1/health/ready` shows `runtimeConfigMissingKeys: []`.
 
 ---
 
@@ -326,5 +330,6 @@ When running `npm run ci:reliability-gates` or `npm run contract:admin` locally:
 
 - `docs/MASTER_DEPLOYMENT_PLAYBOOK.md` — full VPS + Docker setup
 - `docs/CLIENT_VPS_SETUP_GUIDE.md` — server provisioning
+- `docs/PHASE7_VPS_DEPLOY_INCIDENT_PLAYBOOK.md` — live incident-derived Phase 7 troubleshooting map (env, networking, compose overlay)
 - `docs/THIRD_PARTY_INTEGRATIONS_SETUP_AND_KEY_MANAGEMENT_GUIDE.md` — credential register & rotation
 - `.env.example` — canonical env reference with Phase 1/2 annotations

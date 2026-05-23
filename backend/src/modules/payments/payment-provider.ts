@@ -6,7 +6,7 @@ import { NoopPaymentAdapter } from './adapters/noop-payment.adapter';
 import { RazorpayAdapter } from './adapters/razorpay.adapter';
 
 export type PaymentProviderRuntime = {
-  provider: 'razorpay' | 'noop' | 'cod';
+  provider: 'razorpay' | 'noop' | 'cod' | 'unconfigured';
   failoverEnabled: boolean;
   capabilities: {
     supportsOrderCreation: boolean;
@@ -15,6 +15,30 @@ export type PaymentProviderRuntime = {
   };
   adapter: PaymentProviderAdapter;
 };
+
+class MissingConfigPaymentAdapter implements PaymentProviderAdapter {
+  constructor(private readonly reason: string) {}
+
+  private fail(): never {
+    throw new AppError(ERROR_CODES.CONFIG_NOT_READY, this.reason, 503);
+  }
+
+  async createOrder(): Promise<never> {
+    this.fail();
+  }
+
+  verifyPaymentSignature(): boolean {
+    this.fail();
+  }
+
+  verifyWebhookSignature(): boolean {
+    this.fail();
+  }
+
+  async initiateRefund(): Promise<never> {
+    this.fail();
+  }
+}
 
 function parseBooleanFlag(value: string | undefined): boolean {
   return value === '1' || value === 'true';
@@ -97,11 +121,27 @@ class CircuitBreakerPaymentAdapter implements PaymentProviderAdapter {
 
 export function resolvePaymentProviderRuntime(runtimeConfig: NodeJS.ProcessEnv = process.env): PaymentProviderRuntime {
   const isTest = runtimeConfig.NODE_ENV === 'test';
-  const explicitProvider = runtimeConfig.PAYMENT_PROVIDER;
+  const explicitProvider = runtimeConfig.PAYMENT_PROVIDER?.trim().toLowerCase();
   const testDefault = isTest && !runtimeConfig.RAZORPAY_WEBHOOK_SECRET ? 'noop' : 'razorpay';
-  const primary = (explicitProvider ?? testDefault).trim().toLowerCase();
+  const primary = explicitProvider && explicitProvider.length > 0 ? explicitProvider : testDefault;
   const testImplicitRazorpay = isTest && !explicitProvider;
   const failoverEnabled = parseBooleanFlag(runtimeConfig.PAYMENT_PROVIDER_FAILOVER_ENABLED);
+
+  if (!explicitProvider && !isTest) {
+    return {
+      provider: 'unconfigured',
+      failoverEnabled,
+      capabilities: {
+        supportsOrderCreation: false,
+        supportsRefunds: false,
+        supportsWebhookVerification: false
+      },
+      adapter: new MissingConfigPaymentAdapter(
+        'Payment provider is not configured. Set PAYMENT_PROVIDER in Ops config and restart.'
+      )
+    };
+  }
+
   if (primary === 'noop') {
     return {
       provider: 'noop',
@@ -127,20 +167,40 @@ export function resolvePaymentProviderRuntime(runtimeConfig: NodeJS.ProcessEnv =
     };
   }
   if (primary !== 'razorpay') {
-    throw new AppError(ERROR_CODES.INTERNAL_ERROR, `Unsupported PAYMENT_PROVIDER: ${primary}`, 500);
+    return {
+      provider: 'unconfigured',
+      failoverEnabled,
+      capabilities: {
+        supportsOrderCreation: false,
+        supportsRefunds: false,
+        supportsWebhookVerification: false
+      },
+      adapter: new MissingConfigPaymentAdapter(
+        `Unsupported PAYMENT_PROVIDER: ${primary}. Configure PAYMENT_PROVIDER via Ops config.`
+      )
+    };
   }
 
   const keyId = (runtimeConfig.RAZORPAY_KEY_ID ?? '').trim();
-  if (!keyId && !testImplicitRazorpay) {
-    throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'RAZORPAY_KEY_ID must be set for razorpay provider', 500);
-  }
   const keySecret = (runtimeConfig.RAZORPAY_KEY_SECRET ?? '').trim();
-  if (!keySecret && !testImplicitRazorpay) {
-    throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'RAZORPAY_KEY_SECRET must be set for razorpay provider', 500);
-  }
   const webhookSecret = (runtimeConfig.RAZORPAY_WEBHOOK_SECRET ?? '').trim();
-  if (!webhookSecret) {
-    throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'RAZORPAY_WEBHOOK_SECRET must be set for razorpay provider', 500);
+  if ((!keyId || !keySecret || !webhookSecret) && !testImplicitRazorpay) {
+    const missing: string[] = [];
+    if (!keyId) missing.push('RAZORPAY_KEY_ID');
+    if (!keySecret) missing.push('RAZORPAY_KEY_SECRET');
+    if (!webhookSecret) missing.push('RAZORPAY_WEBHOOK_SECRET');
+    return {
+      provider: 'unconfigured',
+      failoverEnabled,
+      capabilities: {
+        supportsOrderCreation: false,
+        supportsRefunds: false,
+        supportsWebhookVerification: false
+      },
+      adapter: new MissingConfigPaymentAdapter(
+        `Payment provider config missing: ${missing.join(', ')}. Configure via Ops UI and restart.`
+      )
+    };
   }
 
   return {

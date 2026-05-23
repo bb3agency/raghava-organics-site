@@ -895,3 +895,13 @@ Before going live, verify:
 | CORS | 10/10 | Strict origin validation |
 
 **Overall Security Rating: 10/10 — Maximum Protection Achieved**  
+
+---
+
+### VPS Phase 7 readiness dependency (May 2026)
+
+Frontend integration and go-live steps assume backend Phase 7 is stable (no restart loops). Before frontend VPS work, confirm the incident-derived backend startup gates in:
+
+- `docs/PHASE7_VPS_DEPLOY_INCIDENT_PLAYBOOK.md`
+
+especially strict env completeness (`REPLAY_APPROVAL_TOKEN`, provider mode keys), production compose overlay usage, and host-Postgres routing checks.

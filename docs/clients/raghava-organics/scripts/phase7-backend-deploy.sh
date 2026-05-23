@@ -19,6 +19,9 @@ log "Ensure Redis is not published publicly (comment ports: in docker-compose.ym
 log "Installing backend deps (required — bare 'npx prisma' pulls Prisma 7 and breaks migrate)..."
 npm ci
 
+log "Running bootstrap env preflight (hard-fails bootstrap keys, warns on DB-overlay runtime keys)..."
+node scripts/verify-client-bootstrap-env.mjs
+
 log "Starting Redis (prod overlay — no Compose Postgres; host DB on :5432)..."
 docker compose -p "$COMPOSE_PROJECT" "${COMPOSE_FILES[@]}" up -d redis
 
@@ -36,11 +39,14 @@ docker compose -p "$COMPOSE_PROJECT" "${COMPOSE_FILES[@]}" up -d --build backend
 BACKEND_PORT=$(grep -E '^BACKEND_PORT=' .env | cut -d= -f2 | tr -d '[:space:]')
 BACKEND_PORT="${BACKEND_PORT:-3001}"
 HEALTH_URL="http://127.0.0.1:${BACKEND_PORT}/api/v1/health"
+READY_URL="http://127.0.0.1:${BACKEND_PORT}/api/v1/health/ready"
 
 log "Health check: $HEALTH_URL"
 for i in $(seq 1 30); do
   if curl -fsS "$HEALTH_URL" | grep -q '"database":"connected"'; then
     curl -fsS "$HEALTH_URL"
+    log "Readiness snapshot (expected may be not_ready until Phase 8 Ops config):"
+    curl -sS "$READY_URL" || true
     log "Phase 7 backend health OK"
     exit 0
   fi

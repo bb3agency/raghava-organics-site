@@ -75,13 +75,16 @@
 
 - [ ] Backend repo cloned / updated at `/var/www/<client-id>/backend`
 - [ ] `.env` copied from secure source (not git) — no `replace_with` placeholders
-- [ ] `.env` contains **bootstrap keys only**: `CLIENT_ID`, `DATABASE_URL`, `REDIS_URL`, `REDIS_PASSWORD`, `JWT_SECRET`, `JWT_REFRESH_SECRET`, `OPS_DB_ENCRYPTION_KEY`, `OPS_COOKIE_SECRET`, `AUDIT_ANCHOR_SECRET`, feature flags, OTEL vars
+- [ ] `.env` contains all startup-required **bootstrap** keys: `CLIENT_ID`, `DATABASE_URL`, `REDIS_URL`, `REDIS_PASSWORD`, `JWT_SECRET`, `JWT_REFRESH_SECRET`, `OPS_DB_ENCRYPTION_KEY`, `OPS_COOKIE_SECRET`, `AUDIT_ANCHOR_SECRET`, `PORT=3000`, `BACKEND_PORT=<host-port>`
   - **Also set** `RESEND_API_KEY` and `RESEND_FROM` as live values — required for `node scripts/ops-newuser.mjs` (Phase 1 only; manage via Ops UI after first ops login). See `docs/PRODUCTION_FIRST_DEPLOY_CHECKLIST.md`.
-  > All other provider credentials (`RAZORPAY_*`, `DELHIVERY_*`, `MSG91_*`, etc.) and ops-security params must **not** be in `.env` — they are DB-overlay keys provisioned via Ops UI after Phase 8. See `docs/ENV_VS_DB_CONFIG_REFERENCE.md`.
+  - Runtime provider/security keys are DB-overlay managed and can be absent at first boot.
+  - Missing runtime keys must be visible in `GET /api/v1/health/ready` via `runtimeConfigMissingKeys`.
+- [ ] `node scripts/verify-client-bootstrap-env.mjs` passes before any container restart
 - [ ] `npm ci --omit=dev` — passes
 - [ ] `npm run prisma:migrate:deploy` — passes (all migrations applied)
-- [ ] `docker compose -p <client-id> up -d --build` — all containers start
+- [ ] `docker compose -f docker-compose.yml -f docker-compose.prod.yml -p <client-id> up -d --build backend workers` — all containers start without launching compose postgres
 - [ ] `docker ps` shows all containers `Up`
+- [ ] `curl -fsS http://127.0.0.1:<BACKEND_PORT>/api/v1/health/ready` shows `runtimeConfigMissingKeys: []` before go-live
 
 ### 7.3 Nginx configuration
 
@@ -134,7 +137,7 @@
 - [ ] Setup completed at `https://<domain>/ops/setup` — ops user account created
 - [ ] Email OTP login verified — `GET /api/v1/ops/session` returns 200
 - [ ] **DB-overlay keys provisioned via Ops UI** (`POST /api/v1/ops/config/save` — requires ops auth + email OTP): all provider credentials (`RAZORPAY_*`, `DELHIVERY_*` or `SHIPROCKET_*`, `RESEND_API_KEY`, `MSG91_AUTH_KEY` / `FAST2SMS_API_KEY`, `META_WHATSAPP_*` if enabled) and ops-security params (`OPS_METRICS_TOKEN`, `REPLAY_APPROVAL_TOKEN`, etc.) saved and encrypted in `OpsConfigSecret`
-- [ ] Containers restarted to apply DB-overlay: `docker compose -p <client-id> up -d backend workers`
+- [ ] Containers restarted to apply DB-overlay: `docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml up -d backend workers`
 - [ ] Ops status endpoint tested: `GET /api/v1/ops/session` returns 200 with email-OTP verification
 - [ ] Ops config save hardening validated: `POST /api/v1/ops/config/save` requires OTP and returns masked/encrypted persistence metadata
 - [ ] Expired invite cleanup verified: `POST /api/v1/ops/invites/cleanup-expired` accessible to ops users

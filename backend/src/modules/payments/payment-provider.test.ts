@@ -16,31 +16,43 @@ describe('payment provider runtime', () => {
     expect(runtime.capabilities.supportsOrderCreation).toBe(true);
   });
 
-  it('fails fast when razorpay key id is missing', () => {
+  it('returns unconfigured runtime when razorpay key id is missing', async () => {
     vi.stubEnv('PAYMENT_PROVIDER', 'razorpay');
     vi.stubEnv('RAZORPAY_KEY_ID', '');
     vi.stubEnv('RAZORPAY_KEY_SECRET', 'rzp_secret');
     vi.stubEnv('RAZORPAY_WEBHOOK_SECRET', 'rzp_webhook');
 
-    expect(() => resolvePaymentProviderRuntime()).toThrow('RAZORPAY_KEY_ID must be set');
+    const runtime = resolvePaymentProviderRuntime();
+    expect(runtime.provider).toBe('unconfigured');
+    await expect(
+      runtime.adapter.createOrder({ amount: 100, currency: 'INR', receipt: 'x' })
+    ).rejects.toThrow('Payment provider config missing');
   });
 
-  it('fails fast when razorpay key secret is missing', () => {
+  it('returns unconfigured runtime when razorpay key secret is missing', async () => {
     vi.stubEnv('PAYMENT_PROVIDER', 'razorpay');
     vi.stubEnv('RAZORPAY_KEY_ID', 'rzp_key');
     vi.stubEnv('RAZORPAY_KEY_SECRET', '');
     vi.stubEnv('RAZORPAY_WEBHOOK_SECRET', 'rzp_webhook');
 
-    expect(() => resolvePaymentProviderRuntime()).toThrow('RAZORPAY_KEY_SECRET must be set');
+    const runtime = resolvePaymentProviderRuntime();
+    expect(runtime.provider).toBe('unconfigured');
+    await expect(
+      runtime.adapter.createOrder({ amount: 100, currency: 'INR', receipt: 'x' })
+    ).rejects.toThrow('Payment provider config missing');
   });
 
-  it('fails fast when razorpay webhook secret is missing', () => {
+  it('returns unconfigured runtime when razorpay webhook secret is missing', async () => {
     vi.stubEnv('PAYMENT_PROVIDER', 'razorpay');
     vi.stubEnv('RAZORPAY_KEY_ID', 'rzp_key');
     vi.stubEnv('RAZORPAY_KEY_SECRET', 'rzp_secret');
     vi.stubEnv('RAZORPAY_WEBHOOK_SECRET', '');
 
-    expect(() => resolvePaymentProviderRuntime()).toThrow('RAZORPAY_WEBHOOK_SECRET must be set');
+    const runtime = resolvePaymentProviderRuntime();
+    expect(runtime.provider).toBe('unconfigured');
+    await expect(
+      runtime.adapter.createOrder({ amount: 100, currency: 'INR', receipt: 'x' })
+    ).rejects.toThrow('Payment provider config missing');
   });
 
   it('supports noop provider selection for fallback drills', () => {
@@ -50,6 +62,16 @@ describe('payment provider runtime', () => {
     expect(runtime.provider).toBe('noop');
     expect(runtime.failoverEnabled).toBe(true);
     expect(runtime.capabilities.supportsWebhookVerification).toBe(false);
+  });
+
+  it('returns unconfigured runtime when PAYMENT_PROVIDER is missing', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('PAYMENT_PROVIDER', '');
+    const runtime = resolvePaymentProviderRuntime();
+    expect(runtime.provider).toBe('unconfigured');
+    await expect(
+      runtime.adapter.createOrder({ amount: 100, currency: 'INR', receipt: 'x' })
+    ).rejects.toThrow('Payment provider is not configured');
   });
 
   it('resolves COD provider with correct capabilities', () => {

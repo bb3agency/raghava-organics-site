@@ -471,6 +471,7 @@ The `npm run ci:reliability-gates` command runs the full quality pipeline:
 | [`docs/MASTER_DEPLOYMENT_PLAYBOOK.md`](docs/MASTER_DEPLOYMENT_PLAYBOOK.md) | Build-time engineering playbook (internal SOP) |
 | [`docs/CLIENT_VPS_SETUP_GUIDE.md`](docs/CLIENT_VPS_SETUP_GUIDE.md) | VPS provisioning step-by-step |
 | [`docs/PRODUCTION_FIRST_DEPLOY_CHECKLIST.md`](docs/PRODUCTION_FIRST_DEPLOY_CHECKLIST.md) | **Phase 1/2 setup model** — bootstrap keys vs Ops UI config, ops-newuser flow |
+| [`docs/PHASE7_VPS_DEPLOY_INCIDENT_PLAYBOOK.md`](docs/PHASE7_VPS_DEPLOY_INCIDENT_PLAYBOOK.md) | Live-incident Phase 7 runbook — strict env preflight, Prisma version pinning, host-Postgres routing, and crash-loop triage |
 | [`docs/CLIENT_GO_LIVE_VALIDATION_GUIDE.md`](docs/CLIENT_GO_LIVE_VALIDATION_GUIDE.md) | Pre-launch validation checklist |
 | [`docs/OPS_CONTROL_PLANE_GUIDE.md`](docs/OPS_CONTROL_PLANE_GUIDE.md) | Detailed ops control plane setup, API usage, and frontend integration flow |
 | [`docs/THIRD_PARTY_INTEGRATIONS_SETUP_AND_KEY_MANAGEMENT_GUIDE.md`](docs/THIRD_PARTY_INTEGRATIONS_SETUP_AND_KEY_MANAGEMENT_GUIDE.md) | Provider account setup, env mapping, and API key lifecycle runbook |

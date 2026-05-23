@@ -394,3 +394,11 @@ All responses include:
 - Sensitive data redaction in logs
 
 **Status: PRODUCTION-READY (June 2026)**
+
+---
+
+### Deployment incident note (May 2026)
+
+No route contract or endpoint shape changed due to the Phase 7 VPS incident. The failures were deploy/runtime configuration issues (env completeness, compose strategy, and host-Postgres routing). Operational remediation is documented in:
+
+- `docs/PHASE7_VPS_DEPLOY_INCIDENT_PLAYBOOK.md`

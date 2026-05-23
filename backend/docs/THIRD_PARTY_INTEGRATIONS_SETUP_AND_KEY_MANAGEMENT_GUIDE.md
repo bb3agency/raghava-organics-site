@@ -583,7 +583,7 @@ Related ops configuration hardening:
 3. Save the new key via Ops UI (`POST /api/v1/ops/config/save`) — requires ops auth, `ops:write` permission, and email OTP challenge.
 4. If supported, keep overlap window before revoking old key:
    - Example: `RAZORPAY_WEBHOOK_SECRET_OLD` during transition.
-5. Restart containers to apply the DB-overlay change: `docker compose up -d backend workers`.
+5. Restart containers to apply the DB-overlay change: `docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml up -d backend workers`.
 6. Verify live traffic succeeds with new credential.
 7. Revoke old key/secret after verification window.
 
@@ -645,7 +645,7 @@ Rotation execution checklist:
 1. Generate new provider credential.
 2. Update vault entry and credential register metadata.
 3. Save new credential via Ops UI (`POST /api/v1/ops/config/save`) — ops auth + email OTP required.
-4. Restart containers: `docker compose up -d backend workers`.
+4. Restart containers: `docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml up -d backend workers`.
 5. Verify provider flow in staging/production-safe path.
 6. Revoke old credential after overlap window.
 
@@ -657,7 +657,7 @@ Drill sequence (`revoke -> regenerate -> ops-save -> restart -> verify`):
 1. Revoke selected credential in provider dashboard.
 2. Regenerate replacement credential.
 3. Update vault and save new credential via Ops UI (`POST /api/v1/ops/config/save`) — ops auth + email OTP required.
-4. Restart containers: `docker compose up -d backend workers` (not restart-only).
+4. Restart containers: `docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml up -d backend workers` (not restart-only).
 5. Verify affected flow succeeds and old credential is unusable.
 6. Record elapsed time, blockers, and remediation actions.
 
@@ -702,3 +702,17 @@ Compare-Object (Get-Content ..\backend\frontend-agent-rules.md) (Get-Content .ag
 ---
 
 > **Provider setup spans multiple onboarding phases.** Phase 1 (account creation and initial credentials), Phase 4 (staging dry-runs per provider per vertical slice), Phase 10 (live webhook URL registration after VPS + HTTPS are active), and Phase 13 (90-day rotation calendar and compromise drill setup). The full sequenced execution order for all of these is in **[`docs/CLIENT_ONBOARDING_EXECUTION_ORDER.md`](CLIENT_ONBOARDING_EXECUTION_ORDER.md)**. Never complete all provider setup in one batch at the start — dry-runs must happen alongside the frontend slice that integrates each provider.
+
+---
+
+## Phase 7 bootstrap caveat (May 2026)
+
+First VPS startup now hard-fails only on bootstrap keys. DB-overlay runtime keys (provider/security) can be configured after first Ops login. For deterministic startup:
+
+- pass bootstrap env preflight before container startup,
+- complete provider/security config in Ops UI,
+- restart backend/workers and confirm `GET /api/v1/health/ready` returns `runtimeConfigMissingKeys: []` before launch.
+
+Reference:
+
+- `docs/PHASE7_VPS_DEPLOY_INCIDENT_PLAYBOOK.md`

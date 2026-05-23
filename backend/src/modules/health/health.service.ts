@@ -1,4 +1,5 @@
 import { FastifyInstance } from 'fastify';
+import { findMissingStrictOpsConfigKeys } from '@modules/ops/ops-config-contract';
 
 export type DependencyStatus = 'connected' | 'disconnected';
 export type ReadinessStatus = 'ready' | 'not_ready';
@@ -18,13 +19,14 @@ export type ReadinessCheckResult = {
   version: string;
   database: DependencyStatus;
   redis: DependencyStatus;
-  degradationMode: 'none' | 'database_down' | 'redis_down' | 'queue_stale';
+  degradationMode: 'none' | 'database_down' | 'redis_down' | 'queue_stale' | 'runtime_config_missing';
   queues: {
     waiting: number;
     active: number;
     oldestWaitingAgeSeconds: number;
     workerFreshness: WorkerFreshness;
   };
+  runtimeConfigMissingKeys: string[];
 };
 
 export class HealthService {
@@ -48,7 +50,13 @@ export class HealthService {
     const database = await this.pingDatabase();
     const redis = await this.pingRedis();
     const queueSummary = await this.queueSummary();
-    const isReady = database === 'connected' && redis === 'connected' && queueSummary.workerFreshness !== 'stale';
+    const strictProfile = this.isProductionLikeProfile();
+    const runtimeConfigMissingKeys = strictProfile ? findMissingStrictOpsConfigKeys(process.env) : [];
+    const isReady =
+      database === 'connected' &&
+      redis === 'connected' &&
+      queueSummary.workerFreshness !== 'stale' &&
+      runtimeConfigMissingKeys.length === 0;
     const degradationMode =
       database !== 'connected'
         ? 'database_down'
@@ -56,6 +64,8 @@ export class HealthService {
           ? 'redis_down'
           : queueSummary.workerFreshness === 'stale'
             ? 'queue_stale'
+            : runtimeConfigMissingKeys.length > 0
+              ? 'runtime_config_missing'
             : 'none';
 
     return {
@@ -65,7 +75,8 @@ export class HealthService {
       database,
       redis,
       degradationMode,
-      queues: queueSummary
+      queues: queueSummary,
+      runtimeConfigMissingKeys
     };
   }
 
@@ -93,6 +104,11 @@ export class HealthService {
     } catch {
       return 'disconnected';
     }
+  }
+
+  private isProductionLikeProfile(): boolean {
+    const env = (process.env.NODE_ENV ?? 'development').trim().toLowerCase();
+    return env !== 'development' && env !== 'test';
   }
 
   private async queueSummary(): Promise<{

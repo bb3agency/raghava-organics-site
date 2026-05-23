@@ -504,12 +504,19 @@ git clone https://github.com/your-org/ecom-backend-template .
 # Copy .env from secure source (never git)
 # scp from local, or pull from secrets vault
 
-npm ci --omit=dev
-npm run prisma:migrate:deploy    # applies all migrations
-docker compose -p <client-id> up -d --build
+# Strict preflight before any restart loop triage
+npm ci
+node scripts/verify-client-bootstrap-env.mjs
+
+# Host-side migrate uses localhost/127.0.0.1 (container hostname is not valid on host shell)
+DATABASE_URL="$(grep -E '^DATABASE_URL=' .env | cut -d= -f2- | sed 's/host\.docker\.internal/127.0.0.1/')" \
+  npx prisma migrate deploy --schema prisma/schema.prisma
+
+# VPS production: use compose overlay to avoid starting compose postgres
+docker compose -f docker-compose.yml -f docker-compose.prod.yml -p <client-id> up -d --build backend workers
 ```
 
-Reference: `docs/CLIENT_VPS_SETUP_GUIDE.md` §6–§7 (first deploy) and §22 (automated CD setup).
+Reference: `docs/CLIENT_VPS_SETUP_GUIDE.md` §6–§7 (first deploy), §22 (automated CD setup), and `docs/PHASE7_VPS_DEPLOY_INCIDENT_PLAYBOOK.md`.
 
 ### 7.3 — Nginx configuration
 
@@ -625,8 +632,8 @@ docker compose -p <client-id> logs workers --tail=50
 
 9. **Restart containers after config save** so `applyOpsConfigRuntimeOverlay()` applies the new DB-stored values before provider initialization:
    ```bash
-   docker compose -p <client-id> up -d backend workers
-   docker compose -p <client-id> logs backend --tail=50
+   docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml up -d backend workers
+   docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml logs backend --tail=50
    # Verify: no startup errors, provider init logs show correct provider
    ```
 

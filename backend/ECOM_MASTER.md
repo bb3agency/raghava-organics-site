@@ -1638,3 +1638,5 @@ Drop-in additions — each is a self-contained Fastify plugin, added to `app.ts`
 ---
 
 > **Deploying this template for a new client?** The end-to-end sequenced execution order — from client intake and third-party account setup, through VPS provisioning, backend configuration, staging dry-runs, frontend build, VPS deploy, ops bootstrap, admin provisioning, webhook registration, go-live validation, DNS cutover, and post-handoff maintenance setup — is consolidated in **[`docs/CLIENT_ONBOARDING_EXECUTION_ORDER.md`](docs/CLIENT_ONBOARDING_EXECUTION_ORDER.md)**. All isolation rules defined in this document (§5, §11) are enforced as evidence gates in that runbook.
+
+> **Operational addendum (May 2026):** For deterministic Phase 7 backend startup on VPS (strict env, Prisma version pinning, host-Postgres routing, compose overlay), use **[`docs/PHASE7_VPS_DEPLOY_INCIDENT_PLAYBOOK.md`](docs/PHASE7_VPS_DEPLOY_INCIDENT_PLAYBOOK.md)**.

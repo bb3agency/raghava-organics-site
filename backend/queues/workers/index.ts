@@ -40,7 +40,6 @@ function validateWorkerEnv(): void {
   const isStrictProfile = env !== 'development' && env !== 'test';
   if (isStrictProfile) {
     requireWorkerEnv('DATABASE_URL');
-    requireWorkerEnv('REPLAY_APPROVAL_TOKEN');
     requireWorkerEnv('OPS_DB_ENCRYPTION_KEY');
   }
   if (isEnabled(process.env.NOTIFY_EMAIL_ENABLED)) {
@@ -62,8 +61,11 @@ function validateWorkerEnv(): void {
   if (isEnabled(process.env.OTEL_TRACING_ENABLED)) {
     requireWorkerEnv('OTEL_EXPORTER_OTLP_ENDPOINT');
   }
-  const shippingProvider = (process.env.SHIPPING_PROVIDER ?? 'delhivery').trim().toLowerCase();
-  if (shippingProvider === 'delhivery') {
+  const shippingProviderRaw = (process.env.SHIPPING_PROVIDER ?? '').trim().toLowerCase();
+  const shippingProvider = shippingProviderRaw || 'delhivery';
+  if (!shippingProviderRaw) {
+    // Allow first bootstrap without provider mode set in env.
+  } else if (shippingProvider === 'delhivery') {
     requireWorkerEnv('DELHIVERY_API_KEY');
     if (isStrictProfile) {
       requireWorkerEnv('DELHIVERY_WEBHOOK_TOKEN');

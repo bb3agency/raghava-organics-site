@@ -197,6 +197,7 @@
 
 - [ ] `docs/BACKEND_GO_LIVE_CHECKLIST.md` — fully ticked (local environment)
 - [ ] `docs/FRONTEND_AI_GO_LIVE_CHECKLIST.md` — fully ticked
+- [ ] `docs/PHASE7_VPS_DEPLOY_INCIDENT_PLAYBOOK.md` reviewed before Phase 6 handoff (strict env + networking gates captured)
 - [ ] No `replace_with` placeholders in `.env` (confirmed via `findstr /i "replace_with" .env`)
 - [ ] No `noop` payment or shipping provider active
 - [ ] Race-condition hardening verified: CAS-hardened service tests pass (`ops.service.test.ts`, `auth.service.mfa-refresh.test.ts`, `admin-invites.service.test.ts`, `reconciliation.worker.test.ts`, `idempotency.test.ts`)

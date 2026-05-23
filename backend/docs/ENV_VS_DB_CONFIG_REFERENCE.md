@@ -510,3 +510,16 @@ All Redis keys and pub/sub channels follow the project-wide convention: `<module
 | `system:restart` | `cart-cleanup.worker.ts` (via `publishRestartSignal()`) | `src/main.ts` (API process), `queues/workers/index.ts` (worker process) | `{ jobId, requestedBy, scheduledFor }` JSON | Constant `SYSTEM_RESTART_CHANNEL` exported from `src/common/restart/system-restart.ts`. Both subscribers initiate graceful shutdown on receipt. Subscriber ioredis connections are closed inside each process's `shutdown()` / `gracefulShutdown()` function — no dangling connections on SIGINT/SIGTERM. |
 
 ---
+
+## Phase 7 strict-startup reminder (May 2026 incident learnings)
+
+Before first production boot on VPS, startup-required strict-profile keys must already exist in `.env` even if later managed in Ops UI. At minimum:
+
+- `REPLAY_APPROVAL_TOKEN`
+- `OPS_METRICS_TOKEN`
+- explicit provider mode and compatible keys (`PAYMENT_PROVIDER`, `SHIPPING_PROVIDER`, and required provider credentials for the chosen mode)
+
+See:
+
+- `docs/PHASE7_VPS_DEPLOY_INCIDENT_PLAYBOOK.md`
+- `scripts/verify-client-bootstrap-env.mjs`

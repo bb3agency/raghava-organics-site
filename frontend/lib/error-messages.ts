@@ -22,6 +22,8 @@ const ERROR_MESSAGES: Record<string, string> = {
   PINCODE_NOT_SERVICEABLE: "Delivery is not available for this pincode. Try another address.",
   RATE_LIMIT_EXCEEDED: "Too many attempts. Please wait a moment and try again.",
   ORDER_NOT_FOUND: "Order not found.",
+  CONFIG_NOT_READY:
+    "Required runtime configuration is missing. Complete Ops Config and restart backend/workers.",
   INTERNAL_ERROR: "Something went wrong. Please try again.",
   UNKNOWN_ERROR: "Something went wrong. Please try again.",
 };
@@ -87,6 +89,16 @@ export function isConflictErrorCode(code: string): boolean {
 export function getApiErrorMessageWithHint(error: unknown): string {
   const message = getApiErrorMessage(error);
   if (error instanceof ApiError) {
+    if (error.code === "CONFIG_NOT_READY") {
+      const fields = error.details?.fields ?? [];
+      const missingKeys = fields
+        .map((item) => item.field)
+        .filter((field) => typeof field === "string" && field.trim().length > 0);
+      if (missingKeys.length > 0) {
+        return `${message} Missing keys: ${missingKeys.join(", ")}.`;
+      }
+      return message;
+    }
     if (isConflictErrorCode(error.code) || error.status === 409) {
       return `${message} Do not resubmit the same idempotency key for a new user action.`;
     }

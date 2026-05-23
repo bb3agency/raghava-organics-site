@@ -168,8 +168,15 @@ function isEnabled(value: string | undefined): boolean {
   return (value ?? '').trim().toLowerCase() === 'true';
 }
 
-function getProviderValue(draftEnv: NodeJS.ProcessEnv, key: string, fallback: string): string {
-  return (draftEnv[key] ?? fallback).trim().toLowerCase();
+const OPS_PROVIDER_DEFAULTS: Record<string, string> = {
+  PAYMENT_PROVIDER: 'razorpay',
+  SHIPPING_PROVIDER: 'delhivery',
+  SMS_PROVIDER: 'msg91'
+};
+
+function getProviderValue(draftEnv: NodeJS.ProcessEnv, key: string): string {
+  const raw = (draftEnv[key] ?? '').trim().toLowerCase();
+  return raw || (OPS_PROVIDER_DEFAULTS[key] ?? '');
 }
 
 export function isOpsConfigMutableKey(key: string): boolean {
@@ -200,7 +207,11 @@ export function computeRequiredOpsConfigKeys(draftEnv: NodeJS.ProcessEnv, strict
   const required = new Set<string>(['PAYMENT_PROVIDER', 'SHIPPING_PROVIDER', 'SMS_PROVIDER']);
 
   for (const [providerKey, providerMap] of Object.entries(OPS_CONFIG_REQUIRED_BY_PROVIDER)) {
-    const providerValue = getProviderValue(draftEnv, providerKey, providerKey === 'PAYMENT_PROVIDER' ? 'razorpay' : 'delhivery');
+    const hasExplicitProvider = (draftEnv[providerKey] ?? '').trim().length > 0;
+    if (!hasExplicitProvider) {
+      continue;
+    }
+    const providerValue = getProviderValue(draftEnv, providerKey);
     for (const key of providerMap[providerValue] ?? []) {
       required.add(key);
     }
@@ -220,7 +231,11 @@ export function computeRequiredOpsConfigKeys(draftEnv: NodeJS.ProcessEnv, strict
     }
 
     for (const [providerKey, strictMap] of Object.entries(OPS_CONFIG_STRICT_ADDITIONAL_REQUIRED_BY_PROVIDER)) {
-      const providerValue = getProviderValue(draftEnv, providerKey, providerKey === 'PAYMENT_PROVIDER' ? 'razorpay' : 'delhivery');
+      const hasExplicitProvider = (draftEnv[providerKey] ?? '').trim().length > 0;
+      if (!hasExplicitProvider) {
+        continue;
+      }
+      const providerValue = getProviderValue(draftEnv, providerKey);
       for (const key of strictMap[providerValue] ?? []) {
         required.add(key);
       }

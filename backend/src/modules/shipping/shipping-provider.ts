@@ -6,7 +6,7 @@ import ShiprocketAdapter from './adapters/shiprocket.adapter';
 import { NoopShippingAdapter } from './adapters/noop-shipping.adapter';
 
 export type ShippingProviderRuntime = {
-  provider: 'delhivery' | 'shiprocket' | 'noop';
+  provider: 'delhivery' | 'shiprocket' | 'noop' | 'unconfigured';
   failoverEnabled: boolean;
   capabilities: {
     supportsCreateShipment: boolean;
@@ -17,6 +17,42 @@ export type ShippingProviderRuntime = {
   };
   adapter: ShippingProviderAdapter | null;
 };
+
+class MissingConfigShippingAdapter implements ShippingProviderAdapter {
+  constructor(private readonly reason: string) {}
+
+  private fail(): never {
+    throw new AppError(ERROR_CODES.CONFIG_NOT_READY, this.reason, 503);
+  }
+
+  async createShipment(): Promise<never> {
+    this.fail();
+  }
+
+  async trackShipment(): Promise<never> {
+    this.fail();
+  }
+
+  async cancelShipment(): Promise<never> {
+    this.fail();
+  }
+
+  async checkServiceability(): Promise<never> {
+    this.fail();
+  }
+
+  async calculateDeliveryRate(): Promise<never> {
+    this.fail();
+  }
+
+  async schedulePickup(): Promise<never> {
+    this.fail();
+  }
+
+  async generateLabel(): Promise<never> {
+    this.fail();
+  }
+}
 
 function parseBooleanFlag(value: string | undefined): boolean {
   return value === '1' || value === 'true';
@@ -143,7 +179,9 @@ class CircuitBreakerShippingAdapter implements ShippingProviderAdapter {
 }
 
 export function resolveShippingProviderRuntime(runtimeConfig: NodeJS.ProcessEnv = process.env): ShippingProviderRuntime {
-  const primary = (runtimeConfig.SHIPPING_PROVIDER ?? 'delhivery').trim().toLowerCase();
+  const explicitProvider = runtimeConfig.SHIPPING_PROVIDER?.trim().toLowerCase();
+  const hasExplicitProvider = Boolean(explicitProvider && explicitProvider.length > 0);
+  const primary = hasExplicitProvider ? (explicitProvider as string) : 'delhivery';
   const failoverEnabled = parseBooleanFlag(runtimeConfig.SHIPPING_PROVIDER_FAILOVER_ENABLED);
 
   if (primary === 'noop') {
@@ -165,8 +203,22 @@ export function resolveShippingProviderRuntime(runtimeConfig: NodeJS.ProcessEnv 
     const email = runtimeConfig.SHIPROCKET_EMAIL?.trim();
     const password = runtimeConfig.SHIPROCKET_PASSWORD?.trim();
     if (!email || !password) {
+      if (!hasExplicitProvider) {
+        return {
+          provider: 'noop',
+          failoverEnabled,
+          capabilities: {
+            supportsCreateShipment: false,
+            supportsTracking: false,
+            supportsRateCalculation: false,
+            supportsSchedulePickup: false,
+            supportsGenerateLabel: false
+          },
+          adapter: new NoopShippingAdapter()
+        };
+      }
       return {
-        provider: 'shiprocket',
+        provider: 'unconfigured',
         failoverEnabled,
         capabilities: {
           supportsCreateShipment: false,
@@ -175,7 +227,9 @@ export function resolveShippingProviderRuntime(runtimeConfig: NodeJS.ProcessEnv 
           supportsSchedulePickup: false,
           supportsGenerateLabel: false
         },
-        adapter: null
+        adapter: new MissingConfigShippingAdapter(
+          'Shipping provider config missing: SHIPROCKET_EMAIL/SHIPROCKET_PASSWORD. Configure via Ops UI and restart.'
+        )
       };
     }
     const baseUrl = runtimeConfig.SHIPROCKET_BASE_URL?.trim();
@@ -197,13 +251,8 @@ export function resolveShippingProviderRuntime(runtimeConfig: NodeJS.ProcessEnv 
   }
 
   if (primary !== 'delhivery') {
-    throw new AppError(ERROR_CODES.INTERNAL_ERROR, `Unsupported SHIPPING_PROVIDER: ${primary}`, 500);
-  }
-
-  const apiKey = runtimeConfig.DELHIVERY_API_KEY;
-  if (!apiKey) {
     return {
-      provider: 'delhivery',
+      provider: 'unconfigured',
       failoverEnabled,
       capabilities: {
         supportsCreateShipment: false,
@@ -212,7 +261,41 @@ export function resolveShippingProviderRuntime(runtimeConfig: NodeJS.ProcessEnv 
         supportsSchedulePickup: false,
         supportsGenerateLabel: false
       },
-      adapter: null
+      adapter: new MissingConfigShippingAdapter(
+        `Unsupported SHIPPING_PROVIDER: ${primary}. Configure SHIPPING_PROVIDER via Ops config.`
+      )
+    };
+  }
+
+  const apiKey = runtimeConfig.DELHIVERY_API_KEY;
+  if (!apiKey) {
+    if (!hasExplicitProvider) {
+      return {
+        provider: 'noop',
+        failoverEnabled,
+        capabilities: {
+          supportsCreateShipment: false,
+          supportsTracking: false,
+          supportsRateCalculation: false,
+          supportsSchedulePickup: false,
+          supportsGenerateLabel: false
+        },
+        adapter: new NoopShippingAdapter()
+      };
+    }
+    return {
+      provider: 'unconfigured',
+      failoverEnabled,
+      capabilities: {
+        supportsCreateShipment: false,
+        supportsTracking: false,
+        supportsRateCalculation: false,
+        supportsSchedulePickup: false,
+        supportsGenerateLabel: false
+      },
+      adapter: new MissingConfigShippingAdapter(
+        'Shipping provider config missing: DELHIVERY_API_KEY. Configure via Ops UI and restart.'
+      )
     };
   }
 
@@ -234,10 +317,10 @@ export function resolveShippingProviderRuntime(runtimeConfig: NodeJS.ProcessEnv 
 
 export function createShippingProvider(runtimeConfig: NodeJS.ProcessEnv = process.env): ShippingProviderAdapter | null {
   const runtime = resolveShippingProviderRuntime(runtimeConfig);
-  if (!runtime.adapter) {
-    return null;
+  if (runtime.provider === 'noop') {
+    return runtime.adapter as ShippingProviderAdapter;
   }
   const failureThreshold = Number(runtimeConfig.SHIPPING_CB_FAILURE_THRESHOLD ?? 5);
   const cooldownMs = Number(runtimeConfig.SHIPPING_CB_COOLDOWN_MS ?? 30_000);
-  return new CircuitBreakerShippingAdapter(runtime.adapter, failureThreshold, cooldownMs);
+  return new CircuitBreakerShippingAdapter(runtime.adapter as ShippingProviderAdapter, failureThreshold, cooldownMs);
 }

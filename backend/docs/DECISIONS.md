@@ -437,6 +437,16 @@ Endpoint-criticality tiers (auth/catalog/cart/checkout/webhook/admin/health). Pr
 ## [2026-04-27] Inventory restock restricted to cancellation transitions
 Admin status updates restock only on `CANCELLED` for captured payments — prevents stock inflation on forward transitions. **Affects:** `orders.service.ts`.
 
+## [2026-05-23] Phase 7 VPS deploy must fail-fast on strict env + host DB routing prerequisites
+Adopted a deterministic Phase 7 preflight model after live incident replay:
+- `npm ci` before any Prisma command (avoid accidental Prisma major drift from floating `npx`),
+- strict env verification before container startup,
+- host-side Prisma migrate uses `127.0.0.1` mapping,
+- production startup uses compose overlay (`docker-compose.prod.yml`) so host PostgreSQL remains authoritative and compose `postgres` is not started,
+- explicit troubleshooting playbook canonicalized in `docs/PHASE7_VPS_DEPLOY_INCIDENT_PLAYBOOK.md`.
+
+This decision prevents restart-loop troubleshooting from starting after container launch; failures are now surfaced as preflight errors.
+
 ## [2026-04-27] Payment verify + webhook: cross-entry dedupe + atomic status claim
 Webhook + verify flows share Redis/JobId dedup. Worker atomically claims `PENDING_PAYMENT → CONFIRMED`. `POST /payments/verify` returns success for already-confirmed same-provider payment (idempotent). **Affects:** `orders.service.ts`, `order-processing.worker.ts`.
 

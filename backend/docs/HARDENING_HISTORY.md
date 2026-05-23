@@ -534,3 +534,30 @@ All core documentation synchronized with final security model:
 - MSG91 adapter now normalizes accepted Indian phone inputs into `91XXXXXXXXXX` and rejects invalid formats before provider calls.
 - Analytics replay audit metadata now stores redacted/hash-safe `eventKey` values instead of raw identifiers.
 - Added route-level schema/guard coverage for dashboard and analytics admin endpoints, plus provider hardening tests for notification bootstrapping and MSG91 number normalization.
+
+---
+
+## [2026-05-23] Phase 7 VPS startup hardening from live incident
+
+**Observed failure chain (live deploy):**
+- Missing `backend/.env` on VPS blocked phase script.
+- Host shell `npx prisma` pulled Prisma v7 when `npm ci` was skipped, causing schema validation drift from pinned v6 expectations.
+- Host-side migrate attempted with `host.docker.internal` (container-only hostname), causing false DB reachability failures.
+- Plain compose startup attempted to start compose `postgres` and collided with host PostgreSQL on port `5432`.
+- Production image omitted `scripts/lib/logger`, causing bootstrap `MODULE_NOT_FOUND` crash loops.
+- Host PostgreSQL initially listened on localhost only; `pg_hba.conf` and UFW did not allow docker/private bridge source ranges.
+- After DB path fix, strict runtime env checks failed on missing `REPLAY_APPROVAL_TOKEN`, then provider keys (`RAZORPAY_KEY_ID`) due to provider mode mismatch.
+
+**Template-level hardening applied:**
+- Added strict startup incident runbook: `docs/PHASE7_VPS_DEPLOY_INCIDENT_PLAYBOOK.md`.
+- Updated deploy script `docs/clients/raghava-organics/scripts/phase7-backend-deploy.sh` to:
+  - run `npm ci` first,
+  - run `node scripts/verify-client-bootstrap-env.mjs` preflight,
+  - run host-side migrate with runtime `DATABASE_URL` rewritten to `127.0.0.1`,
+  - use production compose overlay (`docker-compose.prod.yml`) for backend/workers startup.
+- Added `backend/docker-compose.prod.yml` to prevent compose postgres dependency in VPS mode.
+- Updated `.dockerignore` + `Dockerfile` so `scripts/lib/logger` is present in production image.
+- Expanded `scripts/verify-client-bootstrap-env.mjs` to validate strict startup requirements (`REPLAY_APPROVAL_TOKEN`, `OPS_METRICS_TOKEN`, provider-mode key completeness, `PORT=3000`).
+
+**Outcome:**
+- Phase 7 now has explicit deterministic preflight gates for env completeness, DB routing, compose strategy, and crash-loop triage before proceeding to Nginx/TLS and Ops bootstrap.

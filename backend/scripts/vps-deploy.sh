@@ -46,6 +46,8 @@ cd "$CLIENT_PATH"
 
 COMPOSE_FILES=(-f docker-compose.yml -f docker-compose.prod.yml)
 [ -f docker-compose.prod.yml ] || fail "docker-compose.prod.yml not found — required for VPS (host Postgres)"
+COMPOSE_PROJECT="${CLIENT_ID:-$(grep -E '^CLIENT_ID=' .env | cut -d= -f2 | tr -d '[:space:]')}"
+[ -n "$COMPOSE_PROJECT" ] || COMPOSE_PROJECT="client-backend"
 
 # ---------------------------------------------------------------------------
 # 1. Pull latest code from main
@@ -63,10 +65,22 @@ fi
 log "SHA verified: $CURRENT_SHA"
 
 # ---------------------------------------------------------------------------
+# 1.25 Install lockfile-pinned dependencies (prevents Prisma CLI drift)
+# ---------------------------------------------------------------------------
+log "Installing lockfile-pinned dependencies..."
+npm ci
+
+# ---------------------------------------------------------------------------
+# 1.5 Strict env preflight before build/swap
+# ---------------------------------------------------------------------------
+log "Running strict env preflight..."
+node scripts/verify-client-bootstrap-env.mjs
+
+# ---------------------------------------------------------------------------
 # 2. Build new Docker image (old containers remain live during build)
 # ---------------------------------------------------------------------------
 log "Building Docker image..."
-docker compose "${COMPOSE_FILES[@]}" build
+docker compose -p "$COMPOSE_PROJECT" "${COMPOSE_FILES[@]}" build
 
 # ---------------------------------------------------------------------------
 # 3. Run database migrations (before container swap)
@@ -79,7 +93,7 @@ MIGRATE_DATABASE_URL="$(grep -E '^DATABASE_URL=' .env | cut -d= -f2- | sed 's/ho
 log "Prisma migrate on host Postgres (127.0.0.1)..."
 DATABASE_URL="$MIGRATE_DATABASE_URL" npx prisma migrate deploy --schema prisma/schema.prisma
 
-docker compose "${COMPOSE_FILES[@]}" run --rm --no-deps --entrypoint "" backend \
+docker compose -p "$COMPOSE_PROJECT" "${COMPOSE_FILES[@]}" run --rm --no-deps --entrypoint "" backend \
   sh -c "npx prisma generate"
 
 # ---------------------------------------------------------------------------
@@ -87,15 +101,16 @@ docker compose "${COMPOSE_FILES[@]}" run --rm --no-deps --entrypoint "" backend 
 #    Nginx maintenance page handles the ~3–5s window automatically.
 # ---------------------------------------------------------------------------
 log "Restarting containers..."
-docker compose "${COMPOSE_FILES[@]}" up -d redis
-docker compose "${COMPOSE_FILES[@]}" up -d backend workers
+docker compose -p "$COMPOSE_PROJECT" "${COMPOSE_FILES[@]}" up -d redis
+docker compose -p "$COMPOSE_PROJECT" "${COMPOSE_FILES[@]}" up -d backend workers
 
 # ---------------------------------------------------------------------------
 # 5. Health check — retry until backend is responding or timeout
 # ---------------------------------------------------------------------------
 BACKEND_PORT=$(grep -E '^BACKEND_PORT=' .env | cut -d= -f2 | tr -d '[:space:]')
-BACKEND_PORT="${BACKEND_PORT:-3000}"
+BACKEND_PORT="${BACKEND_PORT:-3001}"
 HEALTH_URL="http://127.0.0.1:${BACKEND_PORT}/api/v1/health"
+READY_URL="http://127.0.0.1:${BACKEND_PORT}/api/v1/health/ready"
 
 log "Waiting for backend health at $HEALTH_URL..."
 for i in $(seq 1 $HEALTH_RETRIES); do
@@ -105,17 +120,31 @@ for i in $(seq 1 $HEALTH_RETRIES); do
   fi
   if [ "$i" -eq "$HEALTH_RETRIES" ]; then
     log "Health check failed after ${HEALTH_RETRIES} attempts — dumping container logs"
-    docker compose "${COMPOSE_FILES[@]}" logs --tail=50 backend || true
-    docker compose "${COMPOSE_FILES[@]}" logs --tail=50 workers || true
+    docker compose -p "$COMPOSE_PROJECT" "${COMPOSE_FILES[@]}" logs --tail=50 backend || true
+    docker compose -p "$COMPOSE_PROJECT" "${COMPOSE_FILES[@]}" logs --tail=50 workers || true
     fail "Backend did not become healthy after deploy. Manual intervention required."
   fi
   sleep "$HEALTH_INTERVAL"
 done
 
 # ---------------------------------------------------------------------------
+# 5.5 Runtime readiness check — must include no missing runtime keys
+# ---------------------------------------------------------------------------
+log "Validating readiness payload at $READY_URL..."
+READY_RESPONSE="$(curl -sS "$READY_URL" || true)"
+if ! echo "$READY_RESPONSE" | grep -q '"status":"ready"'; then
+  log "Readiness endpoint response: $READY_RESPONSE"
+  fail "Readiness status is not 'ready'. Fix dependencies/runtime config before serving traffic."
+fi
+if ! echo "$READY_RESPONSE" | grep -q '"runtimeConfigMissingKeys":\[\]'; then
+  log "Readiness endpoint response: $READY_RESPONSE"
+  fail "runtimeConfigMissingKeys is not empty. Complete Ops config and restart backend/workers."
+fi
+
+# ---------------------------------------------------------------------------
 # 6. Verify workers are up
 # ---------------------------------------------------------------------------
-WORKERS_STATUS=$(docker compose "${COMPOSE_FILES[@]}" ps workers --format json 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('State','unknown'))" 2>/dev/null || echo "unknown")
+WORKERS_STATUS=$(docker compose -p "$COMPOSE_PROJECT" "${COMPOSE_FILES[@]}" ps workers --format json 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('State','unknown'))" 2>/dev/null || echo "unknown")
 if [ "$WORKERS_STATUS" != "running" ]; then
   log "WARNING: workers container may not be in running state (status: $WORKERS_STATUS)"
   log "Check: docker compose logs workers"

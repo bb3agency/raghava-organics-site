@@ -70,6 +70,12 @@ Integration methodology note:
 | YYYY-MM-DD | Meta WhatsApp | Template message send (if enabled) | Pass/Fail | |
 | YYYY-MM-DD | Invoice Storage | Local write + authenticated read cycle | Pass/Fail | |
 
+> During VPS Phase 7 execution, also capture startup-gate evidence from `docs/PHASE7_VPS_DEPLOY_INCIDENT_PLAYBOOK.md`:
+> - strict env preflight output,
+> - compose overlay command used,
+> - host Postgres routing checks (`host.docker.internal` / bridge IP),
+> - final stable health response.
+
 ## 5) Compromise drill log (quarterly)
 
 | Date | Drill Scope | Revoke | Regenerate | Redeploy | Verify | Total Time | Observations |

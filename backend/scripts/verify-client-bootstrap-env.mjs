@@ -85,20 +85,81 @@ if (jwtSecret && jwtRefresh && jwtSecret === jwtRefresh) {
   errors.push("JWT_REFRESH_SECRET must differ from JWT_SECRET");
 }
 
+const nodeEnv = (env.NODE_ENV ?? "production").trim().toLowerCase();
+if (!["production", "staging"].includes(nodeEnv) && nodeEnv !== "development") {
+  warnings.push(`Unexpected NODE_ENV='${env.NODE_ENV}'. Expected production/staging/development.`);
+}
+
+const appPort = (env.PORT ?? "").trim();
+if (!appPort) {
+  errors.push("Missing required key: PORT");
+} else if (appPort !== "3000") {
+  errors.push("PORT must be 3000 for Docker runtime (host port is BACKEND_PORT).");
+}
+
+const paymentProviderRaw = (env.PAYMENT_PROVIDER ?? "").trim().toLowerCase();
+const paymentProvider = paymentProviderRaw || "razorpay";
+if (!["razorpay", "cod", "noop"].includes(paymentProvider)) {
+  errors.push(`Unsupported PAYMENT_PROVIDER='${paymentProvider}'. Allowed: razorpay, cod, noop.`);
+}
+
+if (!paymentProviderRaw) {
+  warnings.push(
+    "PAYMENT_PROVIDER is not set. First bootstrap is allowed, but set PAYMENT_PROVIDER=cod or full razorpay keys before prepaid go-live."
+  );
+} else if (paymentProvider === "razorpay") {
+  for (const key of ["RAZORPAY_KEY_ID", "RAZORPAY_KEY_SECRET", "RAZORPAY_WEBHOOK_SECRET"]) {
+    requireKey(key);
+    if (/replace_with|change_me/i.test(env[key] ?? "")) {
+      errors.push(`${key} still contains placeholder text`);
+    }
+  }
+}
+
+const shippingProviderRaw = (env.SHIPPING_PROVIDER ?? "").trim().toLowerCase();
+const shippingProvider = shippingProviderRaw || "delhivery";
+if (!["delhivery", "shiprocket", "noop"].includes(shippingProvider)) {
+  errors.push(`Unsupported SHIPPING_PROVIDER='${shippingProvider}'. Allowed: delhivery, shiprocket, noop.`);
+}
+
+if (!shippingProviderRaw) {
+  warnings.push(
+    "SHIPPING_PROVIDER is not set. First bootstrap is allowed, but set SHIPPING_PROVIDER and provider keys before shipping flows."
+  );
+} else if (shippingProvider === "delhivery") {
+  for (const key of ["DELHIVERY_API_KEY", "DELHIVERY_WEBHOOK_TOKEN"]) {
+    requireKey(key);
+    if (/replace_with|change_me/i.test(env[key] ?? "")) {
+      errors.push(`${key} still contains placeholder text`);
+    }
+  }
+}
+
+if (shippingProvider === "shiprocket") {
+  for (const key of ["SHIPROCKET_EMAIL", "SHIPROCKET_PASSWORD", "SHIPROCKET_WEBHOOK_TOKEN"]) {
+    requireKey(key);
+    if (/replace_with|change_me/i.test(env[key] ?? "")) {
+      errors.push(`${key} still contains placeholder text`);
+    }
+  }
+}
+
 if (/replace_with/i.test(env.RESEND_API_KEY ?? "")) {
   warnings.push("RESEND_API_KEY is placeholder — required before ops:newuser on VPS");
 }
 
-for (const providerKey of [
-  "RAZORPAY_KEY_SECRET",
-  "DELHIVERY_API_KEY",
-  "MSG91_AUTH_KEY",
-]) {
-  if (env[providerKey]?.trim()) {
-    warnings.push(
-      `${providerKey} is set in .env — production provider secrets should be Ops DB overlay only`,
-    );
-  }
+if (!(env.REPLAY_APPROVAL_TOKEN ?? "").trim()) {
+  warnings.push("REPLAY_APPROVAL_TOKEN is not set — analytics replay APIs will fail closed until configured.");
+}
+
+if (!(env.OPS_METRICS_TOKEN ?? "").trim()) {
+  warnings.push("OPS_METRICS_TOKEN is not set — /ops/metrics will be inaccessible until configured.");
+}
+
+if (paymentProvider === "cod") {
+  warnings.push(
+    "PAYMENT_PROVIDER=cod detected. This is valid for bootstrap, but switch to razorpay before prepaid go-live."
+  );
 }
 
 if (warnings.length) {

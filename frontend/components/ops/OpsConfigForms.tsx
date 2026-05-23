@@ -11,7 +11,11 @@ import {
 
 const SAMPLE_VALUES = '{\n  "RAZORPAY_KEY_ID": "rzp_test_xxx"\n}';
 
-export function OpsConfigForms() {
+interface OpsConfigFormsProps {
+  onConfigSaved?: () => void;
+}
+
+export function OpsConfigForms({ onConfigSaved }: OpsConfigFormsProps) {
   const [validateMessage, setValidateMessage] = useState<string | null>(null);
   const [validateError, setValidateError] = useState<string | null>(null);
 
@@ -95,6 +99,7 @@ export function OpsConfigForms() {
             string | number | boolean | null
           >;
           await saveOpsConfigClient({ domain, values, challengeId, otpCode });
+          onConfigSaved?.();
         }}
       >
         <div id="ops-config-save-form" className="grid gap-3">
