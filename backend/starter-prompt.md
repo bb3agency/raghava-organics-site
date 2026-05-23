@@ -137,7 +137,7 @@ OPS_DB_ENCRYPTION_KEY=<32-char-hex>    # <-- SET THIS
 
 > Generate secrets: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`
 
-Then start the backend and verify it is healthy before writing any frontend code. For authoritative backend configuration (what is bootstrap env vs Ops DB overlay, mutability, restart requirements), use `docs/ENV_VS_DB_CONFIG_REFERENCE.md`. For the step-by-step first-deploy Phase 1/2 model (including `RESEND_API_KEY` bootstrap requirement for ops-newuser), see `docs/PRODUCTION_FIRST_DEPLOY_CHECKLIST.md`.
+Then start the backend and verify it is healthy before writing any frontend code:
 
 ```bash
 # Terminal 1
@@ -158,21 +158,16 @@ If `db` or `redis` shows `disconnected`, fix the backend first. See `README.md` 
 *Rule for AI:* Before starting any development, ask the user for their Backend API URL and Store Name. Then generate the `.env.local` file automatically:
 
 ```env
-# .env.local  (development)
+# .env.local
 NEXT_PUBLIC_API_BASE_URL=http://localhost:3000/api/v1   # must include /api/v1
 NEXT_PUBLIC_STORE_NAME="Your Brand Name"
 NEXT_PUBLIC_STOREFRONT_URL=http://localhost:3001
 NEXT_PUBLIC_RAZORPAY_KEY_ID=rzp_test_xxxxx              # public key ONLY — never the secret
-
-# Required on VPS by vps-frontend-deploy.sh for PM2 process naming and health checks.
-# Set these in .env.local (or .env.production.local) on the VPS before the first deploy.
-CLIENT_ID=your-client-id                                # e.g. greengrocer (slug, no spaces)
-STOREFRONT_PORT=3101                                    # matches Nginx proxy_pass + port assignment
 ```
 
 Never hardcode API URLs in fetch calls. Always use `process.env.NEXT_PUBLIC_API_BASE_URL`. Ensure all client components that need it use the `NEXT_PUBLIC_` prefix.
 
-Never include secret/backend-only keys in frontend env files. `CLIENT_ID` and `STOREFRONT_PORT` are infrastructure variables, not secrets — they are safe in `.env.local`. For provider onboarding and key lifecycle policy, follow `docs/THIRD_PARTY_INTEGRATIONS_SETUP_AND_KEY_MANAGEMENT_GUIDE.md`.
+Never include secret/backend-only keys in frontend env files. For provider onboarding and key lifecycle policy, follow `docs/THIRD_PARTY_INTEGRATIONS_SETUP_AND_KEY_MANAGEMENT_GUIDE.md`.
 
 ### 3.3 Repo-specific frontend integration contract (must follow)
 
@@ -180,7 +175,6 @@ This section is intentionally concise. Canonical contract detail lives in:
 - `docs/NEXTJS_FRONTEND_INTEGRATION_GUIDE.md`
 - `docs/FRONTEND_AI_GO_LIVE_CHECKLIST.md`
 - `docs/BACKEND_GO_LIVE_CHECKLIST.md`
-- `docs/ROUTE_SURFACE_COMPLETE_REFERENCE.md` — deep per-route reference: every route's purpose, required permission, data it touches, constraints, setup flows, and hard layer boundaries (what admin cannot do, what ops cannot do, what no route exists for). Use when building or prompting for any admin/ops/customer surface.
 
 Minimum non-negotiable implementation rules:
 1. Use `NEXT_PUBLIC_API_BASE_URL` (with `/api/v1`) and no hardcoded API URLs.
@@ -193,222 +187,8 @@ Minimum non-negotiable implementation rules:
 8. Keep ops config/admin invite boundaries aligned with backend contracts.
 9. Build via vertical slices (not page-first), with real backend integration per slice.
 10. Complete paired go-live checklists before release.
-11. **Technical failure alerting:** The backend emits structured email alerts (`sendTechnicalFailureAlert`) to all active Ops + Admin users on every critical error path. Frontend error handling should surface user-facing messages via `error.code` while backend alerting covers operational visibility. Verify alert delivery is configured per `docs/BACKEND_GO_LIVE_CHECKLIST.md` §2.8.
 
 > **Full-Stack Tip:** If your local backend is crashing with an infinite `ECONNRESET` loop on startup, it means your Docker Redis is in protected mode. You must add `REDIS_PASSWORD=localpassword` to the *backend's* `.env` file and recreate the container with `docker compose down -v`.
-
-### 3.4 Ops Authentication & Control Plane
-
-**Ops is the administrative control plane** - separate from customer and admin authentication:
-
-**Ops Login Flow (Browser Session Cookie):**
-```typescript
-// Step 1: Request OTP
-await api.post('/ops/auth/login/request-otp', { email, password });
-
-// Step 2: Verify OTP — cookie set automatically
-const { opsUserId, permissions } = await api.post('/ops/auth/login/verify-otp', { email, otp });
-// No token to store — cookie handles everything
-
-// Step 3: All ops requests use credentials: 'include'
-await api.get('/ops/config/overview', { credentials: 'include' });
-```
-
-**Critical Operations Requiring OTP Challenge:**
-The following 5 operations require a 2-step OTP flow:
-
-1. `POST /ops/config/save` - Save system configuration
-2. `POST /ops/load-shed` - Enable/disable load shedding  
-3. `POST /ops/system/restart` - Restart application services
-4. `POST /ops/users/:id/deactivate` - Deactivate admin users
-5. `POST /ops/invites/:id/revoke` - Revoke admin invitations
-
-**OTP Challenge Pattern:**
-```typescript
-// Component: CriticalOpsAction.tsx
-function CriticalOpsAction({ actionType, onExecute, buttonText }) {
-  const [showOtpModal, setShowOtpModal] = useState(false);
-  const [challengeId, setChallengeId] = useState<string | null>(null);
-
-  const handleInitiate = async () => {
-    // Step 1: Request OTP challenge
-    const { challengeId, expiresAt } = await api.post('/ops/otp/request', { actionType });
-    setChallengeId(challengeId);
-    setShowOtpModal(true);
-  };
-
-  const handleVerifyAndExecute = async (otpCode: string) => {
-    // Step 2: Execute with challengeId + otpCode
-    await onExecute({ challengeId, otpCode });
-    setShowOtpModal(false);
-  };
-
-  return (
-    <>
-      <Button onClick={handleInitiate}>{buttonText}</Button>
-      {showOtpModal && (
-        <OtpModal
-          onSubmit={handleVerifyAndExecute}
-          onCancel={() => setShowOtpModal(false)}
-        />
-      )}
-    </>
-  );
-}
-```
-
-**Provider Configuration via Ops UI:**
-All provider keys (Razorpay, MSG91/Fast2SMS, Resend, Meta WhatsApp, Delhivery, Shiprocket) are configured through the Ops UI, not environment variables:
-
-```typescript
-// Save provider config
-await api.post('/ops/config/save', {
-  RAZORPAY_KEY_ID: 'rzp_live_xxx',
-  MSG91_AUTH_KEY: 'encrypted_value',
-  RESEND_API_KEY: 'encrypted_value',
-  META_WHATSAPP_ACCESS_TOKEN: 'encrypted_value'
-}, { 
-  headers: { 'X-Otp-Code': otpCode }, // Required for config changes
-  credentials: 'include' 
-});
-```
-
-### 3.5 Provider Configuration Details
-
-**SMS Provider Selection (Backend `.env`):**
-```bash
-# Choose ONE of these in backend .env
-SMS_PROVIDER=msg91      # MSG91 (template-based SMS)
-SMS_PROVIDER=fast2sms   # Fast2SMS (direct API SMS)  
-SMS_PROVIDER=noop       # Development mode (no actual SMS)
-```
-
-**SMS Provider Implementation:**
-```typescript
-// Detect active SMS provider
-const detectSmsProvider = async (): Promise<'msg91' | 'fast2sms' | 'noop'> => {
-  const { data: { config } } = await api.get('/ops/config/sms-provider');
-  return config.SMS_PROVIDER;
-};
-
-// Usage in auth flows
-const smsProvider = await detectSmsProvider();
-switch (smsProvider) {
-  case 'msg91':
-    await msg91Client.sendOtp(phone, otp);
-    break;
-  case 'fast2sms':
-    await fast2SmsClient.sendOtp(phone, otp);
-    break;
-  case 'noop':
-    console.log('Development mode: OTP would be sent to', phone);
-    // Show OTP in UI for testing in noop mode
-    setDevOtp(otp);
-    break;
-}
-```
-
-**Meta WhatsApp Configuration (Backend `.env`):**
-```bash
-# Enable/disable WhatsApp (independent of SMS provider)
-NOTIFY_WHATSAPP_ENABLED=true     # Enable Meta Cloud API
-NOTIFY_WHATSAPP_ENABLED=false    # Disable WhatsApp
-```
-
-**WhatsApp Features:**
-- 2-way customer communication (order updates, support)
-- Template-based messages for notifications
-- Interactive buttons for quick actions
-- Separate from SMS provider (can work with any SMS provider)
-
-**WhatsApp Implementation:**
-```typescript
-// Check WhatsApp availability
-const isWhatsAppEnabled = async (): Promise<boolean> => {
-  const { data: { config } } = await api.get('/ops/config/whatsapp');
-  return config.NOTIFY_WHATSAPP_ENABLED;
-};
-
-// Send WhatsApp message
-if (await isWhatsAppEnabled()) {
-  await whatsappClient.sendTemplateMessage(
-    customer.phone,
-    'order_confirmation',
-    { order_id: order.id, total: formatPrice(order.total) }
-  );
-}
-```
-
-**Provider Keys Management:**
-All provider API keys are configured through the Ops UI, not environment variables:
-
-**Bootstrap Keys (Backend `.env` only):**
-- `JWT_SECRET` - Unique per client
-- `JWT_REFRESH_SECRET` - Different from JWT_SECRET
-- `OPS_DB_ENCRYPTION_KEY` - 32-char hex for encrypting Ops DB secrets
-
-**DB-Backed Keys (Ops UI → `/ops/config/save`):**
-- `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`
-- `MSG91_AUTH_KEY` or `FAST2SMS_API_KEY`
-- `RESEND_API_KEY`
-- `META_WHATSAPP_ACCESS_TOKEN`, `META_WHATSAPP_PHONE_NUMBER_ID`
-- `DELHIVERY_API_KEY`, `DELHIVERY_API_SECRET`
-- `SHIPROCKET_API_KEY`, `SHIPROCKET_API_SECRET`
-
-**Important:** Provider keys stored in Ops DB are encrypted and require OTP to modify. Changes take effect after API restart.
-
-### 3.6 Production First Deploy Checklist
-
-**Critical:** For first-time production deployments, follow the Phase 1/2 bootstrap model:
-
-**Phase 1: Bootstrap (Ops DB not reachable)**
-1. Set bootstrap secrets in backend `.env`:
-   - `JWT_SECRET` (64-char hex)
-   - `JWT_REFRESH_SECRET` (different 64-char hex)
-   - `OPS_DB_ENCRYPTION_KEY` (32-char hex)
-   - `RESEND_API_KEY` (required for ops-newuser.mjs)
-
-2. Run ops-newuser to create first Ops user:
-   ```bash
-   cd backend
-   node scripts/ops-newuser.mjs your-email@company.com
-   ```
-
-3. Access Ops UI and configure remaining provider keys via `/ops/config/save`
-
-**Phase 2: Full Configuration (Ops DB reachable)**
-1. Configure all provider keys through Ops UI (not .env):
-   - Razorpay (test/live keys)
-   - SMS provider (MSG91/Fast2SMS)
-   - Meta WhatsApp (if enabled)
-   - Email (Resend)
-   - Shipping (Delhivery/Shiprocket)
-
-2. Verify all integrations in Ops UI
-3. Restart backend services to apply DB-backed config
-
-**Frontend Production Variables:**
-```env
-# .env.production.local (VPS deployment)
-NEXT_PUBLIC_API_BASE_URL=https://your-domain.com/api/v1
-NEXT_PUBLIC_STORE_NAME="Your Brand Name"
-NEXT_PUBLIC_STOREFRONT_URL=https://your-domain.com
-NEXT_PUBLIC_RAZORPAY_KEY_ID=rzp_live_xxx    # Production key
-CLIENT_ID=your-client-id                     # PM2 process naming
-STOREFRONT_PORT=3101                         # Nginx proxy port
-```
-
-**Production Deployment Order:**
-1. Backend healthy with all providers configured
-2. Frontend built and deployed
-3. Nginx configured with TLS
-4. DNS pointed to VPS
-5. SSL certificates installed
-
-**Reference Documents:**
-- `docs/PRODUCTION_FIRST_DEPLOY_CHECKLIST.md` - Complete step-by-step guide
-- `docs/ENV_VS_DB_CONFIG_REFERENCE.md` - Bootstrap vs DB config mapping
-- `docs/CLIENT_VPS_SETUP_GUIDE.md` - VPS hardening and setup
 
 ---
 
@@ -432,49 +212,12 @@ If `diff` output shows differences, re-copy and commit `.agents/rules/dev-rules.
 
 Canonical source: `CO_DEVELOPMENT_SYNC_GUIDE.md`.
 
-**Flow A: Subtree (Frontend + Backend in one repo)**
-```bash
-# Add backend as subtree (one-time setup)
-git subtree add --prefix backend https://github.com/your-org/ecom-backend-template main --squash
+Use that guide for:
+- Flow A (`frontend/` + `backend/` in one repo) and Flow B (separate template clone).
+- Template-worthy vs client-specific classification.
+- Copy/paste safety checklist and validation gates.
 
-# Pull latest backend changes
-git subtree pull --prefix backend https://github.com/your-org/ecom-backend-template main --squash
-
-# Push client-specific changes upstream (careful!)
-git subtree push --prefix backend https://github.com/your-org/client-repo main
-```
-
-**Flow B: Separate Repos (Recommended)**
-```bash
-# Clone backend template
-git clone https://github.com/your-org/ecom-backend-template.git ../backend
-
-# Sync backend changes (run from frontend repo)
-rsync -av --exclude='.git' --exclude='node_modules' \
-  ../backend/docs/ ../docs/
-rsync -av ../backend/frontend-agent-rules.md .agents/rules/dev-rules.md
-
-# Safety checklist before any backend changes
-echo "=== Backend Sync Safety Checklist ==="
-echo "1. Are you changing template-worthy code?"
-echo "2. Have you committed all frontend changes?"
-echo "3. Are you avoiding client-specific secrets?"
-echo "4. Is this in a separate branch from main?"
-read -p "Continue? (y/N): " confirm
-```
-
-**Template-Worthy vs Client-Specific:**
-- **Template-worthy:** Core features, bug fixes, architectural improvements
-- **Client-specific:** API keys, domain names, custom branding, feature flags
-
-**Copy/Paste Safety Checklist:**
-1. Never copy `.env` files or secrets
-2. Always check for hardcoded client values before committing
-3. Use `CLIENT_ID` placeholder, not actual client slug
-4. Verify no customer PII in commits
-5. Test with clean checkout before pushing
-
-**Agent Rule:** Always propose commands and wait for user approval/execution for remote mutations.
+Agent rule: propose commands and wait for user approval/execution for remote mutations.
 
 ### Cursor IDE Setup
 
@@ -509,7 +252,6 @@ Before any major prompt, ensure the AI has access to:
 - [ ] At least one existing component (to learn your style)
 - [ ] The backend API endpoint schema (from this repo's TRD.md)
 - [ ] `.agents/rules/dev-rules.md` (Antigravity) or `.cursor/rules/*.mdc` (Cursor)
-- [ ] `docs/ROUTE_SURFACE_COMPLETE_REFERENCE.md` — when building admin, ops, or any API-integrated surface: what every route does, required permissions, hard boundaries, setup flows, and what each layer cannot do
 
 ---
 
@@ -1000,36 +742,6 @@ DO NOT:
 - ❌ Ignore mobile viewport
 - ❌ Use generic colors (plain red, blue, green) — use curated palette
 ```
-
-### 11.1 Security Anti-Patterns (Critical)
-
-```
-SECURITY — NEVER DO:
-- ❌ Store JWT tokens or auth data in localStorage/sessionStorage
-- ❌ Store refresh tokens in browser storage (must be httpOnly cookie)
-- ❌ Parse error.message for branching logic (use error.code only)
-- ❌ Show full error details/stack traces to users
-- ❌ Use eval() or new Function() with user input
-- ❌ Use innerHTML or dangerouslySetInnerHTML with user content
-- ❌ Inline <script> tags (use external JS files)
-- ❌ Inline style= attributes (use CSS classes)
-- ❌ Trust client-side permission checks alone (backend validates all)
-- ❌ Call webhook endpoints from browser code
-- ❌ Hardcode API URLs or secrets in client bundles
-- ❌ Disable CSP for development (keep strict in all envs)
-- ❌ Skip OTP challenge flow for critical ops operations
-- ❌ Show plaintext secret values in admin UI
-```
-
-**Backend Security Model (June 2026):**
-- ✅ Tokens stored in memory only (never localStorage)
-- ✅ Refresh tokens in httpOnly, secure, sameSite=strict cookies
-- ✅ Ops auth: browser-session-only (no API keys)
-- ✅ CSP: `style-src 'self'` — no 'unsafe-inline'
-- ✅ 5 critical ops operations require OTP challenge
-- ✅ bcrypt 12 rounds for passwords
-- ✅ SHA256 for token/OTP hashing
-- ✅ AES-256-GCM for config secrets
 
 ---
 

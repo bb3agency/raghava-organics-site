@@ -103,7 +103,14 @@ generating $1M+ ARR.
 
 ### 3.1 Backend `.env` must be configured first
 
-**Before prompting the AI to build anything**, verify the backend `.env` has these set correctly:
+**Before prompting the AI to build anything**, verify the backend `.env` has these set correctly.
+
+**Pre-check rules (verify before touching Docker):**
+- `POSTGRES_DB` must use **underscores only** — PostgreSQL forbids hyphens in DB names (`raghava_organics` ✓, `raghava-organics` ✗)
+- `POSTGRES_DB` and the DB name in `DATABASE_URL` **must be identical**
+- `REDIS_PASSWORD` must be **non-empty** — blank causes `ECONNABORTED` loops in ioredis on every reconnect
+- `REDIS_URL` must embed the password: `redis://:password@localhost:6379`
+- Changing `POSTGRES_DB`, `POSTGRES_PASSWORD`, or `REDIS_PASSWORD` after first container start requires `docker compose down -v`
 
 ```env
 # ── Identity ───────────────────────────────────────────────────────────────
@@ -111,13 +118,16 @@ generating $1M+ ARR.
 CLIENT_ID=raghava-organics            # <-- SET THIS (slug, no spaces, unique per project)
 
 # ── Database ───────────────────────────────────────────────────────────────
+# DB name: underscores only — hyphens are invalid in PostgreSQL
+POSTGRES_DB=raghava_organics           # <-- SET THIS (underscores only, must match DATABASE_URL)
+POSTGRES_PASSWORD=yourpassword         # <-- SET THIS
+# DB name in URL must exactly match POSTGRES_DB above
 DATABASE_URL=postgresql://postgres:yourpassword@localhost:5432/raghava_organics  # <-- SET THIS
-POSTGRES_PASSWORD=yourpassword         # <-- SET THIS (must match DATABASE_URL)
-POSTGRES_DB=raghava_organics           # <-- SET THIS (must match DATABASE_URL path)
 
 # ── Redis ───────────────────────────────────────────────────────────────────
-REDIS_PASSWORD=yourredispassword       # <-- SET THIS (never blank — blank causes ECONNRESET)
-REDIS_URL=redis://:yourredispassword@localhost:6379  # <-- SET THIS (must match REDIS_PASSWORD)
+# NEVER blank — blank REDIS_PASSWORD causes ECONNABORTED/ECONNRESET on every ioredis reconnect
+REDIS_PASSWORD=yourredispassword       # <-- SET THIS (non-empty)
+REDIS_URL=redis://:yourredispassword@localhost:6379  # <-- SET THIS (must embed REDIS_PASSWORD)
 
 # ── Bootstrap secrets ───────────────────────────────────────────────────────
 JWT_SECRET=<64-char-hex>               # <-- SET THIS

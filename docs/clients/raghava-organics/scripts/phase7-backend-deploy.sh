@@ -15,10 +15,13 @@ cd "$BACKEND_PATH"
 
 log "Ensure Redis is not published publicly (comment ports: in docker-compose.yml for redis service)."
 
+log "Installing backend deps (required — bare 'npx prisma' pulls Prisma 7 and breaks migrate)..."
+npm ci
+
 log "Starting Redis..."
 docker compose -p "$COMPOSE_PROJECT" up -d redis
 
-log "Prisma generate + migrate..."
+log "Prisma generate + migrate (lockfile-pinned Prisma 6)..."
 npx prisma generate --schema prisma/schema.prisma
 npx prisma migrate deploy --schema prisma/schema.prisma
 
