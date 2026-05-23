@@ -5,6 +5,23 @@ import path from 'node:path';
 
 const ROUTE_CALL_REGEX = /fastify\.(get|post|patch|delete|put)\(\s*'([^']+)'\s*,\s*\{([\s\S]*?)\}\s*,/g;
 const EXEMPT_ENDPOINTS = new Set(['GET /api/v1/ops/metrics']);
+const ROUTE_FILE_PATTERN = /\.routes\.(ts|js)$/;
+
+/** Dev uses src/modules; production Docker image ships dist/src/modules only. */
+function resolveModulesRoot(workspaceRoot: string): string {
+  const candidates = [
+    path.join(workspaceRoot, 'src', 'modules'),
+    path.join(workspaceRoot, 'dist', 'src', 'modules'),
+  ];
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  throw new Error(
+    `Admin policy registry validation: expected src/modules or dist/src/modules under ${workspaceRoot}`
+  );
+}
 
 function listRouteFiles(targetDir: string): string[] {
   const entries = fs.readdirSync(targetDir, { withFileTypes: true });
@@ -15,7 +32,7 @@ function listRouteFiles(targetDir: string): string[] {
       files.push(...listRouteFiles(fullPath));
       continue;
     }
-    if (entry.isFile() && entry.name.endsWith('.routes.ts')) {
+    if (entry.isFile() && ROUTE_FILE_PATTERN.test(entry.name)) {
       files.push(fullPath);
     }
   }
@@ -58,7 +75,7 @@ function parseGuardedRoutesFromSource(source: string): GuardedRouteRecord[] {
 }
 
 function parseGuardedRoutesFromWorkspace(workspaceRoot: string): GuardedRouteRecord[] {
-  const modulesRoot = path.join(workspaceRoot, 'src', 'modules');
+  const modulesRoot = resolveModulesRoot(workspaceRoot);
   const files = listRouteFiles(modulesRoot);
   const records: GuardedRouteRecord[] = [];
   for (const filePath of files) {

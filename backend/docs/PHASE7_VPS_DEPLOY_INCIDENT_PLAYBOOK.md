@@ -121,6 +121,18 @@ Fix:
 - Provider factories now return call-time `CONFIG_NOT_READY` errors when runtime config is incomplete.
 - Complete provider config in Ops UI before go-live and verify `/api/v1/health/ready` has `runtimeConfigMissingKeys: []`.
 
+### H) Backend crash loop: `ENOENT: scandir '/app/src/modules'`
+Cause:
+- `assertAdminPolicyRegistryIntegrity()` scanned `src/modules` at runtime; production Docker images ship `dist/` only.
+
+Symptoms:
+- `docker compose ps` shows `raghava-organics-backend` as `Restarting (1)`.
+- Logs repeat `Error: ENOENT: no such file or directory, scandir '/app/src/modules'` after ops overlay message.
+
+Fix:
+- Pull backend with fix in `admin-policy-registry.validation.ts` (resolves `dist/src/modules` and `.routes.js`).
+- Rebuild and restart: `docker compose -p <client> -f docker-compose.yml -f docker-compose.prod.yml up -d --build backend workers`.
+
 ---
 
 ## 5) Network verification commands (authoritative)
