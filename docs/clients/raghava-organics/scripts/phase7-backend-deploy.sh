@@ -23,7 +23,11 @@ docker compose -p "$COMPOSE_PROJECT" up -d redis
 
 log "Prisma generate + migrate (lockfile-pinned Prisma 6)..."
 npx prisma generate --schema prisma/schema.prisma
-npx prisma migrate deploy --schema prisma/schema.prisma
+
+# Migrations run on the VPS host; host.docker.internal only resolves inside containers.
+MIGRATE_DATABASE_URL="$(grep -E '^DATABASE_URL=' .env | cut -d= -f2- | sed 's/host\.docker\.internal/127.0.0.1/')"
+log "Prisma migrate via host Postgres (127.0.0.1, not host.docker.internal)..."
+DATABASE_URL="$MIGRATE_DATABASE_URL" npx prisma migrate deploy --schema prisma/schema.prisma
 
 log "Building and starting backend + workers..."
 docker compose -p "$COMPOSE_PROJECT" up -d --build backend workers
