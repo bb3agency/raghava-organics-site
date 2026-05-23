@@ -12,6 +12,8 @@ scripts/
 !scripts/
 scripts/*
 !scripts/build.js
+!scripts/lib/
+!scripts/lib/**
 observability/
 nginx/
 *.md
