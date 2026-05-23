@@ -54,7 +54,7 @@ describe('shipping provider runtime', () => {
     expect(runtime.adapter).not.toBeNull();
   });
 
-  it('returns unconfigured adapter when SHIPPING_PROVIDER is missing', () => {
+  it('returns noop adapter when SHIPPING_PROVIDER is missing', () => {
     vi.stubEnv('SHIPPING_PROVIDER', '');
     const runtime = resolveShippingProviderRuntime();
     expect(runtime.provider).toBe('noop');

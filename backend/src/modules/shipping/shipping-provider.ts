@@ -181,42 +181,35 @@ class CircuitBreakerShippingAdapter implements ShippingProviderAdapter {
 export function resolveShippingProviderRuntime(runtimeConfig: NodeJS.ProcessEnv = process.env): ShippingProviderRuntime {
   const explicitProvider = runtimeConfig.SHIPPING_PROVIDER?.trim().toLowerCase();
   const hasExplicitProvider = Boolean(explicitProvider && explicitProvider.length > 0);
-  const primary = hasExplicitProvider ? (explicitProvider as string) : 'delhivery';
   const failoverEnabled = parseBooleanFlag(runtimeConfig.SHIPPING_PROVIDER_FAILOVER_ENABLED);
 
+  const noopRuntime = (): ShippingProviderRuntime => ({
+    provider: 'noop',
+    failoverEnabled,
+    capabilities: {
+      supportsCreateShipment: false,
+      supportsTracking: false,
+      supportsRateCalculation: false,
+      supportsSchedulePickup: false,
+      supportsGenerateLabel: false
+    },
+    adapter: new NoopShippingAdapter()
+  });
+
+  if (!hasExplicitProvider) {
+    return noopRuntime();
+  }
+
+  const primary = explicitProvider as string;
+
   if (primary === 'noop') {
-    return {
-      provider: 'noop',
-      failoverEnabled,
-      capabilities: {
-        supportsCreateShipment: false,
-        supportsTracking: false,
-        supportsRateCalculation: false,
-        supportsSchedulePickup: false,
-        supportsGenerateLabel: false
-      },
-      adapter: new NoopShippingAdapter()
-    };
+    return noopRuntime();
   }
 
   if (primary === 'shiprocket') {
     const email = runtimeConfig.SHIPROCKET_EMAIL?.trim();
     const password = runtimeConfig.SHIPROCKET_PASSWORD?.trim();
     if (!email || !password) {
-      if (!hasExplicitProvider) {
-        return {
-          provider: 'noop',
-          failoverEnabled,
-          capabilities: {
-            supportsCreateShipment: false,
-            supportsTracking: false,
-            supportsRateCalculation: false,
-            supportsSchedulePickup: false,
-            supportsGenerateLabel: false
-          },
-          adapter: new NoopShippingAdapter()
-        };
-      }
       return {
         provider: 'unconfigured',
         failoverEnabled,
@@ -269,20 +262,6 @@ export function resolveShippingProviderRuntime(runtimeConfig: NodeJS.ProcessEnv 
 
   const apiKey = runtimeConfig.DELHIVERY_API_KEY;
   if (!apiKey) {
-    if (!hasExplicitProvider) {
-      return {
-        provider: 'noop',
-        failoverEnabled,
-        capabilities: {
-          supportsCreateShipment: false,
-          supportsTracking: false,
-          supportsRateCalculation: false,
-          supportsSchedulePickup: false,
-          supportsGenerateLabel: false
-        },
-        adapter: new NoopShippingAdapter()
-      };
-    }
     return {
       provider: 'unconfigured',
       failoverEnabled,
