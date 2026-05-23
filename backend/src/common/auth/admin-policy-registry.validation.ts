@@ -3,16 +3,18 @@ import { ADMIN_ENDPOINT_POLICY_REGISTRY } from './admin-endpoint-policy-registry
 import fs from 'node:fs';
 import path from 'node:path';
 
-const ROUTE_CALL_REGEX = /fastify\.(get|post|patch|delete|put)\(\s*'([^']+)'\s*,\s*\{([\s\S]*?)\}\s*,/g;
+const ROUTE_CALL_REGEX =
+  /fastify\.(get|post|patch|delete|put)\(\s*['"]([^'"]+)['"]\s*,\s*\{([\s\S]*?)\}\s*,/g;
 const EXEMPT_ENDPOINTS = new Set(['GET /api/v1/ops/metrics']);
 const ROUTE_FILE_PATTERN = /\.routes\.(ts|js)$/;
 
 /** Dev uses src/modules; production Docker image ships dist/src/modules only. */
 function resolveModulesRoot(workspaceRoot: string): string {
-  const candidates = [
-    path.join(workspaceRoot, 'src', 'modules'),
-    path.join(workspaceRoot, 'dist', 'src', 'modules'),
-  ];
+  const src = path.join(workspaceRoot, 'src', 'modules');
+  const dist = path.join(workspaceRoot, 'dist', 'src', 'modules');
+  const nodeEnv = (process.env.NODE_ENV ?? '').trim().toLowerCase();
+  const candidates =
+    nodeEnv === 'production' || nodeEnv === 'staging' ? [dist, src] : [src, dist];
   for (const candidate of candidates) {
     if (fs.existsSync(candidate)) {
       return candidate;
@@ -45,6 +47,21 @@ type GuardedRouteRecord = {
   permission: string;
 };
 
+/** Matches TS source (`adminPermissionGuard('x')`) and compiled JS (`adminPermissionGuard)('x')`). */
+function extractGuardPermission(configSource: string): string | undefined {
+  const patterns = [
+    /(?:admin|ops)PermissionGuard\(['"]([^'"]+)['"]\)/,
+    /\.(?:admin|ops)PermissionGuard\)\(['"]([^'"]+)['"]\)/,
+  ];
+  for (const pattern of patterns) {
+    const match = configSource.match(pattern);
+    if (match?.[1]) {
+      return match[1];
+    }
+  }
+  return undefined;
+}
+
 function parseGuardedRoutesFromSource(source: string): GuardedRouteRecord[] {
   const records: GuardedRouteRecord[] = [];
   let match = ROUTE_CALL_REGEX.exec(source);
@@ -60,13 +77,9 @@ function parseGuardedRoutesFromSource(source: string): GuardedRouteRecord[] {
         routePath.startsWith('/api/v1/ops/') ||
         routePath.startsWith('/api/v1/auth/admin/'))
     ) {
-      const permissionMatch =
-        configSource.match(/adminPermissionGuard\('([^']+)'\)/) ??
-        configSource.match(/adminPermissionGuard\("([^"]+)"\)/) ??
-        configSource.match(/opsPermissionGuard\('([^']+)'\)/) ??
-        configSource.match(/opsPermissionGuard\("([^"]+)"\)/);
-      if (permissionMatch?.[1]) {
-        records.push({ method, path: routePath, permission: permissionMatch[1] });
+      const permission = extractGuardPermission(configSource);
+      if (permission) {
+        records.push({ method, path: routePath, permission });
       }
     }
     match = ROUTE_CALL_REGEX.exec(source);

@@ -133,6 +133,14 @@ Fix:
 - Pull backend with fix in `admin-policy-registry.validation.ts` (resolves `dist/src/modules` and `.routes.js`).
 - Rebuild and restart: `docker compose -p <client> -f docker-compose.yml -f docker-compose.prod.yml up -d --build backend workers`.
 
+### I) Backend crash loop: `Registry entry POST /api/v1/admin/invites is not backed by a guarded ... route`
+Cause:
+- Startup policy scan read compiled `.routes.js` but only matched TypeScript-style `opsPermissionGuard('ops:write')`, not compiled `(0, ops_permissions_guard_1.opsPermissionGuard)('ops:write')`.
+
+Fix:
+- Pull backend with updated `extractGuardPermission()` in `admin-policy-registry.validation.ts`.
+- Rebuild backend image (same compose command as incident H).
+
 ---
 
 ## 5) Network verification commands (authoritative)
