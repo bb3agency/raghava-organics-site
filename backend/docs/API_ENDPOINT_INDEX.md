@@ -23,7 +23,7 @@ Canonical low-noise index of backend HTTP endpoints. Route files and schemas rem
 |---|---|---|---|
 | GET | `/api/v1/health` | Full health check | `health.routes.ts` |
 | GET | `/api/v1/health/live` | Liveness check | `health.routes.ts` |
-| GET | `/api/v1/health/ready` | Readiness/dependency freshness check | `health.routes.ts` |
+| GET | `/api/v1/health/ready` | Readiness check — DB/Redis connected plus runtime config complete (`runtimeConfigMissingKeys` empty when ready) | `health.routes.ts` |
 | GET | `/api/v1/products` | Public product listing | `products.routes.ts` |
 | GET | `/api/v1/products/categories` | Public category list | `products.routes.ts` |
 | GET | `/api/v1/products/categories/:slug/products` | Products by category | `products.routes.ts` |

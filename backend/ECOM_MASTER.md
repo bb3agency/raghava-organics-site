@@ -378,7 +378,7 @@ volumes:
 
 > **Development vs Production usage:**
 > - **Dev laptop:** `docker compose up -d postgres redis` — only infrastructure. Run Node on the host with `npm run dev`.
-> - **VPS production:** `docker compose up -d --build` — full stack. `backend` and `workers` containers always run `NODE_ENV=production`.
+> - **VPS production:** `docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml up -d --build backend workers` — host Postgres + Redis; no compose postgres. Go-live requires `/api/v1/health/ready` with `runtimeConfigMissingKeys=[]`.
 > - **No inline env var warnings:** All application config is injected via `env_file: .env`. Docker Compose never sees `${DELHIVERY_API_KEY}` etc., so there are zero "variable is not set" warnings when starting only infrastructure services.
 
 ### 5.3 Nginx Config (Per Client)
@@ -453,8 +453,10 @@ nano .env   # Fill CLIENT_ID, BACKEND_PORT, DATABASE_URL, JWT_SECRET, OPS_DB_ENC
 # Step 5: Run Prisma migrations (creates all tables)
 docker run --rm -v $(pwd):/app -w /app node:22-alpine npx prisma migrate deploy
 
-# Step 6: Build and start containers
-docker compose up -d --build
+# Step 6: Build and start containers (VPS host-Postgres prod overlay)
+docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml up -d --build backend workers
+curl -fsS http://127.0.0.1:<BACKEND_PORT>/api/v1/health
+curl -fsS http://127.0.0.1:<BACKEND_PORT>/api/v1/health/ready
 
 # Step 7: Configure Nginx
 sudo cp nginx/client.conf.template /etc/nginx/sites-available/foodstore.com

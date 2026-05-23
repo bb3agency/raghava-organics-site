@@ -478,7 +478,8 @@ Perform each dry-run as part of the vertical slice that builds the relevant fron
 **Prerequisites:** Phase 5 complete (full local testing passed). Phase 6 complete (VPS baseline ready).
 
 **Full runbook:** `docs/CLIENT_VPS_SETUP_GUIDE.md` §5–§12  
-**Master playbook:** `docs/MASTER_DEPLOYMENT_PLAYBOOK.md`
+**Master playbook:** `docs/MASTER_DEPLOYMENT_PLAYBOOK.md`  
+**Client phase scripts (template):** Copy and customize from `docs/templates/scripts/` into `docs/clients/<client-id>/scripts/` before first VPS deploy.
 
 ### 7.1 — Database setup
 
@@ -556,19 +557,23 @@ Certbot will auto-patch the Nginx config. Verify HTTPS redirect from HTTP is act
 # Health check
 curl -s https://<domain>/api/v1/health | jq .
 
+# Readiness (Phase 7: informational; go-live requires empty runtimeConfigMissingKeys)
+curl -s https://<domain>/api/v1/health/ready | jq .
+
 # Metrics endpoint (requires OPS_METRICS_TOKEN)
 curl -s -H "Authorization: Bearer <OPS_METRICS_TOKEN>" https://<domain>/api/v1/ops/metrics | head -30
 
 # Container health
 docker ps --filter "name=<client-id>"
-docker compose -p <client-id> logs backend --tail=50
-docker compose -p <client-id> logs workers --tail=50
+docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml logs backend --tail=50
+docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml logs workers --tail=50
 ```
 
 **Evidence gate:**
 - All containers running (`docker ps` shows `Up`).
-- `/api/v1/health` returns 200.
-- `/api/v1/ops/metrics` returns 200 with Prometheus text format.
+- `/api/v1/health` returns 200 with `db` and `redis` connected.
+- `/api/v1/health/ready` returns 200 (Phase 7 bootstrap may list missing runtime keys until Phase 8 completes).
+- `/api/v1/ops/metrics` returns 200 with Prometheus text format (after Phase 8 config save).
 - Nginx HTTPS active; HTTP redirects to HTTPS.
 - TLS certificate valid (check with browser or `openssl s_client -connect <domain>:443`).
 - No errors in backend or workers container logs at startup.
@@ -644,6 +649,11 @@ docker compose -p <client-id> logs workers --tail=50
       --cookie "ops_session=<session_token>"
     # All expected keys should show status: present, noPlaceholdersInStrict: true
     ```
+11. **Readiness gate before Phase 9/10 handoff:**
+    ```bash
+    curl -fsS https://<domain>/api/v1/health/ready
+    # Expected: status=ready and runtimeConfigMissingKeys=[]
+    ```
 
 **Evidence gate:**
 - Ops invite is completed before expiry.
@@ -651,6 +661,7 @@ docker compose -p <client-id> logs workers --tail=50
 - Email OTP challenge verification is functional for privileged write actions.
 - Ops session endpoint returns 200 from authenticated browser session.
 - All DB-overlay keys are saved via Ops UI and `/ops/config/overview` confirms all keys present with no placeholders.
+- `/api/v1/health/ready` is `ready` and `runtimeConfigMissingKeys` is empty after restart.
 - Backend and worker containers restarted after config save; no startup errors.
 - `run config:parity-check` passes locally confirming `.env.example` layout is correct.
 
@@ -879,8 +890,8 @@ docker compose -p <client-id> logs workers --tail=50
 
 5. **Monitor logs and metrics** for the first 24–48 hours:
    ```bash
-   docker compose -p <client-id> logs backend -f
-   docker compose -p <client-id> logs workers -f
+   docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml logs backend -f
+   docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml logs workers -f
    ```
 
 **Evidence gate:**

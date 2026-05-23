@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # =============================================================================
-# vps-frontend-deploy.sh — VPS-side deploy script for Next.js frontend
+# vps-frontend-deploy.sh - VPS-side deploy script for Next.js frontend
 #
 # Executed locally by the self-hosted GitHub Actions runner installed on this VPS.
 # The runner pulls the job from GitHub via outbound HTTPS and runs this script
-# directly — no inbound SSH connection is opened.
+# directly - no inbound SSH connection is opened.
 #
 # Performs a zero-downtime deploy via PM2 reload (graceful worker drain + swap).
 # Skips build steps if no frontend-relevant files changed since the last deploy.
@@ -20,12 +20,28 @@
 # Requirements on VPS:
 #   - Self-hosted GitHub Actions runner installed and registered (see §22)
 #   - git, node, npm, pm2 (installed globally: npm install -g pm2)
-#   - PM2 process already started once manually (pm2 start → pm2 save → pm2 startup)
+#   - PM2 process already started once manually (pm2 start -> pm2 save -> pm2 startup)
 #   - .env.local (or .env.production.local) present at FRONTEND_PATH (never written here)
 #   - CLIENT_ID env var set in .env.local (used to derive pm2 process name)
 # =============================================================================
 
 set -euo pipefail
+
+resolve_storefront_port() {
+  local base_path="$1"
+  local env_file=""
+  local port=""
+  for env_file in .env.local .env.production.local .env.production; do
+    if [ -f "$base_path/$env_file" ]; then
+      port=$(grep -E '^STOREFRONT_PORT=' "$base_path/$env_file" | head -1 | cut -d= -f2- | tr -d '"' | xargs || true)
+      if [ -n "$port" ]; then
+        echo "$port"
+        return 0
+      fi
+    fi
+  done
+  echo "3101"
+}
 
 # ---------------------------------------------------------------------------
 # 0. Arguments and validation
@@ -44,7 +60,7 @@ if [ ! -d "$FRONTEND_PATH" ]; then
 fi
 
 if [ ! -f "$FRONTEND_PATH/package.json" ]; then
-  echo "::error::No package.json found at $FRONTEND_PATH — is this a Next.js project?"
+  echo "::error::No package.json found at $FRONTEND_PATH - is this a Next.js project?"
   exit 1
 fi
 
@@ -66,7 +82,7 @@ git reset --hard "origin/main"
 
 ACTUAL_SHA=$(git rev-parse HEAD)
 if [ "$ACTUAL_SHA" != "$COMMIT_SHA" ]; then
-  echo "::error::SHA mismatch — expected $COMMIT_SHA, got $ACTUAL_SHA"
+  echo "::error::SHA mismatch - expected $COMMIT_SHA, got $ACTUAL_SHA"
   echo "Another push may have landed mid-deploy. Failing safely."
   exit 1
 fi
@@ -83,14 +99,11 @@ if [ -f "$SHA_RECORD" ]; then
   LAST_SHA=$(cat "$SHA_RECORD")
   echo "Last deployed SHA: $LAST_SHA"
 
-  # Files that require a rebuild when changed
   CHANGED=$(git diff --name-only "$LAST_SHA" "$COMMIT_SHA" 2>/dev/null || echo "UNKNOWN")
-
   if [ "$CHANGED" = "UNKNOWN" ]; then
     echo "Could not diff against last SHA (force-push or first deploy). Proceeding with full build."
-  elif echo "$CHANGED" | grep -qE \
-    '^(app/|pages/|components/|lib/|hooks/|styles/|public/|next\.config|package\.json|package-lock\.json|tsconfig|tailwind\.config|postcss\.config)'; then
-    echo "Frontend-relevant files changed — full build required."
+  elif echo "$CHANGED" | grep -qE '^(app/|pages/|components/|lib/|hooks/|styles/|public/|next\.config|package\.json|package-lock\.json|tsconfig|tailwind\.config|postcss\.config)'; then
+    echo "Frontend-relevant files changed - full build required."
   else
     echo "No frontend-relevant files changed. Skipping build."
     SKIP_BUILD=true
@@ -100,16 +113,13 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 3. Install dependencies (only if build needed or lock file changed)
+# 3. Install dependencies and build
 # ---------------------------------------------------------------------------
 if [ "$SKIP_BUILD" = "false" ]; then
   echo ""
   echo "----- Step 3: npm ci -----"
-  npm ci --omit=dev --prefer-offline 2>&1
+  npm ci --prefer-offline 2>&1
 
-  # ---------------------------------------------------------------------------
-  # 4. Build Next.js production bundle
-  # ---------------------------------------------------------------------------
   echo ""
   echo "----- Step 4: npm run build -----"
   npm run build 2>&1
@@ -120,22 +130,22 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 5. Derive PM2 process name from CLIENT_ID in .env.local
+# 5. Derive PM2 process name from CLIENT_ID in env
 # ---------------------------------------------------------------------------
 echo ""
 echo "----- Step 5: PM2 reload -----"
 
-# Read CLIENT_ID from .env.local or .env.production.local
 CLIENT_ID=""
 for env_file in .env.local .env.production.local .env.production; do
   if [ -f "$FRONTEND_PATH/$env_file" ]; then
-    CLIENT_ID=$(grep -E '^CLIENT_ID=' "$FRONTEND_PATH/$env_file" | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'" | xargs)
-    [ -n "$CLIENT_ID" ] && break
+    CLIENT_ID=$(grep -E '^CLIENT_ID=' "$FRONTEND_PATH/$env_file" | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'" | xargs || true)
+    if [ -n "$CLIENT_ID" ]; then
+      break
+    fi
   fi
 done
 
 if [ -z "$CLIENT_ID" ]; then
-  # Fallback: derive from directory name (e.g. /var/www/foodstore/frontend → foodstore)
   CLIENT_ID=$(basename "$(dirname "$FRONTEND_PATH")")
   echo "::warning::CLIENT_ID not found in env files. Using directory-derived name: $CLIENT_ID"
 fi
@@ -143,8 +153,7 @@ fi
 PM2_NAME="${CLIENT_ID}-frontend"
 echo "PM2 process name: $PM2_NAME"
 
-# Reload if running, start if not
-if pm2 describe "$PM2_NAME" > /dev/null 2>&1; then
+if pm2 describe "$PM2_NAME" >/dev/null 2>&1; then
   pm2 reload "$PM2_NAME" --update-env
   echo "PM2 reload issued for $PM2_NAME"
 else
@@ -153,18 +162,18 @@ else
   echo "  pm2 start npm --name '$PM2_NAME' -- start -- -p <STOREFRONT_PORT>"
   echo "  pm2 save && pm2 startup"
   echo "Attempting cold start (port from STOREFRONT_PORT env or 3101)..."
-  STOREFRONT_PORT=$(grep -E '^STOREFRONT_PORT=' "$FRONTEND_PATH/.env.local" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"' | xargs || echo "3101")
+  STOREFRONT_PORT=$(resolve_storefront_port "$FRONTEND_PATH")
   pm2 start npm --name "$PM2_NAME" -- start -- -p "$STOREFRONT_PORT"
   pm2 save
 fi
 
 # ---------------------------------------------------------------------------
-# 6. Health check — verify frontend is responding
+# 6. Health check - verify frontend is responding
 # ---------------------------------------------------------------------------
 echo ""
 echo "----- Step 6: health check -----"
 
-STOREFRONT_PORT=$(grep -E '^STOREFRONT_PORT=' "$FRONTEND_PATH/.env.local" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"' | xargs || echo "3101")
+STOREFRONT_PORT=$(resolve_storefront_port "$FRONTEND_PATH")
 HEALTH_URL="http://127.0.0.1:${STOREFRONT_PORT}/"
 MAX_RETRIES=20
 RETRY_DELAY=3
@@ -181,7 +190,7 @@ for i in $(seq 1 $MAX_RETRIES); do
     pm2 logs "$PM2_NAME" --lines 30 --nostream 2>/dev/null || true
     exit 1
   fi
-  echo "  Attempt $i/$MAX_RETRIES — HTTP $HTTP_CODE. Retrying in ${RETRY_DELAY}s..."
+  echo "  Attempt $i/$MAX_RETRIES - HTTP $HTTP_CODE. Retrying in ${RETRY_DELAY}s..."
   sleep "$RETRY_DELAY"
 done
 

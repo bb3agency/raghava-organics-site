@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Phase 8 - Ops bootstrap (run on VPS after Phase 7 health passes)
+# Phase 8 — Ops bootstrap template (copy to docs/clients/<client-id>/scripts/ and customize)
+# Run on VPS after Phase 7 health passes.
 set -euo pipefail
 
-CLIENT_ID="${CLIENT_ID:-raghava-organics}"
-BACKEND_PATH="${BACKEND_PATH:-/var/www/raghava-organics/backend}"
+CLIENT_ID="${CLIENT_ID:-<client-id>}"
+BACKEND_PATH="${BACKEND_PATH:-/var/www/<client-id>/backend}"
 OPS_EMAIL="${OPS_EMAIL:?Set OPS_EMAIL}"
 SETUP_BASE_URL="${SETUP_BASE_URL:?Set SETUP_BASE_URL e.g. https://your-domain}"
 COMPOSE_ARGS="-p ${CLIENT_ID} -f docker-compose.yml -f docker-compose.prod.yml"

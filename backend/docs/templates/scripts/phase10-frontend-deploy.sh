@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Phase 10 - Frontend PM2 deploy (run on VPS after backend + Nginx)
+# Phase 10 — Frontend PM2 deploy template (copy to docs/clients/<client-id>/scripts/ and customize)
+# Run on VPS after backend + Nginx + TLS are active.
 set -euo pipefail
 
-FRONTEND_PATH="${FRONTEND_PATH:-/var/www/raghava-organics/frontend}"
-CLIENT_ID="${CLIENT_ID:-raghava-organics}"
+FRONTEND_PATH="${FRONTEND_PATH:-/var/www/<client-id>/frontend}"
+CLIENT_ID="${CLIENT_ID:-<client-id>}"
 
 if [ ! -d "$FRONTEND_PATH" ]; then
   echo "Missing $FRONTEND_PATH"

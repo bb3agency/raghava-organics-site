@@ -39,10 +39,26 @@ if (existsSync(deploySh)) {
     "CLIENT_PATH",
     "prisma migrate deploy",
     "/api/v1/health",
-    "docker compose up -d",
+    "/api/v1/health/ready",
+    "runtimeConfigMissingKeys",
+    "docker compose -p",
   ]) {
     if (!content.includes(needle)) {
       errors.push(`vps-deploy.sh missing expected step: ${needle}`);
+    }
+  }
+}
+
+const frontendDeploySh = resolve(root, "scripts/vps-frontend-deploy.sh");
+if (existsSync(frontendDeploySh)) {
+  const content = readFileSync(frontendDeploySh, "utf8");
+  const shebangCount = (content.match(/^#!\/usr\/bin\/env bash/gm) ?? []).length;
+  if (shebangCount !== 1) {
+    errors.push(`vps-frontend-deploy.sh should contain exactly one shebang (found ${shebangCount})`);
+  }
+  for (const needle of ["npm ci", "pm2 reload", "resolve_storefront_port"]) {
+    if (!content.includes(needle)) {
+      errors.push(`vps-frontend-deploy.sh missing expected step: ${needle}`);
     }
   }
 }

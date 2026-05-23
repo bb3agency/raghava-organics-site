@@ -879,7 +879,8 @@ npx prisma migrate deploy
 
 # 7. Start backend Docker stack (VPS host-Postgres mode)
 docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml up -d --build backend workers
-curl http://127.0.0.1:3001/api/v1/health  # verify
+curl http://127.0.0.1:3001/api/v1/health  # verify db + redis connected
+curl http://127.0.0.1:3001/api/v1/health/ready  # Phase 7: informational; go-live requires status=ready and runtimeConfigMissingKeys=[]
 
 # 7. Build and start frontend (FIRST-TIME BOOTSTRAP ONLY)
 # After completing §22 (runner setup), all subsequent frontend deploys are automated:
@@ -919,7 +920,7 @@ sudo certbot --nginx -d foodstore.com -d www.foodstore.com
 ```
 
 
-> **Mandatory runtime gate before go-live sign-off:** execute the runtime stability validation in `docs/CLIENT_VPS_SETUP_GUIDE.md` section **10.1** (separate API/workers supervision, RSS/heap trend capture, sustained OTP/login soak, and notification worker liveness verification).
+> **Mandatory runtime gate before go-live sign-off:** `/api/v1/health/ready` must return `status: "ready"` with `runtimeConfigMissingKeys: []` (after Phase 8 Ops config save + restart). Also execute the runtime stability validation in `docs/CLIENT_VPS_SETUP_GUIDE.md` section **10.1** (separate API/workers supervision, RSS/heap trend capture, sustained OTP/login soak, and notification worker liveness verification).
 
 ### 5.5a Runtime validation — Per-template primary notification channels (DB-backed)
 
@@ -981,7 +982,7 @@ All provider credentials, webhook tokens, and ops-security parameters are stored
 
 ```bash
 # ALWAYS use `up -d`, never `restart`
-docker compose up -d              # picks up new .env values
+docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml up -d backend workers   # VPS: picks up new .env values
 docker compose logs -f backend    # verify no startup errors
 ```
 
@@ -989,7 +990,7 @@ docker compose logs -f backend    # verify no startup errors
 
 > **Ops config overlay gotcha:** DB-backed Ops config changes are encrypted in `OpsConfigSecret` and are applied only during API/worker startup. After saving non-bootstrap keys through `/api/v1/ops/config/save`, restart/recreate backend and worker containers so both processes load the same overlay before providers initialize. Bootstrap-only keys (`DATABASE_URL`, initial `REDIS_URL`, `OPS_DB_ENCRYPTION_KEY`) must still be changed in deployment env/secret manager.
 >
-> **Two ways to restart after a config save:** (1) **SSH/VPS:** `docker compose up -d` — recreates containers and picks up the new overlay. (2) **Ops UI (no SSH required):** `POST /api/v1/ops/system/restart` — schedules a payment-safe restart via BullMQ; drains `PENDING_PAYMENT` orders first (default 5 min timeout, override via `RESTART_PAYMENT_DRAIN_TIMEOUT_MS`), then publishes to the `system:restart` Redis pub/sub channel — both backend and worker containers restart automatically via Docker `restart: unless-stopped`. Prefer this method in production to maintain audit trail and avoid direct server access.
+> **Two ways to restart after a config save:** (1) **SSH/VPS:** `docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml up -d backend workers` — recreates containers and picks up the new overlay. (2) **Ops UI (no SSH required):** `POST /api/v1/ops/system/restart` — schedules a payment-safe restart via BullMQ; drains `PENDING_PAYMENT` orders first (default 5 min timeout, override via `RESTART_PAYMENT_DRAIN_TIMEOUT_MS`), then publishes to the `system:restart` Redis pub/sub channel — both backend and worker containers restart automatically via Docker `restart: unless-stopped`. Prefer this method in production to maintain audit trail and avoid direct server access. After restart, verify `/api/v1/health/ready` returns `status=ready` with empty `runtimeConfigMissingKeys`.
 
 ### 5.6 Ops control plane invite bootstrap on VPS (mandatory)
 
@@ -2331,7 +2332,7 @@ docker exec ecom-postgres psql -U postgres -d ecom_template -c "SELECT 1;"
 
 ### Phase 7 incident companion (May 2026)
 
-For real-world failure signatures and copy/paste remediations observed during live VPS deploy (Prisma version drift, host-vs-container DB routing, compose postgres port collision, missing strict env keys, restart-loop triage), see:
+For real-world failure signatures and copy/paste remediations observed during live VPS deploy (Prisma version drift, host-vs-container DB routing, compose postgres port collision, bootstrap vs runtime config readiness, restart-loop triage), see:
 
 - `docs/PHASE7_VPS_DEPLOY_INCIDENT_PLAYBOOK.md`
 

@@ -340,7 +340,8 @@ Verify:
 
 1. Containers: `${CLIENT_ID}-postgres`, `${CLIENT_ID}-redis`, `${CLIENT_ID}-backend`, `${CLIENT_ID}-workers`.
 2. Health: `curl -sS http://127.0.0.1:<BACKEND_PORT>/api/v1/health` — must report DB + Redis connected (`TRD.md` §4.3).
-3. Workers processing: trigger a test flow or inspect **`GET /api/v1/ops/queues`** (Bull Board, ops session + `ops:read` — `TRD.md` §10.1).
+3. Readiness: `curl -sS http://127.0.0.1:<BACKEND_PORT>/api/v1/health/ready` — before go-live this must be `status=ready` with `runtimeConfigMissingKeys=[]`.
+4. Workers processing: trigger a test flow or inspect **`GET /api/v1/ops/queues`** (Bull Board, ops session + `ops:read` — `TRD.md` §10.1).
 
 ---
 
@@ -735,9 +736,10 @@ git push origin main
       → git pull + SHA verification
       → docker compose build   (new image built; old containers still serve)
       → npx prisma migrate deploy   (migrations run before container swap)
-      → docker compose up -d   (container swap — ~3–5s window)
+      → docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml up -d backend workers   (container swap — ~3–5s window)
       → nginx maintenance page auto-serves during the window
       → health check: /api/v1/health (30 retries × 2s)
+      → readiness gate: /api/v1/health/ready must be status=ready with runtimeConfigMissingKeys=[]
       → done ✅ (or deploy marked failed if health check times out)
 ```
 
@@ -798,8 +800,9 @@ Go to **Settings → Secrets and variables → Actions** in the client's GitHub 
 | CI gate | Reliability CI must pass | Deploy never runs on CI failure |
 | SHA verification | Script checks pulled SHA matches CI-validated SHA | Prevents race if another push lands mid-deploy |
 | Migrations first | `prisma migrate deploy` runs before container swap | Migrations must be backward-compatible (additive) |
-| Container swap | `docker compose up -d` | Uses `restart: unless-stopped` — stays up after future VPS reboots |
-| Health check | 30 retries × 2s = 60s window | Fails deploy + dumps logs if backend doesn't come up |
+| Container swap | `docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml up -d backend workers` | Host-Postgres prod overlay; uses `restart: unless-stopped` |
+| Health check | 30 retries × 2s = 60s window | `/api/v1/health` must respond |
+| Readiness gate | After health passes | `/api/v1/health/ready` must be `status=ready` with `runtimeConfigMissingKeys=[]` |
 | Worker check | Verifies `workers` container is running | Emits warning (not hard failure) if workers are degraded |
 | Image cleanup | `docker image prune -f` | Removes dangling images from previous builds |
 
@@ -840,7 +843,7 @@ docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml u
 
 ### Downtime expectation
 
-~3–5 seconds during `docker compose up -d`. The nginx maintenance page (`/etc/nginx/maintenance/maintenance.html`) is configured via `error_page 502 503` in the nginx config template and serves automatically during this window with a `Retry-After: 15` header and 15s auto-refresh.
+~3–5 seconds during `docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml up -d backend workers`. The nginx maintenance page (`/etc/nginx/maintenance/maintenance.html`) is configured via `error_page 502 503` in the nginx config template and serves automatically during this window with a `Retry-After: 15` header and 15s auto-refresh.
 
 For zero-downtime deploys, a blue-green or Docker Swarm approach would be required — outside the scope of the current single-VPS model.
 
