@@ -296,7 +296,7 @@ Each client repo commit message records which template version it was bootstrapp
 - **Nginx on the host** — one instance handles all domain routing and SSL. Certbot (host-installed) manages all certificates.
 - **Admin frontend is route-based in same app** — Next.js frontend serves storefront and admin routes from one deployment (no separate admin host/container).
 - **Frontend runs as a PM2 host process** — Next.js is NOT containerised; it runs directly on the VPS host under PM2 for zero-downtime reloads. Each client gets an independent process (`<client-id>-frontend`) on its own port (`3100 + N`).
-- **GitHub Actions self-hosted runner per client** — each client repo has its own runner registered with a unique label (`VPS_RUNNER_LABEL`). On every push to `main`, the `deploy-backend` job rebuilds Docker containers and the `deploy-frontend` job runs `vps-frontend-deploy.sh` for zero-downtime PM2 reload. See `.github/workflows/deploy.yml` and `docs/CLIENT_VPS_SETUP_GUIDE.md` §22.
+- **GitHub Actions self-hosted runner per client** — each client repo has its own runner on that client's VPS (polls GitHub outbound; no inbound SSH for deploys). On every push to `main` after CI passes: `deploy-backend` + optional `deploy-frontend` via `vps-deploy.sh` / `vps-frontend-deploy.sh`. **Setup:** `docs/GITHUB_CD_SELF_HOSTED_RUNNER_GUIDE.md` (Phase 7.6); summary: `docs/CLIENT_VPS_SETUP_GUIDE.md` §22. Monorepos use repo-root `.github/workflows/`; backend-only repos use `backend/.github/workflows/`.
 
 ### 5.2 Docker Compose (Per Client)
 

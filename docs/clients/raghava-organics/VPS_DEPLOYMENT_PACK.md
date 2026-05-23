@@ -44,7 +44,8 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 
 ## GitHub Actions (CD)
 
-See [GITHUB_CD_SETUP.md](./GITHUB_CD_SETUP.md).
+- **Full guide:** [backend/docs/GITHUB_CD_SELF_HOSTED_RUNNER_GUIDE.md](../../../backend/docs/GITHUB_CD_SELF_HOSTED_RUNNER_GUIDE.md)
+- **Raghava values:** [GITHUB_CD_SETUP.md](./GITHUB_CD_SETUP.md)
 
 ## Nginx
 

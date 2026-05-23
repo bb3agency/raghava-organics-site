@@ -707,8 +707,9 @@ If you currently deploy under `/srv/...`, standardize to `/var/www/...` on the n
 1. `ECOM_MASTER.md` — §5 VPS layout, §12 per-client checklist, §11 security pipeline diagram  
 2. `TRD.md` — §3 infrastructure, §4.2 plugin order, §7 API and webhooks, §10 queues  
 3. `BRD.md` — §12 Phase 6 acceptance (maps to `docs/CLIENT_GO_LIVE_VALIDATION_GUIDE.md`)  
-4. Repo: `docker-compose.yml`, `Dockerfile`, `nginx/client.conf.template`, `.env.example`, `src/main.ts`, `queues/workers/`
-5. `docs/THIRD_PARTY_INTEGRATIONS_SETUP_AND_KEY_MANAGEMENT_GUIDE.md` + `docs/CLIENT_INTEGRATION_CREDENTIAL_REGISTER_TEMPLATE.md` — provider setup, dry-run, rotation, compromise drill, and evidence register
+4. `docs/GITHUB_CD_SELF_HOSTED_RUNNER_GUIDE.md` — **push-to-deploy** (one runner per client repo; Phase 7.6)  
+5. Repo: `docker-compose.yml`, `Dockerfile`, `nginx/client.conf.template`, `.env.example`, `src/main.ts`, `queues/workers/`
+6. `docs/THIRD_PARTY_INTEGRATIONS_SETUP_AND_KEY_MANAGEMENT_GUIDE.md` + `docs/CLIENT_INTEGRATION_CREDENTIAL_REGISTER_TEMPLATE.md` — provider setup, dry-run, rotation, compromise drill, and evidence register
 
 Next.js integration for storefront/admin is **`docs/NEXTJS_FRONTEND_INTEGRATION_GUIDE.md`**.
 
@@ -720,17 +721,23 @@ Canonical matrix note: route/control and permission ownership matrices remain ca
 
 ## 22. Continuous Deployment (push-to-deploy via GitHub Actions)
 
-This template ships with a push-to-deploy pipeline: every `git push` to `main` on a client repo automatically builds the Docker image, runs migrations, and restarts the backend stack on their Hetzner VPS.
+> **Full step-by-step guide (use for every new client):** [`docs/GITHUB_CD_SELF_HOSTED_RUNNER_GUIDE.md`](GITHUB_CD_SELF_HOSTED_RUNNER_GUIDE.md)  
+> **Per-client filled checklist:** copy [`docs/templates/client-GITHUB_CD_SETUP.template.md`](templates/client-GITHUB_CD_SETUP.template.md) → `docs/clients/<client-id>/GITHUB_CD_SETUP.md`  
+> **Onboarding phase:** `docs/CLIENT_ONBOARDING_EXECUTION_ORDER.md` — Phase 7.6
 
-**Mechanism:** A self-hosted GitHub Actions runner is installed directly on the VPS. It maintains a persistent outbound HTTPS connection to GitHub — GitHub never opens an inbound connection to the VPS. No SSH is involved during deploys, so port 22 can be locked to your office IP only.
+This template ships with a **Vercel-like developer experience** on the client's own VPS: every `git push` to `main` on a **client GitHub repo** automatically deploys after CI passes.
 
-**The pipeline is opt-in.** The template repo itself never deploys — `VPS_DEPLOY_ENABLED=true` must be set in each client's GitHub repo to activate it.
+**Mechanism:** Install **one self-hosted GitHub Actions runner per client repository** on that client's VPS. The runner **polls GitHub over outbound HTTPS (port 443)** — GitHub never opens an inbound connection to the VPS. Deploy jobs execute `vps-deploy.sh` and `vps-frontend-deploy.sh` locally on the server. **No SSH is required during deploys**; restrict port 22 to your office IP after the runner is Online.
+
+**The pipeline is opt-in.** The backend template repo itself never deploys — set `VPS_DEPLOY_ENABLED=true` only on each **client** GitHub repository.
 
 ### How it works
 
 ```
 git push origin main
-  → Reliability CI (.github/workflows/ci.yml) runs all gates
+  → Reliability CI runs all gates
+      (monorepo: .github/workflows/reliability-ci.yml at repo root)
+      (backend-only client repo: backend/.github/workflows/ci.yml)
   → if CI passes → deploy job queued on GitHub
       → self-hosted runner on VPS picks up job via outbound HTTPS (port 443)
       → git pull + SHA verification
@@ -924,7 +931,7 @@ STOREFRONT_PORT=3101
 
 | File | Purpose |
 |------|---------|
-| `.github/workflows/deploy.yml` | GitHub Actions deploy workflow (`runs-on: ${{ vars.VPS_RUNNER_LABEL \|\| 'self-hosted' }}`) — two jobs: `deploy-backend` and `deploy-frontend` |
+| `.github/workflows/deploy.yml` | Deploy workflow at **repo root** for monorepos, or `backend/.github/workflows/deploy.yml` for backend-only repos. `runs-on: ${{ vars.VPS_RUNNER_LABEL \|\| 'self-hosted' }}` — jobs `deploy-backend` and `deploy-frontend` |
 | `scripts/vps-deploy.sh` | Backend deploy script — Docker Compose build + migration + container swap |
 | `scripts/vps-frontend-deploy.sh` | Frontend deploy script — Next.js build + PM2 zero-downtime reload |
 | `nginx/client.conf.template` | Nginx config with `error_page 502 503 /maintenance.html` |

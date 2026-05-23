@@ -1,3 +1,6 @@
+# Backend-only repos: this file is the CD entrypoint.
+# Monorepos: use /.github/workflows/deploy.yml instead (frontend script via VPS_CLIENT_PATH).
+
 name: Deploy to VPS
 
 # Triggered automatically after Reliability CI completes on main.
@@ -100,7 +103,9 @@ jobs:
 
       - name: Deploy frontend locally via vps-frontend-deploy.sh
         env:
+          VPS_CLIENT_PATH: ${{ secrets.VPS_CLIENT_PATH }}
           VPS_FRONTEND_PATH: ${{ secrets.VPS_FRONTEND_PATH }}
           COMMIT_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
-          bash "$VPS_FRONTEND_PATH/scripts/vps-frontend-deploy.sh" "$VPS_FRONTEND_PATH" "$COMMIT_SHA"
+          # Monorepo: deploy script lives under backend/scripts/, not frontend/scripts/
+          bash "$VPS_CLIENT_PATH/scripts/vps-frontend-deploy.sh" "$VPS_FRONTEND_PATH" "$COMMIT_SHA"

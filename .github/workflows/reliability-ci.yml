@@ -1,5 +1,5 @@
-# Backend-only repos: this file is the CI entrypoint.
-# Monorepos (backend + frontend at repo root): use /.github/workflows/reliability-ci.yml instead.
+# Monorepo entrypoint — GitHub Actions only runs workflows from the repository root.
+# Canonical job definition: backend/.github/workflows/ci.yml (keep in sync).
 
 name: Reliability CI
 
@@ -12,6 +12,10 @@ on:
     branches:
       - main
       - master
+
+defaults:
+  run:
+    working-directory: backend
 
 jobs:
   reliability-gates:
@@ -70,6 +74,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
+          cache-dependency-path: backend/package-lock.json
 
       - name: Install dependencies
         run: npm ci
@@ -116,8 +121,6 @@ jobs:
       - name: Reliability gates
         run: |
           if [[ "$GITHUB_REF" == "refs/heads/main" || "$GITHUB_REF" == "refs/heads/master" || "$GITHUB_REF" == refs/heads/release/* ]]; then
-            # Only require live Prometheus telemetry if PROMETHEUS_BASE_URL is configured.
-            # Template repos without Prometheus gracefully fall back to env-based budget.
             if [ -n "${PROMETHEUS_BASE_URL:-}" ]; then
               export RELEASE_POLICY_MODE=live_required
             fi
@@ -164,5 +167,5 @@ jobs:
         with:
           name: unit-coverage
           path: |
-            artifacts/coverage/unit
-            coverage
+            backend/artifacts/coverage/unit
+            backend/coverage

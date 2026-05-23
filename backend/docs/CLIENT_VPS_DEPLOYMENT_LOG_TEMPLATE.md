@@ -126,6 +126,31 @@
 
 ---
 
+## Phase 7.6 — GitHub Push-to-Deploy (Self-Hosted Runner)
+
+> **Full guide:** `docs/GITHUB_CD_SELF_HOSTED_RUNNER_GUIDE.md`  
+> **Client checklist:** `docs/clients/<client-id>/GITHUB_CD_SETUP.md`
+
+**Status:** `[ ]` not started · `[~]` in progress · `[x]` done
+
+- [ ] Monorepo at `/var/www/<client-id>/` (single clone) or backend-only layout documented
+- [ ] Workflow files on client repo `main` (root for monorepo)
+- [ ] Runner installed on VPS for this client's GitHub repo; label `<client-id>-vps`
+- [ ] GitHub Variables + Secrets configured
+- [ ] Test push: CI green → Deploy to VPS green on correct runner
+
+| Field | Value |
+|---|---|
+| GitHub repo | |
+| Runner Online date | |
+| First green CD SHA | |
+
+**Phase 7.6 cleared on:** —
+
+**Notes:**
+
+---
+
 ## Phase 8 — Ops Control Plane Invite Bootstrap
 
 **Status:** `[ ]` not started · `[~]` in progress · `[x]` done

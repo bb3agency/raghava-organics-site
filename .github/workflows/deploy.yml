@@ -1,0 +1,94 @@
+# Push-to-deploy for client VPS (see backend/docs/CLIENT_VPS_SETUP_GUIDE.md §22).
+#
+# Model: one self-hosted runner per client GitHub repo on that client's VPS.
+# The runner maintains outbound HTTPS to GitHub (polling). On push to main:
+#   Reliability CI (ubuntu-latest) → this workflow → vps-deploy.sh + vps-frontend-deploy.sh
+#
+# Monorepo (raghava-organics-site): workflows live here at repo root.
+# Backend-only client repo: use backend/.github/workflows/deploy.yml instead.
+
+name: Deploy to VPS
+
+on:
+  workflow_run:
+    workflows: ["Reliability CI"]
+    types:
+      - completed
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: "Git SHA to deploy (default: HEAD of main on VPS after pull)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vps-deploy-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  deploy-backend:
+    name: Deploy Backend to Hetzner VPS
+    runs-on: ${{ vars.VPS_RUNNER_LABEL || 'self-hosted' }}
+    if: |
+      vars.VPS_DEPLOY_ENABLED == 'true' && (
+        (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') ||
+        github.event_name == 'workflow_dispatch'
+      )
+
+    steps:
+      - name: Verify deploy variables are set
+        run: |
+          missing=()
+          [ -z "${{ secrets.VPS_CLIENT_PATH }}" ] && missing+=("VPS_CLIENT_PATH (secret)")
+          if [ ${#missing[@]} -ne 0 ]; then
+            echo "::error::Missing required secrets: ${missing[*]}"
+            echo "See backend/docs/CLIENT_VPS_SETUP_GUIDE.md §22"
+            exit 1
+          fi
+          if [ -z "${{ vars.VPS_RUNNER_LABEL }}" ]; then
+            echo "::warning::VPS_RUNNER_LABEL is not set — using generic self-hosted label."
+            echo "Register the runner with a unique label per client repo (e.g. raghava-organics-vps)."
+          fi
+
+      - name: Deploy backend locally via vps-deploy.sh
+        env:
+          VPS_CLIENT_PATH: ${{ secrets.VPS_CLIENT_PATH }}
+          COMMIT_SHA: ${{ github.event.workflow_run.head_sha || inputs.commit_sha || github.sha }}
+        run: |
+          bash "$VPS_CLIENT_PATH/scripts/vps-deploy.sh" "$VPS_CLIENT_PATH" "$COMMIT_SHA"
+
+  deploy-frontend:
+    name: Deploy Frontend to Hetzner VPS
+    runs-on: ${{ vars.VPS_RUNNER_LABEL || 'self-hosted' }}
+    if: |
+      vars.VPS_DEPLOY_ENABLED == 'true' &&
+      vars.FRONTEND_DEPLOY_ENABLED == 'true' && (
+        (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') ||
+        github.event_name == 'workflow_dispatch'
+      )
+
+    steps:
+      - name: Verify frontend deploy variables are set
+        run: |
+          missing=()
+          [ -z "${{ secrets.VPS_CLIENT_PATH }}" ] && missing+=("VPS_CLIENT_PATH (secret)")
+          [ -z "${{ secrets.VPS_FRONTEND_PATH }}" ] && missing+=("VPS_FRONTEND_PATH (secret)")
+          if [ ${#missing[@]} -ne 0 ]; then
+            echo "::error::Missing required secrets: ${missing[*]}"
+            echo "See backend/docs/CLIENT_VPS_SETUP_GUIDE.md §22"
+            exit 1
+          fi
+
+      - name: Deploy frontend locally via vps-frontend-deploy.sh
+        env:
+          VPS_CLIENT_PATH: ${{ secrets.VPS_CLIENT_PATH }}
+          VPS_FRONTEND_PATH: ${{ secrets.VPS_FRONTEND_PATH }}
+          COMMIT_SHA: ${{ github.event.workflow_run.head_sha || inputs.commit_sha || github.sha }}
+        run: |
+          bash "$VPS_CLIENT_PATH/scripts/vps-frontend-deploy.sh" "$VPS_FRONTEND_PATH" "$COMMIT_SHA"

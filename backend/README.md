@@ -421,7 +421,9 @@ On every push to `main` that passes the Reliability CI workflow, `.github/workfl
 | `VPS_CLIENT_PATH` | Secret | `/var/www/<client-id>/backend` |
 | `VPS_FRONTEND_PATH` | Secret | `/var/www/<client-id>/frontend` |
 
-See `docs/CLIENT_VPS_SETUP_GUIDE.md` §22 for full setup instructions.
+**Setup guide:** [`docs/GITHUB_CD_SELF_HOSTED_RUNNER_GUIDE.md`](docs/GITHUB_CD_SELF_HOSTED_RUNNER_GUIDE.md) (full checklist) · [`docs/CLIENT_VPS_SETUP_GUIDE.md`](docs/CLIENT_VPS_SETUP_GUIDE.md) §22 (summary)
+
+**Monorepo client repos** (e.g. `backend/` + `frontend/` at root): workflows must live at **repository root** `.github/workflows/reliability-ci.yml` and `deploy.yml`. Backend-only repos use `backend/.github/workflows/`.
 
 ### Quality Pipeline
 

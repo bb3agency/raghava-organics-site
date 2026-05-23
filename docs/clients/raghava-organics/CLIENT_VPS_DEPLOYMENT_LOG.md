@@ -53,6 +53,20 @@
 
 ---
 
+## Phase 7.6 — GitHub CD (self-hosted runner)
+
+**Status:** `[ ]` configure after Phase 7 (+ PM2 for frontend CD)
+
+> Guide: [backend/docs/GITHUB_CD_SELF_HOSTED_RUNNER_GUIDE.md](../../../backend/docs/GITHUB_CD_SELF_HOSTED_RUNNER_GUIDE.md)
+
+- [ ] Monorepo at `/var/www/raghava-organics` (single clone)
+- [ ] Runner installed: `raghava-organics-vps` label
+- [ ] GitHub Variables + Secrets per [GITHUB_CD_SETUP.md](./GITHUB_CD_SETUP.md)
+- [ ] Root workflows on `main`: `.github/workflows/reliability-ci.yml`, `deploy.yml`
+- [ ] Test push to `main` → CI green → Deploy jobs on VPS runner
+
+---
+
 ## Phase 10 — Frontend
 
 **Status:** `[~]` template ready

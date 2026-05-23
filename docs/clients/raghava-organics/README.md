@@ -9,7 +9,7 @@ Client-specific deployment and evidence live here (not under `backend/docs/`).
 | [CLIENT_VPS_DEPLOYMENT_LOG.md](./CLIENT_VPS_DEPLOYMENT_LOG.md) | Phase 6–14 checklist |
 | [LOCAL_SETUP_EVIDENCE.md](./LOCAL_SETUP_EVIDENCE.md) | Local backend bootstrap evidence |
 | [DEPLOYMENT_READY_SIGNOFF.md](./DEPLOYMENT_READY_SIGNOFF.md) | Local vs production readiness |
-| [GITHUB_CD_SETUP.md](./GITHUB_CD_SETUP.md) | GitHub Actions + self-hosted runner |
+| [GITHUB_CD_SETUP.md](./GITHUB_CD_SETUP.md) | Raghava CD values (full guide: [GITHUB_CD_SELF_HOSTED_RUNNER_GUIDE.md](../../../backend/docs/GITHUB_CD_SELF_HOSTED_RUNNER_GUIDE.md)) |
 | [PHASE5_EVIDENCE_CHECKLIST.md](./PHASE5_EVIDENCE_CHECKLIST.md) | Postman, dry-runs, go-live sign-off |
 | [scripts/](./scripts/) | Bash scripts to run on the VPS |
 

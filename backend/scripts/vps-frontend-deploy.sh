@@ -102,7 +102,7 @@ if [ -f "$SHA_RECORD" ]; then
   CHANGED=$(git diff --name-only "$LAST_SHA" "$COMMIT_SHA" 2>/dev/null || echo "UNKNOWN")
   if [ "$CHANGED" = "UNKNOWN" ]; then
     echo "Could not diff against last SHA (force-push or first deploy). Proceeding with full build."
-  elif echo "$CHANGED" | grep -qE '^(app/|pages/|components/|lib/|hooks/|styles/|public/|next\.config|package\.json|package-lock\.json|tsconfig|tailwind\.config|postcss\.config)'; then
+  elif echo "$CHANGED" | grep -qE '^(frontend/)?(app/|pages/|components/|lib/|hooks/|styles/|public/|next\.config|package\.json|package-lock\.json|tsconfig|tailwind\.config|postcss\.config)'; then
     echo "Frontend-relevant files changed - full build required."
   else
     echo "No frontend-relevant files changed. Skipping build."

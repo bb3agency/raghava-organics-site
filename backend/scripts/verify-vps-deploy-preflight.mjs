@@ -23,12 +23,24 @@ const requiredFiles = [
   "docs/BACKEND_GO_LIVE_CHECKLIST.md",
 ];
 
+const monorepoWorkflows = [
+  "../.github/workflows/reliability-ci.yml",
+  "../.github/workflows/deploy.yml",
+];
+
 const errors = [];
 
 for (const rel of requiredFiles) {
   const abs = resolve(root, rel);
   if (!existsSync(abs)) {
     errors.push(`Missing required file: ${rel}`);
+  }
+}
+
+for (const rel of monorepoWorkflows) {
+  const abs = resolve(root, rel);
+  if (!existsSync(abs)) {
+    errors.push(`Missing monorepo workflow (push-to-deploy will not run): ${rel}`);
   }
 }
 

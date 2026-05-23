@@ -437,6 +437,22 @@ Endpoint-criticality tiers (auth/catalog/cart/checkout/webhook/admin/health). Pr
 ## [2026-04-27] Inventory restock restricted to cancellation transitions
 Admin status updates restock only on `CANCELLED` for captured payments — prevents stock inflation on forward transitions. **Affects:** `orders.service.ts`.
 
+## [2026-05-23] Push-to-deploy via per-repo self-hosted GitHub Actions runner
+
+**Decision:** Each client production VPS runs exactly **one** GitHub Actions self-hosted runner registered to **that client's GitHub repository**, with a unique runner label (`<client-id>-vps`). Deploy jobs use `runs-on: ${{ vars.VPS_RUNNER_LABEL || 'self-hosted' }}` so multiple clients on one physical VPS cannot receive each other's deploy jobs.
+
+**Flow (unchanged from CLIENT_VPS_SETUP_GUIDE §22):** `git push` to `main` → `Reliability CI` (GitHub-hosted) → on success `Deploy to VPS` (`workflow_run`) → runner on VPS executes `vps-deploy.sh` and optionally `vps-frontend-deploy.sh` locally. The runner polls GitHub via outbound HTTPS; no inbound SSH or webhook to the VPS is required.
+
+**Monorepo adjustment:** For client repos that contain `backend/` + `frontend/` at the root (e.g. `raghava-organics-site`), workflow files must live at **repository root** `.github/workflows/` (`reliability-ci.yml`, `deploy.yml`) with `defaults.run.working-directory: backend` for CI. Backend-only template clones continue to use `backend/.github/workflows/`. Deploy scripts always live under `backend/scripts/`; frontend deploy is invoked as `$VPS_CLIENT_PATH/scripts/vps-frontend-deploy.sh $VPS_FRONTEND_PATH`.
+
+**Opt-in:** `VPS_DEPLOY_ENABLED=true` (repository Variable) on the client repo only. Template/backend baseline repos leave it unset.
+
+*Alt: SSH pull on post-receive hook (rejected — inbound access, no CI gate, no audit in GitHub Actions); shared runner without per-client label (rejected — cross-client deploy misfire on multi-tenant VPS); Vercel for API/workers (rejected — BullMQ workers and Dockerized backend require VPS).*
+
+**Affects:** `.github/workflows/`, `backend/.github/workflows/deploy.yml`, `backend/scripts/vps-deploy.sh`, `backend/scripts/vps-frontend-deploy.sh`, `docs/CLIENT_VPS_SETUP_GUIDE.md` §22, `docs/clients/*/GITHUB_CD_SETUP.md`.
+
+---
+
 ## [2026-05-23] Phase 7 VPS deploy must fail-fast on strict env + host DB routing prerequisites
 Adopted a deterministic Phase 7 preflight model after live incident replay:
 - `npm ci` before any Prisma command (avoid accidental Prisma major drift from floating `npx`),

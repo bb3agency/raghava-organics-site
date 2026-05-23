@@ -830,7 +830,7 @@ Capacity signals before onboarding each additional client:
 
 ### 5.4 Deploy this client
 
-> **First-time bootstrap only.** The steps below (git clone, docker compose up) are run once to set up the client stack. After completing `CLIENT_VPS_SETUP_GUIDE.md` §22 (self-hosted runner setup), all subsequent deploys happen automatically — every `git push` to `main` triggers the CI/CD pipeline: CI gates → runner picks up job → build → migrate → container swap → health check. No SSH required for re-deploys.
+> **First-time bootstrap only.** The steps below (git clone, docker compose up) are run once to set up the client stack. After completing [`docs/GITHUB_CD_SELF_HOSTED_RUNNER_GUIDE.md`](GITHUB_CD_SELF_HOSTED_RUNNER_GUIDE.md) (Phase 7.6 — self-hosted runner per client repo + GitHub Variables/Secrets), all subsequent deploys happen automatically — every `git push` to `main` triggers: Reliability CI (cloud) → Deploy to VPS (runner on client VPS polls GitHub) → `vps-deploy.sh` + optional `vps-frontend-deploy.sh`. No SSH required for re-deploys.
 
 ```bash
 ssh deploy@your-vps

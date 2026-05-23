@@ -580,6 +580,55 @@ docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml l
 
 ---
 
+## Phase 7.6 — Enable GitHub push-to-deploy (self-hosted runner)
+
+**What you are doing:** Register a GitHub Actions self-hosted runner on the client VPS for **this client's GitHub repo only**, configure repository Variables/Secrets, and verify that a push to `main` triggers automatic deploy after CI passes.
+
+**Prerequisites:**
+
+- Phase 7 complete (`/api/v1/health` OK on VPS).
+- Monorepo cloned once at `/var/www/<client-id>/` (see guide — not two separate clones).
+- Workflow files present on `main` (monorepo: repo root `.github/workflows/`; backend-only repo: `backend/.github/workflows/`).
+
+**Full guide:** [`docs/GITHUB_CD_SELF_HOSTED_RUNNER_GUIDE.md`](GITHUB_CD_SELF_HOSTED_RUNNER_GUIDE.md)
+
+**Execution steps (summary):**
+
+1. **VPS — install runner** (token from client repo → Settings → Actions → Runners → New):
+   ```bash
+   mkdir -p ~/actions-runner && cd ~/actions-runner
+   # curl + tar from GitHub UI
+   ./config.sh \
+     --url https://github.com/<org>/<client-repo> \
+     --token <REGISTRATION_TOKEN> \
+     --name "<client-id>-vps" \
+     --labels "self-hosted,<client-id>-vps" \
+     --unattended
+   sudo ./svc.sh install && sudo ./svc.sh start
+   ```
+2. **GitHub — Variables:** `VPS_DEPLOY_ENABLED=true`, `VPS_RUNNER_LABEL=<client-id>-vps`, `FRONTEND_DEPLOY_ENABLED=true` (if storefront on VPS).
+3. **GitHub — Secrets:** `VPS_CLIENT_PATH=/var/www/<client-id>/backend`, `VPS_FRONTEND_PATH=/var/www/<client-id>/frontend`.
+4. **Test:** `git push origin main` → Actions: **Reliability CI** (green) → **Deploy to VPS** (jobs on `<client-id>-vps` runner).
+5. **Copy client checklist:** `cp docs/templates/client-GITHUB_CD_SETUP.template.md docs/clients/<client-id>/GITHUB_CD_SETUP.md` and fill values.
+
+> **Backend auto-deploy readiness:** `vps-deploy.sh` requires `/api/v1/health/ready` with empty `runtimeConfigMissingKeys`. First green **backend** CD deploy typically requires **Phase 8** complete. You may install the runner after Phase 7; frontend CD (PM2) can succeed earlier if PM2 was bootstrapped in Phase 10.
+
+**Daily workflow after Phase 7.6:**
+
+```bash
+git commit -m "feat: ..."
+git push origin main
+```
+
+**Evidence gate:**
+
+- Runner shows **Idle** (green) on the correct client repo with label `<client-id>-vps`.
+- All Variables and Secrets configured (Variables are not Secrets).
+- Test deploy workflow completed successfully on the self-hosted runner.
+- `client-<id>/GITHUB_CD_SETUP.md` filled and linked from `CLIENT_VPS_DEPLOYMENT_LOG.md`.
+
+---
+
 ## Phase 8 — Ops control plane invite bootstrap
 
 **What you are doing:** Create the first ops invite, complete setup from email, and confirm the ops control plane is accessible from the designated IP.
@@ -759,7 +808,7 @@ docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml l
    | Variable | `FRONTEND_DEPLOY_ENABLED` | `true` |
    | Secret | `VPS_FRONTEND_PATH` | `/var/www/<client-id>/frontend` |
 
-   > See `docs/CLIENT_VPS_SETUP_GUIDE.md` §22 for the full frontend CD pipeline reference.
+   > See [`docs/GITHUB_CD_SELF_HOSTED_RUNNER_GUIDE.md`](GITHUB_CD_SELF_HOSTED_RUNNER_GUIDE.md) and `docs/CLIENT_VPS_SETUP_GUIDE.md` §22.
 
 3. **Update Nginx** to proxy storefront traffic to `http://127.0.0.1:<STOREFRONT_PORT>`. Reload Nginx.
 
@@ -1007,3 +1056,5 @@ These rules come from `ECOM_MASTER.md` §5 and `TRD.md` §2.3. They are not sugg
 | `docs/CLIENT_DEV_LOG_TEMPLATE.md` | **Copy to `client-<id>/CLIENT_DEV_LOG.md` at Phase 0** — persistent dev context for Phases 0–5 (backend config, provider dry-runs, frontend milestones, Phase 5 gate) |
 | `docs/FRONTEND_DEV_LOG_TEMPLATE.md` | **Copy to `frontend/docs/FRONTEND_DEV_LOG.md` at Phase 4 start** — frontend slice-level tracker |
 | `docs/CLIENT_VPS_DEPLOYMENT_LOG_TEMPLATE.md` | **Copy to `client-<id>/CLIENT_VPS_DEPLOYMENT_LOG.md` at Phase 6 start** — VPS deployment progress log for Phases 6–14 |
+| `docs/GITHUB_CD_SELF_HOSTED_RUNNER_GUIDE.md` | **Phase 7.6** — push-to-deploy via per-repo self-hosted runner (full setup) |
+| `docs/templates/client-GITHUB_CD_SETUP.template.md` | **Copy to `client-<id>/GITHUB_CD_SETUP.md`** — per-client CD values checklist |

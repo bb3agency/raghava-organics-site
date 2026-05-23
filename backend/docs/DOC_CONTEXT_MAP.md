@@ -10,8 +10,9 @@ Use this map to keep AI/developer context small while ensuring no detail is lost
 4. `docs/API_ENDPOINT_INDEX.md` — endpoint inventory mapped to frontend/admin/ops UI surfaces.
 5. `docs/ENV_VS_DB_CONFIG_REFERENCE.md` — authoritative config source-of-truth (env vs DB), validation/alerting, recent hardening.
 6. `docs/PRODUCTION_FIRST_DEPLOY_CHECKLIST.md` — step-by-step Phase 1/2 model: what goes in `.env` vs Ops UI, ops-newuser flow.
-7. `docs/BACKEND_GO_LIVE_CHECKLIST.md` — backend release/parity gate.
-8. `docs/FRONTEND_AI_GO_LIVE_CHECKLIST.md` — frontend release gate.
+7. `docs/GITHUB_CD_SELF_HOSTED_RUNNER_GUIDE.md` — push-to-deploy: one self-hosted runner per client repo, Variables/Secrets, monorepo workflow paths.
+8. `docs/BACKEND_GO_LIVE_CHECKLIST.md` — backend release/parity gate.
+9. `docs/FRONTEND_AI_GO_LIVE_CHECKLIST.md` — frontend release gate.
 
 ## Development-time supporting references (read only when needed)
 
@@ -24,6 +25,7 @@ Use this map to keep AI/developer context small while ensuring no detail is lost
 - `docs/OPS_CONTROL_PLANE_GUIDE.md` — detailed ops control-plane behavior.
 - Error handling canon: `docs/NEXTJS_FRONTEND_INTEGRATION_GUIDE.md` section `2.1` (frontend error-code handling matrix) + `docs/CLIENT_VPS_SETUP_GUIDE.md` section `19.1` (VPS/API error triage matrix).
 - `docs/PHASE7_VPS_DEPLOY_INCIDENT_PLAYBOOK.md` — real incident replay and deterministic remediation for Phase 7 VPS backend deploy.
+- `docs/templates/client-GITHUB_CD_SETUP.template.md` — per-client filled CD checklist (`GITHUB_CD_SETUP.md`).
 - `docs/HARDENING_HISTORY.md` — full engineering hardening narrative (reference-only during active delivery).
 - `docs/DECISIONS.md` — architectural decision ledger.
 
