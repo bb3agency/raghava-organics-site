@@ -20,6 +20,16 @@ Fill [VPS_INPUTS.md](./VPS_INPUTS.md) first, then run scripts under [scripts/](.
 | Production domain | `raghavaorganics.com` |
 | VPS IP | `178.104.46.202` |
 
+## Docker Compose on VPS
+
+Production uses **host PostgreSQL** (port 5432) plus **Compose Redis + backend + workers** only:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml -p raghava-organics up -d backend workers
+```
+
+Do **not** run plain `docker compose up -d` on VPS — it starts a second Postgres container and fails with `address already in use` on `:5432`.
+
 ## Phase 1 production `.env` (bootstrap-only)
 
 Copy to VPS `/var/www/raghava-organics/backend/.env` from vault. Template: [production.backend.env.example](./production.backend.env.example)

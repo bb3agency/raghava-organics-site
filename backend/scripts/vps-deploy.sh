@@ -44,6 +44,9 @@ log "Starting deploy to $CLIENT_PATH (expected SHA: $EXPECTED_SHA)"
 
 cd "$CLIENT_PATH"
 
+COMPOSE_FILES=(-f docker-compose.yml -f docker-compose.prod.yml)
+[ -f docker-compose.prod.yml ] || fail "docker-compose.prod.yml not found — required for VPS (host Postgres)"
+
 # ---------------------------------------------------------------------------
 # 1. Pull latest code from main
 # ---------------------------------------------------------------------------
@@ -63,7 +66,7 @@ log "SHA verified: $CURRENT_SHA"
 # 2. Build new Docker image (old containers remain live during build)
 # ---------------------------------------------------------------------------
 log "Building Docker image..."
-docker compose build
+docker compose "${COMPOSE_FILES[@]}" build
 
 # ---------------------------------------------------------------------------
 # 3. Run database migrations (before container swap)
@@ -72,15 +75,20 @@ docker compose build
 # ---------------------------------------------------------------------------
 log "Running Prisma migrations..."
 # Generate client inside a temporary builder container to pick up any new models
-docker compose run --rm --no-deps --entrypoint "" backend \
-  sh -c "npx prisma generate && npx prisma migrate deploy"
+MIGRATE_DATABASE_URL="$(grep -E '^DATABASE_URL=' .env | cut -d= -f2- | sed 's/host\.docker\.internal/127.0.0.1/')"
+log "Prisma migrate on host Postgres (127.0.0.1)..."
+DATABASE_URL="$MIGRATE_DATABASE_URL" npx prisma migrate deploy --schema prisma/schema.prisma
+
+docker compose "${COMPOSE_FILES[@]}" run --rm --no-deps --entrypoint "" backend \
+  sh -c "npx prisma generate"
 
 # ---------------------------------------------------------------------------
 # 4. Swap containers (minimal-downtime restart)
 #    Nginx maintenance page handles the ~3–5s window automatically.
 # ---------------------------------------------------------------------------
 log "Restarting containers..."
-docker compose up -d
+docker compose "${COMPOSE_FILES[@]}" up -d redis
+docker compose "${COMPOSE_FILES[@]}" up -d backend workers
 
 # ---------------------------------------------------------------------------
 # 5. Health check — retry until backend is responding or timeout
@@ -97,8 +105,8 @@ for i in $(seq 1 $HEALTH_RETRIES); do
   fi
   if [ "$i" -eq "$HEALTH_RETRIES" ]; then
     log "Health check failed after ${HEALTH_RETRIES} attempts — dumping container logs"
-    docker compose logs --tail=50 backend || true
-    docker compose logs --tail=50 workers || true
+    docker compose "${COMPOSE_FILES[@]}" logs --tail=50 backend || true
+    docker compose "${COMPOSE_FILES[@]}" logs --tail=50 workers || true
     fail "Backend did not become healthy after deploy. Manual intervention required."
   fi
   sleep "$HEALTH_INTERVAL"
@@ -107,7 +115,7 @@ done
 # ---------------------------------------------------------------------------
 # 6. Verify workers are up
 # ---------------------------------------------------------------------------
-WORKERS_STATUS=$(docker compose ps workers --format json 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('State','unknown'))" 2>/dev/null || echo "unknown")
+WORKERS_STATUS=$(docker compose "${COMPOSE_FILES[@]}" ps workers --format json 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('State','unknown'))" 2>/dev/null || echo "unknown")
 if [ "$WORKERS_STATUS" != "running" ]; then
   log "WARNING: workers container may not be in running state (status: $WORKERS_STATUS)"
   log "Check: docker compose logs workers"

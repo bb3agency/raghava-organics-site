@@ -5,6 +5,7 @@ set -euo pipefail
 CLIENT_ID="${CLIENT_ID:-raghava-organics}"
 BACKEND_PATH="${BACKEND_PATH:-/var/www/raghava-organics/backend}"
 COMPOSE_PROJECT="${CLIENT_ID}"
+COMPOSE_FILES=(-f docker-compose.yml -f docker-compose.prod.yml)
 
 log() { echo "[phase7] $*"; }
 
@@ -18,8 +19,8 @@ log "Ensure Redis is not published publicly (comment ports: in docker-compose.ym
 log "Installing backend deps (required — bare 'npx prisma' pulls Prisma 7 and breaks migrate)..."
 npm ci
 
-log "Starting Redis..."
-docker compose -p "$COMPOSE_PROJECT" up -d redis
+log "Starting Redis (prod overlay — no Compose Postgres; host DB on :5432)..."
+docker compose -p "$COMPOSE_PROJECT" "${COMPOSE_FILES[@]}" up -d redis
 
 log "Prisma generate + migrate (lockfile-pinned Prisma 6)..."
 npx prisma generate --schema prisma/schema.prisma
@@ -30,7 +31,7 @@ log "Prisma migrate via host Postgres (127.0.0.1, not host.docker.internal)..."
 DATABASE_URL="$MIGRATE_DATABASE_URL" npx prisma migrate deploy --schema prisma/schema.prisma
 
 log "Building and starting backend + workers..."
-docker compose -p "$COMPOSE_PROJECT" up -d --build backend workers
+docker compose -p "$COMPOSE_PROJECT" "${COMPOSE_FILES[@]}" up -d --build backend workers
 
 BACKEND_PORT=$(grep -E '^BACKEND_PORT=' .env | cut -d= -f2 | tr -d '[:space:]')
 BACKEND_PORT="${BACKEND_PORT:-3001}"
@@ -46,5 +47,5 @@ for i in $(seq 1 30); do
   sleep 2
 done
 
-docker compose -p "$COMPOSE_PROJECT" logs --tail=40 backend
+docker compose -p "$COMPOSE_PROJECT" "${COMPOSE_FILES[@]}" logs --tail=40 backend
 exit 1
