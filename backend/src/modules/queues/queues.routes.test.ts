@@ -2,18 +2,20 @@ import Fastify from 'fastify';
 import { describe, expect, it, vi } from 'vitest';
 import { Queue } from 'bullmq';
 
+vi.mock('@common/guards/ops-auth.guard', () => ({
+  opsAuthGuard: vi.fn(async (request: { opsUser?: unknown }) => {
+    request.opsUser = { id: 'ops-1', email: 'ops@example.com', permissions: ['OPS_READ'] };
+  })
+}));
+vi.mock('@common/guards/ops-permissions.guard', () => ({
+  opsPermissionGuard: () => vi.fn(async () => undefined)
+}));
+
 import { registerQueuesRoutes } from './queues.routes';
 
 describe('registerQueuesRoutes', () => {
-  it('registers secured admin queue routes', async () => {
+  it('registers secured ops queue routes', async () => {
     const app = Fastify();
-    app.decorateRequest('jwtVerify', async function () {
-      (this as unknown as { user: unknown }).user = {
-        sub: 'user-1',
-        role: 'ADMIN',
-        permissions: ['queues:inspect']
-      };
-    });
 
     app.decorate('redis', { get: vi.fn().mockResolvedValue(null) } as never);
 
@@ -54,8 +56,7 @@ describe('registerQueuesRoutes', () => {
 
     const response = await app.inject({
       method: 'GET',
-      url: '/api/v1/admin/queues/dlq/summary',
-      headers: { authorization: 'Bearer token' }
+      url: '/api/v1/ops/queues/dlq/summary'
     });
 
     expect(response.statusCode).toBe(200);

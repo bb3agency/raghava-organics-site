@@ -83,12 +83,10 @@ NEXT_PUBLIC_RAZORPAY_KEY_ID=
 |---|---|---|---|
 | Session bootstrap | [ ] | `GET /ops/session` | |
 | Ops config overview/validate/stored/save | [ ] | `GET /ops/config/overview`, `POST /ops/config/validate`, `GET /ops/config/stored`, `POST /ops/config/save` | |
-| Load-shed request step | [ ] | `POST /ops/load-shed` | |
-| Load-shed approve/reject step | [ ] | `POST /ops/approvals/:requestId/confirm`, `/reject` | |
-| Approvals queue view | [ ] | `GET /ops/approvals` | |
+| Load-shed change (direct) | [ ] | `POST /ops/load-shed` | |
 | Audit timeline | [ ] | `GET /ops/audit/logs` | |
 
-**Tier 2 done when:** All slices `[x]`. Load-shed is provably two explicit steps. Ops credentials never visible in browser DevTools.
+**Tier 2 done when:** All slices `[x]`. Load-shed change is applied directly with OTP confirmation. Ops credentials never visible in browser DevTools.
 
 ---
 

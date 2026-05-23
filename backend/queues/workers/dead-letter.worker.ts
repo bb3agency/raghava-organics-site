@@ -1,4 +1,12 @@
 import { Worker, type ConnectionOptions } from 'bullmq';
+import { PrismaClient as RealPrismaClient } from '@prisma/client';
+import { sendTechnicalFailureAlert } from '../../src/modules/notifications/notification-failure-alert';
+
+type DeadLetterWorkerDeps = {
+  PrismaClient?: typeof RealPrismaClient;
+  Worker?: typeof Worker;
+  sendTechnicalFailureAlert?: typeof sendTechnicalFailureAlert;
+};
 
 /**
  * Dead Letter Queue (DLQ) Worker
@@ -6,16 +14,37 @@ import { Worker, type ConnectionOptions } from 'bullmq';
  * This is a no-op holding pen for terminal failures from all other queues.
  * Jobs land here when they exhaust all retry attempts in their source queue.
  *
- * Admin can inspect and retry jobs via Bull Board UI at /api/v1/admin/queues.
- * The worker simply logs receipt for audit trail — it does NOT auto-process.
+ * Ops can inspect and retry jobs via Bull Board UI at /api/v1/ops/queues (ops:read).
+ * The worker logs receipt for audit trail and fires a technical failure alert
+ * to all ops and admin users — every DLQ arrival is a terminal failure.
  */
-export function createDeadLetterWorker(connection: ConnectionOptions): Worker {
-  return new Worker(
+export function createDeadLetterWorker(connection: ConnectionOptions, deps?: DeadLetterWorkerDeps): Worker {
+  const PrismaClientCtor = deps?.PrismaClient ?? RealPrismaClient;
+  const WorkerCtor = deps?.Worker ?? Worker;
+  const alertFn = deps?.sendTechnicalFailureAlert ?? sendTechnicalFailureAlert;
+  const prisma = new PrismaClientCtor();
+
+  const worker = new WorkerCtor(
     'dead-letter',
-    async () => {
+    async (job) => {
       // No-op: DLQ is a holding pen for admin inspection.
       // Jobs are retained indefinitely (removeOnComplete: false, removeOnFail: false).
       // Admins can retry individual jobs via Bull Board UI.
+      // Alert fires via the 'completed' event below (every DLQ arrival = terminal failure).
+      void alertFn({
+        prisma,
+        template: 'DeadLetterJobArrival',
+        channel: 'UNKNOWN',
+        recipient: 'dead-letter-queue',
+        errorMessage: `Job "${job.name}" (id: ${job.id ?? 'unknown'}) arrived in the dead-letter queue after exhausting all retries`,
+        failureStage: 'WORKER_TERMINAL',
+        queueName: 'dead-letter',
+        jobName: job.name,
+        jobId: job.id ?? 'unknown',
+        domain: 'workers',
+        component: 'dead-letter-worker',
+        terminalFailure: true
+      });
     },
     {
       connection,
@@ -23,4 +52,6 @@ export function createDeadLetterWorker(connection: ConnectionOptions): Worker {
       autorun: true
     }
   );
+
+  return worker;
 }

@@ -1,5 +1,6 @@
 import { Queue, Worker, type ConnectionOptions } from 'bullmq';
 import { type Prisma, PrismaClient as RealPrismaClient } from '@prisma/client';
+import { sendTechnicalFailureAlert } from '../../src/modules/notifications/notification-failure-alert';
 import { canTransitionOrder } from '@common/orders/order-state-machine';
 import { mapPaymentEventToStatuses } from '@common/orders/webhook-status-mappers';
 import { AppError } from '@common/errors/app-error';
@@ -7,7 +8,7 @@ import { ERROR_CODES } from '@common/errors/error-codes';
 import { type InvoiceStorageAdapter } from '@common/interfaces/invoice-storage.interface';
 import { createInvoiceStorageProvider } from '@modules/invoices/invoice-storage-provider';
 import { renderCreditNotePdfBuffer, renderInvoicePdfBuffer, type InvoiceLineItem } from '@modules/invoices/invoice-renderer';
-import { featureFlags, resolveNotifyFlags } from '@config/feature-flags';
+import { featureFlags } from '@config/feature-flags';
 
 type OrderStatus =
   | 'PENDING_PAYMENT'
@@ -54,6 +55,7 @@ type RefundsQueue = Pick<Queue, 'add'>;
 type OrderProcessingWorkerDeps = {
   PrismaClient?: typeof RealPrismaClient;
   Worker?: typeof Worker;
+  sendTechnicalFailureAlert?: typeof sendTechnicalFailureAlert;
 };
 
 type PaymentWebhookJobData = {
@@ -245,6 +247,7 @@ export function createOrderProcessingWorker(
 ): Worker {
   const PrismaClientCtor = deps?.PrismaClient ?? RealPrismaClient;
   const WorkerCtor = deps?.Worker ?? Worker;
+  const alertFn = deps?.sendTechnicalFailureAlert ?? sendTechnicalFailureAlert;
   const prisma = new PrismaClientCtor();
   const notificationsQueue = notificationsQueueArg ?? new Queue('notifications', { connection });
   const orderProcessingQueue = orderProcessingQueueArg ?? new Queue('order-processing', { connection });
@@ -252,7 +255,7 @@ export function createOrderProcessingWorker(
   const refundsQueue = refundsQueueArg ?? new Queue('refunds', { connection });
   const invoiceStorageAdapter = invoiceStorageAdapterArg ?? createInvoiceStorageProvider();
 
-  return new WorkerCtor(
+  const worker = new WorkerCtor(
     'order-processing',
     async (job) => {
       if (job.name === 'generate-credit-note') {
@@ -500,21 +503,23 @@ export function createOrderProcessingWorker(
             await outboxDelegate.create({
               data: {
                 queueName: 'notifications',
-                jobName: 'send-email',
+                jobName: 'send-primary',
                 payload: {
-                  to: order.user.email,
+                  email: order.user.email,
+                  phone: order.user.phone,
                   template: 'PaymentFailed',
                   data: {
                     orderId: order.id,
                     providerOrderId: data.providerOrderId
                   }
                 } as Prisma.InputJsonValue,
-                jobId: `notifications:email:${order.id}:PaymentFailed`
+                jobId: `notifications:primary:${order.id}:PaymentFailed`
               }
             });
           } else {
-            await notificationsQueue.add('send-email', {
-              to: order.user.email,
+            await notificationsQueue.add('send-primary', {
+              email: order.user.email,
+              phone: order.user.phone,
               template: 'PaymentFailed',
               data: {
                 orderId: order.id,
@@ -527,6 +532,28 @@ export function createOrderProcessingWorker(
     },
     { connection }
   );
+
+  worker.on('failed', (job, error) => {
+    if (!job) return;
+    const attempts = job.opts.attempts ?? 1;
+    if (job.attemptsMade < attempts) return;
+    void alertFn({
+      prisma,
+      template: 'OrderProcessingWorkerTerminalFailure',
+      channel: 'UNKNOWN',
+      recipient: 'order-processing-worker',
+      errorMessage: error instanceof Error ? error.message : String(error),
+      failureStage: 'WORKER_TERMINAL',
+      queueName: 'order-processing',
+      jobName: job.name,
+      jobId: job.id ?? 'unknown',
+      domain: 'orders',
+      component: 'order-processing-worker',
+      terminalFailure: true
+    });
+  });
+
+  return worker;
 }
 
 // ---------------------------------------------------------------------------
@@ -758,36 +785,16 @@ async function handleProcessOrderUpdate(
   }
   const sideEffectsTarget = orderForSideEffects;
 
-  const notifyFlags = resolveNotifyFlags();
-  if (sideEffectsTarget.user.email && notifyFlags.email) {
-    await enqueueOutboxOrQueue(prisma, 'notifications', 'send-email', {
-      to: sideEffectsTarget.user.email,
-      template: 'OrderConfirmed',
-      data: {
-        orderId: sideEffectsTarget.id,
-        providerOrderId: data.providerOrderId ?? ''
-      }
-    }, notificationsQueue, `notifications:email:${sideEffectsTarget.id}:OrderConfirmed`);
-  }
-  if (sideEffectsTarget.user.phone && notifyFlags.sms) {
-    await enqueueOutboxOrQueue(prisma, 'notifications', 'send-sms', {
+  if (sideEffectsTarget.user.email || sideEffectsTarget.user.phone) {
+    await enqueueOutboxOrQueue(prisma, 'notifications', 'send-primary', {
+      email: sideEffectsTarget.user.email,
       phone: sideEffectsTarget.user.phone,
       template: 'OrderConfirmed',
       data: {
         orderId: sideEffectsTarget.id,
         providerOrderId: data.providerOrderId ?? ''
       }
-    }, notificationsQueue, `notifications:sms:${sideEffectsTarget.id}:OrderConfirmed`);
-  }
-  if (sideEffectsTarget.user.phone && notifyFlags.whatsapp) {
-    await enqueueOutboxOrQueue(prisma, 'notifications', 'send-whatsapp', {
-      phone: sideEffectsTarget.user.phone,
-      template: 'OrderConfirmed',
-      data: {
-        orderId: sideEffectsTarget.id,
-        providerOrderId: data.providerOrderId ?? ''
-      }
-    }, notificationsQueue, `notifications:whatsapp:${sideEffectsTarget.id}:OrderConfirmed`);
+    }, notificationsQueue, `notifications:primary:${sideEffectsTarget.id}:OrderConfirmed`);
   }
 
   await enqueueOutboxOrQueue(prisma, 'orderProcessing', 'generate-invoice', {
@@ -1109,20 +1116,20 @@ async function resolveSellerProfileOrThrow(prisma: RealPrismaClient): Promise<Se
         where: { singletonKey: 'default' },
         select: {
           storeName: true,
+          sellerAddress: true,
+          sellerState: true,
           gstin: true,
           fssaiNumber: true
         }
       })
     : null;
 
-  const legalName = (settings?.storeName ?? process.env.STORE_LEGAL_NAME ?? '').trim();
-  const addressLine = (process.env.STORE_SELLER_ADDRESS ?? '').trim();
-  const state = (process.env.STORE_SELLER_STATE ?? '').trim();
-  const gstin = (settings?.gstin ?? process.env.STORE_SELLER_GSTIN ?? '').trim();
-  const fssai = (settings?.fssaiNumber ?? process.env.STORE_SELLER_FSSAI ?? '').trim();
-  const requiresFssai = ['food', 'true', '1'].includes(
-    String(process.env.STORE_REQUIRES_FSSAI ?? process.env.STORE_BUSINESS_TYPE ?? '').toLowerCase()
-  );
+  const legalName = (settings?.storeName ?? '').trim();
+  const addressLine = (settings?.sellerAddress ?? '').trim();
+  const state = (settings?.sellerState ?? '').trim();
+  const gstin = (settings?.gstin ?? '').trim();
+  const fssai = (settings?.fssaiNumber ?? '').trim();
+  const requiresFssai = ['food', 'true', '1'].includes(String(process.env.STORE_REQUIRES_FSSAI ?? '').toLowerCase());
 
   if (requiresFssai && !fssai) {
     throw new AppError(
@@ -1134,17 +1141,17 @@ async function resolveSellerProfileOrThrow(prisma: RealPrismaClient): Promise<Se
 
   if (process.env.NODE_ENV === 'production') {
     const missing = [
-      !legalName ? 'STORE_LEGAL_NAME' : null,
-      !addressLine ? 'STORE_SELLER_ADDRESS' : null,
-      !state ? 'STORE_SELLER_STATE' : null,
-      !gstin ? 'STORE_SELLER_GSTIN' : null,
-      (!fssai && requiresFssai) ? 'STORE_SELLER_FSSAI' : null
+      !legalName ? 'StoreSettings.storeName' : null,
+      !addressLine ? 'StoreSettings.sellerAddress' : null,
+      !state ? 'StoreSettings.sellerState' : null,
+      !gstin ? 'StoreSettings.gstin' : null,
+      (!fssai && requiresFssai) ? 'StoreSettings.fssaiNumber' : null
     ].filter((value): value is string => value !== null);
 
     if (missing.length > 0) {
       throw new AppError(
         ERROR_CODES.INTERNAL_ERROR,
-        `Missing seller profile env vars for invoicing: ${missing.join(', ')}`,
+        `Missing required DB-backed configuration for invoicing: ${missing.join(', ')}`,
         500
       );
     }

@@ -1,5 +1,6 @@
 import { OrderStatus, PaymentStatus, Prisma, PrismaClient as RealPrismaClient } from '@prisma/client';
 import { Queue, Worker, type ConnectionOptions } from 'bullmq';
+import { sendTechnicalFailureAlert } from '../../src/modules/notifications/notification-failure-alert';
 
 const STALE_PENDING_PAYMENT_MS = 30 * 60 * 1000;
 
@@ -38,6 +39,7 @@ type ReconciliationWorkerDeps = {
   PrismaClient?: typeof RealPrismaClient;
   Worker?: typeof Worker;
   Queue?: typeof Queue;
+  sendTechnicalFailureAlert?: typeof sendTechnicalFailureAlert;
 };
 
 export function createReconciliationWorker(
@@ -47,9 +49,10 @@ export function createReconciliationWorker(
   const PrismaClientCtor = deps?.PrismaClient ?? RealPrismaClient;
   const WorkerCtor = deps?.Worker ?? Worker;
   const QueueCtor = deps?.Queue ?? Queue;
+  const alertFn = deps?.sendTechnicalFailureAlert ?? sendTechnicalFailureAlert;
   const prisma = new PrismaClientCtor();
 
-  return new WorkerCtor(
+  const worker = new WorkerCtor(
     'reconciliation',
     async (job) => {
       if (job.name !== 'run-order-lifecycle-check') {
@@ -318,4 +321,26 @@ export function createReconciliationWorker(
     },
     { connection }
   );
+
+  worker.on('failed', (job, error) => {
+    if (!job) return;
+    const attempts = job.opts.attempts ?? 1;
+    if (job.attemptsMade < attempts) return;
+    void alertFn({
+      prisma,
+      template: 'ReconciliationWorkerTerminalFailure',
+      channel: 'UNKNOWN',
+      recipient: 'reconciliation-worker',
+      errorMessage: error instanceof Error ? error.message : String(error),
+      failureStage: 'WORKER_TERMINAL',
+      queueName: 'reconciliation',
+      jobName: job.name,
+      jobId: job.id ?? 'unknown',
+      domain: 'orders',
+      component: 'reconciliation-worker',
+      terminalFailure: true
+    });
+  });
+
+  return worker;
 }

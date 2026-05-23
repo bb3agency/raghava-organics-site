@@ -1,6 +1,7 @@
 export type ProductListQuery = {
   category?: string;
   search?: string;
+  sku?: string;
   minPrice?: number;
   maxPrice?: number;
   tags?: string;

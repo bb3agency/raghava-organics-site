@@ -1,2 +1,0 @@
-ALTER TABLE "OrderStatusHistory"
-ADD COLUMN "triggeredBy" TEXT NOT NULL DEFAULT 'SYSTEM';

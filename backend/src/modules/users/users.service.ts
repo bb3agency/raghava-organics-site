@@ -3,12 +3,18 @@ import { AppError } from '@common/errors/app-error';
 import { ERROR_CODES } from '@common/errors/error-codes';
 import {
   AddressListQuery,
+  AdminCustomerOrdersQuery,
   AdminUsersListQuery,
   CreateAddressInput,
   OrderListQuery,
   UpdateAddressInput,
   UpdateProfileInput
 } from './users.types';
+
+function maskPhone(phone: string | null): string | null {
+  if (!phone || phone.length < 4) return phone;
+  return phone.slice(0, -4).replace(/\d/g, '*') + phone.slice(-4);
+}
 
 export class UsersService {
   constructor(private readonly fastify: FastifyInstance) {}
@@ -314,9 +320,72 @@ export class UsersService {
     return {
       items: items.map((item) => ({
         ...item,
+        phone: maskPhone(item.phone),
         totalOrders: statsByUserId.get(item.id)?.totalOrders ?? 0,
         totalSpendPaise: statsByUserId.get(item.id)?.totalSpendPaise ?? 0,
         createdAt: item.createdAt.toISOString()
+      })),
+      meta: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit)
+      }
+    };
+  }
+
+  async adminGetCustomerOrders(userId: string, query: AdminCustomerOrdersQuery) {
+    const page = query.page ?? 1;
+    const limit = Math.min(query.limit ?? 20, 100);
+    const skip = (page - 1) * limit;
+
+    const user = await this.fastify.prisma.user.findFirst({
+      where: { id: userId, role: 'CUSTOMER' },
+      select: { id: true }
+    });
+    if (!user) {
+      throw new AppError(ERROR_CODES.NOT_FOUND, 'User not found', 404);
+    }
+
+    const [orders, total] = await this.fastify.prisma.$transaction([
+      this.fastify.prisma.order.findMany({
+        where: { userId },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+        include: {
+          shipment: {
+            select: {
+              status: true,
+              awbNumber: true,
+              trackingUrl: true,
+              events: {
+                orderBy: { occurredAt: 'desc' },
+                take: 1,
+                select: { status: true, occurredAt: true }
+              }
+            }
+          }
+        }
+      }),
+      this.fastify.prisma.order.count({ where: { userId } })
+    ]);
+
+    return {
+      items: orders.map((order) => ({
+        id: order.id,
+        orderNumber: order.orderNumber,
+        status: order.status,
+        subtotal: order.subtotal,
+        shippingCharge: order.shippingCharge,
+        discountAmount: order.discountAmount,
+        total: order.total,
+        createdAt: order.createdAt.toISOString(),
+        shipmentStatus: order.shipment?.status ?? null,
+        awb: order.shipment?.awbNumber ?? null,
+        trackingUrl: order.shipment?.trackingUrl ?? null,
+        latestShipmentEventStatus: order.shipment?.events[0]?.status ?? null,
+        latestShipmentEventAt: order.shipment?.events[0]?.occurredAt.toISOString() ?? null
       })),
       meta: {
         page,
@@ -398,6 +467,161 @@ export class UsersService {
         latestShipmentEventAt: order.shipment?.events[0]?.occurredAt.toISOString() ?? null
       }))
     };
+  }
+
+  /**
+   * Ban a customer account. Sets isBanned=true, records reason and timestamp.
+   * @param userId - Customer UUID
+   * @param reason - Human-readable ban reason
+   * @param adminUserId - Admin performing the action
+   */
+  async adminBanUser(userId: string, reason: string, adminUserId: string) {
+    const user = await this.fastify.prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, isBanned: true, role: true }
+    });
+
+    if (!user) {
+      throw new AppError(ERROR_CODES.NOT_FOUND, 'User not found', 404);
+    }
+
+    if (user.role === 'ADMIN') {
+      throw new AppError(ERROR_CODES.FORBIDDEN, 'Cannot ban an admin user', 403);
+    }
+
+    if (user.isBanned) {
+      throw new AppError(ERROR_CODES.CONFLICT, 'User is already banned', 409);
+    }
+
+    const updated = await this.fastify.prisma.user.update({
+      where: { id: userId },
+      data: {
+        isBanned: true,
+        bannedAt: new Date(),
+        bannedReason: `${reason} [admin:${adminUserId}]`
+      },
+      select: { id: true, isBanned: true, bannedAt: true, bannedReason: true }
+    });
+
+    return {
+      userId: updated.id,
+      isBanned: updated.isBanned,
+      bannedAt: updated.bannedAt?.toISOString() ?? null,
+      bannedReason: updated.bannedReason
+    };
+  }
+
+  /**
+   * Unban a customer account. Clears ban fields.
+   * @param userId - Customer UUID
+   * @param adminUserId - Admin performing the action
+   */
+  async adminUnbanUser(userId: string, adminUserId: string) {
+    const user = await this.fastify.prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, isBanned: true }
+    });
+
+    if (!user) {
+      throw new AppError(ERROR_CODES.NOT_FOUND, 'User not found', 404);
+    }
+
+    if (!user.isBanned) {
+      throw new AppError(ERROR_CODES.CONFLICT, 'User is not banned', 409);
+    }
+
+    this.fastify.log.info({ adminUserId, userId }, 'Admin unbanning user');
+
+    await this.fastify.prisma.user.update({
+      where: { id: userId },
+      data: {
+        isBanned: false,
+        bannedAt: null,
+        bannedReason: null
+      }
+    });
+
+    return { userId, isBanned: false };
+  }
+
+  /**
+   * List admin notes for a customer.
+   * @param userId - Customer UUID
+   */
+  async adminListUserNotes(userId: string) {
+    const user = await this.fastify.prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true }
+    });
+
+    if (!user) {
+      throw new AppError(ERROR_CODES.NOT_FOUND, 'User not found', 404);
+    }
+
+    const notes = await this.fastify.prisma.userAdminNote.findMany({
+      where: { userId },
+      orderBy: { createdAt: 'desc' }
+    });
+
+    return notes.map((note) => ({
+      id: note.id,
+      userId: note.userId,
+      content: note.content,
+      createdByAdminId: note.createdByAdminId,
+      createdAt: note.createdAt.toISOString()
+    }));
+  }
+
+  /**
+   * Create an admin note for a customer.
+   * @param userId - Customer UUID
+   * @param content - Note content
+   * @param adminUserId - Admin creating the note
+   */
+  async adminCreateUserNote(userId: string, content: string, adminUserId: string) {
+    const user = await this.fastify.prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true }
+    });
+
+    if (!user) {
+      throw new AppError(ERROR_CODES.NOT_FOUND, 'User not found', 404);
+    }
+
+    const note = await this.fastify.prisma.userAdminNote.create({
+      data: {
+        userId,
+        content,
+        createdByAdminId: adminUserId
+      }
+    });
+
+    return {
+      id: note.id,
+      userId: note.userId,
+      content: note.content,
+      createdByAdminId: note.createdByAdminId,
+      createdAt: note.createdAt.toISOString()
+    };
+  }
+
+  /**
+   * Delete an admin note by ID. Validates the note belongs to the given user.
+   * @param userId - Customer UUID (for ownership check)
+   * @param noteId - Note UUID
+   */
+  async adminDeleteUserNote(userId: string, noteId: string) {
+    const note = await this.fastify.prisma.userAdminNote.findUnique({
+      where: { id: noteId }
+    });
+
+    if (!note || note.userId !== userId) {
+      throw new AppError(ERROR_CODES.NOT_FOUND, 'Note not found', 404);
+    }
+
+    await this.fastify.prisma.userAdminNote.delete({ where: { id: noteId } });
+
+    return { deleted: true, noteId };
   }
 }
 

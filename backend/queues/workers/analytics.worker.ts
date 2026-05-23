@@ -1,5 +1,6 @@
 import { Worker, type ConnectionOptions } from 'bullmq';
 import { AnalyticsEventType, Prisma, PrismaClient as RealPrismaClient } from '@prisma/client';
+import { sendTechnicalFailureAlert } from '../../src/modules/notifications/notification-failure-alert';
 
 type RecordEventJobData = {
   eventType: AnalyticsEventType;
@@ -14,6 +15,7 @@ const analyticsEventTypes = new Set<AnalyticsEventType>(Object.values(AnalyticsE
 type AnalyticsWorkerDeps = {
   PrismaClient?: typeof RealPrismaClient;
   Worker?: typeof Worker;
+  sendTechnicalFailureAlert?: typeof sendTechnicalFailureAlert;
 };
 
 export function createAnalyticsWorker(
@@ -22,9 +24,10 @@ export function createAnalyticsWorker(
 ): Worker {
   const PrismaClientCtor = deps?.PrismaClient ?? RealPrismaClient;
   const WorkerCtor = deps?.Worker ?? Worker;
+  const alertFn = deps?.sendTechnicalFailureAlert ?? sendTechnicalFailureAlert;
   const prisma = new PrismaClientCtor();
 
-  return new WorkerCtor(
+  const worker = new WorkerCtor(
     'analytics',
     async (job) => {
       if (job.name !== 'record-event') {
@@ -56,6 +59,28 @@ export function createAnalyticsWorker(
     },
     { connection }
   );
+
+  worker.on('failed', (job, error) => {
+    if (!job) return;
+    const attempts = job.opts.attempts ?? 1;
+    if (job.attemptsMade < attempts) return;
+    void alertFn({
+      prisma,
+      template: 'AnalyticsWorkerTerminalFailure',
+      channel: 'UNKNOWN',
+      recipient: 'analytics-worker',
+      errorMessage: error instanceof Error ? error.message : String(error),
+      failureStage: 'WORKER_TERMINAL',
+      queueName: 'analytics',
+      jobName: job.name,
+      jobId: job.id ?? 'unknown',
+      domain: 'analytics',
+      component: 'analytics-worker',
+      terminalFailure: true
+    });
+  });
+
+  return worker;
 }
 
 function normalizePayload(input: unknown): Prisma.InputJsonValue {

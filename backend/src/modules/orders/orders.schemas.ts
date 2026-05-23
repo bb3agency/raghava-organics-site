@@ -1,6 +1,258 @@
 import { OrderStatus } from '@prisma/client';
 import { standardAdminErrorResponses, standardErrorResponses } from '@common/errors/error-response.schema';
 
+const returnRequestStatusEnum = ['REQUESTED', 'APPROVED', 'REJECTED', 'PICKED_UP', 'REFUNDED'] as const;
+
+export const createReturnRequestSchema = {
+  tags: ['orders'],
+  summary: 'Create a return request for a delivered order',
+  params: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['id'],
+    properties: { id: { type: 'string', maxLength: 64 } }
+  },
+  body: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['items', 'reason'],
+    properties: {
+      reason: { type: 'string', minLength: 1, maxLength: 500 },
+      items: {
+        type: 'array',
+        minItems: 1,
+        maxItems: 50,
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['orderItemId', 'quantity'],
+          properties: {
+            orderItemId: { type: 'string', maxLength: 64 },
+            quantity: { type: 'integer', minimum: 1, maximum: 10000 },
+            reason: { type: 'string', maxLength: 500 }
+          }
+        }
+      }
+    }
+  },
+  response: {
+    201: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['id', 'orderId', 'status', 'reason', 'createdAt'],
+      properties: {
+        id: { type: 'string' },
+        orderId: { type: 'string' },
+        status: { type: 'string', enum: returnRequestStatusEnum, maxLength: 30 },
+        reason: { type: 'string' },
+        createdAt: { type: 'string' }
+      }
+    },
+    ...standardErrorResponses
+  }
+} as const;
+
+export const retryPaymentSchema = {
+  tags: ['payments'],
+  summary: 'Retry payment for a failed or pending-payment order',
+  body: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['orderId'],
+    properties: {
+      orderId: { type: 'string', minLength: 1, maxLength: 64 }
+    }
+  },
+  response: {
+    200: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['orderId', 'provider', 'providerOrderId', 'amount', 'currency'],
+      properties: {
+        orderId: { type: 'string' },
+        provider: { type: 'string' },
+        providerOrderId: { type: 'string' },
+        amount: { type: 'integer' },
+        currency: { type: 'string' }
+      }
+    },
+    ...standardErrorResponses
+  }
+} as const;
+
+export const adminListReturnRequestsSchema = {
+  tags: ['admin', 'returns'],
+  summary: 'List return requests',
+  querystring: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      status: { type: 'string', enum: returnRequestStatusEnum, maxLength: 30 },
+      page: { type: 'integer', minimum: 1, default: 1 },
+      limit: { type: 'integer', minimum: 1, maximum: 100, default: 20 }
+    }
+  },
+  response: {
+    200: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['items', 'total', 'page', 'limit'],
+      properties: {
+        total: { type: 'integer' },
+        page: { type: 'integer' },
+        limit: { type: 'integer' },
+        items: {
+          type: 'array',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['id', 'orderId', 'orderNumber', 'userId', 'customerEmail', 'customerName', 'status', 'reason', 'createdAt'],
+            properties: {
+              id: { type: 'string' },
+              orderId: { type: 'string' },
+              orderNumber: { type: 'string' },
+              userId: { type: 'string' },
+              customerEmail: { type: 'string' },
+              customerName: { type: 'string' },
+              status: { type: 'string', enum: returnRequestStatusEnum, maxLength: 30 },
+              reason: { type: 'string' },
+              createdAt: { type: 'string' }
+            }
+          }
+        }
+      }
+    },
+    ...standardAdminErrorResponses
+  }
+} as const;
+
+export const adminGetReturnRequestSchema = {
+  tags: ['admin', 'returns'],
+  summary: 'Get a return request by ID',
+  params: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['id'],
+    properties: { id: { type: 'string', maxLength: 64 } }
+  },
+  response: {
+    200: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['id', 'orderId', 'orderNumber', 'userId', 'customerEmail', 'customerName', 'status', 'reason', 'items', 'createdAt', 'updatedAt'],
+      properties: {
+        id: { type: 'string' },
+        orderId: { type: 'string' },
+        orderNumber: { type: 'string' },
+        userId: { type: 'string' },
+        customerEmail: { type: 'string' },
+        customerName: { type: 'string' },
+        status: { type: 'string', enum: returnRequestStatusEnum, maxLength: 30 },
+        reason: { type: 'string' },
+        adminNote: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+        items: { type: 'array', items: { type: 'object', additionalProperties: true } },
+        createdAt: { type: 'string' },
+        updatedAt: { type: 'string' }
+      }
+    },
+    ...standardAdminErrorResponses
+  }
+} as const;
+
+export const adminUpdateReturnRequestSchema = {
+  tags: ['admin', 'returns'],
+  summary: 'Update a return request status',
+  params: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['id'],
+    properties: { id: { type: 'string', maxLength: 64 } }
+  },
+  body: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['status'],
+    properties: {
+      status: { type: 'string', enum: returnRequestStatusEnum, maxLength: 30 },
+      adminNote: { type: 'string', maxLength: 1000 }
+    }
+  },
+  response: {
+    200: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['id', 'orderId', 'status', 'updatedAt'],
+      properties: {
+        id: { type: 'string' },
+        orderId: { type: 'string' },
+        status: { type: 'string', enum: returnRequestStatusEnum, maxLength: 30 },
+        adminNote: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+        updatedAt: { type: 'string' }
+      }
+    },
+    ...standardAdminErrorResponses
+  }
+} as const;
+
+export const adminUpdateOrderItemsSchema = {
+  tags: ['admin', 'orders'],
+  summary: 'Update line item quantities for PENDING_PAYMENT or CONFIRMED orders',
+  params: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['id'],
+    properties: { id: { type: 'string', maxLength: 64 } }
+  },
+  body: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['updates'],
+    properties: {
+      updates: {
+        type: 'array',
+        minItems: 1,
+        maxItems: 100,
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['orderItemId', 'quantity'],
+          properties: {
+            orderItemId: { type: 'string', maxLength: 64 },
+            quantity: { type: 'integer', minimum: 1, maximum: 10000 }
+          }
+        }
+      }
+    }
+  },
+  response: {
+    200: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['orderId', 'subtotal', 'total', 'updatedItems'],
+      properties: {
+        orderId: { type: 'string' },
+        subtotal: { type: 'integer' },
+        total: { type: 'integer' },
+        updatedItems: {
+          type: 'array',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['orderItemId', 'quantity', 'unitPrice', 'totalPrice'],
+            properties: {
+              orderItemId: { type: 'string' },
+              quantity: { type: 'integer' },
+              unitPrice: { type: 'integer' },
+              totalPrice: { type: 'integer' }
+            }
+          }
+        }
+      }
+    },
+    ...standardAdminErrorResponses
+  }
+} as const;
+
 const orderStatusValues = Object.values(OrderStatus);
 const emptyParamsSchema = {
   type: 'object',
@@ -883,6 +1135,121 @@ export const adminOrderBoardSchema = {
   }
 } as const;
 
+const paginationMetaSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['page', 'limit', 'total', 'totalPages'],
+  properties: {
+    page: { type: 'integer', minimum: 1 },
+    limit: { type: 'integer', minimum: 1 },
+    total: { type: 'integer', minimum: 0 },
+    totalPages: { type: 'integer', minimum: 0 }
+  }
+} as const;
+
+export const adminListShipmentsSchema = {
+  params: emptyParamsSchema,
+  querystring: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      page: { type: 'integer', minimum: 1, default: 1 },
+      limit: { type: 'integer', minimum: 1, maximum: 100, default: 20 },
+      status: { type: 'string', maxLength: 40 },
+      awbNumber: { type: 'string', maxLength: 100 },
+      orderId: { type: 'string', maxLength: 64 },
+      from: { type: 'string', maxLength: 64 },
+      to: { type: 'string', maxLength: 64 }
+    }
+  },
+  response: {
+    200: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['items', 'meta'],
+      properties: {
+        items: {
+          type: 'array',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['id', 'orderId', 'orderNumber', 'provider', 'status', 'createdAt', 'updatedAt'],
+            properties: {
+              id: { type: 'string', maxLength: 64 },
+              orderId: { type: 'string', maxLength: 64 },
+              orderNumber: { type: 'string', maxLength: 64 },
+              provider: { type: 'string', maxLength: 40 },
+              status: { type: 'string', maxLength: 40 },
+              awbNumber: { anyOf: [{ type: 'string', maxLength: 100 }, { type: 'null' }] },
+              trackingUrl: { anyOf: [{ type: 'string', maxLength: 500 }, { type: 'null' }] },
+              shiprocketShipmentId: { anyOf: [{ type: 'string', maxLength: 100 }, { type: 'null' }] },
+              labelUrl: { anyOf: [{ type: 'string', maxLength: 2048 }, { type: 'null' }] },
+              pickupScheduledDate: { anyOf: [{ type: 'string', maxLength: 64 }, { type: 'null' }] },
+              createdAt: { type: 'string', maxLength: 64 },
+              updatedAt: { type: 'string', maxLength: 64 }
+            }
+          }
+        },
+        meta: paginationMetaSchema
+      }
+    },
+    ...standardAdminErrorResponses
+  }
+} as const;
+
+export const adminListPaymentsSchema = {
+  params: emptyParamsSchema,
+  querystring: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      page: { type: 'integer', minimum: 1, default: 1 },
+      limit: { type: 'integer', minimum: 1, maximum: 100, default: 20 },
+      status: { type: 'string', maxLength: 40 },
+      method: { type: 'string', maxLength: 40 },
+      orderId: { type: 'string', maxLength: 64 },
+      from: { type: 'string', maxLength: 64 },
+      to: { type: 'string', maxLength: 64 }
+    }
+  },
+  response: {
+    200: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['items', 'meta'],
+      properties: {
+        items: {
+          type: 'array',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['id', 'orderId', 'orderNumber', 'provider', 'status', 'amount', 'currency', 'createdAt', 'updatedAt'],
+            properties: {
+              id: { type: 'string', maxLength: 64 },
+              orderId: { type: 'string', maxLength: 64 },
+              orderNumber: { type: 'string', maxLength: 64 },
+              provider: { type: 'string', maxLength: 40 },
+              method: { anyOf: [{ type: 'string', maxLength: 40 }, { type: 'null' }] },
+              status: { type: 'string', maxLength: 40 },
+              amount: { type: 'integer', minimum: 0 },
+              currency: { type: 'string', maxLength: 10 },
+              providerPaymentId: { anyOf: [{ type: 'string', maxLength: 100 }, { type: 'null' }] },
+              providerOrderId: { type: 'string', maxLength: 100 },
+              capturedAt: { anyOf: [{ type: 'string', maxLength: 64 }, { type: 'null' }] },
+              refundPendingAmountPaise: { type: 'integer', minimum: 0 },
+              refundedAmountPaise: { type: 'integer', minimum: 0 },
+              createdAt: { type: 'string', maxLength: 64 },
+              updatedAt: { type: 'string', maxLength: 64 }
+            }
+          }
+        },
+        meta: paginationMetaSchema
+      }
+    },
+    ...standardAdminErrorResponses
+  }
+} as const;
+
 export const adminRetriggerNotificationSchema = {
   params: {
     type: 'object',
@@ -929,6 +1296,116 @@ export const adminRetriggerNotificationSchema = {
           items: { type: 'string', maxLength: 20 }
         },
         queuedJobs: { type: 'integer', minimum: 0, maximum: 10 }
+      }
+    },
+    ...standardAdminErrorResponses
+  }
+} as const;
+
+export const adminGetShipmentByIdSchema = {
+  tags: ['admin', 'shipments'],
+  summary: 'Get a single shipment by ID',
+  params: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['id'],
+    properties: { id: { type: 'string', maxLength: 64 } }
+  },
+  response: {
+    200: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['id', 'orderId', 'orderNumber', 'userId', 'provider', 'status', 'createdAt', 'updatedAt'],
+      properties: {
+        id: { type: 'string' },
+        orderId: { type: 'string' },
+        orderNumber: { type: 'string' },
+        userId: { type: 'string' },
+        provider: { type: 'string' },
+        status: { type: 'string' },
+        awbNumber: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+        trackingUrl: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+        shiprocketShipmentId: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+        labelUrl: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+        pickupScheduledDate: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+        createdAt: { type: 'string' },
+        updatedAt: { type: 'string' }
+      }
+    },
+    ...standardAdminErrorResponses
+  }
+} as const;
+
+export const adminGetPaymentByIdSchema = {
+  tags: ['admin', 'payments'],
+  summary: 'Get a single payment by ID',
+  params: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['id'],
+    properties: { id: { type: 'string', maxLength: 64 } }
+  },
+  response: {
+    200: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['id', 'orderId', 'orderNumber', 'provider', 'status', 'amount', 'currency', 'createdAt', 'updatedAt'],
+      properties: {
+        id: { type: 'string' },
+        orderId: { type: 'string' },
+        orderNumber: { type: 'string' },
+        provider: { type: 'string' },
+        method: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+        status: { type: 'string' },
+        amount: { type: 'integer' },
+        currency: { type: 'string' },
+        providerPaymentId: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+        providerOrderId: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+        capturedAt: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+        refundPendingAmountPaise: { anyOf: [{ type: 'integer' }, { type: 'null' }] },
+        refundedAmountPaise: { anyOf: [{ type: 'integer' }, { type: 'null' }] },
+        createdAt: { type: 'string' },
+        updatedAt: { type: 'string' }
+      }
+    },
+    ...standardAdminErrorResponses
+  }
+} as const;
+
+export const adminGetOrderTimelineSchema = {
+  tags: ['admin', 'orders'],
+  summary: 'Get the status transition timeline for an order',
+  params: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['id'],
+    properties: { id: { type: 'string', maxLength: 64 } }
+  },
+  response: {
+    200: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['orderId', 'orderNumber', 'currentStatus', 'timeline'],
+      properties: {
+        orderId: { type: 'string' },
+        orderNumber: { type: 'string' },
+        currentStatus: { type: 'string', enum: Object.values(OrderStatus) },
+        timeline: {
+          type: 'array',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['id', 'toStatus', 'createdAt'],
+            properties: {
+              id: { type: 'string' },
+              fromStatus: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+              toStatus: { type: 'string' },
+              triggeredBy: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+              note: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+              createdAt: { type: 'string' }
+            }
+          }
+        }
       }
     },
     ...standardAdminErrorResponses

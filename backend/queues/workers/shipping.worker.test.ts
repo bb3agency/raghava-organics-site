@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+let failedHandler: ((job: unknown, error: Error) => void) | undefined;
+
 const state = {
   processor: undefined as undefined | ((job: { name: string; data: unknown }) => Promise<void>),
   notificationsAdd: vi.fn(),
@@ -35,6 +37,7 @@ const state = {
 
 function MockWorker(_name: string, processor: (job: { name: string; data: unknown }) => Promise<void>) {
   state.processor = processor;
+  return { on: (event: string, handler: (job: unknown, error: Error) => void) => { if (event === 'failed') failedHandler = handler; } };
 }
 
 function MockPrismaClient() {
@@ -73,16 +76,20 @@ describe('shipping worker error and retry behavior', () => {
   type ShippingWorkerType = NonNullable<ShippingDeps['Worker']>;
   type ShippingPrismaType = NonNullable<ShippingDeps['PrismaClient']>;
   const mockNotificationsQueue = { add: state.notificationsAdd } as unknown as NotificationsQueueArg;
+  const sendTechnicalFailureAlert = vi.fn().mockResolvedValue(undefined);
+
   const shippingDeps = {
     Worker: MockWorker as unknown as ShippingWorkerType,
     PrismaClient: MockPrismaClient as unknown as ShippingPrismaType,
     createShippingProvider: mockCreateShippingProvider,
-    resolveNotifyFlags: () => ({ email: true, sms: true, whatsapp: true })
+    sendTechnicalFailureAlert
   };
   const boot = () =>
     createShippingWorker(mockConnection, mockNotificationsQueue, shippingDeps);
 
   beforeEach(() => {
+    failedHandler = undefined;
+    sendTechnicalFailureAlert.mockReset();
     process.env.DELHIVERY_PICKUP_PINCODE = '500001';
     state.processor = undefined;
     state.createShipment.mockReset();
@@ -349,23 +356,14 @@ describe('shipping worker error and retry behavior', () => {
       })
     );
     expect(state.notificationsAdd).toHaveBeenCalledWith(
-      'send-sms',
+      'send-primary',
       expect.objectContaining({
+        email: 'customer@example.com',
         phone: '9999999999',
         template: 'OutForDelivery'
       }),
       expect.objectContaining({
-        jobId: expect.stringContaining('shipping:sms:order_1:out-for-delivery')
-      })
-    );
-    expect(state.notificationsAdd).toHaveBeenCalledWith(
-      'send-whatsapp',
-      expect.objectContaining({
-        phone: '9999999999',
-        template: 'OutForDelivery'
-      }),
-      expect.objectContaining({
-        jobId: expect.stringContaining('shipping:wa:order_1:out-for-delivery')
+        jobId: expect.stringContaining('shipping:primary:order_1:out-for-delivery')
       })
     );
   });
@@ -446,7 +444,7 @@ describe('shipping worker error and retry behavior', () => {
     expect(state.notificationsAdd).not.toHaveBeenCalled();
   });
 
-  it('enqueues delivered notifications for both email and sms', async () => {
+  it('enqueues delivered primary notification', async () => {
     boot();
     state.tx.shipment.findFirst.mockResolvedValue({
       id: 'shipment_1',
@@ -477,34 +475,19 @@ describe('shipping worker error and retry behavior', () => {
     });
 
     expect(state.notificationsAdd).toHaveBeenCalledWith(
-      'send-email',
+      'send-primary',
       expect.objectContaining({
-        to: 'customer@example.com',
-        template: 'OrderDelivered'
-      }),
-      expect.objectContaining({
-        jobId: expect.stringContaining('shipping:email:order_1:delivered')
-      })
-    );
-    expect(state.notificationsAdd).toHaveBeenCalledWith(
-      'send-sms',
-      expect.objectContaining({
+        email: 'customer@example.com',
         phone: '9999999999',
         template: 'OrderDelivered'
       }),
       expect.objectContaining({
-        jobId: expect.stringContaining('shipping:sms:order_1:delivered')
-      })
-    );
-    expect(state.notificationsAdd).not.toHaveBeenCalledWith(
-      'send-whatsapp',
-      expect.objectContaining({
-        template: 'OrderDelivered'
+        jobId: expect.stringContaining('shipping:primary:order_1:delivered')
       })
     );
   });
 
-  it('enqueues failed-delivery SMS notification', async () => {
+  it('enqueues failed-delivery primary notification', async () => {
     boot();
     state.tx.shipment.findFirst.mockResolvedValue({
       id: 'shipment_1',
@@ -535,13 +518,14 @@ describe('shipping worker error and retry behavior', () => {
     });
 
     expect(state.notificationsAdd).toHaveBeenCalledWith(
-      'send-sms',
+      'send-primary',
       expect.objectContaining({
+        email: 'customer@example.com',
         phone: '9999999999',
         template: 'FailedDelivery'
       }),
       expect.objectContaining({
-        jobId: expect.stringContaining('shipping:sms:order_1:failed-delivery')
+        jobId: expect.stringContaining('shipping:primary:order_1:failed-delivery')
       })
     );
   });
@@ -693,15 +677,41 @@ describe('shipping worker error and retry behavior', () => {
     });
 
     expect(state.notificationsAdd).toHaveBeenCalledWith(
-      'send-email',
+      'send-primary',
       expect.objectContaining({
-        to: 'admin@example.com',
+        email: 'admin@example.com',
         template: 'OrderCancelled'
       }),
       expect.objectContaining({
-        jobId: expect.stringContaining('shipping:email:order_1:rto-initiated')
+        jobId: expect.stringContaining('shipping:primary:order_1:rto-initiated')
       })
     );
+  });
+
+  it('sends terminal failure alert when shipping job exhausts all attempts', () => {
+    boot();
+
+    const terminalJob = { name: 'create-shipment', id: 'job_s1', opts: { attempts: 3 }, attemptsMade: 3 };
+    failedHandler?.(terminalJob, new Error('provider unreachable'));
+
+    expect(sendTechnicalFailureAlert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        queueName: 'shipping',
+        jobName: 'create-shipment',
+        jobId: 'job_s1',
+        terminalFailure: true,
+        errorMessage: 'provider unreachable'
+      })
+    );
+  });
+
+  it('does NOT send alert when shipping job still has remaining attempts', () => {
+    boot();
+
+    const retryJob = { name: 'create-shipment', id: 'job_s2', opts: { attempts: 3 }, attemptsMade: 1 };
+    failedHandler?.(retryJob, new Error('transient error'));
+
+    expect(sendTechnicalFailureAlert).not.toHaveBeenCalled();
   });
 });
 

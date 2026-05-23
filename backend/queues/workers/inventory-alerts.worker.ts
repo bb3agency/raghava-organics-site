@@ -1,26 +1,11 @@
 import { Worker, type ConnectionOptions } from 'bullmq';
-import { Queue } from 'bullmq';
 import { PrismaClient as RealPrismaClient } from '@prisma/client';
-
-type NotificationsQueue = Pick<Queue, 'add'>;
+import { sendTechnicalFailureAlert } from '../../src/modules/notifications/notification-failure-alert';
 
 type InventoryAlertsWorkerDeps = {
   PrismaClient?: typeof RealPrismaClient;
   Worker?: typeof Worker;
-  Queue?: typeof Queue;
-  notificationsQueue?: NotificationsQueue;
 };
-
-function resolveAdminAlertEmail(): string {
-  if (process.env.ADMIN_ALERT_EMAIL) {
-    return process.env.ADMIN_ALERT_EMAIL;
-  }
-  if (!process.env.RESEND_FROM) {
-    return 'admin@example.com';
-  }
-  const match = process.env.RESEND_FROM.match(/<([^>]+)>/);
-  return match?.[1] ?? process.env.RESEND_FROM;
-}
 
 export function createInventoryAlertsWorker(
   connection: ConnectionOptions,
@@ -28,9 +13,7 @@ export function createInventoryAlertsWorker(
 ): Worker {
   const PrismaClientCtor = deps?.PrismaClient ?? RealPrismaClient;
   const WorkerCtor = deps?.Worker ?? Worker;
-  const QueueCtor = deps?.Queue ?? Queue;
   const prisma = new PrismaClientCtor();
-  const notificationsQueue = deps?.notificationsQueue ?? new QueueCtor('notifications', { connection });
 
   return new WorkerCtor(
     'inventory-alerts',
@@ -105,20 +88,19 @@ export function createInventoryAlertsWorker(
         return;
       }
 
-      const adminEmail = resolveAdminAlertEmail();
-      await notificationsQueue.add('send-email', {
-        to: adminEmail,
+      void sendTechnicalFailureAlert({
+        prisma,
         template: 'LowStockAlert',
-        data: {
-          items: claimedItems.map((item) => ({
-            inventoryId: item.id,
-            variantId: item.variantId,
-            sku: item.variant.sku,
-            variantName: item.variant.name,
-            quantity: item.availableQuantity,
-            lowStockThreshold: item.lowStockThreshold
-          }))
-        }
+        channel: 'UNKNOWN',
+        recipient: 'inventory-alerts-worker',
+        errorMessage: `Low stock detected for ${claimedItems.length} item(s): ${claimedItems.map((i) => i.variant.sku).join(', ')}`,
+        failureStage: 'CORE_LOGIC',
+        queueName: 'inventory-alerts',
+        jobName: job.name,
+        jobId: job.id ?? 'unknown',
+        domain: 'inventory',
+        component: 'inventory-alerts-worker',
+        terminalFailure: false
       });
 
       await prisma.lowStockAlertEvent.createMany({

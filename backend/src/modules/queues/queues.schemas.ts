@@ -12,18 +12,12 @@ const emptyQuerystringSchema = {
   properties: {}
 } as const;
 
-export const adminQueuesUiSchema = {
+export const opsQueuesUiSchema = {
   params: emptyParamsSchema,
-  querystring: emptyQuerystringSchema,
-  response: {
-    200: {
-      type: 'string'
-    },
-    ...standardAdminErrorResponses
-  }
+  querystring: emptyQuerystringSchema
 } as const;
 
-export const adminQueuesDlqSummarySchema = {
+export const opsQueuesDlqSummarySchema = {
   params: emptyParamsSchema,
   querystring: emptyQuerystringSchema,
   response: {

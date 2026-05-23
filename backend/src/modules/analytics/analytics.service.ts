@@ -6,6 +6,7 @@ import { FastifyInstance } from 'fastify';
 import { AppError } from '@common/errors/app-error';
 import { ERROR_CODES } from '@common/errors/error-codes';
 import { redactSensitiveData } from '@common/security/redaction';
+import { sendTechnicalFailureAlert } from '@modules/notifications/notification-failure-alert';
 import {
   AnalyticsCategoryBreakdownQuery,
   AnalyticsFunnelQuery,
@@ -402,6 +403,16 @@ export class AnalyticsService {
         await fs.appendFile(this.replayAuditPath, `${JSON.stringify(immutableEnvelope)}\n`, 'utf8');
       })
       .catch((error) => {
+        void sendTechnicalFailureAlert({
+          prisma: this.fastify.prisma,
+          template: 'AnalyticsReplayAuditWrite',
+          channel: 'UNKNOWN',
+          recipient: 'replay-audit-file',
+          errorMessage: error instanceof Error ? error.message : 'Unknown replay audit write error',
+          failureStage: 'CORE_LOGIC',
+          domain: 'analytics',
+          component: 'replay-audit-append'
+        });
         this.fastify.log.warn(
           { error: error instanceof Error ? error.message : 'Unknown replay audit write error' },
           'Failed to append replay audit entry'

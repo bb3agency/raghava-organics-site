@@ -3,6 +3,7 @@ import { Role } from '@prisma/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { registerAuthRoutes } from './auth.routes';
+import { adminInviteCreateSchema } from './auth.schemas';
 
 interface MockError {
   statusCode?: number;
@@ -60,6 +61,19 @@ function createApp() {
   return { app, mocks: { refreshFindMany, refreshUpdateMany } };
 }
 
+describe('adminInviteCreateSchema permission enum', () => {
+  it('does not include queues:inspect (queue inspection is ops-only, not grantable to admin)', () => {
+    const permItems = adminInviteCreateSchema.body.properties.permissions.items;
+    expect(permItems.enum).not.toContain('queues:inspect');
+  });
+
+  it('does not include ops:read or ops:write (ops permissions are ops-invite-only)', () => {
+    const permItems = adminInviteCreateSchema.body.properties.permissions.items;
+    expect(permItems.enum).not.toContain('ops:read');
+    expect(permItems.enum).not.toContain('ops:write');
+  });
+});
+
 describe('auth routes logout role handling', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -107,17 +121,50 @@ describe('auth routes logout role handling', () => {
     await app.close();
   });
 
-  it('protects admin MFA routes with operation-level permission guard', async () => {
+  it('registers 2-step admin login routes (request-otp and verify-otp)', async () => {
     const { app } = createApp();
     await registerAuthRoutes(app);
 
-    const response = await app.inject({
+    const requestOtpResponse = await app.inject({
       method: 'POST',
-      url: '/api/v1/auth/admin/mfa/setup/start',
-      headers: { 'x-role': 'CUSTOMER' },
+      url: '/api/v1/auth/admin/login/request-otp',
       payload: {}
     });
-    expect(response.statusCode).toBe(403);
+    const verifyOtpResponse = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/admin/login/verify-otp',
+      payload: {}
+    });
+
+    expect(requestOtpResponse.statusCode).not.toBe(404);
+    expect(verifyOtpResponse.statusCode).not.toBe(404);
+
+    await app.close();
+  });
+
+  it('does not register old TOTP MFA routes', async () => {
+    const { app } = createApp();
+    await registerAuthRoutes(app);
+
+    const startResponse = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/admin/mfa/setup/start',
+      payload: {}
+    });
+    const confirmResponse = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/admin/mfa/setup/confirm',
+      payload: {}
+    });
+    const disableResponse = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/admin/mfa/disable',
+      payload: {}
+    });
+
+    expect(startResponse.statusCode).toBe(404);
+    expect(confirmResponse.statusCode).toBe(404);
+    expect(disableResponse.statusCode).toBe(404);
 
     await app.close();
   });

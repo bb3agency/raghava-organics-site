@@ -48,7 +48,8 @@ async function main() {
     'settings:read','settings:write','reviews:read','reviews:moderate',
     'dashboard:read','analytics:read','orders:read','orders:write',
     'orders:export','orders:refund','orders:notify','analytics:export',
-    'analytics:replay','users:read','queues:inspect','ops:read','ops:write'
+    'analytics:replay','users:read','users:write','shipments:read',
+    'payments:read','ops:read','ops:write'
   ];
 
   await prisma.adminPermissionGrant.createMany({

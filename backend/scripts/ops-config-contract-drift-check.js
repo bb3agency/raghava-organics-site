@@ -27,7 +27,6 @@ const OPS_CONFIG_CANDIDATE_EXACT = new Set([
   'JWT_SECRET',
   'JWT_REFRESH_SECRET',
   'INVOICE_STORAGE_ROOT',
-  'ADMIN_MFA_ENCRYPTION_KEY',
   'OPS_DB_ENCRYPTION_KEY',
   'REPLAY_APPROVAL_TOKEN'
 ]);
@@ -44,7 +43,10 @@ function isOpsConfigCandidateKey(key) {
 }
 
 function parseOpsConfigContract(source) {
-  const entryRegex = /\{[^{}]*key:\s*'([A-Z0-9_]+)'[^{}]*mutableViaOps:\s*(true|false)[^{}]*requiresRestart:\s*(true|false)[^{}]*\}/g;
+  // [\s\S]*? matches across newlines (JS has no single-line /s flag in older engines).
+  // This is required because multi-line entries (those with runtimeSource, note, etc.)
+  // were silently skipped by the previous [^{}]* pattern.
+  const entryRegex = /\{[\s\S]*?key:\s*'([A-Z0-9_]+)'[\s\S]*?mutableViaOps:\s*(true|false)[\s\S]*?\}/g;
   const allKeys = new Set();
   const mutableKeys = new Set();
   let match;

@@ -1,9 +1,16 @@
 import crypto from 'crypto';
 import type { FastifyInstance } from 'fastify';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ERROR_CODES } from '@common/errors/error-codes';
+import * as alertModule from '@modules/notifications/notification-failure-alert';
+import { LOAD_SHED_MODE_KEY } from '@common/reliability/load-shed.guard';
 import { OpsService } from './ops.service';
+
+// Helper to compute OTP hash the same way the service does
+function hashOtp(code: string): string {
+  return crypto.createHash('sha256').update(code.trim()).digest('hex');
+}
 
 function createOpsServiceHarness() {
   const redisGet = vi.fn();
@@ -14,21 +21,23 @@ function createOpsServiceHarness() {
   const redisEval = vi.fn(async () => 1);
 
   const opsUserInviteFindUnique = vi.fn();
+  const opsUserInviteFindFirst = vi.fn(async (): Promise<unknown> => null);
   const opsUserInviteCreate = vi.fn();
   const opsUserInviteUpdate = vi.fn();
-  const opsUserInviteDelete = vi.fn();
+  const opsUserInviteUpdateMany = vi.fn(async () => ({ count: 1 }));
   const opsUserInviteFindMany = vi.fn();
-  const opsUserInviteDeleteMany = vi.fn();
 
   const userFindUnique = vi.fn();
 
   const opsUserFindUnique = vi.fn();
   const opsUserFindFirst = vi.fn(async () => null);
   const opsUserCreate = vi.fn();
+  const opsUserUpdateMany = vi.fn(async () => ({ count: 1 }));
 
   const opsOtpChallengeFindUnique = vi.fn();
   const opsOtpChallengeCreate = vi.fn();
   const opsOtpChallengeUpdate = vi.fn();
+  const opsOtpChallengeUpdateMany = vi.fn(async () => ({ count: 1 }));
 
   const opsConfigSecretFindMany = vi.fn(async () => []);
   const opsConfigSecretUpsert = vi.fn();
@@ -43,21 +52,27 @@ function createOpsServiceHarness() {
       },
       opsUserInvite: {
         findUnique: opsUserInviteFindUnique,
+        findFirst: opsUserInviteFindFirst,
         create: opsUserInviteCreate,
         update: opsUserInviteUpdate,
-        delete: opsUserInviteDelete,
+        updateMany: opsUserInviteUpdateMany,
         findMany: opsUserInviteFindMany,
-        deleteMany: opsUserInviteDeleteMany
+        count: vi.fn(async () => 0)
       },
       opsUser: {
         findUnique: opsUserFindUnique,
         findFirst: opsUserFindFirst,
-        create: opsUserCreate
+        findMany: vi.fn(async () => []),
+        count: vi.fn(async () => 0),
+        create: opsUserCreate,
+        update: vi.fn(async () => ({})),
+        updateMany: opsUserUpdateMany
       },
       opsOtpChallenge: {
         findUnique: opsOtpChallengeFindUnique,
         create: opsOtpChallengeCreate,
-        update: opsOtpChallengeUpdate
+        update: opsOtpChallengeUpdate,
+        updateMany: opsOtpChallengeUpdateMany
       },
       opsConfigSecret: {
         findMany: opsConfigSecretFindMany,
@@ -68,13 +83,6 @@ function createOpsServiceHarness() {
         create: opsAuditLogCreate,
         findMany: vi.fn(async () => []),
         count: vi.fn(async () => 0)
-      },
-      opsDualApprovalRequest: {
-        create: vi.fn(),
-        findUnique: vi.fn(),
-        findMany: vi.fn(async () => []),
-        count: vi.fn(async () => 0),
-        update: vi.fn()
       }
     },
     redis: {
@@ -87,6 +95,9 @@ function createOpsServiceHarness() {
     },
     queues: {
       notifications: {
+        add: vi.fn(async () => undefined)
+      },
+      cartCleanup: {
         add: vi.fn(async () => undefined)
       }
     }
@@ -103,18 +114,20 @@ function createOpsServiceHarness() {
       redisExpire,
       redisEval,
       opsUserInviteFindUnique,
+      opsUserInviteFindFirst,
       opsUserInviteCreate,
       opsUserInviteUpdate,
-      opsUserInviteDelete,
+      opsUserInviteUpdateMany,
       opsUserInviteFindMany,
-      opsUserInviteDeleteMany,
       opsUserFindUnique,
+      opsUserUpdateMany,
       userFindUnique,
       opsUserFindFirst,
       opsUserCreate,
       opsOtpChallengeFindUnique,
       opsOtpChallengeCreate,
       opsOtpChallengeUpdate,
+      opsOtpChallengeUpdateMany,
       opsConfigSecretFindMany,
       opsConfigSecretUpsert,
       opsAuditLogFindFirst,
@@ -180,7 +193,7 @@ describe('OpsService failcase coverage', () => {
     process.env.OPS_DB_ENCRYPTION_KEY_VERSION = '1';
   });
 
-  it('consumeOpsInvite rejects expired invites and removes invite record', async () => {
+  it('consumeOpsInvite rejects expired invites and marks them EXPIRED_CLEANED', async () => {
     const { service, mocks } = createOpsServiceHarness();
 
     mocks.opsUserInviteFindUnique.mockResolvedValue({
@@ -206,9 +219,11 @@ describe('OpsService failcase coverage', () => {
       statusCode: 401
     });
 
-    expect(mocks.opsUserInviteDelete).toHaveBeenCalledWith({
-      where: { id: 'invite_1' }
-    });
+    expect(mocks.opsUserInviteUpdateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: { status: 'EXPIRED_CLEANED' }
+      })
+    );
   });
 
   it('verifyEmailOtp marks challenge failed after max attempts', async () => {
@@ -238,8 +253,8 @@ describe('OpsService failcase coverage', () => {
       statusCode: 401
     });
 
-    expect(mocks.opsOtpChallengeUpdate).toHaveBeenCalledWith({
-      where: { id: 'challenge_1' },
+    expect(mocks.opsOtpChallengeUpdateMany).toHaveBeenCalledWith({
+      where: { id: 'challenge_1', status: 'PENDING' },
       data: {
         failedAttempts: 3,
         status: 'FAILED'
@@ -430,6 +445,386 @@ describe('OpsService failcase coverage', () => {
     expect(mocks.redisEval).toHaveBeenCalled();
   });
 
+  it('listOpsUsers returns paginated ops users', async () => {
+    const { service, fastify } = createOpsServiceHarness();
+    const opsUsersFindMany = (fastify as unknown as { prisma: { opsUser: { findMany: ReturnType<typeof vi.fn> } } }).prisma.opsUser.findMany;
+    const opsUsersCount = (fastify as unknown as { prisma: { opsUser: { count: ReturnType<typeof vi.fn> } } }).prisma.opsUser.count;
+    opsUsersFindMany.mockResolvedValueOnce([{
+      id: 'ops_1',
+      email: 'ops@example.com',
+      name: 'Ops User',
+      permissions: ['OPS_READ'],
+      mfaEnabled: false,
+      isActive: true,
+      ipAllowlist: ['127.0.0.1/32'],
+      lastLoginAt: null,
+      createdAt: new Date('2024-01-01')
+    }]);
+    opsUsersCount.mockResolvedValueOnce(1);
+
+    const result = await service.listOpsUsers({ page: 1, limit: 10 });
+
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]!.email).toBe('ops@example.com');
+    expect(result.total).toBe(1);
+    expect(result.page).toBe(1);
+    expect(result.limit).toBe(10);
+  });
+
+  it('deactivateOpsUser rejects self-deactivation', async () => {
+    const { service, mocks } = createOpsServiceHarness();
+    // Mock verifyEmailOtp to succeed before self-deactivation check
+    mocks.opsOtpChallengeFindUnique.mockResolvedValueOnce({
+      id: 'challenge_1',
+      opsUserId: 'ops_1',
+      action: 'user-deactivate',
+      codeHash: hashOtp('123456'),
+      status: 'PENDING',
+      expiresAt: new Date(Date.now() + 60000),
+      failedAttempts: 0
+    });
+    mocks.opsOtpChallengeUpdateMany.mockResolvedValueOnce({ count: 1 });
+
+    await expect(
+      service.deactivateOpsUser({
+        targetOpsUserId: 'ops_1',
+        requestorOpsUserId: 'ops_1',
+        reason: 'test',
+        challengeId: 'challenge_1',
+        otpCode: '123456',
+        requestIp: '127.0.0.1',
+        requestPath: '/api/v1/ops/users/ops_1/deactivate',
+        method: 'POST'
+      })
+    ).rejects.toMatchObject({ statusCode: 403, code: ERROR_CODES.FORBIDDEN });
+  });
+
+  it('deactivateOpsUser deactivates target and writes audit log', async () => {
+    const { service, mocks } = createOpsServiceHarness();
+    // Mock verifyEmailOtp
+    mocks.opsOtpChallengeFindUnique.mockResolvedValueOnce({
+      id: 'challenge_1',
+      opsUserId: 'ops_requestor',
+      action: 'user-deactivate',
+      codeHash: hashOtp('123456'),
+      status: 'PENDING',
+      expiresAt: new Date(Date.now() + 60000),
+      failedAttempts: 0
+    });
+    mocks.opsOtpChallengeUpdateMany.mockResolvedValueOnce({ count: 1 });
+    mocks.opsUserFindUnique.mockResolvedValueOnce({
+      id: 'ops_target',
+      email: 'target@example.com',
+      name: 'Target',
+      isActive: true,
+      permissions: ['OPS_READ']
+    });
+
+    const result = await service.deactivateOpsUser({
+      targetOpsUserId: 'ops_target',
+      requestorOpsUserId: 'ops_requestor',
+      reason: 'Security incident',
+      challengeId: 'challenge_1',
+      otpCode: '123456',
+      requestIp: '127.0.0.1',
+      requestPath: '/api/v1/ops/users/ops_target/deactivate',
+      method: 'POST'
+    });
+
+    expect(result).toEqual({ opsUserId: 'ops_target', deactivated: true });
+    expect(mocks.opsAuditLogCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ actionType: 'USER_DEACTIVATED' })
+      })
+    );
+  });
+
+  it('requestLoginOtp returns generic message for unknown email (anti-enumeration)', async () => {
+    const { service, mocks } = createOpsServiceHarness();
+    // First call: email lookup → not found. Second call: system user lookup → not found.
+    mocks.opsUserFindUnique.mockResolvedValue(null);
+    // resolveAuditActorOpsUserId will try to create the system actor on first bootstrap.
+    mocks.opsUserCreate.mockResolvedValueOnce({ id: 'sys_actor' });
+
+    const result = await service.requestLoginOtp({ email: 'unknown@example.com', requestIp: '127.0.0.1' });
+
+    expect(result.message).toMatch(/OTP has been sent/);
+    expect(mocks.notificationsAdd).not.toHaveBeenCalled();
+  });
+
+  it('requestLoginOtp sends OTP email for valid active ops user', async () => {
+    const { service, mocks } = createOpsServiceHarness();
+    mocks.opsUserFindUnique.mockResolvedValueOnce({
+      id: 'ops_1',
+      email: 'ops@example.com',
+      name: 'Ops User',
+      isActive: true
+    });
+    mocks.redisSet.mockResolvedValue('OK');
+
+    const result = await service.requestLoginOtp({ email: 'ops@example.com', requestIp: '127.0.0.1' });
+
+    expect(result.message).toMatch(/OTP has been sent/);
+    expect(mocks.notificationsAdd).toHaveBeenCalledWith(
+      'send-email',
+      expect.objectContaining({ to: 'ops@example.com', template: 'OpsActionOtp' }),
+      expect.any(Object)
+    );
+  });
+
+  it('verifyLoginOtp throws on unknown or expired OTP', async () => {
+    const { service, mocks } = createOpsServiceHarness();
+    mocks.redisGet.mockResolvedValueOnce(null);
+
+    await expect(
+      service.verifyLoginOtp({
+        email: 'ops@example.com',
+        otp: '123456',
+        requestIp: '127.0.0.1',
+        requestPath: '/api/v1/ops/auth/login/verify-otp',
+        method: 'POST'
+      })
+    ).rejects.toMatchObject({ statusCode: 401, code: ERROR_CODES.INVALID_CREDENTIALS });
+  });
+
+  it('verifyLoginOtp issues session token on correct OTP', async () => {
+    const { service, mocks } = createOpsServiceHarness();
+    const otp = '654321';
+    const otpHash = crypto.createHash('sha256').update(otp).digest('hex');
+    mocks.redisGet.mockResolvedValueOnce(`ops_1||${otpHash}`);
+    mocks.opsUserFindUnique.mockResolvedValueOnce({
+      id: 'ops_1',
+      email: 'ops@example.com',
+      name: 'Ops User',
+      permissions: ['OPS_READ'],
+      isActive: true,
+      ipAllowlist: []
+    });
+    mocks.redisSet.mockResolvedValue('OK');
+
+    const result = await service.verifyLoginOtp({
+      email: 'ops@example.com',
+      otp,
+      requestIp: '127.0.0.1',
+      requestPath: '/api/v1/ops/auth/login/verify-otp',
+      method: 'POST'
+    });
+
+    expect(result.sessionToken).toMatch(/^opssess_/);
+    expect(result.opsUserId).toBe('ops_1');
+    expect(result.email).toBe('ops@example.com');
+    expect(mocks.opsAuditLogCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ actionType: 'OPS_USER_LOGGED_IN' })
+      })
+    );
+  });
+
+  it('scheduleRestart queues job in cartCleanup and writes audit log', async () => {
+    const { service, fastify, mocks } = createOpsServiceHarness();
+    const cartCleanupAdd = (fastify as unknown as { queues: { cartCleanup: { add: ReturnType<typeof vi.fn> } } }).queues.cartCleanup.add;
+    // Mock verifyEmailOtp
+    mocks.opsOtpChallengeFindUnique.mockResolvedValueOnce({
+      id: 'challenge_1',
+      opsUserId: 'ops_1',
+      action: 'system-restart',
+      codeHash: hashOtp('123456'),
+      status: 'PENDING',
+      expiresAt: new Date(Date.now() + 60000),
+      failedAttempts: 0
+    });
+    mocks.opsOtpChallengeUpdateMany.mockResolvedValueOnce({ count: 1 });
+
+    const result = await service.scheduleRestart({
+      opsUserId: 'ops_1',
+      delayMinutes: 5,
+      challengeId: 'challenge_1',
+      otpCode: '123456',
+      requestIp: '127.0.0.1',
+      requestPath: '/api/v1/ops/system/restart',
+      method: 'POST'
+    });
+
+    expect(result.jobId).toMatch(/^ops-restart:/);
+    expect(result.scheduledFor).toBeTruthy();
+    expect(cartCleanupAdd).toHaveBeenCalledWith(
+      'scheduled-process-restart',
+      expect.objectContaining({ requestedBy: 'ops_1' }),
+      expect.objectContaining({ delay: 5 * 60_000 })
+    );
+    expect(mocks.redisSet).toHaveBeenCalledWith(LOAD_SHED_MODE_KEY, 'emergency');
+    expect(mocks.opsAuditLogCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ actionType: 'CONTAINER_RESTART' })
+      })
+    );
+  });
+
+  it('scheduleRestart emits QUEUE_ENQUEUE alert and rethrows when cartCleanup.add() throws', async () => {
+    const { service, fastify, mocks } = createOpsServiceHarness();
+    const cartCleanupAdd = (fastify as unknown as { queues: { cartCleanup: { add: ReturnType<typeof vi.fn> } } }).queues.cartCleanup.add;
+    cartCleanupAdd.mockRejectedValueOnce(new Error('Redis ECONNREFUSED'));
+    mocks.opsOtpChallengeFindUnique.mockResolvedValueOnce({
+      id: 'challenge_2',
+      opsUserId: 'ops_1',
+      action: 'system-restart',
+      codeHash: hashOtp('654321'),
+      status: 'PENDING',
+      expiresAt: new Date(Date.now() + 60000),
+      failedAttempts: 0
+    });
+    mocks.opsOtpChallengeUpdateMany.mockResolvedValueOnce({ count: 1 });
+
+    const alertSpy = vi.spyOn(alertModule, 'sendTechnicalFailureAlert').mockResolvedValue(undefined);
+    afterEach(() => vi.restoreAllMocks());
+
+    await expect(
+      service.scheduleRestart({
+        opsUserId: 'ops_1',
+        delayMinutes: 0,
+        challengeId: 'challenge_2',
+        otpCode: '654321',
+        requestIp: '127.0.0.1',
+        requestPath: '/api/v1/ops/system/restart',
+        method: 'POST'
+      })
+    ).rejects.toThrow('Redis ECONNREFUSED');
+
+    expect(alertSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        failureStage: 'QUEUE_ENQUEUE',
+        template: 'ScheduledRestartEnqueue',
+        queueName: 'cart-cleanup'
+      })
+    );
+  });
+
+  it('createOpsInvite rejects when active invite already exists for email (Gap 8)', async () => {
+    const { service, mocks } = createOpsServiceHarness();
+    mocks.userFindUnique.mockResolvedValueOnce(null);
+    mocks.opsUserFindUnique.mockResolvedValueOnce(null);
+    mocks.opsUserInviteFindFirst.mockResolvedValueOnce({
+      id: 'existing_invite',
+      inviteEmail: 'ops@example.com',
+      status: 'CREATED'
+    });
+
+    await expect(
+      service.createOpsInvite({
+        inviteEmail: 'ops@example.com',
+        inviteName: 'Ops Person',
+        permissions: ['OPS_READ'],
+        ipAllowlist: [],
+        setupBaseUrl: 'https://example.com',
+        requestIp: '127.0.0.1',
+        requestPath: '/api/v1/ops/invites',
+        method: 'POST'
+      })
+    ).rejects.toMatchObject({ statusCode: 409, code: ERROR_CODES.CONFLICT });
+
+    expect(mocks.opsUserInviteCreate).not.toHaveBeenCalled();
+  });
+
+  it('cleanupExpiredInvites attributes audit log to actorOpsUserId when provided (Gap 2)', async () => {
+    const { service, mocks } = createOpsServiceHarness();
+
+    mocks.opsUserInviteFindMany.mockResolvedValue([
+      { id: 'invite_a', inviteEmail: 'old@example.com', createdByOpsUserId: 'some_creator' }
+    ]);
+    mocks.opsUserFindUnique.mockResolvedValueOnce({ id: 'ops_actor', email: 'actor@example.com' });
+
+    await service.cleanupExpiredInvites({
+      requestIp: '127.0.0.1',
+      requestPath: '/api/v1/ops/invites/cleanup-expired',
+      method: 'POST',
+      actorOpsUserId: 'ops_actor'
+    });
+
+    expect(mocks.opsAuditLogCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          opsUserId: 'ops_actor',
+          actionType: 'INVITE_EXPIRED_CLEANED'
+        })
+      })
+    );
+  });
+
+  it('requestLoginOtp writes FAILED audit log for unknown email without leaking info (Gap 3)', async () => {
+    const { service, mocks } = createOpsServiceHarness();
+    mocks.opsUserFindUnique.mockResolvedValueOnce(null);
+    mocks.opsUserCreate.mockResolvedValueOnce({ id: 'sys_actor' });
+
+    const result = await service.requestLoginOtp({ email: 'ghost@example.com', requestIp: '10.0.0.1' });
+
+    expect(result.message).toMatch(/OTP has been sent/);
+    expect(mocks.notificationsAdd).not.toHaveBeenCalled();
+    expect(mocks.opsAuditLogCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          actionType: 'OTP_CHALLENGE_REQUESTED',
+          actionStatus: 'FAILED'
+        })
+      })
+    );
+  });
+
+  it('requestLoginOtp writes EXECUTED audit log for valid active ops user (Gap 3)', async () => {
+    const { service, mocks } = createOpsServiceHarness();
+    mocks.opsUserFindUnique.mockResolvedValueOnce({
+      id: 'ops_1',
+      email: 'ops@example.com',
+      name: 'Ops User',
+      isActive: true
+    });
+    mocks.redisSet.mockResolvedValue('OK');
+
+    await service.requestLoginOtp({ email: 'ops@example.com', requestIp: '10.0.0.1' });
+
+    expect(mocks.opsAuditLogCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          opsUserId: 'ops_1',
+          actionType: 'OTP_CHALLENGE_REQUESTED',
+          actionStatus: 'EXECUTED'
+        })
+      })
+    );
+  });
+
+  it('verifyLoginOtp session payload does NOT include ip field (Gap 1)', async () => {
+    const { service, mocks } = createOpsServiceHarness();
+    const otp = '999888';
+    const otpHash = crypto.createHash('sha256').update(otp).digest('hex');
+    mocks.redisGet.mockResolvedValueOnce(`ops_1||${otpHash}`);
+    mocks.opsUserFindUnique.mockResolvedValueOnce({
+      id: 'ops_1',
+      email: 'ops@example.com',
+      name: 'Ops User',
+      permissions: ['OPS_READ'],
+      isActive: true,
+      ipAllowlist: []
+    });
+    mocks.redisSet.mockResolvedValue('OK');
+
+    await service.verifyLoginOtp({
+      email: 'ops@example.com',
+      otp,
+      requestIp: '10.0.0.1',
+      requestPath: '/api/v1/ops/auth/login/verify-otp',
+      method: 'POST'
+    });
+
+    const setCall = mocks.redisSet.mock.calls.find(
+      (c: unknown[]) => typeof c[0] === 'string' && (c[0] as string).startsWith('ops:browser-session:')
+    ) as [string, string, ...unknown[]] | undefined;
+    expect(setCall).toBeDefined();
+    const sessionPayload = JSON.parse(setCall![1]) as Record<string, unknown>;
+    expect(sessionPayload).not.toHaveProperty('ip');
+    expect(sessionPayload).toHaveProperty('opsUserId', 'ops_1');
+    expect(sessionPayload).toHaveProperty('email', 'ops@example.com');
+  });
+
   it('withOpsAuditChainLock fails fast when lock cannot be acquired within timeout window', async () => {
     const { service, mocks } = createOpsServiceHarness();
     const maybeWithOpsAuditChainLock = Reflect.get(service as object, 'withOpsAuditChainLock');
@@ -451,5 +846,86 @@ describe('OpsService failcase coverage', () => {
       code: 'INTERNAL_ERROR'
     });
     expect(mocks.redisEval).not.toHaveBeenCalled();
+  });
+
+  it('revokeOpsInvite revokes pending invite after OTP verification', async () => {
+    const { service, mocks } = createOpsServiceHarness();
+    // Mock verifyEmailOtp
+    mocks.opsOtpChallengeFindUnique.mockResolvedValueOnce({
+      id: 'challenge_1',
+      opsUserId: 'ops_1',
+      action: 'invite-revoke',
+      codeHash: hashOtp('123456'),
+      status: 'PENDING',
+      expiresAt: new Date(Date.now() + 60000),
+      failedAttempts: 0
+    });
+    mocks.opsOtpChallengeUpdateMany.mockResolvedValueOnce({ count: 1 });
+    mocks.opsUserInviteFindUnique.mockResolvedValueOnce({
+      id: 'invite_1',
+      inviteEmail: 'newops@example.com',
+      status: 'CREATED',
+      expiresAt: new Date(Date.now() + 600000)
+    });
+    mocks.opsUserInviteUpdateMany.mockResolvedValueOnce({ count: 1 });
+
+    const result = await service.revokeOpsInvite({
+      inviteId: 'invite_1',
+      revokerOpsUserId: 'ops_1',
+      challengeId: 'challenge_1',
+      otpCode: '123456',
+      requestIp: '127.0.0.1',
+      requestPath: '/api/v1/ops/invites/invite_1/revoke',
+      method: 'POST'
+    });
+
+    expect(result).toEqual({ inviteId: 'invite_1', revoked: true });
+    expect(mocks.opsAuditLogCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ actionType: 'INVITE_REVOKED' })
+      })
+    );
+  });
+
+  it('setLoadShedModeDirect changes mode after OTP verification and writes audit log', async () => {
+    const { service, mocks } = createOpsServiceHarness();
+    // Mock verifyEmailOtp
+    mocks.opsOtpChallengeFindUnique.mockResolvedValueOnce({
+      id: 'challenge_1',
+      opsUserId: 'ops_1',
+      action: 'load-shed-change',
+      codeHash: hashOtp('123456'),
+      status: 'PENDING',
+      expiresAt: new Date(Date.now() + 60000),
+      failedAttempts: 0
+    });
+    mocks.opsOtpChallengeUpdateMany.mockResolvedValueOnce({ count: 1 });
+    mocks.redisSet.mockResolvedValue('OK');
+
+    // Need to pass a Fastify request object for setLoadShedMode — must include server.redis.set
+    const mockRequest = {
+      id: 'req_1',
+      server: { redis: { set: mocks.redisSet } }
+    } as unknown as import('fastify').FastifyRequest;
+
+    const result = await service.setLoadShedModeDirect({
+      request: mockRequest,
+      requesterId: 'ops_1',
+      mode: 'reduced',
+      reason: 'High traffic spike detected',
+      challengeId: 'challenge_1',
+      otpCode: '123456',
+      requestIp: '127.0.0.1',
+      requestPath: '/api/v1/ops/load-shed',
+      method: 'POST'
+    });
+
+    expect(result.mode).toBe('reduced');
+    expect(result.updated).toBe(true);
+    expect(mocks.opsAuditLogCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ actionType: 'LOAD_SHED_CHANGE' })
+      })
+    );
   });
 });

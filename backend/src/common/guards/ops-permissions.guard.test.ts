@@ -21,12 +21,11 @@ describe('opsPermissionGuard', () => {
 
     await expect(guard(request, {} as unknown as OpsGuardReply)).resolves.toBeUndefined();
     expect(request.opsControlDecision).toEqual({
-      permission: 'ops:read',
-      requiresDualApproval: false
+      permission: 'ops:read'
     });
   });
 
-  it('requires dual approval for ops writes', async () => {
+  it('sets opsControlDecision correctly for ops:write', async () => {
     const guard = opsPermissionGuard('ops:write');
     const request = {
       method: 'POST',
@@ -40,13 +39,12 @@ describe('opsPermissionGuard', () => {
 
     await expect(guard(request, {} as unknown as OpsGuardReply)).resolves.toBeUndefined();
     expect(request.opsControlDecision).toEqual({
-      permission: 'ops:write',
-      requiresDualApproval: true
+      permission: 'ops:write'
     });
   });
 
   it('rejects when permission is missing', async () => {
-    const guard = opsPermissionGuard('ops:approve');
+    const guard = opsPermissionGuard('ops:write');
     const request = {
       method: 'POST',
       opsUser: {

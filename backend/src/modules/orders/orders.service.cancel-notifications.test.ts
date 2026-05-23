@@ -38,7 +38,7 @@ function buildSerializedOrderSource(overrides?: Partial<Record<string, unknown>>
 }
 
 describe('OrdersService cancellation notification enqueue', () => {
-  it('enqueues OrderCancelled email and sms for customer cancellation', async () => {
+  it('enqueues OrderCancelled primary notification for customer cancellation', async () => {
     const notificationsAdd = vi.fn().mockResolvedValue(undefined);
     const orderProcessingAdd = vi.fn().mockResolvedValue(undefined);
     const tx = {
@@ -80,25 +80,15 @@ describe('OrdersService cancellation notification enqueue', () => {
     await service.cancelMyOrder('user_1', 'order_1');
 
     expect(notificationsAdd).toHaveBeenCalledWith(
-      'send-email',
+      'send-primary',
       expect.objectContaining({
-        to: 'customer@example.com',
-        template: 'OrderCancelled',
-        data: { orderId: 'order_1' }
-      }),
-      expect.objectContaining({
-        jobId: 'notifications:email:order_1:OrderCancelled'
-      })
-    );
-    expect(notificationsAdd).toHaveBeenCalledWith(
-      'send-sms',
-      expect.objectContaining({
+        email: 'customer@example.com',
         phone: '9999999999',
         template: 'OrderCancelled',
         data: { orderId: 'order_1' }
       }),
       expect.objectContaining({
-        jobId: 'notifications:sms:order_1:OrderCancelled'
+        jobId: 'notifications:primary:order_1:OrderCancelled'
       })
     );
     expect(orderProcessingAdd).not.toHaveBeenCalled();
@@ -184,14 +174,15 @@ describe('OrdersService cancellation notification enqueue', () => {
     const result = await service.adminCancelOrder('order_1');
 
     expect(notificationsAdd).toHaveBeenCalledWith(
-      'send-email',
+      'send-primary',
       expect.objectContaining({
-        to: 'customer@example.com',
+        email: 'customer@example.com',
+        phone: '9999999999',
         template: 'OrderCancelled',
         data: { orderId: 'order_1' }
       }),
       expect.objectContaining({
-        jobId: 'notifications:email:order_1:OrderCancelled'
+        jobId: 'notifications:primary:order_1:OrderCancelled'
       })
     );
     expect(orderProcessingAdd).not.toHaveBeenCalled();

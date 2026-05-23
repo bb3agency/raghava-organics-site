@@ -2,8 +2,8 @@ import { Queue, Worker, type ConnectionOptions } from 'bullmq';
 import { OrderStatus, ShippingProvider, ShipmentStatus, type Prisma, PrismaClient as RealPrismaClient } from '@prisma/client';
 import { canTransitionOrder } from '@common/orders/order-state-machine';
 import { mapShipmentStatusToOrderStatus, mapShipmentWebhookStatus } from '@common/orders/webhook-status-mappers';
-import { resolveNotifyFlags } from '@config/feature-flags';
 import { createShippingProvider } from '@modules/shipping/shipping-provider';
+import { sendTechnicalFailureAlert } from '../../src/modules/notifications/notification-failure-alert';
 
 type NotificationsQueue = Pick<Queue, 'add'>;
 
@@ -11,7 +11,7 @@ type ShippingWorkerDeps = {
   PrismaClient?: typeof RealPrismaClient;
   Worker?: typeof Worker;
   createShippingProvider?: typeof createShippingProvider;
-  resolveNotifyFlags?: typeof resolveNotifyFlags;
+  sendTechnicalFailureAlert?: typeof sendTechnicalFailureAlert;
 };
 
 type ShippingWebhookJobData = {
@@ -84,7 +84,7 @@ function resolveWebhookPayload(data: ShippingWebhookJobData): Prisma.InputJsonVa
 async function enqueueNotificationOutboxOrQueue(
   tx: Prisma.TransactionClient,
   notificationsQueue: NotificationsQueue,
-  jobName: 'send-email' | 'send-sms' | 'send-whatsapp',
+  jobName: 'send-email' | 'send-sms' | 'send-whatsapp' | 'send-primary',
   payload: Record<string, unknown>,
   jobId?: string
 ): Promise<void> {
@@ -195,13 +195,13 @@ export function createShippingWorker(
 ): Worker {
   const PrismaClientCtor = deps?.PrismaClient ?? RealPrismaClient;
   const WorkerCtor = deps?.Worker ?? Worker;
-  const resolveNotificationFlags = deps?.resolveNotifyFlags ?? resolveNotifyFlags;
   const shippingProviderFactory = deps?.createShippingProvider ?? createShippingProvider;
+  const alertFn = deps?.sendTechnicalFailureAlert ?? sendTechnicalFailureAlert;
   const prisma = new PrismaClientCtor();
   const notificationsQueue = notificationsQueueArg ?? new Queue('notifications', { connection });
   const shippingProvider = shippingProviderFactory();
 
-  return new WorkerCtor(
+  const worker = new WorkerCtor(
     'shipping',
     async (job) => {
       if (job.name === 'create-shipment' || job.name === 'create-delhivery-shipment') {
@@ -294,7 +294,7 @@ export function createShippingWorker(
             hsnCodes.add(hsnCode);
           }
         }
-        const sellerGstTin = (settings?.gstin ?? process.env.STORE_SELLER_GSTIN ?? '').trim();
+        const sellerGstTin = (settings?.gstin ?? '').trim();
         if (!sellerGstTin) {
           throw new Error('Missing seller GSTIN for shipment booking');
         }
@@ -418,8 +418,6 @@ export function createShippingWorker(
 
       const data = job.data as ShippingWebhookJobData;
       const nextShipmentStatus = mapShipmentWebhookStatus(data.status);
-      const notificationFlags = resolveNotificationFlags();
-
       await prisma.$transaction(async (tx) => {
         const shipment = await tx.shipment.findFirst({
           where: { awbNumber: data.awb },
@@ -496,36 +494,28 @@ export function createShippingWorker(
 
         const email = shipment.order.user?.email;
         const phone = shipment.order.user?.phone;
-        if (nextShipmentStatus === 'IN_TRANSIT' && phone) {
-          await enqueueNotificationOutboxOrQueue(tx, notificationsQueue, 'send-sms', {
+        if (nextShipmentStatus === 'IN_TRANSIT' && (phone || email)) {
+          await enqueueNotificationOutboxOrQueue(tx, notificationsQueue, 'send-primary', {
+            email,
             phone,
             template: 'OrderShipped',
             data: {
               orderId: shipment.order.id,
               awb: data.awb
             }
-          }, `shipping:sms:${shipment.order.id}:in-transit`);
+          }, `shipping:primary:${shipment.order.id}:in-transit`);
         }
 
-        if (nextShipmentStatus === 'OUT_FOR_DELIVERY' && phone) {
-          await enqueueNotificationOutboxOrQueue(tx, notificationsQueue, 'send-sms', {
+        if (nextShipmentStatus === 'OUT_FOR_DELIVERY' && (phone || email)) {
+          await enqueueNotificationOutboxOrQueue(tx, notificationsQueue, 'send-primary', {
+            email,
             phone,
             template: 'OutForDelivery',
             data: {
               orderId: shipment.order.id,
               awb: data.awb
             }
-          }, `shipping:sms:${shipment.order.id}:out-for-delivery`);
-          if (notificationFlags.whatsapp) {
-            await enqueueNotificationOutboxOrQueue(tx, notificationsQueue, 'send-whatsapp', {
-              phone,
-              template: 'OutForDelivery',
-              data: {
-                orderId: shipment.order.id,
-                awb: data.awb
-              }
-            }, `shipping:wa:${shipment.order.id}:out-for-delivery`);
-          }
+          }, `shipping:primary:${shipment.order.id}:out-for-delivery`);
         }
 
         if (nextShipmentStatus === 'DELIVERED') {
@@ -574,37 +564,29 @@ export function createShippingWorker(
               }
             }
           }
-          if (email) {
-            await enqueueNotificationOutboxOrQueue(tx, notificationsQueue, 'send-email', {
-              to: email,
-              template: 'OrderDelivered',
-              data: {
-                orderId: shipment.order.id,
-                awb: data.awb
-              }
-            }, `shipping:email:${shipment.order.id}:delivered`);
-          }
-          if (phone) {
-            await enqueueNotificationOutboxOrQueue(tx, notificationsQueue, 'send-sms', {
+          if (email || phone) {
+            await enqueueNotificationOutboxOrQueue(tx, notificationsQueue, 'send-primary', {
+              email,
               phone,
               template: 'OrderDelivered',
               data: {
                 orderId: shipment.order.id,
                 awb: data.awb
               }
-            }, `shipping:sms:${shipment.order.id}:delivered`);
+            }, `shipping:primary:${shipment.order.id}:delivered`);
           }
         }
 
-        if (nextShipmentStatus === 'FAILED_DELIVERY' && phone) {
-          await enqueueNotificationOutboxOrQueue(tx, notificationsQueue, 'send-sms', {
+        if (nextShipmentStatus === 'FAILED_DELIVERY' && (phone || email)) {
+          await enqueueNotificationOutboxOrQueue(tx, notificationsQueue, 'send-primary', {
+            email,
             phone,
             template: 'FailedDelivery',
             data: {
               orderId: shipment.order.id,
               awb: data.awb
             }
-          }, `shipping:sms:${shipment.order.id}:failed-delivery`);
+          }, `shipping:primary:${shipment.order.id}:failed-delivery`);
         }
 
         if (nextShipmentStatus === 'RTO_INITIATED') {
@@ -614,19 +596,40 @@ export function createShippingWorker(
           });
           const adminEmail = settings?.contactEmail ?? null;
           if (adminEmail) {
-            await enqueueNotificationOutboxOrQueue(tx, notificationsQueue, 'send-email', {
-              to: adminEmail,
+            await enqueueNotificationOutboxOrQueue(tx, notificationsQueue, 'send-primary', {
+              email: adminEmail,
               template: 'OrderCancelled',
               data: {
                 orderId: shipment.order.id,
                 awb: data.awb
               }
-            }, `shipping:email:${shipment.order.id}:rto-initiated`);
+            }, `shipping:primary:${shipment.order.id}:rto-initiated`);
           }
         }
       });
     },
     { connection }
   );
-}
 
+  worker.on('failed', (job, error) => {
+    if (!job) return;
+    const attempts = job.opts.attempts ?? 1;
+    if (job.attemptsMade < attempts) return;
+    void alertFn({
+      prisma,
+      template: 'ShippingWorkerTerminalFailure',
+      channel: 'UNKNOWN',
+      recipient: 'shipping-worker',
+      errorMessage: error instanceof Error ? error.message : String(error),
+      failureStage: 'WORKER_TERMINAL',
+      queueName: 'shipping',
+      jobName: job.name,
+      jobId: job.id ?? 'unknown',
+      domain: 'shipping',
+      component: 'shipping-worker',
+      terminalFailure: true
+    });
+  });
+
+  return worker;
+}

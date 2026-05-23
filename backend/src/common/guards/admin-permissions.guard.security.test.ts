@@ -29,12 +29,12 @@ describe('adminPermissionGuard', () => {
   });
 
   it('rejects admin without required permission', async () => {
-    const guard = adminPermissionGuard('queues:inspect');
+    const guard = adminPermissionGuard('analytics:replay');
     const request = {
       user: {
         sub: 'admin_1',
         role: Role.ADMIN,
-        permissions: ['analytics:replay']
+        permissions: ['orders:read']
       }
     } as unknown as AdminGuardRequest;
 
@@ -169,14 +169,14 @@ describe('adminPermissionGuard', () => {
     expect(request.adminControlDecision?.role).toBe('developer');
   });
 
-  it('allows ops approval endpoint permission for developer role', async () => {
-    const guard = adminPermissionGuard('ops:approve');
+  it('allows ops write endpoint permission for developer role', async () => {
+    const guard = adminPermissionGuard('ops:write');
     const request = {
       method: 'POST',
       user: {
         sub: 'admin_dev_approver',
         role: Role.ADMIN,
-        permissions: ['ops:approve', 'developer:*']
+        permissions: ['ops:write', 'developer:*']
       }
     } as unknown as AdminGuardRequest;
     await expect(guard(request, {} as unknown as AdminGuardReply)).resolves.toBeUndefined();

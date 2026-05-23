@@ -35,7 +35,6 @@ declare module 'fastify' {
     };
     opsControlDecision?: {
       permission: OpsPermissionScope;
-      requiresDualApproval: boolean;
     };
   }
 }

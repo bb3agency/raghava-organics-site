@@ -1,5 +1,5 @@
 import { Role } from '@prisma/client';
-import { FastifyInstance } from 'fastify';
+import { FastifyInstance, FastifyRequest } from 'fastify';
 import { getCurrentUser } from '@common/decorators/current-user';
 import { adminPermissionGuard } from '@common/guards/admin-permissions.guard';
 import { AppError } from '@common/errors/app-error';
@@ -21,7 +21,18 @@ import {
   adminSchedulePickupSchema,
   adminPrintLabelSchema,
   adminRetriggerNotificationSchema,
+  adminListShipmentsSchema,
+  adminListPaymentsSchema,
   adminUpdateOrderStatusSchema,
+  adminListReturnRequestsSchema,
+  adminGetReturnRequestSchema,
+  adminUpdateReturnRequestSchema,
+  adminUpdateOrderItemsSchema,
+  adminGetShipmentByIdSchema,
+  adminGetPaymentByIdSchema,
+  adminGetOrderTimelineSchema,
+  createReturnRequestSchema,
+  retryPaymentSchema,
   cancelMyOrderSchema,
   createOrderSchema,
   getMyInvoicePdfSchema,
@@ -36,6 +47,13 @@ import { CheckoutRiskService } from './checkout-risk.service';
 import { OrdersService } from './orders.service';
 import { CancelOrderInput, ReturnRequestStatus } from './orders.types';
 import { assertWebhookAllowlistConfigured, isIpAllowlisted, parseWebhookIpAllowlist, resolveSecurityClientIp } from '@common/security/webhook-allowlist';
+
+function requireRefundPermission(request: FastifyRequest): void {
+  const body = request.body as { status?: string };
+  if (body.status === 'REFUNDED' && !hasAdminPermission(request.user?.permissions, 'orders:refund')) {
+    throw new AppError(ERROR_CODES.FORBIDDEN, 'Insufficient permissions: orders:refund required to set REFUNDED status', 403);
+  }
+}
 
 function requireWebhookRawPayload(body: unknown): string | Buffer {
   if (typeof body === 'string' || Buffer.isBuffer(body)) {
@@ -336,12 +354,8 @@ export async function registerOrdersRoutes(fastify: FastifyInstance): Promise<vo
       preHandler: [
         ...adminGuard,
         adminPermissionGuard('orders:write'),
-        async (request) => {
-          const body = request.body as { status?: string };
-          if (body.status === 'REFUNDED' && !hasAdminPermission(request.user?.permissions, 'orders:refund')) {
-            throw new AppError(ERROR_CODES.FORBIDDEN, 'Insufficient permissions', 403);
-          }
-        },
+        loadShedGuard,
+        requireRefundPermission,
         idempotencyPreHandler
       ],
       config: {
@@ -366,7 +380,7 @@ export async function registerOrdersRoutes(fastify: FastifyInstance): Promise<vo
     '/api/v1/admin/orders/:id/ship',
     {
       schema: adminShipOrderSchema,
-      preHandler: [...adminGuard, adminPermissionGuard('orders:write'), idempotencyPreHandler],
+      preHandler: [...adminGuard, adminPermissionGuard('orders:write'), loadShedGuard, idempotencyPreHandler],
       config: {
         rateLimit: routeRateLimitProfiles.adminWrite
       }
@@ -381,7 +395,7 @@ export async function registerOrdersRoutes(fastify: FastifyInstance): Promise<vo
     '/api/v1/admin/orders/:id/cancel',
     {
       schema: adminCancelOrderSchema,
-      preHandler: [...adminGuard, adminPermissionGuard('orders:refund'), idempotencyPreHandler],
+      preHandler: [...adminGuard, adminPermissionGuard('orders:refund'), loadShedGuard, idempotencyPreHandler],
       config: {
         rateLimit: routeRateLimitProfiles.adminWrite
       }
@@ -404,7 +418,7 @@ export async function registerOrdersRoutes(fastify: FastifyInstance): Promise<vo
     '/api/v1/admin/orders/:id/schedule-pickup',
     {
       schema: adminSchedulePickupSchema,
-      preHandler: [...adminGuard, adminPermissionGuard('orders:write'), idempotencyPreHandler],
+      preHandler: [...adminGuard, adminPermissionGuard('orders:write'), loadShedGuard, idempotencyPreHandler],
       config: {
         rateLimit: routeRateLimitProfiles.adminWrite
       }
@@ -419,9 +433,9 @@ export async function registerOrdersRoutes(fastify: FastifyInstance): Promise<vo
     '/api/v1/admin/orders/:id/print-label',
     {
       schema: adminPrintLabelSchema,
-      preHandler: [...adminGuard, adminPermissionGuard('orders:read')],
+      preHandler: [...adminGuard, adminPermissionGuard('orders:read'), loadShedGuard, idempotencyPreHandler],
       config: {
-        rateLimit: routeRateLimitProfiles.adminRead
+        rateLimit: routeRateLimitProfiles.adminWrite
       }
     },
     async (request) => {
@@ -434,7 +448,7 @@ export async function registerOrdersRoutes(fastify: FastifyInstance): Promise<vo
     '/api/v1/admin/orders/:id/notifications/retrigger',
     {
       schema: adminRetriggerNotificationSchema,
-      preHandler: [...adminGuard, adminPermissionGuard('orders:notify'), idempotencyPreHandler],
+      preHandler: [...adminGuard, adminPermissionGuard('orders:notify'), loadShedGuard, idempotencyPreHandler],
       config: {
         rateLimit: routeRateLimitProfiles.adminWrite
       }
@@ -448,32 +462,7 @@ export async function registerOrdersRoutes(fastify: FastifyInstance): Promise<vo
   fastify.post(
     '/api/v1/payments/retry',
     {
-      schema: {
-        tags: ['payments'],
-        summary: 'Retry payment for a failed or pending-payment order',
-        body: {
-          type: 'object',
-          additionalProperties: false,
-          required: ['orderId'],
-          properties: {
-            orderId: { type: 'string', minLength: 1, maxLength: 64 }
-          }
-        },
-        response: {
-          200: {
-            type: 'object',
-            additionalProperties: false,
-            required: ['orderId', 'provider', 'providerOrderId', 'amount', 'currency'],
-            properties: {
-              orderId: { type: 'string' },
-              provider: { type: 'string' },
-              providerOrderId: { type: 'string' },
-              amount: { type: 'integer' },
-              currency: { type: 'string' }
-            }
-          }
-        }
-      },
+      schema: retryPaymentSchema,
       preHandler: [...customerGuard, idempotencyPreHandler],
       config: {
         rateLimit: routeRateLimitProfiles.checkoutMutation
@@ -498,53 +487,7 @@ export async function registerOrdersRoutes(fastify: FastifyInstance): Promise<vo
   fastify.post(
     '/api/v1/orders/:id/return-requests',
     {
-      schema: {
-        tags: ['orders'],
-        summary: 'Create a return request for a delivered order',
-        params: {
-          type: 'object',
-          additionalProperties: false,
-          required: ['id'],
-          properties: { id: { type: 'string', maxLength: 64 } }
-        },
-        body: {
-          type: 'object',
-          additionalProperties: false,
-          required: ['items', 'reason'],
-          properties: {
-            reason: { type: 'string', minLength: 1, maxLength: 500 },
-            items: {
-              type: 'array',
-              minItems: 1,
-              maxItems: 50,
-              items: {
-                type: 'object',
-                additionalProperties: false,
-                required: ['orderItemId', 'quantity'],
-                properties: {
-                  orderItemId: { type: 'string', maxLength: 64 },
-                  quantity: { type: 'integer', minimum: 1, maximum: 10000 },
-                  reason: { type: 'string', maxLength: 500 }
-                }
-              }
-            }
-          }
-        },
-        response: {
-          201: {
-            type: 'object',
-            additionalProperties: false,
-            required: ['id', 'orderId', 'status', 'reason', 'createdAt'],
-            properties: {
-              id: { type: 'string' },
-              orderId: { type: 'string' },
-              status: { type: 'string', enum: ['REQUESTED', 'APPROVED', 'REJECTED', 'PICKED_UP', 'REFUNDED'], maxLength: 30 },
-              reason: { type: 'string' },
-              createdAt: { type: 'string' }
-            }
-          }
-        }
-      },
+      schema: createReturnRequestSchema,
       preHandler: [...customerGuard, idempotencyPreHandler],
       config: {
         rateLimit: routeRateLimitProfiles.checkoutMutation
@@ -563,53 +506,10 @@ export async function registerOrdersRoutes(fastify: FastifyInstance): Promise<vo
   fastify.get(
     '/api/v1/admin/return-requests',
     {
+      schema: adminListReturnRequestsSchema,
       preHandler: [...adminGuard, adminPermissionGuard('orders:read')],
       config: {
         rateLimit: routeRateLimitProfiles.adminRead
-      },
-      schema: {
-        tags: ['admin', 'returns'],
-        summary: 'List return requests',
-        querystring: {
-          type: 'object',
-          additionalProperties: false,
-          properties: {
-            status: { type: 'string', enum: ['REQUESTED', 'APPROVED', 'REJECTED', 'PICKED_UP', 'REFUNDED'], maxLength: 30 },
-            page: { type: 'integer', minimum: 1, default: 1 },
-            limit: { type: 'integer', minimum: 1, maximum: 100, default: 20 }
-          }
-        },
-        response: {
-          200: {
-            type: 'object',
-            additionalProperties: false,
-            required: ['items', 'total', 'page', 'limit'],
-            properties: {
-              total: { type: 'integer' },
-              page: { type: 'integer' },
-              limit: { type: 'integer' },
-              items: {
-                type: 'array',
-                items: {
-                  type: 'object',
-                  additionalProperties: false,
-                  required: ['id', 'orderId', 'orderNumber', 'userId', 'customerEmail', 'customerName', 'status', 'reason', 'createdAt'],
-                  properties: {
-                    id: { type: 'string' },
-                    orderId: { type: 'string' },
-                    orderNumber: { type: 'string' },
-                    userId: { type: 'string' },
-                    customerEmail: { type: 'string' },
-                    customerName: { type: 'string' },
-                    status: { type: 'string', enum: ['REQUESTED', 'APPROVED', 'REJECTED', 'PICKED_UP', 'REFUNDED'], maxLength: 30 },
-                    reason: { type: 'string' },
-                    createdAt: { type: 'string' }
-                  }
-                }
-              }
-            }
-          }
-        }
       }
     },
     async (request) => {
@@ -618,45 +518,52 @@ export async function registerOrdersRoutes(fastify: FastifyInstance): Promise<vo
     }
   );
 
+  fastify.get(
+    '/api/v1/admin/shipments',
+    {
+      schema: adminListShipmentsSchema,
+      preHandler: [...adminGuard, adminPermissionGuard('shipments:read')],
+      config: {
+        rateLimit: routeRateLimitProfiles.adminRead
+      }
+    },
+    async (request) => ordersService.adminListShipments(request.query as never)
+  );
+
+  fastify.get(
+    '/api/v1/admin/payments',
+    {
+      schema: adminListPaymentsSchema,
+      preHandler: [...adminGuard, adminPermissionGuard('payments:read')],
+      config: {
+        rateLimit: routeRateLimitProfiles.adminRead
+      }
+    },
+    async (request) => ordersService.adminListPayments(request.query as never)
+  );
+
+  fastify.get(
+    '/api/v1/admin/return-requests/:id',
+    {
+      schema: adminGetReturnRequestSchema,
+      preHandler: [...adminGuard, adminPermissionGuard('orders:read')],
+      config: {
+        rateLimit: routeRateLimitProfiles.adminRead
+      }
+    },
+    async (request) => {
+      const params = request.params as { id: string };
+      return ordersService.adminGetReturnRequest(params.id);
+    }
+  );
+
   fastify.patch(
     '/api/v1/admin/return-requests/:id',
     {
-      preHandler: [...adminGuard, adminPermissionGuard('orders:write'), idempotencyPreHandler],
+      schema: adminUpdateReturnRequestSchema,
+      preHandler: [...adminGuard, adminPermissionGuard('orders:write'), loadShedGuard, idempotencyPreHandler],
       config: {
         rateLimit: routeRateLimitProfiles.adminWrite
-      },
-      schema: {
-        tags: ['admin', 'returns'],
-        summary: 'Update a return request status',
-        params: {
-          type: 'object',
-          additionalProperties: false,
-          required: ['id'],
-          properties: { id: { type: 'string', maxLength: 64 } }
-        },
-        body: {
-          type: 'object',
-          additionalProperties: false,
-          required: ['status'],
-          properties: {
-            status: { type: 'string', enum: ['REQUESTED', 'APPROVED', 'REJECTED', 'PICKED_UP', 'REFUNDED'], maxLength: 30 },
-            adminNote: { type: 'string', maxLength: 1000 }
-          }
-        },
-        response: {
-          200: {
-            type: 'object',
-            additionalProperties: false,
-            required: ['id', 'orderId', 'status', 'updatedAt'],
-            properties: {
-              id: { type: 'string' },
-              orderId: { type: 'string' },
-              status: { type: 'string', enum: ['REQUESTED', 'APPROVED', 'REJECTED', 'PICKED_UP', 'REFUNDED'], maxLength: 30 },
-              adminNote: { anyOf: [{ type: 'string' }, { type: 'null' }] },
-              updatedAt: { type: 'string' }
-            }
-          }
-        }
       }
     },
     async (request) => {
@@ -664,6 +571,68 @@ export async function registerOrdersRoutes(fastify: FastifyInstance): Promise<vo
       const params = request.params as { id: string };
       const body = request.body as { status: ReturnRequestStatus; adminNote?: string };
       return ordersService.adminUpdateReturnRequest(adminUser.sub, params.id, body);
+    }
+  );
+
+  fastify.patch(
+    '/api/v1/admin/orders/:id/items',
+    {
+      schema: adminUpdateOrderItemsSchema,
+      preHandler: [...adminGuard, adminPermissionGuard('orders:write'), loadShedGuard, idempotencyPreHandler],
+      config: {
+        rateLimit: routeRateLimitProfiles.adminWrite
+      }
+    },
+    async (request) => {
+      const adminUser = getCurrentUser(request);
+      const params = request.params as { id: string };
+      const body = request.body as { updates: Array<{ orderItemId: string; quantity: number }> };
+      return ordersService.adminUpdateOrderItems(adminUser.sub, params.id, body.updates);
+    }
+  );
+
+  fastify.get(
+    '/api/v1/admin/shipments/:id',
+    {
+      schema: adminGetShipmentByIdSchema,
+      preHandler: [...adminGuard, adminPermissionGuard('shipments:read')],
+      config: {
+        rateLimit: routeRateLimitProfiles.adminRead
+      }
+    },
+    async (request) => {
+      const params = request.params as { id: string };
+      return ordersService.adminGetShipmentById(params.id);
+    }
+  );
+
+  fastify.get(
+    '/api/v1/admin/payments/:id',
+    {
+      schema: adminGetPaymentByIdSchema,
+      preHandler: [...adminGuard, adminPermissionGuard('payments:read')],
+      config: {
+        rateLimit: routeRateLimitProfiles.adminRead
+      }
+    },
+    async (request) => {
+      const params = request.params as { id: string };
+      return ordersService.adminGetPaymentById(params.id);
+    }
+  );
+
+  fastify.get(
+    '/api/v1/admin/orders/:id/timeline',
+    {
+      schema: adminGetOrderTimelineSchema,
+      preHandler: [...adminGuard, adminPermissionGuard('orders:read')],
+      config: {
+        rateLimit: routeRateLimitProfiles.adminRead
+      }
+    },
+    async (request) => {
+      const params = request.params as { id: string };
+      return ordersService.adminGetOrderTimeline(params.id);
     }
   );
 }

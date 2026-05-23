@@ -25,8 +25,8 @@ export const OPS_CONFIG_OVERVIEW_GROUPS: Array<{
     domain: 'core',
     label: 'Core Runtime',
     items: [
-      { key: 'NODE_ENV', mutableViaOps: true, requiresRestart: true },
-      { key: 'CLIENT_ID', mutableViaOps: true, requiresRestart: true },
+      { key: 'NODE_ENV', mutableViaOps: false, requiresRestart: true, runtimeSource: 'env-bootstrap', note: 'Process mode switch; must be set in deployment environment. Changing via DB overlay would silently downgrade the security profile.' },
+      { key: 'CLIENT_ID', mutableViaOps: false, requiresRestart: true, runtimeSource: 'env-bootstrap', note: 'Infrastructure identity key set at deploy time; must not be overrideable via DB.' },
       { key: 'DATABASE_URL', mutableViaOps: false, requiresRestart: true, runtimeSource: 'env-bootstrap', note: 'Bootstrap-only: must come from deployment environment before DB config can be read.' },
       { key: 'REDIS_URL', mutableViaOps: false, requiresRestart: true, runtimeSource: 'env-bootstrap', note: 'Bootstrap-only initial Redis URL; DB overlay cannot be used to establish the first Redis connection.' },
       { key: 'JWT_SECRET', mutableViaOps: true, requiresRestart: true },
@@ -46,7 +46,7 @@ export const OPS_CONFIG_OVERVIEW_GROUPS: Array<{
       { key: 'RAZORPAY_KEY_SECRET', mutableViaOps: true, requiresRestart: true },
       { key: 'RAZORPAY_WEBHOOK_SECRET', mutableViaOps: true, requiresRestart: true },
       { key: 'RAZORPAY_WEBHOOK_SECRET_OLD', mutableViaOps: true, requiresRestart: true, note: 'Optional secret used during webhook secret rotation.' },
-      { key: 'RAZORPAY_WEBHOOK_ALLOWLIST_CIDR', mutableViaOps: true, requiresRestart: true },
+      { key: 'RAZORPAY_WEBHOOK_ALLOWLIST_CIDR', mutableViaOps: true, requiresRestart: true, runtimeSource: 'db-overlay' },
       { key: 'RAZORPAY_WEBHOOK_MAX_SKEW_SECONDS', mutableViaOps: true, requiresRestart: true }
     ]
   },
@@ -58,19 +58,19 @@ export const OPS_CONFIG_OVERVIEW_GROUPS: Array<{
       { key: 'SHIPPING_PROVIDER_FAILOVER_ENABLED', mutableViaOps: true, requiresRestart: true },
       { key: 'SHIPPING_CB_FAILURE_THRESHOLD', mutableViaOps: true, requiresRestart: true },
       { key: 'SHIPPING_CB_COOLDOWN_MS', mutableViaOps: true, requiresRestart: true },
-      { key: 'SHIPPING_WEBHOOK_ALLOWLIST_CIDR', mutableViaOps: true, requiresRestart: true },
+      { key: 'SHIPPING_WEBHOOK_ALLOWLIST_CIDR', mutableViaOps: true, requiresRestart: true, runtimeSource: 'db-overlay' },
       { key: 'DELHIVERY_API_KEY', mutableViaOps: true, requiresRestart: true },
       { key: 'DELHIVERY_BASE_URL', mutableViaOps: true, requiresRestart: true },
       { key: 'DELHIVERY_PICKUP_PINCODE', mutableViaOps: true, requiresRestart: true },
-      { key: 'DELHIVERY_WEBHOOK_TOKEN', mutableViaOps: true, requiresRestart: true },
-      { key: 'DELHIVERY_WEBHOOK_ALLOWLIST_CIDR', mutableViaOps: true, requiresRestart: true },
+      { key: 'DELHIVERY_WEBHOOK_TOKEN', mutableViaOps: true, requiresRestart: true, runtimeSource: 'db-overlay' },
+      { key: 'DELHIVERY_WEBHOOK_ALLOWLIST_CIDR', mutableViaOps: true, requiresRestart: true, runtimeSource: 'db-overlay' },
       { key: 'DELHIVERY_WEBHOOK_MAX_SKEW_SECONDS', mutableViaOps: true, requiresRestart: true },
       { key: 'SHIPROCKET_EMAIL', mutableViaOps: true, requiresRestart: true },
       { key: 'SHIPROCKET_BASE_URL', mutableViaOps: true, requiresRestart: true },
       { key: 'SHIPROCKET_PICKUP_PINCODE', mutableViaOps: true, requiresRestart: true },
       { key: 'SHIPROCKET_PASSWORD', mutableViaOps: true, requiresRestart: true },
-      { key: 'SHIPROCKET_WEBHOOK_TOKEN', mutableViaOps: true, requiresRestart: true },
-      { key: 'SHIPROCKET_WEBHOOK_ALLOWLIST_CIDR', mutableViaOps: true, requiresRestart: true },
+      { key: 'SHIPROCKET_WEBHOOK_TOKEN', mutableViaOps: true, requiresRestart: true, runtimeSource: 'db-overlay' },
+      { key: 'SHIPROCKET_WEBHOOK_ALLOWLIST_CIDR', mutableViaOps: true, requiresRestart: true, runtimeSource: 'db-overlay' },
       { key: 'SHIPROCKET_WEBHOOK_MAX_SKEW_SECONDS', mutableViaOps: true, requiresRestart: true }
     ]
   },
@@ -81,6 +81,9 @@ export const OPS_CONFIG_OVERVIEW_GROUPS: Array<{
       { key: 'NOTIFY_EMAIL_ENABLED', mutableViaOps: true, requiresRestart: true },
       { key: 'NOTIFY_SMS_ENABLED', mutableViaOps: true, requiresRestart: true },
       { key: 'NOTIFY_WHATSAPP_ENABLED', mutableViaOps: true, requiresRestart: true },
+      // Note: Per-template primary notification channels are DB-backed via StoreSettings.primaryNotificationChannels
+      // and configurable via PATCH /api/v1/admin/settings/notifications — not via environment variables.
+      { key: 'EMAIL_PROVIDER', mutableViaOps: true, requiresRestart: true, note: 'resend (currently the only supported provider; reserved for future provider selection)' },
       { key: 'SMS_PROVIDER', mutableViaOps: true, requiresRestart: true, note: 'msg91 | fast2sms | noop' },
       { key: 'RESEND_API_KEY', mutableViaOps: true, requiresRestart: true },
       { key: 'RESEND_FROM', mutableViaOps: true, requiresRestart: true },
@@ -101,12 +104,13 @@ export const OPS_CONFIG_OVERVIEW_GROUPS: Array<{
     items: [
       { key: 'OPS_METRICS_TOKEN', mutableViaOps: true, requiresRestart: true },
       { key: 'OPS_METRICS_ALLOWLIST', mutableViaOps: true, requiresRestart: true },
-      { key: 'OPS_DUAL_APPROVAL_WINDOW_MINUTES', mutableViaOps: true, requiresRestart: true },
-      { key: 'OPS_MFA_ENFORCE', mutableViaOps: true, requiresRestart: true },
-      { key: 'OPS_API_KEY_SALT', mutableViaOps: true, requiresRestart: true },
-      { key: 'ADMIN_MFA_ENCRYPTION_KEY', mutableViaOps: true, requiresRestart: true },
       { key: 'OPS_DB_ENCRYPTION_KEY', mutableViaOps: false, requiresRestart: true, runtimeSource: 'env-bootstrap', note: 'Bootstrap-only encryption key required to decrypt DB-stored ops config.' },
-      { key: 'REPLAY_APPROVAL_TOKEN', mutableViaOps: true, requiresRestart: true }
+      { key: 'REPLAY_APPROVAL_TOKEN', mutableViaOps: true, requiresRestart: true },
+      { key: 'REPLAY_AUDIT_RETENTION_DAYS', mutableViaOps: true, requiresRestart: true, note: 'Number of days to retain replay audit NDJSON log entries. Read in analytics.service.ts.' },
+      { key: 'TRUSTED_PROXY_ALLOWLIST_CIDR', mutableViaOps: true, requiresRestart: true, runtimeSource: 'db-overlay', note: 'CIDR allowlist for trusted reverse proxies. Read in main.ts, observability.plugin.ts, orders.routes.ts.' },
+      { key: 'OPS_COOKIE_SECRET', mutableViaOps: true, requiresRestart: true, note: 'Secret used to sign ops session cookies. Rotate via ops UI; requires restart to take effect.' },
+      { key: 'OPS_BROWSER_SESSION_TTL_SECONDS', mutableViaOps: false, requiresRestart: true, runtimeSource: 'env-bootstrap', note: 'Absolute TTL for ops browser sessions in Redis. Must be set in deployment environment.' },
+      { key: 'OPS_LOGIN_OTP_TTL_SECONDS', mutableViaOps: false, requiresRestart: true, runtimeSource: 'env-bootstrap', note: 'TTL for ops login OTPs stored in Redis. Must be set in deployment environment.' }
     ]
   }
 ];
@@ -157,9 +161,6 @@ const OPS_CONFIG_REQUIRED_BY_FLAG: Record<string, string[]> = {
 
 const OPS_CONFIG_STRICT_BASE_REQUIRED = [
   'OPS_METRICS_TOKEN',
-  'OPS_API_KEY_SALT',
-  'ADMIN_MFA_ENCRYPTION_KEY',
-  'OPS_DUAL_APPROVAL_WINDOW_MINUTES',
   'REPLAY_APPROVAL_TOKEN'
 ];
 

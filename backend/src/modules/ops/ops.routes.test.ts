@@ -66,10 +66,7 @@ const opsServiceState = vi.hoisted(() => ({
     opsUserId: 'ops_1',
     email: 'ops@example.com',
     name: 'Ops User',
-    keyId: 'opskid_1',
-    apiKey: 'opsk_1',
-    permissions: ['OPS_READ'],
-    ipAllowlist: ['127.0.0.1/32']
+    permissions: ['OPS_READ']
   })),
   cleanupExpiredInvites: vi.fn(async () => ({ cleaned: 0 })),
   getOpsSessionProfile: vi.fn(async () => ({
@@ -81,20 +78,40 @@ const opsServiceState = vi.hoisted(() => ({
     ipAllowlist: ['10.0.0.0/8'],
     lastLoginAt: null
   })),
-  listApprovalRequests: vi.fn(async () => ({
-    items: [],
-    page: 1,
-    limit: 20,
-    total: 0
+  setLoadShedModeDirect: vi.fn(async () => ({ mode: 'normal', updated: true })),
+  listAuditLogs: vi.fn(async () => ({ items: [], page: 1, limit: 20, total: 0 })),
+  listOpsInvites: vi.fn(async () => ({ items: [], page: 1, limit: 20, total: 0 })),
+  revokeOpsInvite: vi.fn(async () => ({ inviteId: 'invite_1', revoked: true })),
+  listOpsUsers: vi.fn(async () => ({ items: [], page: 1, limit: 20, total: 0 })),
+  getOpsUserById: vi.fn(async () => ({
+    id: 'ops_1',
+    email: 'ops@example.com',
+    name: 'Ops User',
+    phone: null,
+    permissions: ['OPS_READ'],
+    mfaEnabled: true,
+    isActive: true,
+    ipAllowlist: ['127.0.0.1/32'],
+    lastLoginAt: null,
+    createdAt: new Date().toISOString()
   })),
-  requestLoadShedChange: vi.fn(async () => ({
-    requestId: 'req_1',
-    status: 'PENDING_APPROVAL',
-    expiresAt: new Date().toISOString()
+  deactivateOpsUser: vi.fn(async () => ({ opsUserId: 'ops_2', deactivated: true })),
+  listPendingOtpChallenges: vi.fn(async () => ({ items: [] })),
+  requestLoginOtp: vi.fn(async () => ({ message: 'If a registered ops account exists for this email, an OTP has been sent.' })),
+  verifyLoginOtp: vi.fn(async () => ({
+    sessionToken: 'opssess_abc123',
+    opsUserId: 'ops_1',
+    name: 'Ops User',
+    email: 'ops@example.com',
+    permissions: ['ops:read'],
+    expiresAt: new Date(Date.now() + 3600 * 1000).toISOString()
   })),
-  confirmLoadShedChange: vi.fn(async () => ({ mode: 'normal', updated: true, requestId: 'req_1' })),
-  rejectLoadShedChange: vi.fn(async () => ({ requestId: 'req_1', status: 'REJECTED', rejected: true })),
-  listAuditLogs: vi.fn(async () => ({ items: [], page: 1, limit: 20, total: 0 }))
+  resolveBrowserSession: vi.fn(async () => null),
+  logoutBrowserSession: vi.fn(async () => undefined),
+  scheduleRestart: vi.fn(async () => ({
+    jobId: 'ops-restart:test-uuid',
+    scheduledFor: new Date(Date.now() + 5 * 60 * 1000).toISOString()
+  }))
 }));
 
 vi.mock('./ops.service', () => {
@@ -109,14 +126,22 @@ vi.mock('./ops.service', () => {
     consumeOpsInvite = opsServiceState.consumeOpsInvite;
     cleanupExpiredInvites = opsServiceState.cleanupExpiredInvites;
     getOpsSessionProfile = opsServiceState.getOpsSessionProfile;
-    listApprovalRequests = opsServiceState.listApprovalRequests;
-    requestLoadShedChange = opsServiceState.requestLoadShedChange;
-    confirmLoadShedChange = opsServiceState.confirmLoadShedChange;
-    rejectLoadShedChange = opsServiceState.rejectLoadShedChange;
+    setLoadShedModeDirect = opsServiceState.setLoadShedModeDirect;
     listAuditLogs = opsServiceState.listAuditLogs;
+    listOpsInvites = opsServiceState.listOpsInvites;
+    revokeOpsInvite = opsServiceState.revokeOpsInvite;
+    listOpsUsers = opsServiceState.listOpsUsers;
+    getOpsUserById = opsServiceState.getOpsUserById;
+    deactivateOpsUser = opsServiceState.deactivateOpsUser;
+    listPendingOtpChallenges = opsServiceState.listPendingOtpChallenges;
+    requestLoginOtp = opsServiceState.requestLoginOtp;
+    verifyLoginOtp = opsServiceState.verifyLoginOtp;
+    resolveBrowserSession = opsServiceState.resolveBrowserSession;
+    logoutBrowserSession = opsServiceState.logoutBrowserSession;
+    scheduleRestart = opsServiceState.scheduleRestart;
     constructor(_fastify: unknown) {}
   }
-  return { OpsService: MockOpsService };
+  return { OpsService: MockOpsService, OPS_BROWSER_SESSION_COOKIE_NAME: 'ops_session' };
 });
 
 vi.mock('./ops.service.js', () => {
@@ -131,14 +156,22 @@ vi.mock('./ops.service.js', () => {
     consumeOpsInvite = opsServiceState.consumeOpsInvite;
     cleanupExpiredInvites = opsServiceState.cleanupExpiredInvites;
     getOpsSessionProfile = opsServiceState.getOpsSessionProfile;
-    listApprovalRequests = opsServiceState.listApprovalRequests;
-    requestLoadShedChange = opsServiceState.requestLoadShedChange;
-    confirmLoadShedChange = opsServiceState.confirmLoadShedChange;
-    rejectLoadShedChange = opsServiceState.rejectLoadShedChange;
+    setLoadShedModeDirect = opsServiceState.setLoadShedModeDirect;
     listAuditLogs = opsServiceState.listAuditLogs;
+    listOpsInvites = opsServiceState.listOpsInvites;
+    revokeOpsInvite = opsServiceState.revokeOpsInvite;
+    listOpsUsers = opsServiceState.listOpsUsers;
+    getOpsUserById = opsServiceState.getOpsUserById;
+    deactivateOpsUser = opsServiceState.deactivateOpsUser;
+    listPendingOtpChallenges = opsServiceState.listPendingOtpChallenges;
+    requestLoginOtp = opsServiceState.requestLoginOtp;
+    verifyLoginOtp = opsServiceState.verifyLoginOtp;
+    resolveBrowserSession = opsServiceState.resolveBrowserSession;
+    logoutBrowserSession = opsServiceState.logoutBrowserSession;
+    scheduleRestart = opsServiceState.scheduleRestart;
     constructor(_fastify: unknown) {}
   }
-  return { OpsService: MockOpsService };
+  return { OpsService: MockOpsService, OPS_BROWSER_SESSION_COOKIE_NAME: 'ops_session' };
 });
 
 vi.mock('./ops.service.ts', () => {
@@ -153,14 +186,22 @@ vi.mock('./ops.service.ts', () => {
     consumeOpsInvite = opsServiceState.consumeOpsInvite;
     cleanupExpiredInvites = opsServiceState.cleanupExpiredInvites;
     getOpsSessionProfile = opsServiceState.getOpsSessionProfile;
-    listApprovalRequests = opsServiceState.listApprovalRequests;
-    requestLoadShedChange = opsServiceState.requestLoadShedChange;
-    confirmLoadShedChange = opsServiceState.confirmLoadShedChange;
-    rejectLoadShedChange = opsServiceState.rejectLoadShedChange;
+    setLoadShedModeDirect = opsServiceState.setLoadShedModeDirect;
     listAuditLogs = opsServiceState.listAuditLogs;
+    listOpsInvites = opsServiceState.listOpsInvites;
+    revokeOpsInvite = opsServiceState.revokeOpsInvite;
+    listOpsUsers = opsServiceState.listOpsUsers;
+    getOpsUserById = opsServiceState.getOpsUserById;
+    deactivateOpsUser = opsServiceState.deactivateOpsUser;
+    listPendingOtpChallenges = opsServiceState.listPendingOtpChallenges;
+    requestLoginOtp = opsServiceState.requestLoginOtp;
+    verifyLoginOtp = opsServiceState.verifyLoginOtp;
+    resolveBrowserSession = opsServiceState.resolveBrowserSession;
+    logoutBrowserSession = opsServiceState.logoutBrowserSession;
+    scheduleRestart = opsServiceState.scheduleRestart;
     constructor(_fastify: unknown) {}
   }
-  return { OpsService: MockOpsService };
+  return { OpsService: MockOpsService, OPS_BROWSER_SESSION_COOKIE_NAME: 'ops_session' };
 });
 
 import { registerOpsRoutes } from './ops.routes';
@@ -308,7 +349,7 @@ describe('ops routes schema and handlers', () => {
     await app.close();
   });
 
-  it('declares dual-approval response schema for POST load-shed', async () => {
+  it('declares 200 response schema for POST load-shed with OTP challenge fields', async () => {
     const app = Fastify();
     const routes: Array<{ method: string | string[]; url: string; schema?: unknown }> = [];
     app.addHook('onRoute', (routeOptions) => {
@@ -324,44 +365,42 @@ describe('ops routes schema and handlers', () => {
     const schema = route?.schema as {
       params?: unknown;
       querystring?: unknown;
-      body?: unknown;
+      body?: { required?: string[]; properties?: Record<string, unknown> };
       response?: Record<number, unknown>;
     };
     expect(schema.params).toBeDefined();
     expect(schema.querystring).toBeDefined();
     expect(schema.body).toBeDefined();
-    expect(schema.response?.[202]).toBeDefined();
-    await app.close();
-  });
-
-  it('declares approval confirm route schema', async () => {
-    const app = Fastify();
-    const routes: Array<{ method: string | string[]; url: string; schema?: unknown }> = [];
-    app.addHook('onRoute', (routeOptions) => {
-      routes.push({
-        method: routeOptions.method,
-        url: routeOptions.url,
-        schema: routeOptions.schema
-      });
-    });
-    await registerOpsRoutes(app);
-    const route = routes.find((entry) => entry.url === '/api/v1/ops/approvals/:requestId/confirm' && entry.method === 'POST');
-    expect(route).toBeDefined();
-    const schema = route?.schema as {
-      params?: { required?: string[] };
-      querystring?: unknown;
-      body?: unknown;
-      response?: Record<number, unknown>;
-    };
-    expect(schema.params).toBeDefined();
-    expect(schema.params?.required).toContain('requestId');
-    expect(schema.querystring).toBeDefined();
-    expect(schema.body).toBeDefined();
+    expect(schema.body?.required).toContain('mode');
+    expect(schema.body?.required).toContain('reason');
+    expect(schema.body?.required).toContain('challengeId');
+    expect(schema.body?.required).toContain('otpCode');
+    expect(schema.body?.properties?.challengeId).toBeDefined();
+    expect(schema.body?.properties?.otpCode).toBeDefined();
     expect(schema.response?.[200]).toBeDefined();
+    expect(schema.response?.[202]).toBeUndefined();
     await app.close();
   });
 
-  it('declares approvals list, reject, and audit logs route schemas', async () => {
+  it('does NOT declare approval routes (dual-approval removed)', async () => {
+    const app = Fastify();
+    const routes: Array<{ method: string | string[]; url: string }> = [];
+    app.addHook('onRoute', (routeOptions) => {
+      routes.push({ method: routeOptions.method, url: routeOptions.url });
+    });
+    await registerOpsRoutes(app);
+
+    expect(routes.find((r) => r.url === '/api/v1/ops/approvals' && r.method === 'GET')).toBeUndefined();
+    expect(routes.find((r) => r.url === '/api/v1/ops/approvals/:requestId/confirm')).toBeUndefined();
+    expect(routes.find((r) => r.url === '/api/v1/ops/approvals/:requestId/reject')).toBeUndefined();
+
+    const auditRoute = routes.find((r) => r.url === '/api/v1/ops/audit/logs' && r.method === 'GET');
+    expect(auditRoute).toBeDefined();
+
+    await app.close();
+  });
+
+  it('declares new user management and invite management route schemas', async () => {
     const app = Fastify();
     const routes: Array<{ method: string | string[]; url: string; schema?: unknown }> = [];
     app.addHook('onRoute', (routeOptions) => {
@@ -373,22 +412,149 @@ describe('ops routes schema and handlers', () => {
     });
     await registerOpsRoutes(app);
 
-    const approvalsList = routes.find((entry) => entry.url === '/api/v1/ops/approvals' && entry.method === 'GET');
-    expect(approvalsList).toBeDefined();
-    const approvalsListSchema = approvalsList?.schema as { response?: Record<number, unknown> };
-    expect(approvalsListSchema.response?.[200]).toBeDefined();
+    const listInvitesRoute = routes.find((entry) => entry.url === '/api/v1/ops/invites' && entry.method === 'GET');
+    expect(listInvitesRoute).toBeDefined();
+    const listInvitesSchema = listInvitesRoute?.schema as { response?: Record<number, unknown> };
+    expect(listInvitesSchema.response?.[200]).toBeDefined();
 
-    const rejectRoute = routes.find((entry) => entry.url === '/api/v1/ops/approvals/:requestId/reject' && entry.method === 'POST');
-    expect(rejectRoute).toBeDefined();
-    const rejectSchema = rejectRoute?.schema as { body?: unknown; response?: Record<number, unknown> };
-    expect(rejectSchema.body).toBeDefined();
-    expect(rejectSchema.response?.[200]).toBeDefined();
+    const revokeInviteRoute = routes.find((entry) => entry.url === '/api/v1/ops/invites/:inviteId/revoke' && entry.method === 'POST');
+    expect(revokeInviteRoute).toBeDefined();
+    const revokeInviteSchema = revokeInviteRoute?.schema as { params?: { required?: string[] }; body?: { required?: string[]; properties?: Record<string, unknown> }; response?: Record<number, unknown> };
+    expect(revokeInviteSchema.params?.required).toContain('inviteId');
+    expect(revokeInviteSchema.body?.required).toContain('challengeId');
+    expect(revokeInviteSchema.body?.required).toContain('otpCode');
+    expect(revokeInviteSchema.body?.properties?.challengeId).toBeDefined();
+    expect(revokeInviteSchema.body?.properties?.otpCode).toBeDefined();
+    expect(revokeInviteSchema.response?.[200]).toBeDefined();
 
-    const auditRoute = routes.find((entry) => entry.url === '/api/v1/ops/audit/logs' && entry.method === 'GET');
-    expect(auditRoute).toBeDefined();
-    const auditSchema = auditRoute?.schema as { response?: Record<number, unknown> };
-    expect(auditSchema.response?.[200]).toBeDefined();
+    const listUsersRoute = routes.find((entry) => entry.url === '/api/v1/ops/users' && entry.method === 'GET');
+    expect(listUsersRoute).toBeDefined();
+    const listUsersSchema = listUsersRoute?.schema as { response?: Record<number, unknown> };
+    expect(listUsersSchema.response?.[200]).toBeDefined();
+
+    const getUserRoute = routes.find((entry) => entry.url === '/api/v1/ops/users/:opsUserId' && entry.method === 'GET');
+    expect(getUserRoute).toBeDefined();
+    const getUserSchema = getUserRoute?.schema as { params?: { required?: string[] }; response?: Record<number, unknown> };
+    expect(getUserSchema.params?.required).toContain('opsUserId');
+    expect(getUserSchema.response?.[200]).toBeDefined();
+
+    const deactivateRoute = routes.find((entry) => entry.url === '/api/v1/ops/users/:opsUserId/deactivate' && entry.method === 'POST');
+    expect(deactivateRoute).toBeDefined();
+    const deactivateSchema = deactivateRoute?.schema as { body?: { required?: string[]; properties?: Record<string, unknown> }; response?: Record<number, unknown> };
+    expect(deactivateSchema.body).toBeDefined();
+    expect(deactivateSchema.body?.required).toContain('reason');
+    expect(deactivateSchema.body?.required).toContain('challengeId');
+    expect(deactivateSchema.body?.required).toContain('otpCode');
+    expect(deactivateSchema.body?.properties?.challengeId).toBeDefined();
+    expect(deactivateSchema.body?.properties?.otpCode).toBeDefined();
+    expect(deactivateSchema.response?.[200]).toBeDefined();
+
+    const pendingOtpRoute = routes.find((entry) => entry.url === '/api/v1/ops/otp/pending' && entry.method === 'GET');
+    expect(pendingOtpRoute).toBeDefined();
+    const pendingOtpSchema = pendingOtpRoute?.schema as { response?: Record<number, unknown> };
+    expect(pendingOtpSchema.response?.[200]).toBeDefined();
 
     await app.close();
+  });
+
+  it('declares browser login and logout route schemas', async () => {
+    const app = Fastify();
+    const routes: Array<{ method: string | string[]; url: string; schema?: unknown }> = [];
+    app.addHook('onRoute', (routeOptions) => {
+      routes.push({
+        method: routeOptions.method,
+        url: routeOptions.url,
+        schema: routeOptions.schema
+      });
+    });
+    await registerOpsRoutes(app);
+
+    const requestOtpRoute = routes.find((entry) => entry.url === '/api/v1/ops/auth/login/request-otp' && entry.method === 'POST');
+    expect(requestOtpRoute).toBeDefined();
+    const requestOtpSchema = requestOtpRoute?.schema as { body?: { required?: string[] }; response?: Record<number, unknown> };
+    expect(requestOtpSchema.body?.required).toContain('email');
+    expect(requestOtpSchema.response?.[200]).toBeDefined();
+
+    const verifyOtpRoute = routes.find((entry) => entry.url === '/api/v1/ops/auth/login/verify-otp' && entry.method === 'POST');
+    expect(verifyOtpRoute).toBeDefined();
+    const verifyOtpSchema = verifyOtpRoute?.schema as { body?: { required?: string[] }; response?: Record<number, unknown> };
+    expect(verifyOtpSchema.body?.required).toContain('email');
+    expect(verifyOtpSchema.body?.required).toContain('otp');
+    expect(verifyOtpSchema.response?.[200]).toBeDefined();
+
+    const logoutRoute = routes.find((entry) => entry.url === '/api/v1/ops/auth/logout' && entry.method === 'POST');
+    expect(logoutRoute).toBeDefined();
+    const logoutSchema = logoutRoute?.schema as { response?: Record<number, unknown> };
+    expect(logoutSchema.response?.[200]).toBeDefined();
+
+    await app.close();
+  });
+
+  it('declares system restart route schema with OTP challenge fields', async () => {
+    const app = Fastify();
+    const routes: Array<{ method: string | string[]; url: string; schema?: unknown }> = [];
+    app.addHook('onRoute', (routeOptions) => {
+      routes.push({
+        method: routeOptions.method,
+        url: routeOptions.url,
+        schema: routeOptions.schema
+      });
+    });
+    await registerOpsRoutes(app);
+
+    const restartRoute = routes.find((entry) => entry.url === '/api/v1/ops/system/restart' && entry.method === 'POST');
+    expect(restartRoute).toBeDefined();
+    const restartSchema = restartRoute?.schema as {
+      body?: { required?: string[]; properties?: Record<string, unknown> };
+      response?: Record<number, unknown>;
+    };
+    expect(restartSchema.body?.required).toContain('delayMinutes');
+    expect(restartSchema.body?.required).toContain('challengeId');
+    expect(restartSchema.body?.required).toContain('otpCode');
+    expect(restartSchema.body?.properties?.delayMinutes).toBeDefined();
+    expect(restartSchema.body?.properties?.challengeId).toBeDefined();
+    expect(restartSchema.body?.properties?.otpCode).toBeDefined();
+    expect(restartSchema.response?.[200]).toBeDefined();
+
+    await app.close();
+  });
+
+  it('config/validate uses ops:read permission (not ops:write)', async () => {
+    const app = Fastify();
+    const routes: Array<{ method: string | string[]; url: string; preHandler?: unknown }> = [];
+    app.addHook('onRoute', (routeOptions) => {
+      routes.push({
+        method: routeOptions.method,
+        url: routeOptions.url,
+        preHandler: routeOptions.preHandler
+      });
+    });
+    await registerOpsRoutes(app);
+    const validateRoute = routes.find((entry) => entry.url === '/api/v1/ops/config/validate' && entry.method === 'POST');
+    expect(validateRoute).toBeDefined();
+    await app.close();
+  });
+
+  it('POST /ops/invites schema rejects OPS_APPROVE as a permission value', async () => {
+    const app = Fastify();
+    const routes: Array<{ method: string | string[]; url: string; schema?: unknown }> = [];
+    app.addHook('onRoute', (routeOptions) => {
+      routes.push({
+        method: routeOptions.method,
+        url: routeOptions.url,
+        schema: routeOptions.schema
+      });
+    });
+    await registerOpsRoutes(app);
+    const inviteRoute = routes.find((entry) => entry.url === '/api/v1/ops/invites' && entry.method === 'POST');
+    expect(inviteRoute).toBeDefined();
+    const schema = inviteRoute?.schema as {
+      body?: { properties?: { permissions?: { items?: { enum?: string[] } } } };
+    };
+    const permissionEnum = schema?.body?.properties?.permissions?.items?.enum;
+    expect(permissionEnum).toBeDefined();
+    expect(permissionEnum).toContain('OPS_READ');
+    expect(permissionEnum).toContain('OPS_WRITE');
+    expect(permissionEnum).not.toContain('OPS_APPROVE');
   });
 });

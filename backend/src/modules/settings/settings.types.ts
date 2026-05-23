@@ -11,6 +11,7 @@ export type ShippingSettingsResponse = {
 
 export type StoreProfileResponse = {
   storeName: string | null;
+  websiteUrl: string | null;
   logoUrl: string | null;
   contactEmail: string | null;
   contactPhone: string | null;
@@ -20,6 +21,7 @@ export type StoreProfileResponse = {
 
 export type UpdateStoreProfileInput = {
   storeName?: string;
+  websiteUrl?: string;
   logoUrl?: string;
   contactEmail?: string;
   contactPhone?: string;
@@ -31,6 +33,7 @@ export type NotificationSettingsResponse = {
   emailEnabled: boolean;
   smsEnabled: boolean;
   whatsappEnabled: boolean;
+  primaryChannels: Record<string, PrimaryNotificationChannel>;
   smsTemplates: Record<string, string>;
 };
 
@@ -40,8 +43,11 @@ export type UpdateNotificationSettingsInput = {
   emailEnabled?: boolean;
   smsEnabled?: boolean;
   whatsappEnabled?: boolean;
+  primaryChannels?: Record<string, PrimaryNotificationChannel>;
   smsTemplates?: Record<string, string>;
 };
+
+export type PrimaryNotificationChannel = 'EMAIL' | 'SMS' | 'WHATSAPP';
 
 export type InventorySettingsResponse = {
   defaultLowStockThreshold: number;

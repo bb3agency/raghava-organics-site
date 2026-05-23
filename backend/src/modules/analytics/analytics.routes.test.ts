@@ -151,6 +151,26 @@ describe('analytics routes', () => {
     expect(reconciliation).toBeDefined();
     expect((reconciliation?.schema as { response?: Record<number, unknown> }).response?.[200]).toBeDefined();
 
+    const funnel = routes.find((route) => route.url === '/api/v1/admin/analytics/funnel' && route.method === 'GET');
+    expect(funnel).toBeDefined();
+    expect((funnel?.schema as { response?: Record<number, unknown> }).response?.[200]).toBeDefined();
+
+    const inventoryAlerts = routes.find((route) => route.url === '/api/v1/admin/analytics/inventory-alerts' && route.method === 'GET');
+    expect(inventoryAlerts).toBeDefined();
+    expect((inventoryAlerts?.schema as { response?: Record<number, unknown> }).response?.[200]).toBeDefined();
+
+    const categoryBreakdown = routes.find((route) => route.url === '/api/v1/admin/analytics/category-breakdown' && route.method === 'GET');
+    expect(categoryBreakdown).toBeDefined();
+    expect((categoryBreakdown?.schema as { response?: Record<number, unknown> }).response?.[200]).toBeDefined();
+
+    const outboxDeadLettersList = routes.find((route) => route.url === '/api/v1/admin/analytics/outbox-dead-letter' && route.method === 'GET');
+    expect(outboxDeadLettersList).toBeDefined();
+    expect((outboxDeadLettersList?.schema as { response?: Record<number, unknown> }).response?.[200]).toBeDefined();
+
+    const inboxFailuresList = routes.find((route) => route.url === '/api/v1/admin/analytics/inbox-failures' && route.method === 'GET');
+    expect(inboxFailuresList).toBeDefined();
+    expect((inboxFailuresList?.schema as { response?: Record<number, unknown> }).response?.[200]).toBeDefined();
+
     await app.close();
   });
 });

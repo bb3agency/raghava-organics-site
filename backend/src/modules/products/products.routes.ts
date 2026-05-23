@@ -14,6 +14,7 @@ import {
   adminCreateProductVariantSchema,
   adminDeleteCategorySchema,
   adminDeleteProductSchema,
+  adminDeleteProductVariantSchema,
   adminUpdateCategorySchema,
   adminUpdateProductSchema,
   adminUpdateProductVariantSchema,
@@ -27,10 +28,16 @@ import {
 import { ProductsService } from './products.service';
 import { AppError } from '@common/errors/app-error';
 import { ERROR_CODES } from '@common/errors/error-codes';
+import { idempotencyOnSend, idempotencyPreHandler } from '@common/idempotency/idempotency';
 import { routeRateLimitProfiles } from '@common/rate-limit/rate-limit-policies';
+import { loadShedGuard } from '@common/reliability/load-shed.guard';
 
 export async function registerProductsRoutes(fastify: FastifyInstance): Promise<void> {
   const productsService = new ProductsService(fastify);
+  fastify.addHook('onSend', async (request, reply, payload) => {
+    await idempotencyOnSend(request, reply, payload);
+    return payload;
+  });
 
   fastify.get(
     '/api/v1/products',
@@ -115,7 +122,7 @@ export async function registerProductsRoutes(fastify: FastifyInstance): Promise<
     '/api/v1/admin/products/import-csv',
     {
       schema: adminImportProductsCsvSchema,
-      preHandler: [...adminGuard, adminPermissionGuard('products:write')],
+      preHandler: [...adminGuard, adminPermissionGuard('products:write'), loadShedGuard, idempotencyPreHandler],
       config: {
         rateLimit: routeRateLimitProfiles.adminWrite
       }
@@ -144,7 +151,7 @@ export async function registerProductsRoutes(fastify: FastifyInstance): Promise<
     '/api/v1/admin/products',
     {
       schema: adminCreateProductSchema,
-      preHandler: [...adminGuard, adminPermissionGuard('products:write')],
+      preHandler: [...adminGuard, adminPermissionGuard('products:write'), loadShedGuard, idempotencyPreHandler],
       config: {
         rateLimit: routeRateLimitProfiles.adminWrite
       }
@@ -156,7 +163,7 @@ export async function registerProductsRoutes(fastify: FastifyInstance): Promise<
     '/api/v1/admin/products/:id/variants/:variantId',
     {
       schema: adminUpdateProductVariantSchema,
-      preHandler: [...adminGuard, adminPermissionGuard('products:write')],
+      preHandler: [...adminGuard, adminPermissionGuard('products:write'), loadShedGuard, idempotencyPreHandler],
       config: {
         rateLimit: routeRateLimitProfiles.adminWrite
       }
@@ -171,7 +178,7 @@ export async function registerProductsRoutes(fastify: FastifyInstance): Promise<
     '/api/v1/admin/products/:id/variants',
     {
       schema: adminCreateProductVariantSchema,
-      preHandler: [...adminGuard, adminPermissionGuard('products:write')],
+      preHandler: [...adminGuard, adminPermissionGuard('products:write'), loadShedGuard, idempotencyPreHandler],
       config: {
         rateLimit: routeRateLimitProfiles.adminWrite
       }
@@ -186,7 +193,7 @@ export async function registerProductsRoutes(fastify: FastifyInstance): Promise<
     '/api/v1/admin/products/:id',
     {
       schema: adminUpdateProductSchema,
-      preHandler: [...adminGuard, adminPermissionGuard('products:write')],
+      preHandler: [...adminGuard, adminPermissionGuard('products:write'), loadShedGuard, idempotencyPreHandler],
       config: {
         rateLimit: routeRateLimitProfiles.adminWrite
       }
@@ -201,7 +208,7 @@ export async function registerProductsRoutes(fastify: FastifyInstance): Promise<
     '/api/v1/admin/products/:id/images',
     {
       schema: adminCreateProductImageSchema,
-      preHandler: [...adminGuard, adminPermissionGuard('products:write')],
+      preHandler: [...adminGuard, adminPermissionGuard('products:write'), loadShedGuard, idempotencyPreHandler],
       config: {
         rateLimit: routeRateLimitProfiles.adminWrite
       }
@@ -216,7 +223,7 @@ export async function registerProductsRoutes(fastify: FastifyInstance): Promise<
     '/api/v1/admin/products/:id/images/reorder',
     {
       schema: adminReorderProductImagesSchema,
-      preHandler: [...adminGuard, adminPermissionGuard('products:write')],
+      preHandler: [...adminGuard, adminPermissionGuard('products:write'), loadShedGuard, idempotencyPreHandler],
       config: {
         rateLimit: routeRateLimitProfiles.adminWrite
       }
@@ -231,7 +238,7 @@ export async function registerProductsRoutes(fastify: FastifyInstance): Promise<
     '/api/v1/admin/products/:id/images/:imageId',
     {
       schema: adminDeleteProductImageSchema,
-      preHandler: [...adminGuard, adminPermissionGuard('products:write')],
+      preHandler: [...adminGuard, adminPermissionGuard('products:write'), loadShedGuard, idempotencyPreHandler],
       config: {
         rateLimit: routeRateLimitProfiles.adminWrite
       }
@@ -243,10 +250,25 @@ export async function registerProductsRoutes(fastify: FastifyInstance): Promise<
   );
 
   fastify.delete(
+    '/api/v1/admin/products/:id/variants/:variantId',
+    {
+      schema: adminDeleteProductVariantSchema,
+      preHandler: [...adminGuard, adminPermissionGuard('products:write'), loadShedGuard, idempotencyPreHandler],
+      config: {
+        rateLimit: routeRateLimitProfiles.adminWrite
+      }
+    },
+    async (request) => {
+      const params = request.params as { id: string; variantId: string };
+      return productsService.adminDeleteProductVariant(params.id, params.variantId);
+    }
+  );
+
+  fastify.delete(
     '/api/v1/admin/products/:id',
     {
       schema: adminDeleteProductSchema,
-      preHandler: [...adminGuard, adminPermissionGuard('products:write')],
+      preHandler: [...adminGuard, adminPermissionGuard('products:write'), loadShedGuard, idempotencyPreHandler],
       config: {
         rateLimit: routeRateLimitProfiles.adminWrite
       }
@@ -273,7 +295,7 @@ export async function registerProductsRoutes(fastify: FastifyInstance): Promise<
     '/api/v1/admin/categories',
     {
       schema: adminCreateCategorySchema,
-      preHandler: [...adminGuard, adminPermissionGuard('categories:write')],
+      preHandler: [...adminGuard, adminPermissionGuard('categories:write'), loadShedGuard, idempotencyPreHandler],
       config: {
         rateLimit: routeRateLimitProfiles.adminWrite
       }
@@ -285,7 +307,7 @@ export async function registerProductsRoutes(fastify: FastifyInstance): Promise<
     '/api/v1/admin/categories/:id',
     {
       schema: adminUpdateCategorySchema,
-      preHandler: [...adminGuard, adminPermissionGuard('categories:write')],
+      preHandler: [...adminGuard, adminPermissionGuard('categories:write'), loadShedGuard, idempotencyPreHandler],
       config: {
         rateLimit: routeRateLimitProfiles.adminWrite
       }
@@ -300,7 +322,7 @@ export async function registerProductsRoutes(fastify: FastifyInstance): Promise<
     '/api/v1/admin/categories/:id',
     {
       schema: adminDeleteCategorySchema,
-      preHandler: [...adminGuard, adminPermissionGuard('categories:write')],
+      preHandler: [...adminGuard, adminPermissionGuard('categories:write'), loadShedGuard, idempotencyPreHandler],
       config: {
         rateLimit: routeRateLimitProfiles.adminWrite
       }

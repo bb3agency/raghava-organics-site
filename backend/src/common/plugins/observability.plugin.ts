@@ -7,6 +7,7 @@ import { errorDetailsSchema } from '@common/errors/error-response.schema';
 import { Prisma, Role } from '@prisma/client';
 import { ERROR_CODES } from '@common/errors/error-codes';
 import { parseWebhookIpAllowlist, resolveSecurityClientIp } from '@common/security/webhook-allowlist';
+import { sendTechnicalFailureAlert } from '@modules/notifications/notification-failure-alert';
 
 function sanitizeSummary(value: unknown, depth = 0): unknown {
   if (depth > 3) {
@@ -103,6 +104,16 @@ async function appendAdminAuditAnchor(
       { err: fileErr, hash, previousHash },
       'audit-chain: Redis updated but file append failed — manual reconciliation required'
     );
+    await sendTechnicalFailureAlert({
+      prisma: fastify.prisma,
+      template: 'AuditChainAppend',
+      channel: 'UNKNOWN',
+      recipient: 'audit-chain',
+      errorMessage: fileErr instanceof Error ? fileErr.message : String(fileErr),
+      failureStage: 'CORE_LOGIC',
+      domain: 'observability',
+      component: 'admin-audit-chain'
+    });
   }
 }
 
@@ -191,6 +202,16 @@ export async function registerObservabilityPlugin(fastify: FastifyInstance): Pro
           ...(created.correlationId ? { correlationId: created.correlationId } : {})
         });
       } catch (error) {
+        void sendTechnicalFailureAlert({
+          prisma: fastify.prisma,
+          template: 'AdminAuditEntryPersist',
+          channel: 'UNKNOWN',
+          recipient: 'admin-audit-log',
+          errorMessage: error instanceof Error ? error.message : String(error),
+          failureStage: 'CORE_LOGIC',
+          domain: 'observability',
+          component: 'admin-audit-persist'
+        });
         fastify.log.warn(
           { error: error instanceof Error ? error.message : String(error), route },
           'Failed to persist admin audit entry'

@@ -12,12 +12,14 @@
 
 **May 2026 hardening closeout policy notes (normative):**
 - Process crash boundaries are observability-visible (`process_crash_total{reason}`) and must be preserved in bootstrap behavior.
+- All technical error paths emit structured alerts via `sendTechnicalFailureAlert` to active ops identities and verified admin users; new error-handling code must follow the same pattern.
 - Admin MFA key material is isolated from refresh-token secrets in production-like profiles.
 - Admin authorization remains fail-closed until explicit permission grants exist.
 - Admin permission changes are access-token issuance scoped; immediate enforcement requires revocation/logout.
 - Provider circuit breakers are intentionally process-local unless a deliberate shared-state architecture upgrade is approved.
 - Deferred refund completion is queue-driven; synchronous admin mutation responses are not the source of truth for final refunded state.
 - Frontend/storefront/admin/ops implementation must follow simultaneous build + integration via contract-first vertical slices; UI-only page completion is not accepted as release evidence.
+- Process restarts triggered via the ops control plane (`POST /api/v1/ops/system/restart`) are queue-backed (BullMQ, survives logout) and use Redis pub/sub (`system:restart` channel) to signal both the `backend` container (API) and the `workers` container simultaneously. Before publishing the restart signal, the worker performs a **payment-safe drain**: it polls `prisma.order.count({ status: 'PENDING_PAYMENT' })` every 5 s until all in-flight payments reach a terminal state or a configurable timeout elapses (default 5 min, `RESTART_PAYMENT_DRAIN_TIMEOUT_MS`). If the timeout fires with pending orders, a `sendTechnicalFailureAlert` is sent to ops/admin (`terminalFailure: false`) and the restart proceeds — never deadlocks. If the Redis publish itself fails, a second alert is sent (`terminalFailure: true`) to signal that the API process requires manual restart. The pre-exit `ProcessRestartAlert` email is wrapped in its own `try/catch` so email-send failures never block the restart. `process.exit(0)` is always reached. The API process calls `fastify.close()` to drain in-flight HTTP requests before exiting; the worker process calls `shutdown()` to close all BullMQ workers/queues before exiting. Docker `restart: unless-stopped` brings both containers back with the fresh DB config overlay.
 
 ---
 
@@ -38,6 +40,8 @@
 13. [Development Phases](#13-development-phases)
 14. [Future Module Roadmap](#14-future-module-roadmap)
 
+> Configuration source-of-truth and recent hardening: see `docs/ENV_VS_DB_CONFIG_REFERENCE.md`. For the first-deploy Phase 1/2 setup model (what goes in `.env` vs Ops UI), see `docs/PRODUCTION_FIRST_DEPLOY_CHECKLIST.md`.
+
 ---
 
 ## 1. Core Ideology
@@ -51,7 +55,7 @@ This is not a one-off application. This is a **private, production-grade templat
 ### 1.2 What This Template Is
 
 - A **Modular Monolith** — one Fastify process per client, structured internally with clean module boundaries and adapter interfaces that make every integration point swappable without touching business logic.
-- A **plug-and-play system** — switching payment gateway, delivery partner, or notification provider is a single `.env` change. No code changes. No redeploy of other modules.
+- A **plug-and-play system** — switching payment gateway, delivery partner, or notification provider requires no code changes and no redeploy of other modules. Provider selection and credentials are updated via the Ops UI (stored encrypted in `OpsConfigSecret`) and take effect after a container restart.
 - A **freelancer's compounding asset** — every bug fixed, every feature hardened, every edge case handled in the template raises the quality of every future client deployment automatically.
 - An **IP-protected master** — the template repo never contains client data, credentials, or customisations. It is the recipe, not any one dish.
 
@@ -101,7 +105,9 @@ Layer 2:  Concrete adapter implementations →  Razorpay adapter, Delhivery adap
 Layer 3:  Environment variable selection   →  PAYMENT_PROVIDER=razorpay
 ```
 
-No business logic code knows or cares which adapter is active. It calls the interface. To swap Razorpay for Cashfree: change one `.env` line and restart. Nothing else changes. **This is the invariant.**
+No business logic code knows or cares which adapter is active. It calls the interface. To swap Razorpay for Cashfree in production: update `PAYMENT_PROVIDER` and the new provider's credentials via the Ops UI (`POST /api/v1/ops/config/save`) and restart containers — `applyOpsConfigRuntimeOverlay()` applies the change before provider initialization. Nothing else changes. **This is the invariant.**
+
+> In local dev (`NODE_ENV=development`) you may set `PAYMENT_PROVIDER` and credentials directly in `.env` for fast iteration before ops bootstrap.
 
 **Defined adapter interfaces:** Authoritative type names and method shapes live in the repository under `src/common/interfaces/`. The canonical payment abstraction is `PaymentProviderAdapter` in `payment-provider.interface.ts`; shipping and notification providers follow the same pattern with concrete adapters selected by env.
 
@@ -223,7 +229,7 @@ From this point the client repo is **fully independent.** No connection to the t
 | Nginx config template | ✅ Template file | ✅ Filled with client domain and ports |
 | Email / SMS templates | ✅ Base design | ✅ Customised with client branding |
 | Client logo / brand colours | ❌ Never | ✅ Only in client repo |
-| Razorpay / Delhivery API keys | ❌ Never | ✅ In `.env` only |
+| Razorpay / Delhivery API keys | ❌ Never | ✅ In `OpsConfigSecret` (prod) / `.env` (local dev only) |
 
 ### 4.4 Template Versioning
 
@@ -262,10 +268,22 @@ Each client repo commit message records which template version it was bootstrapp
 │  │  (:6379 internal)   │  │  (:6379 internal)   │              │
 │  └─────────────────────┘  └─────────────────────┘              │
 │                                                                  │
+│  ┌─────────────────────┐  ┌─────────────────────┐  ...         │
+│  │ client1-frontend    │  │ client2-frontend    │              │
+│  │ (PM2, Next.js host) │  │ (PM2, Next.js host) │              │
+│  │ :3101               │  │ :3102               │              │
+│  │ Auto-deployed via   │  │ Auto-deployed via   │              │
+│  │ GitHub Actions CD   │  │ GitHub Actions CD   │              │
+│  └─────────────────────┘  └─────────────────────┘              │
+│                                                                  │
 │  ┌────────────────────────────────────────────────────────────┐ │
 │  │  PostgreSQL 16 (Host Process — Port 5432)                  │ │
 │  │  DB: client1_ecom    DB: client2_ecom    DB: client3_ecom  │ │
 │  └────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+│  GitHub Actions self-hosted runners (host processes)            │
+│  client1-vps-runner   client2-vps-runner   ...                  │
+│  (one per client — unique VPS_RUNNER_LABEL per repo)            │
 │                                                                  │
 │  /etc/letsencrypt/live/client1.com/  (Certbot — auto-renews)    │
 │  /etc/letsencrypt/live/client2.com/                             │
@@ -277,6 +295,8 @@ Each client repo commit message records which template version it was bootstrapp
 - **Redis per client** inside each Docker Compose stack — memory footprint < 50MB per instance at this scale, complete isolation.
 - **Nginx on the host** — one instance handles all domain routing and SSL. Certbot (host-installed) manages all certificates.
 - **Admin frontend is route-based in same app** — Next.js frontend serves storefront and admin routes from one deployment (no separate admin host/container).
+- **Frontend runs as a PM2 host process** — Next.js is NOT containerised; it runs directly on the VPS host under PM2 for zero-downtime reloads. Each client gets an independent process (`<client-id>-frontend`) on its own port (`3100 + N`).
+- **GitHub Actions self-hosted runner per client** — each client repo has its own runner registered with a unique label (`VPS_RUNNER_LABEL`). On every push to `main`, the `deploy-backend` job rebuilds Docker containers and the `deploy-frontend` job runs `vps-frontend-deploy.sh` for zero-downtime PM2 reload. See `.github/workflows/deploy.yml` and `docs/CLIENT_VPS_SETUP_GUIDE.md` §22.
 
 ### 5.2 Docker Compose (Per Client)
 
@@ -422,9 +442,13 @@ psql -U postgres -c "CREATE DATABASE client_foodstore;"
 psql -U postgres -c "CREATE USER foodstore_user WITH PASSWORD 'strongpassword';"
 psql -U postgres -c "GRANT ALL PRIVILEGES ON DATABASE client_foodstore TO foodstore_user;"
 
-# Step 4: Fill environment variables
+# Step 4: Fill .env with BOOTSTRAP KEYS ONLY
+# (provider credentials + ops-security keys are set via Ops UI after Step 8)
+# EXCEPTION: RESEND_API_KEY + RESEND_FROM must also be set as live values for the first ops invite email.
+# After first ops login, manage them via Ops UI. See docs/PRODUCTION_FIRST_DEPLOY_CHECKLIST.md.
 cp .env.example .env
-nano .env   # Fill CLIENT_ID, BACKEND_PORT, DATABASE_URL, all API keys
+nano .env   # Fill CLIENT_ID, BACKEND_PORT, DATABASE_URL, JWT_SECRET, OPS_DB_ENCRYPTION_KEY, RESEND_API_KEY, etc.
+# See docs/ENV_VS_DB_CONFIG_REFERENCE.md for bootstrap vs DB-overlay classification
 
 # Step 5: Run Prisma migrations (creates all tables)
 docker run --rm -v $(pwd):/app -w /app node:22-alpine npx prisma migrate deploy
@@ -441,10 +465,25 @@ sudo nginx -t && sudo systemctl reload nginx
 # Step 8: SSL certificate
 sudo certbot --nginx -d foodstore.com -d www.foodstore.com -d admin.foodstore.com
 
-# Step 9: Build and deploy admin frontend
+# Step 9: First-time frontend bootstrap (one-time only)
+# After this, all subsequent deploys are handled automatically by the GitHub Actions
+# deploy-frontend job (see .github/workflows/deploy.yml) via vps-frontend-deploy.sh
 cd /var/www/client-foodstore-frontend
+# Ensure .env.local (or .env.production.local) exists with CLIENT_ID and STOREFRONT_PORT
+# e.g. CLIENT_ID=foodstore  STOREFRONT_PORT=3101
 npm ci && npm run build
-# deploy/update the same frontend app that serves both storefront and /admin routes
+pm2 start npm --name "foodstore-frontend" -- start -- -p 3101
+pm2 save && pm2 startup   # persist across VPS reboots
+# Subsequent deploys: push to main → GitHub Actions CD runs vps-frontend-deploy.sh automatically
+
+# Step 8b: Ops bootstrap — create ops invite, complete setup, then
+# provision DB-overlay keys via Ops UI (POST /api/v1/ops/config/save)
+# See docs/CLIENT_ONBOARDING_EXECUTION_ORDER.md Phase 8
+npm run ops:newuser -- --email ops@foodstore.internal --name "Primary Ops" --setup-base-url "https://foodstore.com" --yes
+
+# After completing ops setup from email link:
+# - Set all DB-overlay keys via Ops UI: RAZORPAY_*, DELHIVERY_*, RESEND_*, OPS_METRICS_TOKEN, etc.
+# - Restart: docker compose -p foodstore up -d backend workers
 
 echo "✅  foodstore.com is live"
 ```
@@ -453,12 +492,12 @@ echo "✅  foodstore.com is live"
 |---|---|
 | Git setup (local + push) | ~3 min |
 | VPS clone + PostgreSQL setup | ~3 min |
-| `.env` configuration | ~5 min |
+| `.env` bootstrap config (infra keys only) | ~5 min |
 | Docker build (first client — downloads base images) | ~10 min |
 | Docker build (subsequent clients — cached layers) | ~2 min |
 | Prisma migrations | ~30 sec |
 | Nginx config + SSL | ~2 min |
-| Admin frontend build + deploy | ~3 min |
+| Admin frontend first-time bootstrap (PM2 start) | ~3 min |
 | **Total — first client on fresh VPS** | **~26 min** |
 | **Total — each additional client (Docker cached)** | **~16 min** |
 
@@ -883,7 +922,8 @@ PCI scope, caller-class JSON minimisation (public vs customer vs admin vs ops), 
 | POST | `/api/v1/auth/login` | Public | Email + password login → JWT pair |
 | POST | `/api/v1/auth/refresh` | Cookie | Refresh access token |
 | POST | `/api/v1/auth/logout` | Customer | Invalidate refresh token |
-| POST | `/api/v1/auth/admin/login` | Public | Admin login (stricter rate limit) |
+| POST | `/api/v1/auth/admin/login/request-otp` | Public | Admin login step 1 — verify credentials, send OTP to admin email |
+| POST | `/api/v1/auth/admin/login/verify-otp` | Public | Admin login step 2 — verify OTP, issue JWT pair |
 | GET | `/api/v1/users/me` | Customer | Get own profile |
 | PATCH | `/api/v1/users/me` | Customer | Update profile |
 | GET/POST | `/api/v1/users/me/addresses` | Customer | List / add addresses |
@@ -953,11 +993,15 @@ PCI scope, caller-class JSON minimisation (public vs customer vs admin vs ops), 
 | GET | `/api/v1/admin/products` | List products (paginated) |
 | POST | `/api/v1/admin/products/import-csv` | Bulk create/update products from CSV |
 | POST | `/api/v1/admin/products` | Create product |
-| GET | `/api/v1/admin/products/:id` | Product detail |
+| GET | `/api/v1/admin/products/:id` | Product detail including all variants + images |
 | POST | `/api/v1/admin/products/:id/variants` | Create product variant |
 | PATCH | `/api/v1/admin/products/:id/variants/:variantId` | Update variant + inventory fields |
+| DELETE | `/api/v1/admin/products/:id/variants/:variantId` | Delete a product variant (`products:write`). Returns 400 if last variant. |
 | PATCH | `/api/v1/admin/products/:id` | Update product |
 | DELETE | `/api/v1/admin/products/:id` | Soft-delete product |
+| POST | `/api/v1/admin/products/:id/images` | Add product image. Body: `{ url, altText?, sortOrder? }` (`products:write`) |
+| PATCH | `/api/v1/admin/products/:id/images/reorder` | Reorder product images — body: ordered array of image IDs (`products:write`) |
+| DELETE | `/api/v1/admin/products/:id/images/:imageId` | Remove a specific product image (`products:write`) |
 | GET | `/api/v1/admin/categories` | Category tree list |
 | POST | `/api/v1/admin/categories` | Create category |
 | PATCH | `/api/v1/admin/categories/:id` | Update category |
@@ -966,16 +1010,20 @@ PCI scope, caller-class JSON minimisation (public vs customer vs admin vs ops), 
 | PATCH | `/api/v1/admin/inventory/:variantId` | Update stock quantity |
 | GET | `/api/v1/admin/inventory/low-stock` | Variants below threshold |
 | GET | `/api/v1/admin/orders` | All orders — filter by status, date, search |
-| GET | `/api/v1/admin/orders/:id` | Full order detail + payment + shipment timeline |
+| GET | `/api/v1/admin/orders/board` | Kanban board grouped by status (CONFIRMED/PROCESSING/SHIPPED/DELIVERED/CANCELLED); up to 100 orders per column with `canShipNow` + `shippingMode` per card |
+| GET | `/api/v1/admin/orders/export` | Export filtered orders as CSV (`orders:export`) |
+| GET | `/api/v1/admin/orders/:id` | Full order detail + payment + shipment timeline + invoice metadata + `canShipNow`/`shipBlockReason`/`shippingMode` |
+| GET | `/api/v1/admin/orders/:id/invoice.pdf` | Admin invoice PDF download for any order (`orders:read`; gated by `invoice.hasPdf`) |
+| GET | `/api/v1/admin/orders/:id/timeline` | Status-transition audit trail for the order (`orders:read`) |
 | PATCH | `/api/v1/admin/orders/:id/status` | Manually update order status |
 | POST | `/api/v1/admin/orders/:id/ship` | Trigger shipment booking via active shipping provider |
 | POST | `/api/v1/admin/orders/:id/schedule-pickup` | Schedule courier pickup (Shiprocket) |
 | POST | `/api/v1/admin/orders/:id/print-label` | Generate and return shipping label URL (Shiprocket) |
 | POST | `/api/v1/admin/orders/:id/cancel` | Cancel + refund if paid |
 | POST | `/api/v1/admin/orders/:id/notifications/retrigger` | Re-trigger selected order notification template via selected channels (`EMAIL`/`SMS`/`WHATSAPP`) |
-| GET | `/api/v1/admin/orders/export` | Export filtered orders as CSV for accounting/reporting |
 | GET | `/api/v1/admin/reviews` | List reviews for moderation |
 | PATCH | `/api/v1/admin/reviews/:id/moderate` | Approve or reject a review |
+| DELETE | `/api/v1/admin/reviews/:id` | Hard-delete a review (`reviews:moderate`) |
 | GET | `/api/v1/admin/settings/shipping` | Read effective pickup pincode + minimum order value (DB/env source) |
 | PATCH | `/api/v1/admin/settings/shipping` | Update pickup pincode and minimum order value used in checkout/shipping validation |
 | GET | `/api/v1/admin/settings/store` | Read store profile (identity/regulatory) |
@@ -984,21 +1032,51 @@ PCI scope, caller-class JSON minimisation (public vs customer vs admin vs ops), 
 | PATCH | `/api/v1/admin/settings/notifications` | Update notification channel toggles |
 | GET | `/api/v1/admin/settings/inventory` | Read default low-stock threshold |
 | PATCH | `/api/v1/admin/settings/inventory` | Update default low-stock threshold |
-| GET | `/api/v1/admin/users` | Customer list with search + aggregates |
-| GET | `/api/v1/admin/users/:id` | Customer detail + addresses + order history |
+| GET | `/api/v1/admin/users` | Customer list with search + aggregates; phone masked; includes `totalOrders` + `totalSpendPaise` |
+| GET | `/api/v1/admin/users/:id` | Customer detail + addresses + order history + ban status (`isBanned`, `bannedAt`, `bannedReason`) |
+| GET | `/api/v1/admin/users/:id/orders` | Paginated order history for a specific customer (`users:read`) |
+| PATCH | `/api/v1/admin/users/:id/ban` | Ban customer account (`users:write`). Cannot ban admins or already-banned users. |
+| DELETE | `/api/v1/admin/users/:id/ban` | Unban customer account (`users:write`). Returns 400 if not banned. |
+| GET | `/api/v1/admin/users/:id/notes` | List admin notes on customer (`users:read`) |
+| POST | `/api/v1/admin/users/:id/notes` | Create admin note on customer (`users:write`) |
+| DELETE | `/api/v1/admin/users/:id/notes/:noteId` | Delete admin note (`users:write`) |
 | GET | `/api/v1/admin/analytics/revenue` | Revenue over time (custom date range) |
-| GET | `/api/v1/admin/analytics/revenue/export` | Revenue CSV export |
+| GET | `/api/v1/admin/analytics/revenue/export` | Revenue CSV export (`analytics:export`) |
 | GET | `/api/v1/admin/analytics/funnel` | Sessions → cart → checkout → payment funnel |
 | GET | `/api/v1/admin/analytics/inventory-alerts` | Low stock report |
 | GET | `/api/v1/admin/analytics/notifications` | Notification delivery rates per channel |
 | GET | `/api/v1/admin/analytics/category-breakdown` | Revenue contribution by category |
+| GET | `/api/v1/admin/analytics/reconciliation-issues` | Orders where payment-provider state mismatches internal order state — severity/classification/age metadata (`analytics:read`) |
+| GET | `/api/v1/admin/analytics/outbox-dead-letter` | Permanently failed outbox jobs — job type, order, error, attempts (`analytics:replay`) |
+| POST | `/api/v1/admin/analytics/outbox-dead-letter/:id/replay-preview` | Dry-run preview of replaying a dead-letter job (`analytics:replay`) |
+| POST | `/api/v1/admin/analytics/outbox-dead-letter/:id/replay` | Replay a failed outbox job. Body: `{ reason, dryRun?, approvalToken? }` (`analytics:replay`) |
+| GET | `/api/v1/admin/analytics/inbox-failures` | Webhook events that failed inbound processing — provider, event type, error (`analytics:replay`) |
+| POST | `/api/v1/admin/analytics/inbox-failures/:id/replay-preview` | Preview replaying a failed webhook event (`analytics:replay`) |
+| POST | `/api/v1/admin/analytics/inbox-failures/:id/replay` | Replay a failed inbound webhook. Body: `{ reason, dryRun?, operationType?, rawPayload?, verificationHeader? }` (`analytics:replay`) |
 | GET | `/api/v1/admin/coupons` | Coupon list + filters |
+| GET | `/api/v1/admin/coupons/:id` | Single coupon detail |
 | POST | `/api/v1/admin/coupons` | Create coupon |
 | PATCH | `/api/v1/admin/coupons/:id` | Update coupon |
 | PATCH | `/api/v1/admin/coupons/:id/status` | Pause/resume coupon |
-| DELETE | `/api/v1/admin/coupons/:id` | Delete coupon |
+| DELETE | `/api/v1/admin/coupons/:id` | Soft-delete coupon |
+| POST | `/api/v1/admin/coupons/:id/restore` | Restore soft-deleted coupon (`coupons:write`) |
+| POST | `/api/v1/admin/coupons/:id/clone` | Clone coupon (`coupons:write`) |
 | GET | `/api/v1/admin/coupons/analytics` | Coupon redemption analytics |
-| GET | `/api/v1/admin/queues` | Bull Board UI — queue monitor (admin JWT required) |
+| GET | `/api/v1/admin/coupons/:id/audit` | Full coupon audit trail (`coupons:read`) |
+| GET | `/api/v1/admin/return-requests` | List return requests (`orders:read`) |
+| GET | `/api/v1/admin/return-requests/:id` | Single return request detail (`orders:read`) |
+| PATCH | `/api/v1/admin/return-requests/:id` | Approve/reject/update return request (`orders:write`) |
+| PATCH | `/api/v1/admin/orders/:id/items` | Update order line-item quantities (`orders:write`) |
+| GET | `/api/v1/admin/shipments` | Paginated shipment list across all orders. Query: `status`, `provider`, `page`, `limit`. (`shipments:read`) |
+| GET | `/api/v1/admin/shipments/:id` | Single shipment detail — `awbNumber`, `provider`, `status`, `pickupScheduledDate` (`shipments:read`) |
+| GET | `/api/v1/admin/payments` | Paginated payment list across all orders. Query: `status`, `provider`, `page`, `limit`. (`payments:read`) |
+| GET | `/api/v1/admin/payments/:id` | Single payment detail — `amount` (Int paise), `provider`, `status` (`payments:read`) |
+| POST | `/api/v1/admin/inventory/bulk-update` | Bulk stock adjustment — max 100 variants per `$transaction` (`inventory:write`) |
+| GET | `/api/v1/admin/inventory/history/:variantId` | Paginated `InventoryAdjustment` history for a variant (`inventory:read`) |
+| GET | `/api/v1/admin/settings/cod` | Read COD settings (`settings:read`) |
+| PATCH | `/api/v1/admin/settings/cod` | Update COD settings (`settings:write`) |
+| GET | `/api/v1/ops/queues` | Bull Board UI — queue monitor, ops plane only (`ops:read`, Layer C) |
+| GET | `/api/v1/ops/queues/dlq/summary` | Summary card: total DLQ jobs, breakdown by source queue (`ops:read`, Layer C) |
 
 ---
 
@@ -1008,9 +1086,9 @@ PCI scope, caller-class JSON minimisation (public vs customer vs admin vs ops), 
 - Stateless JWT: access token (15 min TTL) + refresh token (7 days, stored hashed in DB, invalidated on logout)
 - Frontend stores `accessToken` in memory; `refreshToken` in `httpOnly` cookie — **never** `localStorage`
 - OTP-based login via SMS provider (MSG91 or Fast2SMS per `SMS_PROVIDER`) — standard for Indian mobile-first e-commerce
-- Admin login via `/auth/admin/login` — separate endpoint with stricter controls (8 req/min route cap + progressive account+IP lockout on repeated failures)
+- Admin login is a **2-step email OTP flow**: `POST /auth/admin/login/request-otp` (verify email+password, send OTP to admin email) → `POST /auth/admin/login/verify-otp` (verify OTP, issue JWT pair). OTP TTL: 300s, max 5 attempts. Stricter rate limit than customer login. No TOTP/authenticator-app MFA — email OTP is the MFA layer.
 - Both roles share JWT structure with `role` claim (`CUSTOMER` vs `ADMIN`); admin tokens also carry operation permissions (`permissions[]`).
-- `rolesGuard` on all admin routes rejects non-admin JWTs with 403, and sensitive admin routes enforce operation-level permissions (`dashboard:read`, `analytics:read`, `orders:read`, `orders:write`, `orders:export`, `orders:refund`, `orders:notify`, etc.) across catalogue, coupons, settings, reviews, inventory, orders, analytics, users, and queues.
+- `rolesGuard` on all admin routes rejects non-admin JWTs with 403, and sensitive admin routes enforce operation-level permissions (`dashboard:read`, `analytics:read`, `orders:read`, `orders:write`, `orders:export`, `orders:refund`, `orders:notify`, `users:read`, `users:write`, `shipments:read`, `payments:read`, `inventory:read`, `inventory:write`, `products:read`, `products:write`, `categories:read`, `categories:write`, `coupons:read`, `coupons:write`, `reviews:read`, `reviews:moderate`, `settings:read`, `settings:write`, `analytics:export`, `analytics:replay`) across catalogue, coupons, settings, reviews, inventory, orders, analytics, users, shipments, payments, and queues.
 - Customer namespaces (`/users/me*`, `/wishlist*`, `/orders*`, `/payments/*`, `/shipping/track/:awb`) enforce `rolesGuard(Role.CUSTOMER)` in addition to JWT validation.
 - All JWT secrets are per-client — compromise of one client doesn't affect others
 
@@ -1122,7 +1200,7 @@ PCI scope, caller-class JSON minimisation (public vs customer vs admin vs ops), 
 - Refine handles: data fetching, pagination, CRUD forms, table sorting/filtering, auth provider, access control
 - Pages: Dashboard (KPIs + sales chart), Orders, Order Detail, Products, Product Editor, Inventory, Categories, Customers, Analytics, Queue Monitor, Settings
 - Recharts for sales chart and funnel visualisation
-- Bull Board UI at `/api/v1/admin/queues` — inspect job status, retry failed jobs, view dead-letter queue
+- Bull Board UI at `/api/v1/ops/queues` (ops plane) — inspect job status, retry failed jobs, view dead-letter queue; requires ops session (`ops:read`)
 - Branding per client: logo + 5 CSS variable changes = 15 minutes
 
 ---
@@ -1139,7 +1217,7 @@ All async work is handled by named BullMQ queues. Workers run in a dedicated wor
 | `inventory-alerts` | `check-low-stock` (repeatable — every 1 hour) | Scheduled — runs continuously |
 | `refunds` | `initiate-razorpay-refund` | Order cancellation with captured payment |
 | `analytics` | `record-event` (page-view, add-to-cart, purchase) | Storefront events |
-| `cart-cleanup` | `delete-expired-guest-carts` (daily), `release-expired-reservations` (every 60s) | Scheduled cleanup + stock release |
+| `cart-cleanup` | `delete-expired-guest-carts` (daily), `release-expired-reservations` (every 60s), `scheduled-process-restart` (on-demand, deferred via `POST /api/v1/ops/system/restart`) | Scheduled cleanup + stock release + ops-triggered payment-safe container restart |
 | `outbox-dispatch` | `publish-pending` (repeatable — every 10 sec) | Publishes persisted outbox events to target queues |
 | `reconciliation` | `run-order-lifecycle-check` (repeatable — every 60 min) | Detects lifecycle drift and records reconciliation issues |
 
@@ -1163,10 +1241,12 @@ All async work is handled by named BullMQ queues. Workers run in a dedicated wor
 | HTTPS | Enforced at Nginx — HTTP always redirected, TLSv1.2 minimum |
 | Secrets | Bootstrap secrets stay in `.env` / deployment secret manager and `.env*` is ignored. DB-overlay eligible ops config values are encrypted in `OpsConfigSecret` and applied only after restart. Production merchant admin provisioning is invite-only; legacy seed scripts are local/emergency tools and read credentials from env vars. `JWT_SECRET` and `JWT_REFRESH_SECRET` fail-fast if missing/empty after overlay. |
 | Admin Routes | Role guard + operation permission guard + stricter auth throttling (progressive account+IP lockout) + dedicated admin read/write limits |
-| Ops Routes | Layer C only: IP-allowlist → API key (bcrypt with salt) → optional email-OTP MFA (`OPS_MFA_ENFORCE`) → dual approval for critical writes (`OPS_DUAL_APPROVAL_WINDOW_MINUTES`). No merchant access. |
+| Ops Routes | Layer C only: browser email-OTP session cookie (httpOnly `ops_session` cookie) → email OTP challenge for critical writes (`ops:write`). No API key path. No merchant access. |
 | Payment Data | Never store raw card details — Razorpay handles all PCI DSS compliance |
 | Cookie Security | Refresh token: `httpOnly=true`, `secure=true`, `sameSite=strict` |
 | Reliability Guardrails | Load-shed mode (`normal/reduced/emergency`), optional idempotency replay, outbox/inbox persistence, reconciliation checks |
+| **Technical Failure Alerting** | Centralised email pipeline via `sendTechnicalFailureAlert()` — all `catch`/`log.error` paths across modules, plugins, workers, and process-level handlers emit structured alerts to active Ops identities (`opsUser.isActive`) and verified Admin users (`User.role=ADMIN`, `isVerified=true`). Eight failure stages (`QUEUE_ENQUEUE`, `OUTBOX_DISPATCH`, `WORKER_TERMINAL`, `WORKER_DELIVERY`, `CORE_LOGIC`, `ROUTE_HANDLER`, `WEBHOOK_PROCESSING`, `PROVIDER_RUNTIME`). DB-first client metadata (`StoreSettings.storeName`/`websiteUrl`) with env fallbacks. Best-effort transport; alert send failures are intentionally swallowed. |
+| **Per-Template Primary Notification Channel** | DB-backed per-template primary channel configuration stored in `StoreSettings.primaryNotificationChannels` (JSON mapping: `TemplateName` → `EMAIL` | `SMS` | `WHATSAPP`). 13 templates supported with `EMAIL` default. `send-primary` job resolves channel from DB mapping with no fallback — if configured channel fails (disabled, missing credentials, provider error), notification fails immediately and triggers alert. Admin UI exposes per-template radio selection via `PATCH /api/v1/admin/settings/notifications`. |
 | **Concurrency & Atomicity** | TOCTOU (Time-of-Check-to-Time-of-Use) vulnerabilities eliminated via Prisma `updateMany` Compare-And-Swap (CAS) pattern: atomic updates guarded by status/field conditions prevent race conditions. Distributed Redis locks serialize audit chain writes (`OpsAuditLog`, `CouponAuditLog`). All CAS paths include test-mock fallbacks for backward compatibility. See §11.2 for surface-by-surface coverage. |
 
 ### 11.1 Atomic Operations & Distributed Locking (Race-Condition Hardening)
@@ -1181,13 +1261,114 @@ All critical state transitions use atomic CAS patterns to prevent TOCTOU races:
 | Refresh token consume | `updateMany` | `consumedAt: null` → `new Date()` (prevents double-spend) |
 | Ops OTP verification | `updateMany` | `attempts < max AND status = PENDING` |
 | Ops invite cleanup | `deleteMany` | `status in ['CREATED', 'EMAIL_SENT']` |
-| Dual-approval confirm | `updateMany` (inside transaction) | `status = PENDING` → `CONFIRMED`/`REJECTED` |
 | Reconciliation auto-heal | `updateMany` | `status: not REFUNDED` → `REFUNDED`; `status = PENDING_PAYMENT` → `CANCELLED` |
 | Webhook inbox claim | `create` + unique-violation + `updateMany` | `status = FAILED` → `PROCESSING` |
 | Analytics replay | `updateMany` | `status = PENDING` ↔ `FAILED` |
 | Audit chain append | Redis lock + Prisma `create` | `withOpsAuditChainLock()` serializes chain-head reads |
 
-**Compatibility strategy:** All CAS paths detect mock delegates (`'mock' in delegate.method`) and fall back to single-row `update`/`delete` to satisfy existing test assertions. Production deployments using real Prisma clients execute full atomic guards.
+**Compatibility strategy (updated):** Mock-detection shims (`'mock' in delegate.method` / `preferUpdateForMock`) were removed in Round 11/12 hardening. All test mocks now provide `updateMany` directly. Production and test code paths are identical — all CAS guards execute unconditionally.
+
+### 11.1.1 Idempotency Implementation Details
+
+The idempotency system prevents duplicate side effects when clients retry failed requests. It uses a **header-based key** (`Idempotency-Key`) with **DB-backed records** and a **state machine**.
+
+**Database Model (`IdempotencyRecord`):**
+- Composite unique key: `(scopeKey, route, method, idempotencyKey)`
+- `scopeKey`: Isolates keys by caller identity (`user:{hash}`, `cart:{hash}`, `anon:{hash}`)
+- `requestHash`: SHA256 of request body — ensures retries send identical payload
+- `status`: `PROCESSING` | `COMPLETED` | `FAILED`
+- `responsePayload`: Cached response (sensitive data redacted via `redactSensitiveData()`)
+- `expiresAt`: 24-hour TTL (`IDEMPOTENCY_TTL_HOURS`)
+
+**State Machine:**
+
+| Status | Behavior on Retry |
+|--------|-------------------|
+| `PROCESSING` | 409 Conflict — request in-flight, client should poll or backoff |
+| `COMPLETED` | Returns cached response with `Idempotent-Replayed: true` header |
+| `FAILED` | Allows retry (same key + payload) — CAS-guarded transition back to `PROCESSING` |
+
+**Scope Resolution (prevents cross-user collision):**
+- **Authenticated users**: `user:{SHA256(sub)}`
+- **Guest carts**: `cart:{SHA256(cart_session cookie)}`
+- **Anonymous**: `anon:{SHA256(IP)}`
+
+**Request Hash Validation:**
+If a retry sends a different payload with the same idempotency key, the backend returns:
+```
+409 CONFLICT — Idempotency-Key payload mismatch
+```
+This prevents accidental retries with modified parameters from being treated as the same intent.
+
+**Routes with Idempotency Guards:**
+- Customer: `POST /orders`, `POST /orders/:id/cancel`, `POST /payments/initiate`, `POST /payments/verify`, `POST /payments/retry`, `POST /orders/:id/return-requests`
+- Admin: `POST /admin/orders/:id/refund`, `POST /admin/orders/:id/ship`, `POST /admin/orders/:id/cancel`, `POST /admin/orders/:id/schedule-pickup`, `POST /admin/orders/:id/notifications/retrigger`, `POST /admin/return-requests/:id`, `POST /admin/orders/:id/items`, `POST /admin/reviews/:id/delete`
+
+### 11.1.2 Load Shedding Implementation Details
+
+Load shedding gracefully drops non-essential traffic during system stress (high load, downstream failures, resource exhaustion). Controlled via three modes: `normal`, `reduced`, `emergency`.
+
+**Mode Resolution (priority order):**
+1. `LOAD_SHED_MODE` environment variable (immediate override)
+2. Redis key `ops:load_shed:mode` (set dynamically via ops panel)
+3. Default: `normal`
+
+Mode is **cached for 5 seconds** per request to avoid Redis hammering.
+
+**Route Classification:**
+
+```typescript
+// Never shed — always serve
+ALWAYS_ALLOWED_PREFIXES = [
+  '/api/v1/health',
+  '/api/v1/auth',
+  '/api/v1/payments/webhook',
+  '/api/v1/shipping/webhook'
+];
+
+// Shed in reduced + emergency modes
+NON_CRITICAL_ADMIN_PREFIXES = [
+  '/api/v1/admin/analytics',
+  '/api/v1/admin/dashboard',
+  '/api/v1/admin/orders/export',
+  '/api/v1/admin/coupons',
+  '/api/v1/admin/settings',
+  '/api/v1/admin/inventory',
+  '/api/v1/admin/reviews',
+  '/api/v1/admin/users',
+  '/api/v1/admin/products',
+  '/api/v1/admin/categories'
+];
+
+// Shed in emergency mode only (checkout mutations)
+REDUCED_MODE_MUTATION_PREFIXES = [
+  '/api/v1/orders',
+  '/api/v1/payments/initiate',
+  '/api/v1/cart'
+];
+```
+
+**Shedding Rules:**
+
+| Mode | Shed Behavior |
+|------|---------------|
+| `normal` | All traffic allowed |
+| `reduced` | Non-critical admin routes return `503` |
+| `emergency` | Non-critical admin + checkout mutations return `503` |
+
+**503 Response Body:**
+```json
+{
+  "error": "INTERNAL_ERROR",
+  "message": "Emergency degraded mode enabled. Non-critical and mutation traffic is temporarily shed."
+}
+```
+
+**Guard Application:**
+The `loadShedGuard` is a Fastify preHandler applied to all admin/ops mutation routes. It runs **after** auth/permission guards but **before** idempotency and business logic handlers.
+
+**Operational Control:**
+Ops users with `ops:write` permission can set modes via `POST /api/v1/ops/load-shed` (OTP-confirmed). Mode changes apply immediately after OTP verification.
 
 ### 11.2 Fastify Request Pipeline
 
@@ -1355,7 +1536,7 @@ Six phases. Sequential. Do not start a phase until the previous phase's delivera
 - `notifications` BullMQ worker — processes all jobs, creates `NotificationLog` records
 - Inventory alerts repeatable job (hourly) + refunds worker
 - All admin REST endpoints: dashboard KPIs, products, orders, inventory, users, analytics
-- Bull Board UI mounted at `/api/v1/admin/queues` (admin JWT required)
+- Bull Board UI mounted at `/api/v1/ops/queues` (ops session + `ops:read` required)
 - **Deliverable:** Full order lifecycle with notifications + complete admin API
 
 ### Phase 5 — Admin Frontend & Hardening ⏱ Weeks 9–10

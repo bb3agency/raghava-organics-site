@@ -146,7 +146,7 @@ Before Phase 5 sign-off and again during Phase 12 go-live validation, verify:
 **Prerequisites:** Phase 1 complete (credentials ready). Phase 0 complete (CLIENT_ID, ports, domain confirmed).
 
 **Full runbook:** `docs/MASTER_DEPLOYMENT_PLAYBOOK.md` Phase 2 (Clone & configure backend).  
-**Environment reference:** `.env.example` (90+ variables — every variable has a comment).
+**Environment reference:** `.env.example` (bootstrap/infra + minimal wiring only). For the authoritative env vs DB configuration map (what belongs in `.env` vs Ops DB overlay), read `docs/ENV_VS_DB_CONFIG_REFERENCE.md`.
 
 **Execution steps:**
 
@@ -156,28 +156,40 @@ Before Phase 5 sign-off and again during Phase 12 go-live validation, verify:
    cd client-<client-id>/backend
    ```
 
-2. **Copy `.env.example` to `.env`** and fill every required variable:
+2. **Copy `.env.example` to `.env`** and fill **bootstrap/infra keys only**:
    ```bash
    cp .env.example .env
    ```
-   Key variables to fill (non-exhaustive — read all comments in `.env.example`):
+
+   > **Two-tier config model:** `.env` is for bootstrap/infra keys only. Provider credentials, webhook tokens, and ops-security parameters are **DB-overlay keys** — stored encrypted in `OpsConfigSecret` and set via the Ops UI after Phase 8 bootstrap. See `docs/ENV_VS_DB_CONFIG_REFERENCE.md` for the full classification.
+   >
+   > **First-deploy exception:** `RESEND_API_KEY` and `RESEND_FROM` must be set as live values for the first ops invite email (`ops-newuser.mjs`). After first ops login, manage via Ops UI. See `docs/PRODUCTION_FIRST_DEPLOY_CHECKLIST.md`.
+
+   **Bootstrap keys to set in `.env`** (non-exhaustive — read all comments in `.env.example`):
    - `CLIENT_ID=<client-id>`
    - `BACKEND_PORT=<assigned port>`
    - `NODE_ENV=production` (for production; `staging` for staging)
    - `DATABASE_URL=postgresql://<user>:<pass>@host.docker.internal:5432/<client-db>`
    - `REDIS_URL=redis://:<redis-password>@redis:6379`
    - `REDIS_PASSWORD=<generated secret>`
-   - `JWT_SECRET=<generated secret>` — must be unique per client
-   - `JWT_REFRESH_SECRET=<generated secret>` — must be unique per client, different from `JWT_SECRET`
-   - `ADMIN_MFA_ENCRYPTION_KEY=<generated secret>` — distinct from `JWT_REFRESH_SECRET`
+   - `JWT_SECRET=<generated secret>` — unique per client
+   - `JWT_REFRESH_SECRET=<generated secret>` — unique per client, different from `JWT_SECRET`
+   - `OPS_DB_ENCRYPTION_KEY=<32-char-hex>` — unique per client; never reused; bootstrap-only
+   - `OPS_COOKIE_SECRET=<32-char-hex>` — signs ops session cookies; bootstrap-only
    - `STOREFRONT_URL=https://<domain>`
    - `ADMIN_URL=https://<domain>/admin` (or subdomain)
-   - `PAYMENT_PROVIDER=razorpay` (never `noop` in production)
-   - `SHIPPING_PROVIDER=delhivery` or `shiprocket` (never `noop` in production)
-   - All Razorpay, shipping provider, SMS provider (MSG91 or Fast2SMS), Resend credentials from Phase 1.
-   - `OPS_API_KEY_SALT=<generated secret>`
-   - `OPS_MFA_ENFORCE=true`
-   - `TRUSTED_PROXY_ALLOWLIST_CIDR=127.0.0.1/32` (or your Nginx/load-balancer IP)
+   - `ADMIN_ALERT_EMAIL=<ops email>` — fallback alert delivery
+   - `TURNSTILE_SECRET_KEY`, `AUDIT_ANCHOR_SECRET`, `IDEMPOTENCY_SCOPE_SECRET`, `REDIS_KEY_PEPPER`
+   - `RESEND_API_KEY`, `RESEND_FROM` — **Phase 1 only**, needed for `ops-newuser.mjs` invite email
+   - Feature flags per Phase 0 scoping
+
+   **DB-overlay keys — do NOT put these in `.env` for production.** Set them via Ops UI after Phase 8:
+   - Provider credentials: `PAYMENT_PROVIDER`, `RAZORPAY_*`, `SHIPPING_PROVIDER`, `DELHIVERY_*`, `SHIPROCKET_*`
+   - Notification credentials: `MSG91_AUTH_KEY`, `FAST2SMS_API_KEY`, `META_WHATSAPP_*`, `SMS_PROVIDER` (and `RESEND_*` after Phase 1 rotation)
+   - Webhook tokens and allowlists: `RAZORPAY_WEBHOOK_SECRET`, `RAZORPAY_WEBHOOK_ALLOWLIST_CIDR`, `DELHIVERY_WEBHOOK_TOKEN`, `SHIPROCKET_WEBHOOK_TOKEN`
+   - Ops security: `OPS_METRICS_TOKEN`, `REPLAY_APPROVAL_TOKEN`, `TRUSTED_PROXY_ALLOWLIST_CIDR`
+
+   In **local dev** (`NODE_ENV=development`) you may temporarily set provider keys in `.env` to test before ops bootstrap. Remove them before VPS production deployment.
 
 3. **CRITICAL: Set PostgreSQL password BEFORE first container start:**
    > The Postgres Docker volume persists the password hash from first initialization. If you change `POSTGRES_PASSWORD` later without updating the DB user, you'll get P1000 authentication errors.
@@ -432,6 +444,8 @@ Perform each dry-run as part of the vertical slice that builds the relevant fron
    - `fail2ban` running
    - `unattended-upgrades` enabled
 
+   > **Port 22 after CD setup:** Once the self-hosted GitHub Actions runner is registered for this client (Phase 7 — see `CLIENT_VPS_SETUP_GUIDE.md` §22), restrict port 22 to your office CIDR only. Automated deploys use HTTPS outbound from the runner and do not require inbound SSH.
+
 7. **Capacity signals (record before onboarding each new client):**
    - RAM sustained usage target: <75%
    - CPU sustained usage target: <70%
@@ -480,11 +494,12 @@ Reference: `docs/CLIENT_VPS_SETUP_GUIDE.md` §5.
 
 ### 7.2 — Backend deployment
 
+> **First-time bootstrap only.** Run these steps once to set up the client stack on the VPS. After this, complete `CLIENT_VPS_SETUP_GUIDE.md` §22 (self-hosted runner setup + GitHub repo Variables). Once the runner is Online, all future deploys are fully automated on every `git push` to `main` — no SSH or manual `docker compose` required.
+
 ```bash
 # On VPS, as deploy user
 cd /var/www/<client-id>/backend
 git clone https://github.com/your-org/ecom-backend-template .
-# OR git pull if re-deploying
 
 # Copy .env from secure source (never git)
 # scp from local, or pull from secrets vault
@@ -494,7 +509,7 @@ npm run prisma:migrate:deploy    # applies all migrations
 docker compose -p <client-id> up -d --build
 ```
 
-Reference: `docs/CLIENT_VPS_SETUP_GUIDE.md` §6–§7.
+Reference: `docs/CLIENT_VPS_SETUP_GUIDE.md` §6–§7 (first deploy) and §22 (automated CD setup).
 
 ### 7.3 — Nginx configuration
 
@@ -535,7 +550,7 @@ Certbot will auto-patch the Nginx config. Verify HTTPS redirect from HTTP is act
 curl -s https://<domain>/api/v1/health | jq .
 
 # Metrics endpoint (requires OPS_METRICS_TOKEN)
-curl -s -H "x-ops-token: <OPS_METRICS_TOKEN>" https://<domain>/api/v1/ops/metrics | head -30
+curl -s -H "Authorization: Bearer <OPS_METRICS_TOKEN>" https://<domain>/api/v1/ops/metrics | head -30
 
 # Container health
 docker ps --filter "name=<client-id>"
@@ -573,7 +588,6 @@ docker compose -p <client-id> logs workers --tail=50
    npm run ops:newuser -- \
      --email ops@<client-id>.internal \
      --name "Primary Ops" \
-     --ip-allowlist "your.office.ip/32,your.home.ip/32" \
      --setup-base-url "https://<client-domain>" \
      --yes
    ```
@@ -581,27 +595,57 @@ docker compose -p <client-id> logs workers --tail=50
 
 2. **Complete setup from invite email** at `https://<client-domain>/ops/setup?...` within 10 minutes.
 
-3. **Store runtime credentials in vault** once setup finishes and API credentials are issued.
+3. **Log in via email-OTP** at `/ops` — enter email, receive OTP, enter OTP. Session cookie (`ops_session`) is set.
 
 4. **Test ops access:**
    ```bash
    curl -s -X GET https://<domain>/api/v1/ops/session \
-     -H "x-ops-key-id: <keyId>" \
-     -H "x-ops-api-key: <apiKey>" \
-     -H "x-ops-mfa-code: <email-otp-if-required>"
+     --cookie "ops_session=<session_token>"
    ```
-   Expected: 200 with ops session payload.
+   Expected: 200 with ops session payload. (Privileged write actions require an email OTP challenge in the request body.)
 
-5. **Verify IP allowlist enforcement:** Attempt an ops call from an IP **not** in the allowlist — must return 403.
+5. **Record ops user** in the credential register with email, permissions, and creation date.
+6. **Verify cleanup policy:** expired unconsumed invites are removed and lifecycle events are visible in ops audit logs.
 
-6. **Record ops user** in the credential register with keyId, vault path, IP allowlist, creation date.
-7. **Verify cleanup policy:** expired unconsumed invites are removed and lifecycle events are visible in ops audit logs.
+8. **Provision DB-overlay config via Ops UI** — after invite bootstrap and first login, use the Ops UI (or API directly) to set all DB-overlay keys:
+
+   a. Request OTP: `POST /api/v1/ops/otp/request` → verify: `POST /api/v1/ops/otp/verify`
+   b. Save config: `POST /api/v1/ops/config/save` with `{ challengeId, otpCode, values: { ... } }`
+
+   Provider credentials, webhook tokens, and ops-security parameters are all DB-overlay keys. They are stored encrypted in `OpsConfigSecret` — see `docs/ENV_VS_DB_CONFIG_REFERENCE.md` §3 for the full list.
+
+   For each domain in order:
+   - **Payments:** `PAYMENT_PROVIDER`, `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET`, `RAZORPAY_WEBHOOK_ALLOWLIST_CIDR`, `PAYMENT_CB_FAILURE_THRESHOLD`, `PAYMENT_CB_COOLDOWN_MS`
+   - **Shipping:** `SHIPPING_PROVIDER`, `DELHIVERY_API_KEY` / `SHIPROCKET_EMAIL` + `SHIPROCKET_PASSWORD`, webhook token + allowlist, circuit breaker params
+   - **Notifications:** `RESEND_API_KEY`, `RESEND_FROM`, `SMS_PROVIDER`, `MSG91_AUTH_KEY` / `FAST2SMS_API_KEY`, `META_WHATSAPP_*` keys
+   - **Ops security:** `OPS_MFA_ENFORCE`, `OPS_METRICS_TOKEN`, `REPLAY_APPROVAL_TOKEN`, `TRUSTED_PROXY_ALLOWLIST_CIDR`
+   - **Risk/replay:** `WEBHOOK_TIMESTAMP_SKEW_SECONDS`, `REPLAY_AUDIT_RETENTION_DAYS`
+
+   > Bootstrap-only keys (`DATABASE_URL`, `OPS_DB_ENCRYPTION_KEY`, etc.) are rejected with `BOOTSTRAP_KEY_NOT_DB_APPLICABLE` if submitted — set them in `.env` only.
+
+9. **Restart containers after config save** so `applyOpsConfigRuntimeOverlay()` applies the new DB-stored values before provider initialization:
+   ```bash
+   docker compose -p <client-id> up -d backend workers
+   docker compose -p <client-id> logs backend --tail=50
+   # Verify: no startup errors, provider init logs show correct provider
+   ```
+
+10. **Verify DB-overlay config is applied:**
+    ```bash
+    # Check ops config overview (masked metadata, no plaintext)
+    curl -s -X GET https://<domain>/api/v1/ops/config/overview \
+      --cookie "ops_session=<session_token>"
+    # All expected keys should show status: present, noPlaceholdersInStrict: true
+    ```
 
 **Evidence gate:**
-- Ops invite is completed before expiry and resulting API credentials are stored in vault.
-- Email OTP-based ops verification is functional for privileged write actions.
-- Ops status endpoint returns 200 from allowlisted IP.
-- 403 confirmed from non-allowlisted IP.
+- Ops invite is completed before expiry.
+- Email OTP login flow is functional (session cookie issued).
+- Email OTP challenge verification is functional for privileged write actions.
+- Ops session endpoint returns 200 from authenticated browser session.
+- All DB-overlay keys are saved via Ops UI and `/ops/config/overview` confirms all keys present with no placeholders.
+- Backend and worker containers restarted after config save; no startup errors.
+- `run config:parity-check` passes locally confirming `.env.example` layout is correct.
 
 ---
 
@@ -615,7 +659,7 @@ docker compose -p <client-id> logs workers --tail=50
 
 1. **Create merchant admin invite** from an authenticated ops context:
    - Backend route: `POST /api/v1/admin/invites`
-   - Required ops auth: `x-ops-key-id`, `x-ops-api-key`, MFA when enforced.
+   - Required ops auth: `ops_session` cookie (email-OTP login) with OTP challenge for privileged write.
    - Required permission: `ops:write`.
    - Endpoint policy: Layer C developer/ops control surface, not merchant admin self-service.
    - Body: `email`, `name`, `setupBaseUrl`, optional merchant-only `permissions`.
@@ -625,12 +669,12 @@ docker compose -p <client-id> logs workers --tail=50
    - Frontend calls `POST /api/v1/admin/invites/consume` with `token`, `password`, and optional `name`.
    - Backend creates `User(role=ADMIN)`, marks the invite consumed, and inserts merchant `AdminPermissionGrant` rows.
    - Default grants cover dashboard, products, categories, inventory, coupons, settings, reviews, analytics, orders, exports, notifications, and users read.
-   - Developer permissions (`ops:*`, `queues:inspect`, `developer:*`) are not granted by this flow.
+   - Developer/ops permissions (`ops:*`, `developer:*`) are not granted by this flow.
    - Invite token is accepted once; expired or consumed invites require a fresh ops-created invite.
 
-3. **Verify admin login** via `POST /api/v1/auth/admin/login`. Confirm token contains expected merchant permissions.
+3. **Verify admin login** via 2-step email OTP: `POST /api/v1/auth/admin/login/request-otp` (sends OTP to admin email) → `POST /api/v1/auth/admin/login/verify-otp` (issues JWT). Confirm JWT `permissions` contains expected merchant scopes only.
 
-4. **Verify MFA enrollment** if `ADMIN_MFA_ENFORCE=true`.
+4. **Confirm no TOTP/MFA enrollment step is required** — email OTP is the only second factor; no authenticator-app provisioning needed.
 
 5. **Confirm admin permission snapshot caveat** is in your ops SOP: permission grant/revoke changes are token-issuance scoped. Mid-session changes require session revocation or logout/re-auth for immediate effect.
 
@@ -668,15 +712,36 @@ docker compose -p <client-id> logs workers --tail=50
    npm run build
    ```
 
-2. **Deploy to VPS** (if self-hosted Next.js):
+2. **First-time VPS setup** (run once — all subsequent deploys are automated via the CD pipeline):
    ```bash
-   # Copy build output to VPS
-   rsync -avz .next/ <deploy-user>@<vps-ip>:/var/www/<client-id>/frontend/.next/
-   rsync -avz public/ <deploy-user>@<vps-ip>:/var/www/<client-id>/frontend/public/
-   # Start Next.js server (use PM2 or Docker)
+   # SSH into VPS and navigate to the frontend directory
+   # (git clone should already be done as part of Phase 7 backend setup)
+   cd /var/www/<client-id>/frontend
+
+   # Create frontend .env.local with production values
+   # Required keys: CLIENT_ID, STOREFRONT_PORT, NEXT_PUBLIC_API_BASE_URL,
+   #                NEXT_PUBLIC_STOREFRONT_URL, NEXT_PUBLIC_RAZORPAY_KEY_ID
+   nano .env.local
+
+   # First production build (bootstraps the .next/ output on the VPS)
+   npm ci && npm run build
+
+   # Start PM2 process (one-time — subsequent deploys use pm2 reload, not pm2 start)
    pm2 start npm --name "<client-id>-frontend" -- start -- -p <STOREFRONT_PORT>
+   pm2 save          # persist process list (survives pm2 restarts)
+   pm2 startup       # install boot hook — run the printed sudo command to survive reboots
    ```
-   OR deploy to Vercel/Netlify with env variables set in their dashboard.
+
+   > **After this, all future deploys are fully automated.** Every `git push` to `main` triggers:
+   > CI gates → self-hosted runner → `vps-frontend-deploy.sh` → `npm run build` → `pm2 reload` (zero downtime). No SSH required.
+
+   **GitHub repo setup (one-time):** Add to the client repo at Settings → Secrets and variables → Actions:
+   | Type | Name | Value |
+   |------|------|-------|
+   | Variable | `FRONTEND_DEPLOY_ENABLED` | `true` |
+   | Secret | `VPS_FRONTEND_PATH` | `/var/www/<client-id>/frontend` |
+
+   > See `docs/CLIENT_VPS_SETUP_GUIDE.md` §22 for the full frontend CD pipeline reference.
 
 3. **Update Nginx** to proxy storefront traffic to `http://127.0.0.1:<STOREFRONT_PORT>`. Reload Nginx.
 
@@ -896,8 +961,6 @@ These rules come from `ECOM_MASTER.md` §5 and `TRD.md` §2.3. They are not sugg
 - **Never share Redis** between clients. Each client gets its own Redis container with its own password.
 - **Never share JWT secrets** (`JWT_SECRET`, `JWT_REFRESH_SECRET`) between clients.
 - **Never share payment/shipping credentials** between clients. Even if two clients use the same Razorpay account owner, create separate API keys.
-- **Never share `OPS_API_KEY_SALT`** between clients.
-- **Never share `ADMIN_MFA_ENCRYPTION_KEY`** between clients.
 - Each client has its own Nginx `server {}` block(s) and its own TLS certificate.
 - Each client's `.env` must **never** be committed to git.
 

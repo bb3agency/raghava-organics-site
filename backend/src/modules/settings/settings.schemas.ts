@@ -26,9 +26,10 @@ const shippingSettingsSchema = {
 const storeProfileSchema = {
   type: 'object',
   additionalProperties: false,
-  required: ['storeName', 'logoUrl', 'contactEmail', 'contactPhone', 'gstin', 'fssaiNumber'],
+  required: ['storeName', 'websiteUrl', 'logoUrl', 'contactEmail', 'contactPhone', 'gstin', 'fssaiNumber'],
   properties: {
     storeName: { anyOf: [{ type: 'string', maxLength: 150 }, { type: 'null' }] },
+    websiteUrl: { anyOf: [{ type: 'string', maxLength: 1000 }, { type: 'null' }] },
     logoUrl: { anyOf: [{ type: 'string', maxLength: 1000 }, { type: 'null' }] },
     contactEmail: { anyOf: [{ type: 'string', maxLength: 200 }, { type: 'null' }] },
     contactPhone: { anyOf: [{ type: 'string', maxLength: 30 }, { type: 'null' }] },
@@ -40,11 +41,19 @@ const storeProfileSchema = {
 const notificationSettingsSchema = {
   type: 'object',
   additionalProperties: false,
-  required: ['emailEnabled', 'smsEnabled', 'whatsappEnabled', 'smsTemplates'],
+  required: ['emailEnabled', 'smsEnabled', 'whatsappEnabled', 'primaryChannels', 'smsTemplates'],
   properties: {
     emailEnabled: { type: 'boolean' },
     smsEnabled: { type: 'boolean' },
     whatsappEnabled: { type: 'boolean' },
+    primaryChannels: {
+      type: 'object',
+      additionalProperties: {
+        type: 'string',
+        enum: ['EMAIL', 'SMS', 'WHATSAPP']
+      },
+      maxProperties: 100
+    },
     smsTemplates: {
       type: 'object',
       additionalProperties: { type: 'string', maxLength: 320 },
@@ -107,6 +116,7 @@ export const updateStoreProfileSchema = {
     minProperties: 1,
     properties: {
       storeName: { type: 'string', maxLength: 150 },
+      websiteUrl: { type: 'string', maxLength: 1000 },
       logoUrl: { type: 'string', maxLength: 1000 },
       contactEmail: { type: 'string', format: 'email', maxLength: 200 },
       contactPhone: { type: 'string', maxLength: 30 },
@@ -140,6 +150,14 @@ export const updateNotificationSettingsSchema = {
       emailEnabled: { type: 'boolean' },
       smsEnabled: { type: 'boolean' },
       whatsappEnabled: { type: 'boolean' },
+      primaryChannels: {
+        type: 'object',
+        additionalProperties: {
+          type: 'string',
+          enum: ['EMAIL', 'SMS', 'WHATSAPP']
+        },
+        maxProperties: 100
+      },
       smsTemplates: {
         type: 'object',
         additionalProperties: { type: 'string', maxLength: 320 },
@@ -175,6 +193,48 @@ export const updateInventorySettingsSchema = {
   },
   response: {
     200: inventorySettingsSchema,
+    ...standardAdminErrorResponses
+  }
+} as const;
+
+const codSettingsShape = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['isCodEnabled', 'cancellationWindowHours'],
+  properties: {
+    isCodEnabled: { type: 'boolean' },
+    cancellationWindowHours: { type: 'integer', minimum: 1 },
+    sellerState: { anyOf: [{ type: 'string', maxLength: 100 }, { type: 'null' }] }
+  }
+} as const;
+
+export const getCodSettingsSchema = {
+  tags: ['admin', 'settings'],
+  summary: 'Get COD and cancellation settings',
+  params: emptyParamsSchema,
+  querystring: emptyQuerystringSchema,
+  response: {
+    200: codSettingsShape,
+    ...standardAdminErrorResponses
+  }
+} as const;
+
+export const updateCodSettingsSchema = {
+  tags: ['admin', 'settings'],
+  summary: 'Update COD and cancellation settings',
+  params: emptyParamsSchema,
+  querystring: emptyQuerystringSchema,
+  body: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      isCodEnabled: { type: 'boolean' },
+      cancellationWindowHours: { type: 'integer', minimum: 1, maximum: 720 },
+      sellerState: { anyOf: [{ type: 'string', maxLength: 100 }, { type: 'null' }] }
+    }
+  },
+  response: {
+    200: codSettingsShape,
     ...standardAdminErrorResponses
   }
 } as const;

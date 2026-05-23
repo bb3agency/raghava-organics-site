@@ -14,20 +14,34 @@ function read(filePath) {
 }
 
 function parseEnvExampleKeys(source) {
-  const entries = source
+  const liveEntries = source
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter((line) => /^[A-Z0-9_]+=/.test(line))
     .map((line) => {
       const [key, ...rest] = line.split('=');
-      return {
-        key,
-        value: rest.join('=')
-      };
+      return { key, value: rest.join('='), stub: false };
     });
+  // Also capture commented stubs: lines like "# KEY=" or "# KEY=value"
+  // These document ops-overlay-managed keys without activating them.
+  const stubEntries = source
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => /^#\s*[A-Z0-9_]+=/.test(line))
+    .map((line) => {
+      const stripped = line.replace(/^#\s*/, '');
+      const [key, ...rest] = stripped.split('=');
+      return { key, value: rest.join('='), stub: true };
+    });
+  // Live entries take precedence over stubs
+  const allByKey = new Map();
+  for (const entry of [...stubEntries, ...liveEntries]) {
+    allByKey.set(entry.key, entry);
+  }
   return {
-    keys: new Set(entries.map((entry) => entry.key)),
-    valuesByKey: new Map(entries.map((entry) => [entry.key, entry.value]))
+    keys: new Set(allByKey.keys()),
+    valuesByKey: new Map([...allByKey.entries()].map(([k, e]) => [k, e.value])),
+    stubKeys: new Set([...allByKey.values()].filter((e) => e.stub).map((e) => e.key))
   };
 }
 
@@ -61,6 +75,8 @@ function collectConfigRuntimeParityErrors(envExample, compose) {
       errors.push(`.env.example is missing required key: ${entry.key}`);
       continue;
     }
+    // dbOverlay keys are allowed to appear as commented stubs only — no live value required.
+    if (entry.dbOverlay) continue;
     if (!entry.allowEmptyInExample) {
       const envValue = parsedEnv.valuesByKey.get(entry.key) ?? '';
       if (envValue.trim().length === 0) {

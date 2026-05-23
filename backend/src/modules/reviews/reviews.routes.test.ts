@@ -51,6 +51,47 @@ describe('reviews routes', () => {
     expect(moderateReview).toBeDefined();
     expect(moderateReview?.preHandler).toBeDefined();
 
+    const deleteReview = routes.find((route) => route.url === '/api/v1/admin/reviews/:id' && route.method === 'DELETE');
+    expect(deleteReview).toBeDefined();
+    expect(deleteReview?.preHandler).toBeDefined();
+
+    await app.close();
+  });
+
+  it('moderate review route has loadShedGuard in preHandler chain (same depth as delete)', async () => {
+    const app = Fastify();
+
+    const routes: Array<{ method: string | string[]; url: string; preHandler?: unknown[] }> = [];
+    app.addHook('onRoute', (routeOptions) => {
+      routes.push({
+        method: routeOptions.method,
+        url: routeOptions.url,
+        preHandler: routeOptions.preHandler as unknown[]
+      });
+    });
+
+    await registerReviewsRoutes(app);
+
+    const moderateRoute = routes.find(
+      (r) => r.url === '/api/v1/admin/reviews/:id/moderate' && r.method === 'PATCH'
+    );
+    const deleteRoute = routes.find(
+      (r) => r.url === '/api/v1/admin/reviews/:id' && r.method === 'DELETE'
+    );
+
+    expect(moderateRoute?.preHandler).toBeDefined();
+    expect(deleteRoute?.preHandler).toBeDefined();
+
+    const moderateHandlerCount = Array.isArray(moderateRoute?.preHandler)
+      ? moderateRoute.preHandler.length
+      : 0;
+    const deleteHandlerCount = Array.isArray(deleteRoute?.preHandler)
+      ? deleteRoute.preHandler.length
+      : 0;
+
+    expect(moderateHandlerCount).toBeGreaterThanOrEqual(3);
+    expect(moderateHandlerCount).toBe(deleteHandlerCount);
+
     await app.close();
   });
 });

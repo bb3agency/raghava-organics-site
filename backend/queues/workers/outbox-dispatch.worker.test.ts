@@ -99,4 +99,32 @@ describe('outbox-dispatch worker', () => {
       })
     );
   });
+
+  it('marks notification outbox message as FAILED after terminal publish error', async () => {
+    createOutboxDispatchWorker({} as never, workerDeps);
+    pending = [
+      {
+        id: 'outbox_terminal_1',
+        queueName: 'notifications',
+        jobName: 'send-primary',
+        payload: { template: 'OrderConfirmed', email: 'customer@example.com' },
+        jobId: 'job_terminal_1',
+        attemptCount: 4,
+        createdAt: new Date()
+      }
+    ];
+    queueAdd.mockRejectedValueOnce(new Error('redis publish failed'));
+
+    await processor?.({ name: 'publish-pending', data: {} });
+
+    expect(outboxUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'outbox_terminal_1' },
+        data: expect.objectContaining({
+          status: 'FAILED',
+          lastError: 'redis publish failed'
+        })
+      })
+    );
+  });
 });

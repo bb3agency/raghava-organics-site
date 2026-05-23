@@ -341,10 +341,20 @@ Admin can export all orders in a selected date range to a CSV file. Used for acc
 ### 6.5 Customer Management
 
 #### BR-CUS-01 — Customer List
-A searchable, paginated list of all registered customers showing name, phone, email, total orders placed, and total spend. Admin can search by name, phone, or email.
+A searchable, paginated list of all registered customers showing name, phone (masked — last 4 digits visible), email, total orders placed, and total spend. Admin can search by name, phone, or email.
 
 #### BR-CUS-02 — Customer Detail
-Full customer profile view showing contact information, saved addresses, and their complete order history with clickable order number links.
+Full customer profile view showing contact information (phone masked), saved addresses, their complete order history with clickable order number links, and ban status (`isBanned`, `bannedAt`, `bannedReason`). A dedicated "Customer Orders" tab loads paginated order history via `GET /admin/users/:id/orders` without re-fetching the full detail.
+
+#### BR-CUS-03 — Customer Account Moderation (Ban / Unban)
+Admin can ban a customer account by providing a mandatory reason. A banned customer can still be viewed in admin but cannot log in or place orders. Admin can unban a customer at any time, which clears the ban record. Banning another admin account is blocked. Banning an already-banned customer is blocked. Banning does **not** automatically cancel existing in-progress orders — those must be handled separately.
+
+API: `PATCH /admin/users/:id/ban` (ban, requires `users:write`) and `DELETE /admin/users/:id/ban` (unban, requires `users:write`).
+
+#### BR-CUS-04 — Admin Notes on Customer Accounts
+Admin can create free-text notes on any customer account for internal CRM use (e.g., "VIP — always expedite shipping", "Dispute history — double-check before refund"). Notes are tagged with the creating admin's ID and timestamp. Any admin with `users:write` can create or delete notes; any admin with `users:read` can list notes. Notes are never shown to the customer.
+
+API: `GET /admin/users/:id/notes` (`users:read`), `POST /admin/users/:id/notes` (`users:write`), `DELETE /admin/users/:id/notes/:noteId` (`users:write`).
 
 ---
 
@@ -584,6 +594,12 @@ Every notification attempt — success or failure — creates a `NotificationLog
 **BR-NOTIF-04 — Channel independence**
 Email, SMS, and WhatsApp channels can be independently enabled or disabled per deployment. Disabling one channel has no effect on the others.
 
+**BR-NOTIF-05 — Technical failure alerting**
+Every technical error path (`catch` block, `log.error`/`log.warn`/`log.fatal`) across the entire system emits a structured alert via `sendTechnicalFailureAlert()` to active ops identities (`opsUser.isActive`) and verified admin users (`User.role=ADMIN`, `User.isVerified=true`). Alerts include failure stage, domain, component, error message, and client metadata. Alert delivery is best-effort via email (Resend); transport failures are silently swallowed to prevent cascading failures. Eight failure stages categorise every alert: `QUEUE_ENQUEUE`, `OUTBOX_DISPATCH`, `WORKER_TERMINAL`, `WORKER_DELIVERY`, `CORE_LOGIC`, `ROUTE_HANDLER`, `WEBHOOK_PROCESSING`, `PROVIDER_RUNTIME`.
+
+**BR-NOTIF-06 — Per-template primary notification channel**
+Each notification template (`OrderConfirmed`, `PaymentFailed`, `OrderShipped`, `OutForDelivery`, `OrderDelivered`, `OrderCancelled`, `LowStockAlert`, `OtpVerification`, `NotificationDeliveryFailure`, `PasswordReset`, `AdminInviteSetup`, `OpsInviteSetup`, `OpsActionOtp`) has a configurable primary channel (`EMAIL`, `SMS`, or `WHATSAPP`) stored in `StoreSettings.primaryNotificationChannels`. Default for all templates is `EMAIL`. Merchant admin can update per-template channel via admin settings UI. When a notification is sent via `send-primary` job, the system uses only the configured primary channel — no fallback to alternate channels. If the primary channel fails (disabled, missing credentials, or provider error), the notification fails immediately and triggers a technical failure alert.
+
 ---
 
 ## 8. Feature Flags — What Can Be Toggled Per Client
@@ -635,13 +651,13 @@ These requirements govern how the system behaves — quality attributes every de
 - Rate limiting is applied at both the Nginx edge layer and the Fastify application layer. All admin routes include load-shed guards and dedicated rate limiting profiles.
 - All JSON Schema `type: 'object'` declarations enforce `additionalProperties: false` to prevent property injection attacks (only webhook header schemas intentionally allow additional properties).
 - `JWT_SECRET` and `JWT_REFRESH_SECRET` fail fast with explicit errors if missing or empty — no silent `undefined` propagation.
-- `ADMIN_MFA_ENCRYPTION_KEY` is treated as a security boundary independent of `JWT_REFRESH_SECRET`; production-like startup rejects missing/same-key configurations.
 - Fresh admin users are fail-closed by default: no `AdminPermissionGrant` rows means no effective privileged permissions until explicitly provisioned.
 - Admin permission changes are not retroactive on already-issued access tokens; immediate grant/revoke effect requires token revocation/logout.
 - Admin-triggered `REFUNDED` order status is asynchronous via queue worker confirmation; immediate API response may continue to show the pre-refund status until provider-confirmed completion.
-- **TOCTOU race condition prevention:** All critical state transitions (invite consumption, refresh token rotation, dual-approval, reconciliation, webhook inbox claiming, idempotency first-write, inventory stock update, low-stock alert dispatch, outbox event enqueue, coupon `usesCount` increment, admin MFA enable/disable) use atomic Compare-And-Swap patterns via Prisma `updateMany` with guard conditions. Concurrent identical requests result in exactly one successful state change; subsequent attempts receive `409 CONFLICT`. Worker replicas cannot produce duplicate low-stock alerts or duplicate outbox event publishes.
+- **TOCTOU race condition prevention:** All critical state transitions (invite consumption, refresh token rotation, reconciliation, webhook inbox claiming, idempotency first-write, inventory stock update, low-stock alert dispatch, outbox event enqueue, coupon `usesCount` increment, admin MFA enable/disable) use atomic Compare-And-Swap patterns via Prisma `updateMany` with guard conditions. Concurrent identical requests result in exactly one successful state change; subsequent attempts receive `409 CONFLICT`. Worker replicas cannot produce duplicate low-stock alerts or duplicate outbox event publishes.
 - **SQL injection prevention:** Repository-wide sweep eliminated all `prisma.$executeRawUnsafe` and `prisma.$queryRawUnsafe` usage. All raw SQL queries use parameterized tagged-template literals (`prisma.$executeRaw\`...\`` / `prisma.$queryRaw\`...\``) with Prisma's template variable interpolation. CI gate `security:sql-injection-guard` fails build if unsafe patterns are introduced.
 - **Audit chain tamper-evidence:** `OpsAuditLog` and `CouponAuditLog` hash chains are protected by Redis distributed locks during concurrent write operations, ensuring linear chain integrity even under concurrent ops mutations.
+- **Dual approval removed:** Ops load-shed mode changes are applied immediately via `POST /ops/load-shed` after OTP verification. There is no separate approval queue or second-operator confirm step.
 
 ### 9.4 Scalability
 

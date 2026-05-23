@@ -70,8 +70,8 @@ test('runAdminLayerDriftCheck returns no errors for minimal coherent workspace',
       export const ADMIN_ENDPOINT_POLICY_REGISTRY = [
         { method: 'GET', path: '/api/v1/admin/orders', permission: 'orders:read', layer: 'A' },
         { method: 'POST', path: '/api/v1/ops/load-shed', permission: 'ops:write', layer: 'C' },
-        { method: 'GET', path: '/api/v1/admin/queues', permission: 'queues:inspect', layer: 'C' },
-        { method: 'GET', path: '/api/v1/admin/queues/dlq/summary', permission: 'queues:inspect', layer: 'C' }
+        { method: 'GET', path: '/api/v1/ops/queues', permission: 'ops:read', layer: 'C' },
+        { method: 'GET', path: '/api/v1/ops/queues/dlq/summary', permission: 'ops:read', layer: 'C' }
       ];
     `,
     'utf8'
@@ -83,7 +83,7 @@ test('runAdminLayerDriftCheck returns no errors for minimal coherent workspace',
       export const ADMIN_CONTROL_POLICY_REGISTRY = {
         'orders:read': { permission: 'orders:read', layer: 'A', ownerRole: 'merchant' },
         'ops:write': { permission: 'ops:write', layer: 'C', ownerRole: 'developer' },
-        'queues:inspect': { permission: 'queues:inspect', layer: 'C', ownerRole: 'developer' }
+        'ops:read': { permission: 'ops:read', layer: 'C', ownerRole: 'developer' }
       };
     `,
     'utf8'

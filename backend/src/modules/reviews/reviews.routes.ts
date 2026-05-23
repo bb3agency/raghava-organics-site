@@ -4,8 +4,11 @@ import { getCurrentUser } from '@common/decorators/current-user';
 import { adminPermissionGuard } from '@common/guards/admin-permissions.guard';
 import { jwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import { rolesGuard } from '@common/guards/roles.guard';
+import { idempotencyOnSend, idempotencyPreHandler } from '@common/idempotency/idempotency';
 import { routeRateLimitProfiles } from '@common/rate-limit/rate-limit-policies';
+import { loadShedGuard } from '@common/reliability/load-shed.guard';
 import {
+  adminDeleteReviewSchema,
   adminListReviewsSchema,
   createReviewSchema,
   listMyReviewsSchema,
@@ -18,6 +21,10 @@ export async function registerReviewsRoutes(fastify: FastifyInstance): Promise<v
   const reviewsService = new ReviewsService(fastify);
   const adminGuard = [jwtAuthGuard, rolesGuard(Role.ADMIN)];
   const customerGuard = [jwtAuthGuard, rolesGuard(Role.CUSTOMER)];
+  fastify.addHook('onSend', async (request, reply, payload) => {
+    await idempotencyOnSend(request, reply, payload);
+    return payload;
+  });
 
   fastify.get(
     '/api/v1/reviews/product/:slug',
@@ -79,7 +86,7 @@ export async function registerReviewsRoutes(fastify: FastifyInstance): Promise<v
     '/api/v1/admin/reviews/:id/moderate',
     {
       schema: moderateReviewSchema,
-      preHandler: [...adminGuard, adminPermissionGuard('reviews:moderate')],
+      preHandler: [...adminGuard, adminPermissionGuard('reviews:moderate'), loadShedGuard, idempotencyPreHandler],
       config: {
         rateLimit: routeRateLimitProfiles.adminWrite
       }
@@ -87,6 +94,21 @@ export async function registerReviewsRoutes(fastify: FastifyInstance): Promise<v
     async (request) => {
       const params = request.params as { id: string };
       return reviewsService.adminModerateReview(params.id, request.body as never);
+    }
+  );
+
+  fastify.delete(
+    '/api/v1/admin/reviews/:id',
+    {
+      schema: adminDeleteReviewSchema,
+      preHandler: [...adminGuard, adminPermissionGuard('reviews:moderate'), loadShedGuard, idempotencyPreHandler],
+      config: {
+        rateLimit: routeRateLimitProfiles.adminWrite
+      }
+    },
+    async (request) => {
+      const params = request.params as { id: string };
+      return reviewsService.adminDeleteReview(params.id);
     }
   );
 }

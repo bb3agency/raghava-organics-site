@@ -9,6 +9,7 @@ import { ShippingProviderAdapter } from '@common/interfaces/shipping-provider.in
 import { NoopShippingAdapter } from '@modules/shipping/adapters/noop-shipping.adapter';
 import { featureFlags } from '@config/feature-flags';
 import { createShippingProvider } from '@modules/shipping/shipping-provider';
+import { sendTechnicalFailureAlert } from '@modules/notifications/notification-failure-alert';
 import { AddCartItemInput, ApplyCouponInput, UpdateCartItemInput } from './cart.types';
 
 const GUEST_CART_TTL_DAYS = 30;
@@ -919,6 +920,16 @@ export class CartService {
         await this.fastify.redis.expire(key, GUEST_COUPON_USAGE_TTL_SECONDS);
       }
     } catch (error) {
+      await sendTechnicalFailureAlert({
+        prisma: this.fastify.prisma,
+        template: 'GuestCouponUsage',
+        channel: 'UNKNOWN',
+        recipient: this.fingerprintIdentifier(sessionToken),
+        errorMessage: error instanceof Error ? error.message : 'Unknown guest coupon usage increment error',
+        failureStage: 'CORE_LOGIC',
+        domain: 'cart',
+        component: 'guest-coupon-usage'
+      });
       this.fastify.log.error(
         {
           couponId,
@@ -975,6 +986,18 @@ export class CartService {
         occurredAt: new Date().toISOString()
       }, `analytics:${eventType}:${sessionId}:${Date.now()}`);
     } catch (error) {
+      await sendTechnicalFailureAlert({
+        prisma: this.fastify.prisma,
+        template: eventType,
+        channel: 'UNKNOWN',
+        recipient: sessionId,
+        errorMessage: error instanceof Error ? error.message : 'Unknown analytics enqueue error',
+        failureStage: 'QUEUE_ENQUEUE',
+        domain: 'analytics',
+        component: 'cart-service',
+        queueName: 'analytics',
+        jobName: 'record-event'
+      });
       this.fastify.log.error(
         {
           eventType,

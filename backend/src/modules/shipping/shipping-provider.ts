@@ -28,8 +28,8 @@ class CircuitBreakerShippingAdapter implements ShippingProviderAdapter {
 
   constructor(
     private readonly delegate: ShippingProviderAdapter,
-    private readonly failureThreshold = Number(process.env.SHIPPING_CB_FAILURE_THRESHOLD ?? 5),
-    private readonly cooldownMs = Number(process.env.SHIPPING_CB_COOLDOWN_MS ?? 30_000)
+    private readonly failureThreshold = 5,
+    private readonly cooldownMs = 30_000
   ) {}
 
   private assertClosed(): void {
@@ -237,5 +237,7 @@ export function createShippingProvider(runtimeConfig: NodeJS.ProcessEnv = proces
   if (!runtime.adapter) {
     return null;
   }
-  return new CircuitBreakerShippingAdapter(runtime.adapter);
+  const failureThreshold = Number(runtimeConfig.SHIPPING_CB_FAILURE_THRESHOLD ?? 5);
+  const cooldownMs = Number(runtimeConfig.SHIPPING_CB_COOLDOWN_MS ?? 30_000);
+  return new CircuitBreakerShippingAdapter(runtime.adapter, failureThreshold, cooldownMs);
 }

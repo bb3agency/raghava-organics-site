@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+let failedHandler: ((job: unknown, error: Error) => void) | undefined;
+
 const state = {
   processor: undefined as undefined | ((job: { name: string; data: unknown }) => Promise<void>),
   notificationsAdd: vi.fn(),
@@ -34,6 +36,7 @@ const state = {
 
 function MockWorker(_name: string, processor: (job: { name: string; data: unknown }) => Promise<void>) {
   state.processor = processor;
+  return { on: (event: string, handler: (job: unknown, error: Error) => void) => { if (event === 'failed') failedHandler = handler; } };
 }
 
 function MockPrismaClient() {
@@ -57,7 +60,8 @@ describe('order-processing worker error and retry behavior', () => {
   type WorkerType = NonNullable<WorkerDeps['Worker']>;
   type PrismaType = NonNullable<WorkerDeps['PrismaClient']>;
   const mockQueue = { add: state.notificationsAdd } as unknown as QueueArg;
-  const workerDeps = { Worker: MockWorker as unknown as WorkerType, PrismaClient: MockPrismaClient as unknown as PrismaType };
+  const sendTechnicalFailureAlert = vi.fn().mockResolvedValue(undefined);
+  const workerDeps = { Worker: MockWorker as unknown as WorkerType, PrismaClient: MockPrismaClient as unknown as PrismaType, sendTechnicalFailureAlert };
   const boot = (invoiceStorageAdapterArg?: InvoiceStorageArg) =>
     createOrderProcessingWorker(
       mockConnection,
@@ -70,6 +74,8 @@ describe('order-processing worker error and retry behavior', () => {
     );
 
   beforeEach(() => {
+    failedHandler = undefined;
+    sendTechnicalFailureAlert.mockReset();
     state.processor = undefined;
     state.paymentFindFirst.mockReset();
     state.tx.payment.findFirst.mockReset();
@@ -240,7 +246,7 @@ describe('order-processing worker error and retry behavior', () => {
     expect(state.tx.inventory.updateMany).not.toHaveBeenCalled();
   });
 
-  it('enqueues payment failed email on failed payment webhook', async () => {
+  it('enqueues payment failed primary notification on failed payment webhook', async () => {
     boot();
     state.tx.payment.findFirst.mockResolvedValue({
       id: 'payment_1',
@@ -266,9 +272,10 @@ describe('order-processing worker error and retry behavior', () => {
     });
 
     expect(state.notificationsAdd).toHaveBeenCalledWith(
-      'send-email',
+      'send-primary',
       expect.objectContaining({
-        to: 'customer@example.com',
+        email: 'customer@example.com',
+        phone: '9999999999',
         template: 'PaymentFailed'
       })
     );
@@ -300,7 +307,7 @@ describe('order-processing worker error and retry behavior', () => {
     expect(state.tx.order.updateMany).not.toHaveBeenCalled();
   });
 
-  it('process-order-update enqueues invoice but skips OrderConfirmed email when user email is missing', async () => {
+  it('process-order-update enqueues invoice and uses send-primary for OrderConfirmed', async () => {
     boot();
     state.tx.order.findUnique.mockResolvedValue({
       id: 'order_1',
@@ -321,9 +328,14 @@ describe('order-processing worker error and retry behavior', () => {
       data: { orderId: 'order_1', toStatus: 'CONFIRMED', triggeredBy: 'PAYMENT_WEBHOOK', providerPaymentId: 'pay_1', providerOrderId: 'order_1' }
     });
 
-    expect(state.notificationsAdd).not.toHaveBeenCalledWith(
-      'send-email',
-      expect.objectContaining({ template: 'OrderConfirmed' })
+    expect(state.notificationsAdd).toHaveBeenCalledWith(
+      'send-primary',
+      expect.objectContaining({
+        email: null,
+        phone: '9999999999',
+        template: 'OrderConfirmed'
+      }),
+      expect.objectContaining({ jobId: 'notifications:primary:order_1:OrderConfirmed' })
     );
     expect(state.notificationsAdd).toHaveBeenCalledWith(
       'generate-invoice',
@@ -554,20 +566,35 @@ describe('order-processing worker error and retry behavior', () => {
     );
   });
 
-  it('throws in production when seller profile env vars are missing', async () => {
-    const originalNodeEnv = process.env.NODE_ENV;
-    const originalStoreLegalName = process.env.STORE_LEGAL_NAME;
-    const originalStoreSellerAddress = process.env.STORE_SELLER_ADDRESS;
-    const originalStoreSellerState = process.env.STORE_SELLER_STATE;
-    const originalStoreSellerGstin = process.env.STORE_SELLER_GSTIN;
-    const originalStoreSellerFssai = process.env.STORE_SELLER_FSSAI;
+  it('sends terminal failure alert when order-processing job exhausts all attempts', () => {
+    boot();
 
+    const terminalJob = { name: 'process-order-update', id: 'job_op1', opts: { attempts: 3 }, attemptsMade: 3 };
+    failedHandler?.(terminalJob, new Error('payment capture failed'));
+
+    expect(sendTechnicalFailureAlert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        queueName: 'order-processing',
+        jobName: 'process-order-update',
+        jobId: 'job_op1',
+        terminalFailure: true,
+        errorMessage: 'payment capture failed'
+      })
+    );
+  });
+
+  it('does NOT send alert when order-processing job still has remaining attempts', () => {
+    boot();
+
+    const retryJob = { name: 'process-order-update', id: 'job_op2', opts: { attempts: 3 }, attemptsMade: 1 };
+    failedHandler?.(retryJob, new Error('transient error'));
+
+    expect(sendTechnicalFailureAlert).not.toHaveBeenCalled();
+  });
+
+  it('throws in production when required DB-backed seller profile fields are missing', async () => {
+    const originalNodeEnv = process.env.NODE_ENV;
     process.env.NODE_ENV = 'production';
-    process.env.STORE_LEGAL_NAME = '';
-    process.env.STORE_SELLER_ADDRESS = '';
-    process.env.STORE_SELLER_STATE = '';
-    process.env.STORE_SELLER_GSTIN = '';
-    process.env.STORE_SELLER_FSSAI = '';
 
     const invoiceStorageAdapter = {
       uploadInvoicePdf: vi.fn().mockResolvedValue({
@@ -579,6 +606,9 @@ describe('order-processing worker error and retry behavior', () => {
 
     boot(invoiceStorageAdapter);
     state.tx.invoice.findUnique.mockResolvedValue(null);
+    // Simulate missing DB-backed StoreSettings by making delegate undefined or return empty values
+    // @ts-expect-error test double
+    state.tx.storeSettings = undefined;
 
     try {
       await expect(
@@ -586,14 +616,9 @@ describe('order-processing worker error and retry behavior', () => {
           name: 'generate-invoice',
           data: { orderId: 'order_1' }
         })
-      ).rejects.toThrow('Missing seller profile env vars for invoicing');
+      ).rejects.toThrow('Missing required DB-backed configuration for invoicing');
     } finally {
       process.env.NODE_ENV = originalNodeEnv;
-      process.env.STORE_LEGAL_NAME = originalStoreLegalName;
-      process.env.STORE_SELLER_ADDRESS = originalStoreSellerAddress;
-      process.env.STORE_SELLER_STATE = originalStoreSellerState;
-      process.env.STORE_SELLER_GSTIN = originalStoreSellerGstin;
-      process.env.STORE_SELLER_FSSAI = originalStoreSellerFssai;
     }
   });
 });

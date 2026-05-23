@@ -7,7 +7,7 @@ export async function registerHelmetPlugin(fastify: FastifyInstance): Promise<vo
       directives: {
         defaultSrc: ["'self'"],
         scriptSrc: ["'self'"],
-        styleSrc: ["'self'", "'unsafe-inline'"],
+        styleSrc: ["'self'"], // No 'unsafe-inline' — all styles must be from self origin
         imgSrc: ["'self'", 'data:']
       }
     },

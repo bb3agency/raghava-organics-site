@@ -1,0 +1,106 @@
+name: Deploy to VPS
+
+# Triggered automatically after Reliability CI completes on main.
+# Uses a self-hosted GitHub Actions runner installed on the client's Hetzner VPS.
+# The runner polls GitHub via outbound HTTPS — no inbound SSH connection required.
+#
+# To activate for a client repo:
+#   1. Install the runner agent on the VPS (see docs/CLIENT_VPS_SETUP_GUIDE.md §22)
+#   2. Set repository Variable:  VPS_DEPLOY_ENABLED=true
+#   3. Set repository Secret:    VPS_CLIENT_PATH=/var/www/<client-id>/backend
+#
+# To also enable automated frontend deploys (monorepo with Next.js frontend):
+#   4. Set repository Variable:  FRONTEND_DEPLOY_ENABLED=true
+#   5. Set repository Secret:    VPS_FRONTEND_PATH=/var/www/<client-id>/frontend
+#
+# Leave VPS_DEPLOY_ENABLED unset in the template repo — both jobs will be skipped.
+# Backend and frontend deploy independently — changing only CSS will not trigger
+# a Docker rebuild; changing only a Prisma schema will not restart the frontend.
+
+on:
+  workflow_run:
+    workflows: ["Reliability CI"]
+    types:
+      - completed
+    branches:
+      - main
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Job 1: Backend — Docker Compose build + container swap + migration
+  # ---------------------------------------------------------------------------
+  deploy-backend:
+    name: Deploy Backend to Hetzner VPS
+    # Runs on the self-hosted runner installed on the client's VPS.
+    # VPS_RUNNER_LABEL must match the --labels value used when registering the runner
+    # (e.g. 'greengrocer-vps'). This prevents cross-client misfires when multiple
+    # client runners share the same VPS. Falls back to 'self-hosted' for single-client setups.
+    runs-on: ${{ vars.VPS_RUNNER_LABEL || 'self-hosted' }}
+    # Only run when:
+    #   1. The CI workflow succeeded (not just completed)
+    #   2. VPS_DEPLOY_ENABLED variable is set to 'true' for this repo
+    if: |
+      github.event.workflow_run.conclusion == 'success' &&
+      vars.VPS_DEPLOY_ENABLED == 'true'
+
+    steps:
+      - name: Verify deploy variables are set
+        run: |
+          missing=()
+          [ -z "${{ secrets.VPS_CLIENT_PATH }}" ] && missing+=("VPS_CLIENT_PATH (secret)")
+          if [ ${#missing[@]} -ne 0 ]; then
+            echo "::error::Missing required secrets: ${missing[*]}"
+            echo "See docs/CLIENT_VPS_SETUP_GUIDE.md §22 for setup instructions."
+            exit 1
+          fi
+          if [ -z "${{ vars.VPS_RUNNER_LABEL }}" ]; then
+            echo "::warning::VPS_RUNNER_LABEL variable is not set. Using generic 'self-hosted' label."
+            echo "On a VPS hosting multiple clients, set VPS_RUNNER_LABEL to the client-specific"
+            echo "runner label (e.g. 'greengrocer-vps') to prevent cross-client deploy misfires."
+          fi
+
+      - name: Deploy backend locally via vps-deploy.sh
+        env:
+          VPS_CLIENT_PATH: ${{ secrets.VPS_CLIENT_PATH }}
+          COMMIT_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          bash "$VPS_CLIENT_PATH/scripts/vps-deploy.sh" "$VPS_CLIENT_PATH" "$COMMIT_SHA"
+
+  # ---------------------------------------------------------------------------
+  # Job 2: Frontend — Next.js build + PM2 zero-downtime reload
+  # Runs independently of the backend job — a CSS-only push will not trigger
+  # a Docker rebuild; a schema-only push will not restart the frontend.
+  # Change detection in vps-frontend-deploy.sh skips the build entirely if no
+  # frontend-relevant files changed since the last deployed SHA.
+  # ---------------------------------------------------------------------------
+  deploy-frontend:
+    name: Deploy Frontend to Hetzner VPS
+    runs-on: ${{ vars.VPS_RUNNER_LABEL || 'self-hosted' }}
+    # Gate: CI passed + VPS_DEPLOY_ENABLED + FRONTEND_DEPLOY_ENABLED
+    # API-only clients set only VPS_DEPLOY_ENABLED — this job stays dormant.
+    if: |
+      github.event.workflow_run.conclusion == 'success' &&
+      vars.VPS_DEPLOY_ENABLED == 'true' &&
+      vars.FRONTEND_DEPLOY_ENABLED == 'true'
+
+    steps:
+      - name: Verify frontend deploy variables are set
+        run: |
+          missing=()
+          [ -z "${{ secrets.VPS_FRONTEND_PATH }}" ] && missing+=("VPS_FRONTEND_PATH (secret)")
+          if [ ${#missing[@]} -ne 0 ]; then
+            echo "::error::Missing required secrets: ${missing[*]}"
+            echo "See docs/CLIENT_VPS_SETUP_GUIDE.md §22 for frontend setup instructions."
+            exit 1
+          fi
+
+      - name: Deploy frontend locally via vps-frontend-deploy.sh
+        env:
+          VPS_FRONTEND_PATH: ${{ secrets.VPS_FRONTEND_PATH }}
+          COMMIT_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          bash "$VPS_FRONTEND_PATH/scripts/vps-frontend-deploy.sh" "$VPS_FRONTEND_PATH" "$COMMIT_SHA"

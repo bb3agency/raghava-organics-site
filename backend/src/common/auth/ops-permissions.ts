@@ -1,10 +1,9 @@
-export type OpsPermissionValue = 'OPS_READ' | 'OPS_WRITE' | 'OPS_APPROVE';
+export type OpsPermissionValue = 'OPS_READ' | 'OPS_WRITE';
 
 export const OPS_PERMISSION_MAP = {
   'ops:read': 'OPS_READ',
-  'ops:write': 'OPS_WRITE',
-  'ops:approve': 'OPS_APPROVE'
-} as const satisfies Record<'ops:read' | 'ops:write' | 'ops:approve', OpsPermissionValue>;
+  'ops:write': 'OPS_WRITE'
+} as const satisfies Record<'ops:read' | 'ops:write', OpsPermissionValue>;
 
 export type OpsPermissionScope = keyof typeof OPS_PERMISSION_MAP;
 

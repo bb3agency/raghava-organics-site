@@ -6,7 +6,7 @@ import { getLoadShedMode } from '@common/reliability/load-shed.guard';
 import { routeRateLimitProfiles } from '@common/rate-limit/rate-limit-policies';
 import { opsAuthGuard } from '@common/guards/ops-auth.guard';
 import { opsPermissionGuard } from '@common/guards/ops-permissions.guard';
-import { OpsService } from './ops.service';
+import { OpsService, OPS_BROWSER_SESSION_COOKIE_NAME } from './ops.service';
 
 export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void> {
   const opsService = new OpsService(fastify);
@@ -79,14 +79,25 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
         }
       }
     },
-    async () => opsService.getConfigOverview()
+    async (request) => {
+      const opsUser = request.opsUser;
+      if (!opsUser) {
+        throw new AppError(ERROR_CODES.UNAUTHORISED, 'Ops authentication required', 401);
+      }
+      return opsService.getConfigOverview({
+        opsUserId: opsUser.id,
+        requestIp: request.ip,
+        requestPath: request.url,
+        method: request.method
+      });
+    }
   );
 
   fastify.post(
     '/api/v1/ops/config/validate',
     {
-      preHandler: [opsAuthGuard, opsPermissionGuard('ops:write')],
-      config: { rateLimit: routeRateLimitProfiles.opsCritical },
+      preHandler: [opsAuthGuard, opsPermissionGuard('ops:read')],
+      config: { rateLimit: routeRateLimitProfiles.opsRead },
       schema: {
         params: emptyObjectSchema,
         querystring: emptyObjectSchema,
@@ -98,7 +109,8 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
             domain: { type: 'string', enum: ['core', 'payments', 'shipping', 'notifications', 'opsSecurity'], maxLength: 24 },
             values: {
               type: 'object',
-              additionalProperties: true
+              additionalProperties: true,
+              maxProperties: 50
             }
           }
         },
@@ -234,9 +246,9 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
           required: ['domain', 'values', 'challengeId', 'otpCode'],
           properties: {
             domain: { type: 'string', enum: ['core', 'payments', 'shipping', 'notifications', 'opsSecurity'], maxLength: 24 },
-            values: { type: 'object', additionalProperties: true },
+            values: { type: 'object', additionalProperties: true, maxProperties: 50 },
             challengeId: { type: 'string', minLength: 1, maxLength: 80 },
-            otpCode: { type: 'string', minLength: 4, maxLength: 10 }
+            otpCode: { type: 'string', minLength: 6, maxLength: 6, pattern: '^[0-9]{6}$' }
           }
         },
         response: {
@@ -304,7 +316,11 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
           additionalProperties: false,
           required: ['action'],
           properties: {
-            action: { type: 'string', minLength: 4, maxLength: 120 }
+            action: {
+              type: 'string',
+              enum: ['config-save', 'load-shed-change', 'user-deactivate', 'system-restart'],
+              maxLength: 40
+            }
           }
         },
         response: {
@@ -351,7 +367,7 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
           required: ['challengeId', 'code'],
           properties: {
             challengeId: { type: 'string', minLength: 1, maxLength: 80 },
-            code: { type: 'string', minLength: 4, maxLength: 10 }
+            code: { type: 'string', minLength: 6, maxLength: 6, pattern: '^[0-9]{6}$' }
           }
         },
         response: {
@@ -387,7 +403,7 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
   fastify.post(
     '/api/v1/ops/invites',
     {
-      preHandler: [opsAuthGuard, opsPermissionGuard('ops:approve')],
+      preHandler: [opsAuthGuard, opsPermissionGuard('ops:write')],
       config: { rateLimit: routeRateLimitProfiles.opsCritical },
       schema: {
         params: emptyObjectSchema,
@@ -395,19 +411,20 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
         body: {
           type: 'object',
           additionalProperties: false,
-          required: ['email', 'name', 'permissions', 'ipAllowlist', 'setupBaseUrl'],
+          required: ['email', 'name', 'permissions', 'setupBaseUrl'],
           properties: {
-            email: { type: 'string', minLength: 3, maxLength: 160 },
+            email: { type: 'string', format: 'email', minLength: 3, maxLength: 160 },
             name: { type: 'string', minLength: 1, maxLength: 160 },
             permissions: {
               type: 'array',
               minItems: 1,
-              items: { type: 'string', enum: ['OPS_READ', 'OPS_WRITE', 'OPS_APPROVE'], maxLength: 20 }
+              items: { type: 'string', enum: ['OPS_READ', 'OPS_WRITE'], maxLength: 20 }
             },
             ipAllowlist: {
               type: 'array',
-              minItems: 1,
-              items: { type: 'string', minLength: 3, maxLength: 120 }
+              minItems: 0,
+              items: { type: 'string', minLength: 3, maxLength: 120 },
+              default: []
             },
             setupBaseUrl: { type: 'string', minLength: 8, maxLength: 300 }
           }
@@ -435,8 +452,8 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
       const body = request.body as {
         email: string;
         name: string;
-        permissions: Array<'OPS_READ' | 'OPS_WRITE' | 'OPS_APPROVE'>;
-        ipAllowlist: string[];
+        permissions: Array<'OPS_READ' | 'OPS_WRITE'>;
+        ipAllowlist?: string[];
         setupBaseUrl: string;
       };
       return opsService.createOpsInvite({
@@ -444,8 +461,125 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
         inviteEmail: body.email,
         inviteName: body.name,
         permissions: body.permissions,
-        ipAllowlist: body.ipAllowlist,
+        ipAllowlist: body.ipAllowlist ?? [],
         setupBaseUrl: body.setupBaseUrl,
+        requestIp: request.ip,
+        requestPath: request.url,
+        method: request.method
+      });
+    }
+  );
+
+  fastify.get(
+    '/api/v1/ops/invites',
+    {
+      preHandler: [opsAuthGuard, opsPermissionGuard('ops:read')],
+      config: { rateLimit: routeRateLimitProfiles.opsRead },
+      schema: {
+        params: emptyObjectSchema,
+        querystring: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            status: { type: 'string', enum: ['CREATED', 'EMAIL_SENT', 'CONSUMED', 'CANCELLED', 'EXPIRED_CLEANED'], maxLength: 24 },
+            page: { type: 'number', minimum: 1, maximum: 100000 },
+            limit: { type: 'number', minimum: 1, maximum: 100 }
+          }
+        },
+        response: {
+          200: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['items', 'page', 'limit', 'total'],
+            properties: {
+              items: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  additionalProperties: false,
+                  required: ['id', 'inviteEmail', 'inviteName', 'status', 'permissions', 'ipAllowlist', 'expiresAt', 'createdAt', 'createdByOpsUserId'],
+                  properties: {
+                    id: { type: 'string', maxLength: 80 },
+                    inviteEmail: { type: 'string', maxLength: 160 },
+                    inviteName: { type: 'string', maxLength: 160 },
+                    status: { type: 'string', maxLength: 24 },
+                    permissions: { type: 'array', items: { type: 'string', maxLength: 20 } },
+                    ipAllowlist: { type: 'array', items: { type: 'string', maxLength: 120 } },
+                    expiresAt: { type: 'string', maxLength: 40 },
+                    createdAt: { type: 'string', maxLength: 40 },
+                    createdByOpsUserId: { anyOf: [{ type: 'string', maxLength: 80 }, { type: 'null' }] }
+                  }
+                }
+              },
+              page: { type: 'number' },
+              limit: { type: 'number' },
+              total: { type: 'number' }
+            }
+          },
+          ...standardAdminErrorResponses
+        }
+      }
+    },
+    async (request) => {
+      const query = request.query as {
+        status?: 'CREATED' | 'EMAIL_SENT' | 'CONSUMED' | 'CANCELLED' | 'EXPIRED_CLEANED';
+        page?: number;
+        limit?: number;
+      };
+      return opsService.listOpsInvites(query);
+    }
+  );
+
+  fastify.post(
+    '/api/v1/ops/invites/:inviteId/revoke',
+    {
+      preHandler: [opsAuthGuard, opsPermissionGuard('ops:write')],
+      config: { rateLimit: routeRateLimitProfiles.opsCritical },
+      schema: {
+        params: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['inviteId'],
+          properties: {
+            inviteId: { type: 'string', minLength: 1, maxLength: 80 }
+          }
+        },
+        querystring: emptyObjectSchema,
+        body: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['challengeId', 'otpCode'],
+          properties: {
+            challengeId: { type: 'string', minLength: 1, maxLength: 80 },
+            otpCode: { type: 'string', minLength: 6, maxLength: 6, pattern: '^[0-9]{6}$' }
+          }
+        },
+        response: {
+          200: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['inviteId', 'revoked'],
+            properties: {
+              inviteId: { type: 'string', maxLength: 80 },
+              revoked: { type: 'boolean' }
+            }
+          },
+          ...standardAdminErrorResponses
+        }
+      }
+    },
+    async (request) => {
+      const opsUser = request.opsUser;
+      if (!opsUser) {
+        throw new AppError(ERROR_CODES.UNAUTHORISED, 'Ops authentication required', 401);
+      }
+      const params = request.params as { inviteId: string };
+      const body = request.body as { challengeId: string; otpCode: string };
+      return opsService.revokeOpsInvite({
+        inviteId: params.inviteId,
+        revokerOpsUserId: opsUser.id,
+        challengeId: body.challengeId,
+        otpCode: body.otpCode,
         requestIp: request.ip,
         requestPath: request.url,
         method: request.method
@@ -463,7 +597,7 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
         body: {
           type: 'object',
           additionalProperties: false,
-          required: ['token', 'name', 'phone'],
+          required: ['token', 'name'],
           properties: {
             token: { type: 'string', minLength: 10, maxLength: 500 },
             name: { type: 'string', minLength: 1, maxLength: 160 },
@@ -485,11 +619,11 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
       }
     },
     async (request) => {
-      const body = request.body as { token: string; name: string; phone: string };
+      const body = request.body as { token: string; name: string; phone?: string };
       return opsService.sendInviteSetupOtp({
         inviteToken: body.token,
         name: body.name,
-        phone: body.phone
+        ...(body.phone ? { phone: body.phone } : {})
       });
     }
   );
@@ -507,22 +641,19 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
           required: ['token', 'otp'],
           properties: {
             token: { type: 'string', minLength: 10, maxLength: 500 },
-            otp: { type: 'string', minLength: 6, maxLength: 6 }
+            otp: { type: 'string', minLength: 6, maxLength: 6, pattern: '^[0-9]{6}$' }
           }
         },
         response: {
           200: {
             type: 'object',
             additionalProperties: false,
-            required: ['opsUserId', 'email', 'name', 'keyId', 'apiKey', 'permissions', 'ipAllowlist'],
+            required: ['opsUserId', 'email', 'name', 'permissions'],
             properties: {
               opsUserId: { type: 'string', maxLength: 80 },
               email: { type: 'string', maxLength: 160 },
               name: { type: 'string', maxLength: 160 },
-              keyId: { type: 'string', maxLength: 120 },
-              apiKey: { type: 'string', maxLength: 200 },
-              permissions: { type: 'array', items: { type: 'string', maxLength: 20 } },
-              ipAllowlist: { type: 'array', items: { type: 'string', maxLength: 120 } }
+              permissions: { type: 'array', items: { type: 'string', maxLength: 20 } }
             }
           },
           ...standardAdminErrorResponses
@@ -544,7 +675,7 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
   fastify.post(
     '/api/v1/ops/invites/cleanup-expired',
     {
-      preHandler: [opsAuthGuard, opsPermissionGuard('ops:approve')],
+      preHandler: [opsAuthGuard, opsPermissionGuard('ops:write')],
       config: { rateLimit: routeRateLimitProfiles.opsCritical },
       schema: {
         params: emptyObjectSchema,
@@ -563,11 +694,218 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
         }
       }
     },
-    async (request) => opsService.cleanupExpiredInvites({
-      requestIp: request.ip,
-      requestPath: request.url,
-      method: request.method
-    })
+    async (request) => {
+      const opsUser = request.opsUser;
+      if (!opsUser) {
+        throw new AppError(ERROR_CODES.UNAUTHORISED, 'Ops authentication required', 401);
+      }
+      return opsService.cleanupExpiredInvites({
+        requestIp: request.ip,
+        requestPath: request.url,
+        method: request.method,
+        actorOpsUserId: opsUser.id
+      });
+    }
+  );
+
+  fastify.get(
+    '/api/v1/ops/users',
+    {
+      preHandler: [opsAuthGuard, opsPermissionGuard('ops:read')],
+      config: { rateLimit: routeRateLimitProfiles.opsRead },
+      schema: {
+        params: emptyObjectSchema,
+        querystring: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            isActive: { type: 'boolean' },
+            page: { type: 'number', minimum: 1, maximum: 100000 },
+            limit: { type: 'number', minimum: 1, maximum: 100 }
+          }
+        },
+        response: {
+          200: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['items', 'page', 'limit', 'total'],
+            properties: {
+              items: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  additionalProperties: false,
+                  required: ['id', 'email', 'name', 'permissions', 'mfaEnabled', 'isActive', 'ipAllowlist', 'lastLoginAt', 'createdAt'],
+                  properties: {
+                    id: { type: 'string', maxLength: 80 },
+                    email: { type: 'string', maxLength: 160 },
+                    name: { type: 'string', maxLength: 160 },
+                    permissions: { type: 'array', items: { type: 'string', maxLength: 32 } },
+                    mfaEnabled: { type: 'boolean' },
+                    isActive: { type: 'boolean' },
+                    ipAllowlist: { type: 'array', items: { type: 'string', maxLength: 120 } },
+                    lastLoginAt: { anyOf: [{ type: 'string', maxLength: 40 }, { type: 'null' }] },
+                    createdAt: { type: 'string', maxLength: 40 }
+                  }
+                }
+              },
+              page: { type: 'number' },
+              limit: { type: 'number' },
+              total: { type: 'number' }
+            }
+          },
+          ...standardAdminErrorResponses
+        }
+      }
+    },
+    async (request) => {
+      const query = request.query as { isActive?: boolean; page?: number; limit?: number };
+      return opsService.listOpsUsers(query);
+    }
+  );
+
+  fastify.get(
+    '/api/v1/ops/users/:opsUserId',
+    {
+      preHandler: [opsAuthGuard, opsPermissionGuard('ops:read')],
+      config: { rateLimit: routeRateLimitProfiles.opsRead },
+      schema: {
+        params: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['opsUserId'],
+          properties: {
+            opsUserId: { type: 'string', minLength: 1, maxLength: 80 }
+          }
+        },
+        querystring: emptyObjectSchema,
+        response: {
+          200: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['id', 'email', 'name', 'phone', 'permissions', 'mfaEnabled', 'isActive', 'ipAllowlist', 'lastLoginAt', 'createdAt'],
+            properties: {
+              id: { type: 'string', maxLength: 80 },
+              email: { type: 'string', maxLength: 160 },
+              name: { type: 'string', maxLength: 160 },
+              phone: { anyOf: [{ type: 'string', maxLength: 20 }, { type: 'null' }] },
+              permissions: { type: 'array', items: { type: 'string', maxLength: 32 } },
+              mfaEnabled: { type: 'boolean' },
+              isActive: { type: 'boolean' },
+              ipAllowlist: { type: 'array', items: { type: 'string', maxLength: 120 } },
+              lastLoginAt: { anyOf: [{ type: 'string', maxLength: 40 }, { type: 'null' }] },
+              createdAt: { type: 'string', maxLength: 40 }
+            }
+          },
+          ...standardAdminErrorResponses
+        }
+      }
+    },
+    async (request) => {
+      const params = request.params as { opsUserId: string };
+      return opsService.getOpsUserById(params.opsUserId);
+    }
+  );
+
+  fastify.post(
+    '/api/v1/ops/users/:opsUserId/deactivate',
+    {
+      preHandler: [opsAuthGuard, opsPermissionGuard('ops:write')],
+      config: { rateLimit: routeRateLimitProfiles.opsCritical },
+      schema: {
+        params: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['opsUserId'],
+          properties: {
+            opsUserId: { type: 'string', minLength: 1, maxLength: 80 }
+          }
+        },
+        querystring: emptyObjectSchema,
+        body: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['reason', 'challengeId', 'otpCode'],
+          properties: {
+            reason: { type: 'string', minLength: 5, maxLength: 500 },
+            challengeId: { type: 'string', minLength: 1, maxLength: 80 },
+            otpCode: { type: 'string', minLength: 6, maxLength: 6, pattern: '^[0-9]{6}$' }
+          }
+        },
+        response: {
+          200: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['opsUserId', 'deactivated'],
+            properties: {
+              opsUserId: { type: 'string', maxLength: 80 },
+              deactivated: { type: 'boolean' }
+            }
+          },
+          ...standardAdminErrorResponses
+        }
+      }
+    },
+    async (request) => {
+      const opsUser = request.opsUser;
+      if (!opsUser) {
+        throw new AppError(ERROR_CODES.UNAUTHORISED, 'Ops authentication required', 401);
+      }
+      const params = request.params as { opsUserId: string };
+      const body = request.body as { reason: string; challengeId: string; otpCode: string };
+      return opsService.deactivateOpsUser({
+        targetOpsUserId: params.opsUserId,
+        requestorOpsUserId: opsUser.id,
+        reason: body.reason,
+        challengeId: body.challengeId,
+        otpCode: body.otpCode,
+        requestIp: request.ip,
+        requestPath: request.url,
+        method: request.method
+      });
+    }
+  );
+
+  fastify.get(
+    '/api/v1/ops/otp/pending',
+    {
+      preHandler: [opsAuthGuard, opsPermissionGuard('ops:read')],
+      config: { rateLimit: routeRateLimitProfiles.opsRead },
+      schema: {
+        params: emptyObjectSchema,
+        querystring: emptyObjectSchema,
+        response: {
+          200: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['items'],
+            properties: {
+              items: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  additionalProperties: false,
+                  required: ['id', 'action', 'expiresAt'],
+                  properties: {
+                    id: { type: 'string', maxLength: 80 },
+                    action: { type: 'string', maxLength: 120 },
+                    expiresAt: { type: 'string', maxLength: 40 }
+                  }
+                }
+              }
+            }
+          },
+          ...standardAdminErrorResponses
+        }
+      }
+    },
+    async (request) => {
+      const opsUser = request.opsUser;
+      if (!opsUser) {
+        throw new AppError(ERROR_CODES.UNAUTHORISED, 'Ops authentication required', 401);
+      }
+      return opsService.listPendingOtpChallenges(opsUser.id);
+    }
   );
 
   fastify.get(
@@ -644,202 +982,41 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
         body: {
           type: 'object',
           additionalProperties: false,
-          required: ['mode', 'reason'],
+          required: ['mode', 'reason', 'challengeId', 'otpCode'],
           properties: {
             mode: { type: 'string', enum: ['normal', 'reduced', 'emergency'], maxLength: 20 },
-            reason: { type: 'string', minLength: 10, maxLength: 500 }
+            reason: { type: 'string', minLength: 10, maxLength: 500 },
+            challengeId: { type: 'string', minLength: 1, maxLength: 80 },
+            otpCode: { type: 'string', minLength: 6, maxLength: 6, pattern: '^[0-9]{6}$' }
           }
         },
         response: {
-          202: {
+          200: {
             type: 'object',
             additionalProperties: false,
-            required: ['requestId', 'status', 'expiresAt'],
+            required: ['mode', 'updated'],
             properties: {
-              requestId: { type: 'string', maxLength: 80 },
-              status: { type: 'string', enum: ['PENDING_APPROVAL'], maxLength: 40 },
-              expiresAt: { type: 'string', maxLength: 40 }
+              mode: { type: 'string', enum: ['normal', 'reduced', 'emergency'], maxLength: 20 },
+              updated: { type: 'boolean' }
             }
           },
           ...standardAdminErrorResponses
         }
       }
     },
-    async (request, reply) => {
+    async (request) => {
       const opsUser = request.opsUser;
       if (!opsUser) {
         throw new AppError(ERROR_CODES.UNAUTHORISED, 'Ops authentication required', 401);
       }
-      const body = request.body as { mode: 'normal' | 'reduced' | 'emergency'; reason: string };
-      const result = await opsService.requestLoadShedChange({
+      const body = request.body as { mode: 'normal' | 'reduced' | 'emergency'; reason: string; challengeId: string; otpCode: string };
+      return opsService.setLoadShedModeDirect({
+        request,
         requesterId: opsUser.id,
         mode: body.mode,
         reason: body.reason,
-        requestIp: request.ip,
-        requestPath: request.url,
-        method: request.method
-      });
-      reply.code(202);
-      return result;
-    }
-  );
-
-  fastify.post(
-    '/api/v1/ops/approvals/:requestId/confirm',
-    {
-      preHandler: [opsAuthGuard, opsPermissionGuard('ops:approve')],
-      config: { rateLimit: routeRateLimitProfiles.opsCritical },
-      schema: {
-        params: {
-          type: 'object',
-          additionalProperties: false,
-          required: ['requestId'],
-          properties: {
-            requestId: { type: 'string', minLength: 1, maxLength: 80 }
-          }
-        },
-        querystring: emptyObjectSchema,
-        body: emptyObjectSchema,
-        response: {
-          200: {
-            type: 'object',
-            additionalProperties: false,
-            required: ['mode', 'updated', 'requestId'],
-            properties: {
-              mode: { type: 'string', enum: ['normal', 'reduced', 'emergency'], maxLength: 20 },
-              updated: { type: 'boolean' },
-              requestId: { type: 'string', maxLength: 80 }
-            }
-          },
-          ...standardAdminErrorResponses
-        }
-      }
-    },
-    async (request) => {
-      const opsUser = request.opsUser;
-      if (!opsUser) {
-        throw new AppError(ERROR_CODES.UNAUTHORISED, 'Ops authentication required', 401);
-      }
-      const params = request.params as { requestId: string };
-      return opsService.confirmLoadShedChange({
-        request,
-        requestId: params.requestId,
-        confirmerId: opsUser.id,
-        requestIp: request.ip,
-        requestPath: request.url,
-        method: request.method
-      });
-    }
-  );
-
-  fastify.get(
-    '/api/v1/ops/approvals',
-    {
-      preHandler: [opsAuthGuard, opsPermissionGuard('ops:read')],
-      config: { rateLimit: routeRateLimitProfiles.opsRead },
-      schema: {
-        params: emptyObjectSchema,
-        querystring: {
-          type: 'object',
-          additionalProperties: false,
-          properties: {
-            status: { type: 'string', enum: ['PENDING_APPROVAL', 'APPROVED', 'REJECTED', 'EXECUTED', 'FAILED'], maxLength: 32 },
-            page: { type: 'number', minimum: 1, maximum: 100000 },
-            limit: { type: 'number', minimum: 1, maximum: 100 }
-          }
-        },
-        response: {
-          200: {
-            type: 'object',
-            additionalProperties: false,
-            required: ['items', 'page', 'limit', 'total'],
-            properties: {
-              items: {
-                type: 'array',
-                items: {
-                  type: 'object',
-                  additionalProperties: false,
-                  required: ['requestId', 'requesterId', 'status', 'payload', 'expiresAt', 'createdAt', 'confirmerId', 'confirmedAt'],
-                  properties: {
-                    requestId: { type: 'string', maxLength: 80 },
-                    requesterId: { type: 'string', maxLength: 80 },
-                    status: { type: 'string', maxLength: 32 },
-                    payload: { type: 'object' },
-                    expiresAt: { type: 'string', maxLength: 40 },
-                    createdAt: { type: 'string', maxLength: 40 },
-                    confirmerId: { anyOf: [{ type: 'string', maxLength: 80 }, { type: 'null' }] },
-                    confirmedAt: { anyOf: [{ type: 'string', maxLength: 40 }, { type: 'null' }] }
-                  }
-                }
-              },
-              page: { type: 'number' },
-              limit: { type: 'number' },
-              total: { type: 'number' }
-            }
-          },
-          ...standardAdminErrorResponses
-        }
-      }
-    },
-    async (request) => {
-      const query = request.query as {
-        status?: 'PENDING_APPROVAL' | 'APPROVED' | 'REJECTED' | 'EXECUTED' | 'FAILED';
-        page?: number;
-        limit?: number;
-      };
-      return opsService.listApprovalRequests(query);
-    }
-  );
-
-  fastify.post(
-    '/api/v1/ops/approvals/:requestId/reject',
-    {
-      preHandler: [opsAuthGuard, opsPermissionGuard('ops:approve')],
-      config: { rateLimit: routeRateLimitProfiles.opsCritical },
-      schema: {
-        params: {
-          type: 'object',
-          additionalProperties: false,
-          required: ['requestId'],
-          properties: {
-            requestId: { type: 'string', minLength: 1, maxLength: 80 }
-          }
-        },
-        querystring: emptyObjectSchema,
-        body: {
-          type: 'object',
-          additionalProperties: false,
-          required: ['reason'],
-          properties: {
-            reason: { type: 'string', minLength: 10, maxLength: 500 }
-          }
-        },
-        response: {
-          200: {
-            type: 'object',
-            additionalProperties: false,
-            required: ['requestId', 'status', 'rejected'],
-            properties: {
-              requestId: { type: 'string', maxLength: 80 },
-              status: { type: 'string', enum: ['REJECTED'], maxLength: 32 },
-              rejected: { type: 'boolean' }
-            }
-          },
-          ...standardAdminErrorResponses
-        }
-      }
-    },
-    async (request) => {
-      const opsUser = request.opsUser;
-      if (!opsUser) {
-        throw new AppError(ERROR_CODES.UNAUTHORISED, 'Ops authentication required', 401);
-      }
-      const params = request.params as { requestId: string };
-      const body = request.body as { reason: string };
-      return opsService.rejectLoadShedChange({
-        requestId: params.requestId,
-        rejectorId: opsUser.id,
-        reason: body.reason,
+        challengeId: body.challengeId,
+        otpCode: body.otpCode,
         requestIp: request.ip,
         requestPath: request.url,
         method: request.method
@@ -858,7 +1035,9 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
           type: 'object',
           additionalProperties: false,
           properties: {
-            actionStatus: { type: 'string', enum: ['PENDING_APPROVAL', 'APPROVED', 'REJECTED', 'EXECUTED', 'FAILED'], maxLength: 32 },
+            actionStatus: { type: 'string', enum: ['EXECUTED', 'FAILED'], maxLength: 32 },
+            actionType: { type: 'string', maxLength: 64 },
+            opsUserId: { type: 'string', maxLength: 80 },
             page: { type: 'number', minimum: 1, maximum: 100000 },
             limit: { type: 'number', minimum: 1, maximum: 100 }
           }
@@ -874,10 +1053,11 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
                 items: {
                   type: 'object',
                   additionalProperties: false,
-                  required: ['id', 'requestId', 'actionStatus', 'requestPath', 'method', 'summary', 'createdAt'],
+                  required: ['id', 'requestId', 'actionType', 'actionStatus', 'requestPath', 'method', 'summary', 'createdAt'],
                   properties: {
                     id: { type: 'string', maxLength: 80 },
                     requestId: { type: 'string', maxLength: 80 },
+                    actionType: { type: 'string', maxLength: 64 },
                     actionStatus: { type: 'string', maxLength: 32 },
                     requestPath: { type: 'string', maxLength: 300 },
                     method: { type: 'string', maxLength: 16 },
@@ -897,11 +1077,223 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
     },
     async (request) => {
       const query = request.query as {
-        actionStatus?: 'PENDING_APPROVAL' | 'APPROVED' | 'REJECTED' | 'EXECUTED' | 'FAILED';
+        actionStatus?: 'EXECUTED' | 'FAILED';
+        actionType?: string;
+        opsUserId?: string;
         page?: number;
         limit?: number;
       };
       return opsService.listAuditLogs(query);
+    }
+  );
+
+  // ── System restart ────────────────────────────────────────────────────────
+
+  fastify.post(
+    '/api/v1/ops/system/restart',
+    {
+      preHandler: [opsAuthGuard, opsPermissionGuard('ops:write')],
+      config: { rateLimit: routeRateLimitProfiles.opsCritical },
+      schema: {
+        params: emptyObjectSchema,
+        querystring: emptyObjectSchema,
+        body: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['delayMinutes', 'challengeId', 'otpCode'],
+          properties: {
+            delayMinutes: { type: 'number', minimum: 0, maximum: 1440 },
+            challengeId: { type: 'string', minLength: 1, maxLength: 80 },
+            otpCode: { type: 'string', minLength: 6, maxLength: 6, pattern: '^[0-9]{6}$' }
+          }
+        },
+        response: {
+          200: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['jobId', 'scheduledFor'],
+            properties: {
+              jobId: { type: 'string', maxLength: 80 },
+              scheduledFor: { type: 'string', maxLength: 40 }
+            }
+          },
+          ...standardAdminErrorResponses
+        }
+      }
+    },
+    async (request) => {
+      const opsUser = request.opsUser;
+      if (!opsUser) {
+        throw new AppError(ERROR_CODES.UNAUTHORISED, 'Ops authentication required', 401);
+      }
+      const body = request.body as { delayMinutes: number; challengeId: string; otpCode: string };
+      return opsService.scheduleRestart({
+        opsUserId: opsUser.id,
+        delayMinutes: body.delayMinutes,
+        challengeId: body.challengeId,
+        otpCode: body.otpCode,
+        requestIp: request.ip,
+        requestPath: request.url,
+        method: request.method
+      });
+    }
+  );
+
+  // ── Browser login flow (public — no opsAuthGuard) ─────────────────────────
+
+  fastify.post(
+    '/api/v1/ops/auth/login/request-otp',
+    {
+      config: { rateLimit: routeRateLimitProfiles.authSensitive },
+      schema: {
+        params: emptyObjectSchema,
+        querystring: emptyObjectSchema,
+        body: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['email'],
+          properties: {
+            email: { type: 'string', format: 'email', maxLength: 254 }
+          }
+        },
+        response: {
+          200: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['message'],
+            properties: {
+              message: { type: 'string', maxLength: 200 }
+            }
+          },
+          ...standardAdminErrorResponses
+        }
+      }
+    },
+    async (request) => {
+      const { email } = request.body as { email: string };
+      return opsService.requestLoginOtp({ email, requestIp: request.ip });
+    }
+  );
+
+  fastify.post(
+    '/api/v1/ops/auth/login/verify-otp',
+    {
+      config: { rateLimit: routeRateLimitProfiles.authSensitive },
+      schema: {
+        params: emptyObjectSchema,
+        querystring: emptyObjectSchema,
+        body: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['email', 'otp'],
+          properties: {
+            email: { type: 'string', format: 'email', maxLength: 254 },
+            otp: { type: 'string', minLength: 6, maxLength: 6, pattern: '^[0-9]{6}$' }
+          }
+        },
+        response: {
+          200: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['opsUserId', 'name', 'email', 'permissions', 'expiresAt'],
+            properties: {
+              opsUserId: { type: 'string', maxLength: 80 },
+              name: { type: 'string', maxLength: 120 },
+              email: { type: 'string', maxLength: 254 },
+              permissions: { type: 'array', items: { type: 'string', maxLength: 32 } },
+              expiresAt: { type: 'string', maxLength: 40 }
+            }
+          },
+          ...standardAdminErrorResponses
+        }
+      }
+    },
+    async (request, reply) => {
+      const { email, otp } = request.body as { email: string; otp: string };
+      const result = await opsService.verifyLoginOtp({
+        email,
+        otp,
+        requestIp: request.ip,
+        requestPath: request.url,
+        method: request.method
+      });
+
+      const nodeEnv = (process.env.NODE_ENV ?? 'development').toLowerCase();
+      const isProduction = nodeEnv !== 'development' && nodeEnv !== 'test';
+
+      // Session cookie — no maxAge/expires so it is destroyed when the browser
+      // session ends (tab/window close). The server-side Redis TTL
+      // (OPS_BROWSER_SESSION_TTL_SECONDS) still enforces the absolute time limit.
+      void reply.setCookie(OPS_BROWSER_SESSION_COOKIE_NAME, result.sessionToken, {
+        httpOnly: true,
+        secure: isProduction,
+        sameSite: 'strict',
+        path: '/api/v1/ops'
+      });
+
+      return {
+        opsUserId: result.opsUserId,
+        name: result.name,
+        email: result.email,
+        permissions: result.permissions,
+        expiresAt: result.expiresAt
+      };
+    }
+  );
+
+  fastify.post(
+    '/api/v1/ops/auth/logout',
+    {
+      preHandler: [opsAuthGuard, opsPermissionGuard('ops:read')],
+      config: { rateLimit: routeRateLimitProfiles.opsRead },
+      schema: {
+        params: emptyObjectSchema,
+        querystring: emptyObjectSchema,
+        body: emptyObjectSchema,
+        response: {
+          200: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['loggedOut'],
+            properties: {
+              loggedOut: { type: 'boolean' }
+            }
+          },
+          ...standardAdminErrorResponses
+        }
+      }
+    },
+    async (request, reply) => {
+      const opsUser = request.opsUser;
+      if (!opsUser) {
+        throw new AppError(ERROR_CODES.UNAUTHORISED, 'Ops authentication required', 401);
+      }
+
+      const rawCookies = request.headers.cookie ?? '';
+      const sessionToken = rawCookies
+        .split(';')
+        .map((p) => p.trim())
+        .find((p) => p.startsWith(`${OPS_BROWSER_SESSION_COOKIE_NAME}=`))
+        ?.replace(`${OPS_BROWSER_SESSION_COOKIE_NAME}=`, '')
+        .trim();
+
+      if (sessionToken) {
+        await opsService.logoutBrowserSession(
+          sessionToken,
+          request.ip,
+          request.url,
+          request.method,
+          opsUser.id
+        );
+      }
+
+      void reply.clearCookie(OPS_BROWSER_SESSION_COOKIE_NAME, {
+        path: '/api/v1/ops',
+        httpOnly: true,
+        sameSite: 'strict'
+      });
+
+      return { loggedOut: true };
     }
   );
 }

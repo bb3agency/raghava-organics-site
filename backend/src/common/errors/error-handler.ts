@@ -3,6 +3,7 @@ import { AppError } from './app-error';
 import { ERROR_CODES } from './error-codes';
 import { recordCheckoutPath } from '@common/observability/metrics';
 import { redactSensitiveData } from '@common/security/redaction';
+import { sendTechnicalFailureAlert } from '@modules/notifications/notification-failure-alert';
 
 type ValidationError = FastifyError & {
   validation?: unknown;
@@ -57,10 +58,43 @@ function normalizedValidationFields(validation: unknown): Array<{ field: string;
 
 export async function registerGlobalErrorHandler(fastify: FastifyInstance): Promise<void> {
   const verboseValidationErrors = process.env.ENABLE_VERBOSE_VALIDATION_ERRORS?.trim().toLowerCase() === 'true';
+
+  const dispatchTechnicalFailureAlert = (args: {
+    errorMessage: string;
+    statusCode: number;
+    request: FastifyRequest;
+    component: string;
+    terminalFailure?: boolean;
+  }): void => {
+    const routePath = typeof args.request.routeOptions.url === 'string' ? args.request.routeOptions.url : args.request.url;
+    void sendTechnicalFailureAlert({
+      prisma: fastify.prisma,
+      template: 'RouteHandlerFailure',
+      channel: 'UNKNOWN',
+      recipient: 'system-route',
+      errorMessage: args.errorMessage,
+      failureStage: 'ROUTE_HANDLER',
+      domain: 'api',
+      component: args.component,
+      route: routePath,
+      method: args.request.method,
+      statusCode: args.statusCode,
+      terminalFailure: args.terminalFailure ?? false
+    });
+  };
+
   fastify.setErrorHandler(
     (error: ValidationError, request: FastifyRequest, reply: FastifyReply): void => {
       if (error instanceof AppError) {
         maybeTrackCheckoutFailure(request);
+        if (error.statusCode >= 500) {
+          dispatchTechnicalFailureAlert({
+            errorMessage: error.message,
+            statusCode: error.statusCode,
+            request,
+            component: 'app-error-handler'
+          });
+        }
         if (
           error.statusCode === 429 &&
           error.details &&
@@ -144,6 +178,14 @@ export async function registerGlobalErrorHandler(fastify: FastifyInstance): Prom
         },
         'Unhandled application error'
       );
+
+      dispatchTechnicalFailureAlert({
+        errorMessage: error.message,
+        statusCode: 500,
+        request,
+        component: 'unhandled-error-handler',
+        terminalFailure: true
+      });
 
       reply.status(500).send({
         success: false,

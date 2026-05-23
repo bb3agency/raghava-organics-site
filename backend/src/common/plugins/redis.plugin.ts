@@ -1,6 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import Redis from 'ioredis';
 import { redisConfig } from '@config/redis.config';
+import { sendTechnicalFailureAlert } from '@modules/notifications/notification-failure-alert';
 
 type RedisInstance = InstanceType<typeof Redis>;
 
@@ -38,6 +39,16 @@ export async function registerRedisPlugin(fastify: FastifyInstance, deps: RedisP
   redis.on('error', (err: unknown) => {
     const message = err instanceof Error ? err.message : String(err);
     fastify.log.error({ err: message }, 'Redis client error');
+    void sendTechnicalFailureAlert({
+      prisma: fastify.prisma,
+      template: 'RedisClientError',
+      channel: 'UNKNOWN',
+      recipient: 'redis-runtime',
+      errorMessage: message,
+      failureStage: 'CORE_LOGIC',
+      domain: 'infrastructure',
+      component: 'redis-plugin'
+    });
   });
 
   // Wait for Redis to be ready before proceeding — prevents command timeouts

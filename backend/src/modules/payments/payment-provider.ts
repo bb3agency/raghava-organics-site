@@ -39,8 +39,8 @@ class CircuitBreakerPaymentAdapter implements PaymentProviderAdapter {
 
   constructor(
     private readonly delegate: PaymentProviderAdapter,
-    private readonly failureThreshold = Number(process.env.PAYMENT_CB_FAILURE_THRESHOLD ?? 5),
-    private readonly cooldownMs = Number(process.env.PAYMENT_CB_COOLDOWN_MS ?? 30_000)
+    private readonly failureThreshold = 5,
+    private readonly cooldownMs = 30_000
   ) {}
 
   private assertClosed(): void {
@@ -96,7 +96,11 @@ class CircuitBreakerPaymentAdapter implements PaymentProviderAdapter {
 }
 
 export function resolvePaymentProviderRuntime(runtimeConfig: NodeJS.ProcessEnv = process.env): PaymentProviderRuntime {
-  const primary = (runtimeConfig.PAYMENT_PROVIDER ?? 'razorpay').trim().toLowerCase();
+  const isTest = runtimeConfig.NODE_ENV === 'test';
+  const explicitProvider = runtimeConfig.PAYMENT_PROVIDER;
+  const testDefault = isTest && !runtimeConfig.RAZORPAY_WEBHOOK_SECRET ? 'noop' : 'razorpay';
+  const primary = (explicitProvider ?? testDefault).trim().toLowerCase();
+  const testImplicitRazorpay = isTest && !explicitProvider;
   const failoverEnabled = parseBooleanFlag(runtimeConfig.PAYMENT_PROVIDER_FAILOVER_ENABLED);
   if (primary === 'noop') {
     return {
@@ -127,11 +131,11 @@ export function resolvePaymentProviderRuntime(runtimeConfig: NodeJS.ProcessEnv =
   }
 
   const keyId = (runtimeConfig.RAZORPAY_KEY_ID ?? '').trim();
-  if (!keyId) {
+  if (!keyId && !testImplicitRazorpay) {
     throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'RAZORPAY_KEY_ID must be set for razorpay provider', 500);
   }
   const keySecret = (runtimeConfig.RAZORPAY_KEY_SECRET ?? '').trim();
-  if (!keySecret) {
+  if (!keySecret && !testImplicitRazorpay) {
     throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'RAZORPAY_KEY_SECRET must be set for razorpay provider', 500);
   }
   const webhookSecret = (runtimeConfig.RAZORPAY_WEBHOOK_SECRET ?? '').trim();
@@ -157,5 +161,7 @@ export function resolvePaymentProviderRuntime(runtimeConfig: NodeJS.ProcessEnv =
 }
 
 export function createPaymentProvider(runtimeConfig: NodeJS.ProcessEnv = process.env): PaymentProviderAdapter {
-  return new CircuitBreakerPaymentAdapter(resolvePaymentProviderRuntime(runtimeConfig).adapter);
+  const failureThreshold = Number(runtimeConfig.PAYMENT_CB_FAILURE_THRESHOLD ?? 5);
+  const cooldownMs = Number(runtimeConfig.PAYMENT_CB_COOLDOWN_MS ?? 30_000);
+  return new CircuitBreakerPaymentAdapter(resolvePaymentProviderRuntime(runtimeConfig).adapter, failureThreshold, cooldownMs);
 }

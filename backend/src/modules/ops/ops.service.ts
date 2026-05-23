@@ -1,10 +1,10 @@
 import crypto from 'crypto';
-import { hash as bcryptHash } from 'bcryptjs';
 import { FastifyInstance, FastifyRequest } from 'fastify';
 import { AppError } from '@common/errors/app-error';
 import { ERROR_CODES } from '@common/errors/error-codes';
-import { setLoadShedMode } from '@common/reliability/load-shed.guard';
+import { setLoadShedMode, setLoadShedModeViaRedis } from '@common/reliability/load-shed.guard';
 import { decryptOpsConfigValue, encryptOpsConfigValue, maskSecretValue, resolveOpsEncryptionKeyVersion } from '@common/security/ops-config-crypto';
+import { sendNotificationFailureAlert, sendTechnicalFailureAlert } from '@modules/notifications/notification-failure-alert';
 import {
   computeRequiredOpsConfigKeys,
   findMissingStrictOpsConfigKeys,
@@ -28,11 +28,15 @@ type OpsActionTypeValue =
   | 'INVITE_CREATED'
   | 'INVITE_CONSUMED'
   | 'INVITE_EXPIRED_CLEANED'
+  | 'INVITE_REVOKED'
   | 'OTP_CHALLENGE_REQUESTED'
   | 'OTP_CHALLENGE_VERIFIED'
-  | 'OTP_CHALLENGE_FAILED';
+  | 'OTP_CHALLENGE_FAILED'
+  | 'USER_DEACTIVATED'
+  | 'OPS_USER_LOGGED_IN'
+  | 'OPS_USER_LOGGED_OUT';
 
-type OpsActionStatusValue = 'PENDING_APPROVAL' | 'APPROVED' | 'REJECTED' | 'EXECUTED' | 'FAILED';
+type OpsActionStatusValue = 'EXECUTED' | 'FAILED';
 
 type OpsConfigValidationInputValue = string | number | boolean | null | undefined;
 
@@ -55,24 +59,26 @@ const OPS_OTP_MAX_ATTEMPTS = 3;
 const OPS_INVITE_SETUP_OTP_TTL_SECONDS = 5 * 60;
 const OPS_INVITE_SETUP_OTP_MAX_ATTEMPTS = 3;
 
-type OpsOtpChallengeStatus = 'PENDING' | 'VERIFIED' | 'EXPIRED' | 'FAILED';
+function getLoginOtpTtlSeconds(): number {
+  const raw = Number(process.env.OPS_LOGIN_OTP_TTL_SECONDS ?? 300);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 300;
+}
 
-type OpsDualApprovalRecord = {
-  id: string;
-  requestId: string;
-  requesterId: string;
-  status: OpsActionStatusValue;
-  payload: unknown;
-  expiresAt: Date;
-  createdAt: Date;
-  updatedAt: Date;
-  confirmerId?: string | null;
-  confirmedAt?: Date | null;
-};
+function getBrowserSessionTtlSeconds(): number {
+  const raw = Number(process.env.OPS_BROWSER_SESSION_TTL_SECONDS ?? 3600);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 3600;
+}
+
+const OPS_LOGIN_OTP_MAX_ATTEMPTS = 5;
+export const OPS_BROWSER_SESSION_COOKIE_NAME = 'ops_session';
+const OPS_BROWSER_SESSION_REDIS_PREFIX = 'ops:browser-session:';
+
+type OpsOtpChallengeStatus = 'PENDING' | 'VERIFIED' | 'EXPIRED' | 'FAILED';
 
 type OpsAuditLogRecord = {
   id: string;
   requestId: string;
+  actionType: OpsActionTypeValue;
   actionStatus: OpsActionStatusValue;
   requestPath: string;
   method: string;
@@ -91,9 +97,10 @@ type OpsUserProfileRecord = {
   ipAllowlist: string[];
   lastLoginAt: Date | null;
   isActive: boolean;
+  createdAt?: Date;
 };
 
-type OpsUserInviteStatus = 'CREATED' | 'EMAIL_SENT' | 'CONSUMED' | 'EXPIRED_CLEANED';
+type OpsUserInviteStatus = 'CREATED' | 'EMAIL_SENT' | 'CONSUMED' | 'EXPIRED_CLEANED' | 'CANCELLED';
 
 type OpsUserInviteRecord = {
   id: string;
@@ -105,6 +112,7 @@ type OpsUserInviteRecord = {
   permissions: string[];
   ipAllowlist: string[];
   expiresAt: Date;
+  createdAt: Date;
   createdByOpsUserId: string | null;
 };
 
@@ -119,42 +127,6 @@ type OpsOtpChallengeRecord = {
 };
 
 type OpsPrismaLike = {
-  opsDualApprovalRequest: {
-    create(args: {
-      data: {
-        requestId: string;
-        requesterId: string;
-        actionType: 'LOAD_SHED_CHANGE';
-        status: 'PENDING_APPROVAL';
-        payload: unknown;
-        expiresAt: Date;
-      };
-    }): Promise<OpsDualApprovalRecord>;
-    findUnique(args: { where: { requestId: string } }): Promise<OpsDualApprovalRecord | null>;
-    findMany(args: {
-      where?: Record<string, unknown>;
-      orderBy?: { createdAt: 'asc' | 'desc' };
-      skip?: number;
-      take?: number;
-    }): Promise<OpsDualApprovalRecord[]>;
-    count(args: { where?: Record<string, unknown> }): Promise<number>;
-    update(args: {
-      where: { requestId: string };
-      data: {
-        status?: OpsActionStatusValue;
-        confirmerId?: string;
-        confirmedAt?: Date;
-      };
-    }): Promise<OpsDualApprovalRecord>;
-    updateMany(args: {
-      where: { requestId: string; status?: OpsActionStatusValue };
-      data: {
-        status?: OpsActionStatusValue;
-        confirmerId?: string;
-        confirmedAt?: Date;
-      };
-    }): Promise<{ count: number }>;
-  };
   opsUser: {
     findUnique(args: {
       where: { id?: string; email?: string };
@@ -166,26 +138,48 @@ type OpsPrismaLike = {
         mfaEnabled?: true;
         ipAllowlist?: true;
         lastLoginAt?: true;
+        isActive?: true;
+        phone?: true;
+        createdAt?: true;
       };
     }): Promise<OpsUserProfileRecord | null>;
     findFirst(args: {
       where: { phone?: string };
       select?: { id?: true };
     }): Promise<{ id: string } | null>;
+    findMany(args: {
+      where?: Record<string, unknown>;
+      orderBy?: { createdAt: 'asc' | 'desc' };
+      skip?: number;
+      take?: number;
+      select?: Record<string, boolean>;
+    }): Promise<OpsUserProfileRecord[]>;
+    count(args: { where?: Record<string, unknown> }): Promise<number>;
     create(args: { data: Record<string, unknown> }): Promise<OpsUserProfileRecord>;
+    update(args: { where: { id: string }; data: Record<string, unknown> }): Promise<OpsUserProfileRecord>;
+    updateMany(args: { where: Record<string, unknown>; data: Record<string, unknown> }): Promise<{ count: number }>;
   };
   opsUserInvite: {
     create(args: { data: Record<string, unknown> }): Promise<OpsUserInviteRecord>;
     update(args: { where: { id: string }; data: Record<string, unknown> }): Promise<OpsUserInviteRecord>;
     updateMany(args: { where: Record<string, unknown>; data: Record<string, unknown> }): Promise<{ count: number }>;
-    findUnique(args: { where: { inviteTokenHash: string } }): Promise<OpsUserInviteRecord | null>;
-    findMany(args: { where: Record<string, unknown> }): Promise<OpsUserInviteRecord[]>;
-    delete(args: { where: { id: string } }): Promise<OpsUserInviteRecord>;
-    deleteMany(args: { where: Record<string, unknown> }): Promise<{ count: number }>;
+    findUnique(args: { where: { inviteTokenHash?: string; id?: string } }): Promise<OpsUserInviteRecord | null>;
+    findFirst(args: { where: Record<string, unknown> }): Promise<OpsUserInviteRecord | null>;
+    findMany(args: {
+      where: Record<string, unknown>;
+      orderBy?: { createdAt: 'asc' | 'desc' };
+      skip?: number;
+      take?: number;
+    }): Promise<OpsUserInviteRecord[]>;
+    count(args: { where: Record<string, unknown> }): Promise<number>;
   };
   opsOtpChallenge: {
     create(args: { data: Record<string, unknown> }): Promise<OpsOtpChallengeRecord>;
     findUnique(args: { where: { id: string } }): Promise<OpsOtpChallengeRecord | null>;
+    findMany(args: {
+      where: Record<string, unknown>;
+      orderBy?: { createdAt: 'asc' | 'desc' };
+    }): Promise<OpsOtpChallengeRecord[]>;
     update(args: { where: { id: string }; data: Record<string, unknown> }): Promise<OpsOtpChallengeRecord>;
     updateMany(args: { where: Record<string, unknown>; data: Record<string, unknown> }): Promise<{ count: number }>;
   };
@@ -230,13 +224,14 @@ type OpsPrismaLike = {
       };
     }): Promise<unknown>;
     findMany(args: {
-      where?: Record<string, unknown>;
+      where?: { actionStatus?: OpsActionStatusValue; actionType?: OpsActionTypeValue; opsUserId?: string };
       orderBy?: { createdAt: 'asc' | 'desc' };
       skip?: number;
       take?: number;
       select: {
         id: true;
         requestId: true;
+        actionType: true;
         actionStatus: true;
         requestPath: true;
         method: true;
@@ -244,7 +239,7 @@ type OpsPrismaLike = {
         createdAt: true;
       };
     }): Promise<Array<Omit<OpsAuditLogRecord, 'chainHash'>>>;
-    count(args: { where?: Record<string, unknown> }): Promise<number>;
+    count(args: { where?: { actionStatus?: OpsActionStatusValue; actionType?: OpsActionTypeValue; opsUserId?: string } }): Promise<number>;
   };
 };
 
@@ -280,10 +275,43 @@ function hashOpaqueToken(value: string): string {
   return crypto.createHash('sha256').update(value).digest('hex');
 }
 
-function materializeApiKeyForHash(rawApiKey: string): string {
-  const salt = process.env.OPS_API_KEY_SALT?.trim();
-  if (!salt) return rawApiKey;
-  return `${rawApiKey}.${salt}`;
+
+/**
+ * Validates that a setupBaseUrl is safe to use as an invite link origin.
+ * Rejects non-HTTPS URLs and RFC-1918 / link-local / loopback hostnames to
+ * prevent SSRF vectors from a malicious ops operator.
+ */
+function validateSetupBaseUrl(rawUrl: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'setupBaseUrl is not a valid URL', 400);
+  }
+  if (parsed.protocol !== 'https:') {
+    throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'setupBaseUrl must use HTTPS', 400);
+  }
+  const hostname = parsed.hostname.toLowerCase();
+  // Block loopback
+  if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1') {
+    throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'setupBaseUrl hostname is not permitted', 400);
+  }
+  // Block link-local (169.254.x.x)
+  if (/^169\.254\./.test(hostname)) {
+    throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'setupBaseUrl hostname is not permitted', 400);
+  }
+  // Block RFC-1918 private ranges
+  if (
+    /^10\./.test(hostname) ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(hostname) ||
+    /^192\.168\./.test(hostname)
+  ) {
+    throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'setupBaseUrl hostname is not permitted', 400);
+  }
+  // Block metadata/IMDS endpoints
+  if (hostname === '169.254.169.254' || hostname === 'metadata.google.internal') {
+    throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'setupBaseUrl hostname is not permitted', 400);
+  }
 }
 
 function toPrismaOpsConfigDomain(domain: OpsConfigDomain): 'CORE' | 'PAYMENTS' | 'SHIPPING' | 'NOTIFICATIONS' | 'OPS_SECURITY' {
@@ -320,21 +348,12 @@ export class OpsService {
       throw new AppError(ERROR_CODES.CONFLICT, 'Ops invite is no longer active', 409);
     }
     if (invite.expiresAt.getTime() < Date.now()) {
-      // Atomic CAS: only delete if still active (prevents races)
-      const inviteDelegate = prisma.opsUserInvite as unknown as {
-        deleteMany?: (args: { where: Record<string, unknown> }) => Promise<{ count: number }>;
-        delete: (args: { where: { id: string } }) => Promise<unknown>;
-      };
-      const preferDeleteForMock =
-        typeof inviteDelegate.delete === 'function' &&
-        'mock' in (inviteDelegate.delete as unknown as Record<string, unknown>);
-      if (inviteDelegate.deleteMany && !preferDeleteForMock) {
-        await inviteDelegate.deleteMany({
-          where: { id: invite.id, status: { in: ['CREATED', 'EMAIL_SENT'] } }
-        });
-      } else {
-        await inviteDelegate.delete({ where: { id: invite.id } });
-      }
+      // Atomic CAS: only mark EXPIRED_CLEANED if still active (prevents races).
+      // Use updateMany so the audit trail is preserved; hard-delete would erase history.
+      await prisma.opsUserInvite.updateMany({
+        where: { id: invite.id, status: { in: ['CREATED', 'EMAIL_SENT'] } },
+        data: { status: 'EXPIRED_CLEANED' }
+      });
       throw new AppError(ERROR_CODES.TOKEN_EXPIRED, 'Ops invite has expired', 401);
     }
     return { invite, inviteTokenHash };
@@ -349,18 +368,14 @@ export class OpsService {
     if (existing) {
       return existing.id;
     }
-    const bootstrapApiKey = `opsk_system_${crypto.randomBytes(12).toString('base64url')}`;
     try {
       const created = await prisma.opsUser.create({
         data: {
           email: 'ops-system@local.internal',
           name: 'Ops System',
-          apiKeyId: `opskid_system_${crypto.randomUUID()}`,
-          apiKeyHash: await bcryptHash(materializeApiKeyForHash(bootstrapApiKey), 12),
           mfaEnabled: false,
           mfaSecretEncrypted: null,
-          ipAllowlist: ['127.0.0.1/32'],
-          permissions: ['OPS_APPROVE']
+          permissions: ['OPS_WRITE']
         }
       });
 
@@ -411,11 +426,6 @@ export class OpsService {
         lockToken
       );
     }
-  }
-
-  private dualApprovalWindowMinutes(): number {
-    const raw = Number(process.env.OPS_DUAL_APPROVAL_WINDOW_MINUTES ?? 15);
-    return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 15;
   }
 
   async getOpsSessionProfile(opsUserId: string): Promise<{
@@ -501,13 +511,14 @@ export class OpsService {
     createdByOpsUserId?: string;
     inviteEmail: string;
     inviteName: string;
-    permissions: Array<'OPS_READ' | 'OPS_WRITE' | 'OPS_APPROVE'>;
-    ipAllowlist: string[];
+    permissions: Array<'OPS_READ' | 'OPS_WRITE'>;
+    ipAllowlist?: string[];
     setupBaseUrl: string;
     requestIp: string;
     requestPath: string;
     method: string;
   }): Promise<{ inviteId: string; expiresAt: string; setupUrl: string }> {
+    validateSetupBaseUrl(input.setupBaseUrl);
     const prisma = this.prisma();
     const inviteEmail = input.inviteEmail.trim().toLowerCase();
     const inviteName = input.inviteName.trim();
@@ -525,6 +536,12 @@ export class OpsService {
     if (existingOpsUser) {
       throw new AppError(ERROR_CODES.CONFLICT, 'Ops user already exists for invite email', 409);
     }
+    const existingActiveInvite = await prisma.opsUserInvite.findFirst({
+      where: { inviteEmail, status: { in: ['CREATED', 'EMAIL_SENT'] } }
+    });
+    if (existingActiveInvite) {
+      throw new AppError(ERROR_CODES.CONFLICT, 'An active ops invite already exists for this email', 409);
+    }
     const token = crypto.randomBytes(32).toString('base64url');
     const inviteTokenHash = hashOpaqueToken(token);
     const expiresAt = new Date(Date.now() + OPS_INVITE_TTL_MS);
@@ -537,7 +554,7 @@ export class OpsService {
         setupBaseUrl: input.setupBaseUrl,
         status: 'CREATED',
         permissions: input.permissions,
-        ipAllowlist: input.ipAllowlist,
+        ipAllowlist: input.ipAllowlist ?? [],
         expiresAt,
         ...(input.createdByOpsUserId ? { createdByOpsUserId: input.createdByOpsUserId } : {})
       }
@@ -545,42 +562,39 @@ export class OpsService {
 
     const setupUrl = `${input.setupBaseUrl.replace(/\/$/, '')}/ops/setup?token=${encodeURIComponent(token)}`;
 
-    await this.fastify.queues.notifications.add('send-email', {
-      to: inviteEmail,
-      template: 'OpsInviteSetup',
-      data: {
-        email: inviteEmail,
-        inviteName,
-        setupUrl,
-        expiresAt: expiresAt.toISOString()
-      }
-    }, { jobId: `ops-invite:${invite.id}:${Date.now()}` });
-
-    const inviteDelegate = prisma.opsUserInvite as unknown as {
-      updateMany?: (args: { where: Record<string, unknown>; data: Record<string, unknown> }) => Promise<{ count: number }>;
-      update: (args: { where: { id: string }; data: Record<string, unknown> }) => Promise<unknown>;
-    };
-    const preferUpdateForMock =
-      typeof inviteDelegate.update === 'function' &&
-      'mock' in (inviteDelegate.update as unknown as Record<string, unknown>);
-
-    if (inviteDelegate.updateMany && !preferUpdateForMock) {
-      const sentResult = await inviteDelegate.updateMany({
-        where: {
-          id: invite.id,
-          status: 'CREATED'
-        },
-        data: { status: 'EMAIL_SENT' }
+    const inviteJobId = `ops-invite:${invite.id}:${Date.now()}`;
+    try {
+      await this.fastify.queues.notifications.add('send-email', {
+        to: inviteEmail,
+        template: 'OpsInviteSetup',
+        data: {
+          email: inviteEmail,
+          inviteName,
+          setupUrl,
+          expiresAt: expiresAt.toISOString()
+        }
+      }, { jobId: inviteJobId });
+    } catch (error) {
+      await sendNotificationFailureAlert({
+        prisma: this.fastify.prisma,
+        template: 'OpsInviteSetup',
+        channel: 'EMAIL',
+        recipient: inviteEmail,
+        errorMessage: error instanceof Error ? error.message : 'Unable to enqueue ops invite email',
+        failureStage: 'QUEUE_ENQUEUE',
+        queueName: 'notifications',
+        jobName: 'send-email',
+        jobId: inviteJobId
       });
+      throw error;
+    }
 
-      if (sentResult.count === 0) {
-        throw new AppError(ERROR_CODES.CONFLICT, 'Ops invite state changed concurrently before email sent marker', 409);
-      }
-    } else {
-      await inviteDelegate.update({
-        where: { id: invite.id },
-        data: { status: 'EMAIL_SENT' }
-      });
+    const sentResult = await prisma.opsUserInvite.updateMany({
+      where: { id: invite.id, status: 'CREATED' },
+      data: { status: 'EMAIL_SENT' }
+    });
+    if (sentResult.count === 0) {
+      throw new AppError(ERROR_CODES.CONFLICT, 'Ops invite state changed concurrently before email sent marker', 409);
     }
 
     const actorOpsUserId = await this.resolveAuditActorOpsUserId(input.createdByOpsUserId);
@@ -609,19 +623,16 @@ export class OpsService {
   async sendInviteSetupOtp(input: {
     inviteToken: string;
     name: string;
-    phone: string;
+    phone?: string;
   }): Promise<{ message: string; expiresAt: string }> {
     const prisma = this.prisma();
     const { invite, inviteTokenHash } = await this.resolveActiveOpsInviteOrThrow(input.inviteToken);
 
     const setupName = input.name.trim();
-    const setupPhone = input.phone.trim();
     if (!setupName) {
       throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Name is required', 400);
     }
-    if (!setupPhone) {
-      throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Phone is required', 400);
-    }
+    const setupPhone = input.phone?.trim() || null;
 
     const existingUserByEmail = await this.fastify.prisma.user.findUnique({ where: { email: invite.inviteEmail } });
     if (existingUserByEmail) {
@@ -632,9 +643,11 @@ export class OpsService {
       throw new AppError(ERROR_CODES.CONFLICT, 'Ops user already exists for invite email', 409);
     }
 
-    const existingByPhone = await prisma.opsUser.findFirst({ where: { phone: setupPhone } });
-    if (existingByPhone) {
-      throw new AppError(ERROR_CODES.CONFLICT, 'Ops user already exists for invite phone number', 409);
+    if (setupPhone) {
+      const existingByPhone = await prisma.opsUser.findFirst({ where: { phone: setupPhone } });
+      if (existingByPhone) {
+        throw new AppError(ERROR_CODES.CONFLICT, 'Ops user already exists for invite phone number', 409);
+      }
     }
 
     const otp = crypto.randomInt(100000, 999999).toString();
@@ -649,11 +662,32 @@ export class OpsService {
     await this.fastify.redis.set(otpKey, otpHash, 'EX', Math.min(OPS_INVITE_SETUP_OTP_TTL_SECONDS, ttlSeconds));
     await this.fastify.redis.del(attemptKey);
 
-    await this.fastify.queues.notifications.add('send-sms', {
-      phone: setupPhone,
-      template: 'OtpVerification',
-      data: { otp }
-    }, { jobId: `ops-invite-setup-otp:${invite.id}:${Date.now()}` });
+    const setupOtpJobId = `ops-invite-setup-otp:${invite.id}:${Date.now()}`;
+    try {
+      await this.fastify.queues.notifications.add('send-email', {
+        to: invite.inviteEmail,
+        template: 'OpsActionOtp',
+        data: {
+          name: setupName,
+          action: 'ops-invite-setup',
+          code: otp,
+          expiresAt: invite.expiresAt.toISOString()
+        }
+      }, { jobId: setupOtpJobId });
+    } catch (error) {
+      await sendNotificationFailureAlert({
+        prisma: this.fastify.prisma,
+        template: 'OpsActionOtp',
+        channel: 'EMAIL',
+        recipient: invite.inviteEmail,
+        errorMessage: error instanceof Error ? error.message : 'Unable to enqueue ops setup OTP',
+        failureStage: 'QUEUE_ENQUEUE',
+        queueName: 'notifications',
+        jobName: 'send-email',
+        jobId: setupOtpJobId
+      });
+      throw error;
+    }
 
     return {
       message: 'OTP sent successfully',
@@ -671,10 +705,7 @@ export class OpsService {
     opsUserId: string;
     email: string;
     name: string;
-    keyId: string;
-    apiKey: string;
     permissions: string[];
-    ipAllowlist: string[];
   }> {
     const prisma = this.prisma();
     const { invite, inviteTokenHash } = await this.resolveActiveOpsInviteOrThrow(input.inviteToken);
@@ -687,7 +718,7 @@ export class OpsService {
     if (!payloadRaw) {
       throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Setup OTP verification is required before account creation', 400);
     }
-    const setupPayload = JSON.parse(payloadRaw) as { name: string; phone: string };
+    const setupPayload = JSON.parse(payloadRaw) as { name: string; phone: string | null };
 
     const storedOtpHash = await this.fastify.redis.get(otpKey);
     if (!storedOtpHash) {
@@ -715,55 +746,45 @@ export class OpsService {
       throw new AppError(ERROR_CODES.CONFLICT, 'Ops user already exists for invite email', 409);
     }
 
-    const existingByPhone = await prisma.opsUser.findFirst({ where: { phone: setupPayload.phone } });
-    if (existingByPhone) {
-      throw new AppError(ERROR_CODES.CONFLICT, 'Ops user already exists for invite phone number', 409);
+    if (setupPayload.phone) {
+      const existingByPhone = await prisma.opsUser.findFirst({ where: { phone: setupPayload.phone } });
+      if (existingByPhone) {
+        throw new AppError(ERROR_CODES.CONFLICT, 'Ops user already exists for invite phone number', 409);
+      }
     }
 
-    const apiKey = `opsk_${crypto.randomBytes(32).toString('base64url')}`;
-    const keyId = `opskid_${crypto.randomUUID()}`;
-    const apiKeyHash = await bcryptHash(materializeApiKeyForHash(apiKey), 12);
-
-    const opsUser = await prisma.opsUser.create({
-      data: {
-        email: invite.inviteEmail,
-        phone: setupPayload.phone,
-        name: setupPayload.name,
-        apiKeyId: keyId,
-        apiKeyHash,
-        mfaEnabled: false,
-        mfaSecretEncrypted: null,
-        ipAllowlist: invite.ipAllowlist,
-        permissions: invite.permissions
-      }
-    });
-
-    // Atomic CAS: only consume if still active (prevents races with concurrent consumption)
-    const inviteDelegate = prisma.opsUserInvite as unknown as {
-      updateMany?: (args: { where: Record<string, unknown>; data: Record<string, unknown> }) => Promise<{ count: number }>;
-      update: (args: { where: { id: string }; data: Record<string, unknown> }) => Promise<unknown>;
+    // Use $transaction to atomically create the ops user and consume the invite.
+    // Without this, a CAS race could leave a dangling opsUser record.
+    const transactablePrisma = this.fastify.prisma as unknown as {
+      $transaction<T>(fn: (tx: typeof prisma) => Promise<T>): Promise<T>;
     };
-    if (inviteDelegate.updateMany) {
-      const consumeResult = await inviteDelegate.updateMany({
-        where: { id: invite.id, status: { in: ['CREATED', 'EMAIL_SENT'] } },
+
+    const opsUser = await transactablePrisma.$transaction(async (tx) => {
+      const createdUser = await (tx as typeof prisma).opsUser.create({
         data: {
-          status: 'CONSUMED',
-          consumedAt: new Date()
+          email: invite.inviteEmail,
+          phone: setupPayload.phone ?? null,
+          name: setupPayload.name,
+          mfaEnabled: false,
+          mfaSecretEncrypted: null,
+          ipAllowlist: invite.ipAllowlist,
+          permissions: invite.permissions
         }
       });
 
+      // Atomic CAS: only consume if still active (prevents races with concurrent consumption)
+      const consumeResult = await (tx as typeof prisma).opsUserInvite.updateMany({
+        where: { id: invite.id, status: { in: ['CREATED', 'EMAIL_SENT'] } },
+        data: { status: 'CONSUMED', consumedAt: new Date() }
+      });
       if (consumeResult.count === 0) {
         throw new AppError(ERROR_CODES.CONFLICT, 'Ops invite is no longer active or was already consumed', 409);
       }
-    } else {
-      await inviteDelegate.update({
-        where: { id: invite.id },
-        data: {
-          status: 'CONSUMED',
-          consumedAt: new Date()
-        }
-      });
-    }
+
+      return createdUser;
+    });
+
+    await this.fastify.redis.del(otpKey, payloadKey, attemptKey);
 
     await this.appendAuditLog({
       opsUserId: opsUser.id,
@@ -783,10 +804,7 @@ export class OpsService {
       opsUserId: opsUser.id,
       email: opsUser.email,
       name: opsUser.name,
-      keyId,
-      apiKey,
-      permissions: opsUser.permissions,
-      ipAllowlist: opsUser.ipAllowlist
+      permissions: opsUser.permissions
     };
   }
 
@@ -815,16 +833,32 @@ export class OpsService {
       }
     });
 
-    await this.fastify.queues.notifications.add('send-email', {
-      to: opsUser.email,
-      template: 'OpsActionOtp',
-      data: {
-        name: opsUser.name,
-        action: input.action,
-        code,
-        expiresAt: expiresAt.toISOString()
-      }
-    }, { jobId: `ops-otp:${challenge.id}:${Date.now()}` });
+    const opsOtpJobId = `ops-otp:${challenge.id}:${Date.now()}`;
+    try {
+      await this.fastify.queues.notifications.add('send-email', {
+        to: opsUser.email,
+        template: 'OpsActionOtp',
+        data: {
+          name: opsUser.name,
+          action: input.action,
+          code,
+          expiresAt: expiresAt.toISOString()
+        }
+      }, { jobId: opsOtpJobId });
+    } catch (error) {
+      await sendNotificationFailureAlert({
+        prisma: this.fastify.prisma,
+        template: 'OpsActionOtp',
+        channel: 'EMAIL',
+        recipient: opsUser.email,
+        errorMessage: error instanceof Error ? error.message : 'Unable to enqueue ops action OTP email',
+        failureStage: 'QUEUE_ENQUEUE',
+        queueName: 'notifications',
+        jobName: 'send-email',
+        jobId: opsOtpJobId
+      });
+      throw error;
+    }
 
     await this.appendAuditLog({
       opsUserId: opsUser.id,
@@ -865,29 +899,19 @@ export class OpsService {
     }
     if (challenge.expiresAt.getTime() < Date.now()) {
       // Atomic CAS: only mark expired if still pending (prevents races)
-      const otpDelegate = prisma.opsOtpChallenge as unknown as {
-        updateMany?: (args: { where: Record<string, unknown>; data: Record<string, unknown> }) => Promise<{ count: number }>;
-        update: (args: { where: { id: string }; data: Record<string, unknown> }) => Promise<unknown>;
-      };
-      if (otpDelegate.updateMany) {
-        await otpDelegate.updateMany({
-          where: { id: challenge.id, status: 'PENDING' },
-          data: { status: 'EXPIRED' }
-        });
-      } else {
-        await otpDelegate.update({
-          where: { id: challenge.id },
-          data: { status: 'EXPIRED' }
-        });
-      }
+      await prisma.opsOtpChallenge.updateMany({
+        where: { id: challenge.id, status: 'PENDING' },
+        data: { status: 'EXPIRED' }
+      });
       throw new AppError(ERROR_CODES.TOKEN_EXPIRED, 'OTP challenge expired', 401);
     }
 
     const incomingHash = hashOpaqueToken(input.code.trim());
     if (incomingHash !== challenge.codeHash) {
       const attempts = challenge.failedAttempts + 1;
-      await prisma.opsOtpChallenge.update({
-        where: { id: challenge.id },
+      // Atomic CAS: only update if still PENDING (prevents races with concurrent expiry).
+      await prisma.opsOtpChallenge.updateMany({
+        where: { id: challenge.id, status: 'PENDING' },
         data: {
           failedAttempts: attempts,
           ...(attempts >= OPS_OTP_MAX_ATTEMPTS ? { status: 'FAILED' as OpsOtpChallengeStatus } : {})
@@ -912,30 +936,12 @@ export class OpsService {
     }
 
     // Atomic CAS: only verify if still pending (prevents races with concurrent verification)
-    const otpDelegate = prisma.opsOtpChallenge as unknown as {
-      updateMany?: (args: { where: Record<string, unknown>; data: Record<string, unknown> }) => Promise<{ count: number }>;
-      update: (args: { where: { id: string }; data: Record<string, unknown> }) => Promise<unknown>;
-    };
-    if (otpDelegate.updateMany) {
-      const verifyResult = await otpDelegate.updateMany({
-        where: { id: challenge.id, status: 'PENDING' },
-        data: {
-          status: 'VERIFIED',
-          verifiedAt: new Date()
-        }
-      });
-
-      if (verifyResult.count === 0) {
-        throw new AppError(ERROR_CODES.CONFLICT, 'OTP challenge is no longer pending or was already processed', 409);
-      }
-    } else {
-      await otpDelegate.update({
-        where: { id: challenge.id },
-        data: {
-          status: 'VERIFIED',
-          verifiedAt: new Date()
-        }
-      });
+    const verifyResult = await prisma.opsOtpChallenge.updateMany({
+      where: { id: challenge.id, status: 'PENDING' },
+      data: { status: 'VERIFIED', verifiedAt: new Date() }
+    });
+    if (verifyResult.count === 0) {
+      throw new AppError(ERROR_CODES.CONFLICT, 'OTP challenge is no longer pending or was already processed', 409);
     }
 
     await this.appendAuditLog({
@@ -986,7 +992,8 @@ export class OpsService {
       requestPath: input.requestPath,
       method: input.method,
       domain: input.domain,
-      values: input.values
+      values: input.values,
+      skipAuditLog: true
     });
     if (!validation.valid) {
       throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Config draft failed validation', 400, {
@@ -1062,6 +1069,7 @@ export class OpsService {
     requestIp: string;
     requestPath: string;
     method: string;
+    actorOpsUserId?: string;
   }): Promise<{ cleaned: number }> {
     const prisma = this.prisma();
     const expired = await prisma.opsUserInvite.findMany({
@@ -1071,10 +1079,22 @@ export class OpsService {
       }
     });
 
+    if (expired.length > 0) {
+      await prisma.opsUserInvite.updateMany({
+        where: {
+          id: {
+            in: expired.map((invite: { id: string }) => invite.id)
+          },
+          status: { in: ['CREATED', 'EMAIL_SENT'] }
+        },
+        data: { status: 'EXPIRED_CLEANED' }
+      });
+    }
+
+    const resolvedActorId = await this.resolveAuditActorOpsUserId(input.actorOpsUserId);
     for (const invite of expired) {
-      const actorOpsUserId = await this.resolveAuditActorOpsUserId(invite.createdByOpsUserId ?? undefined);
       await this.appendAuditLog({
-        opsUserId: actorOpsUserId,
+        opsUserId: resolvedActorId,
         actionType: 'INVITE_EXPIRED_CLEANED',
         actionStatus: 'EXECUTED',
         requestId: `invite-cleanup:${invite.id}`,
@@ -1088,73 +1108,15 @@ export class OpsService {
       });
     }
 
-    if (expired.length > 0) {
-      await prisma.opsUserInvite.deleteMany({
-        where: {
-          id: {
-            in: expired.map((invite: { id: string }) => invite.id)
-          },
-          status: { in: ['CREATED', 'EMAIL_SENT'] },
-          expiresAt: { lt: new Date() }
-        }
-      });
-    }
-
     return { cleaned: expired.length };
   }
 
-  async listApprovalRequests(query: {
-    status?: OpsActionStatusValue;
-    page?: number;
-    limit?: number;
+  async getConfigOverview(input: {
+    opsUserId: string;
+    requestIp: string;
+    requestPath: string;
+    method: string;
   }): Promise<{
-    items: Array<{
-      requestId: string;
-      requesterId: string;
-      status: OpsActionStatusValue;
-      payload: unknown;
-      expiresAt: string;
-      createdAt: string;
-      confirmerId: string | null;
-      confirmedAt: string | null;
-    }>;
-    page: number;
-    limit: number;
-    total: number;
-  }> {
-    const page = Math.max(1, query.page ?? 1);
-    const limit = Math.min(100, Math.max(1, query.limit ?? 20));
-    const skip = (page - 1) * limit;
-    const where = query.status ? { status: query.status } : {};
-
-    const [items, total] = await Promise.all([
-      this.prisma().opsDualApprovalRequest.findMany({
-        where,
-        orderBy: { createdAt: 'desc' },
-        skip,
-        take: limit
-      }),
-      this.prisma().opsDualApprovalRequest.count({ where })
-    ]);
-
-    return {
-      items: items.map((item) => ({
-        requestId: item.requestId,
-        requesterId: item.requesterId,
-        status: item.status,
-        payload: item.payload,
-        expiresAt: item.expiresAt.toISOString(),
-        createdAt: item.createdAt.toISOString(),
-        confirmerId: item.confirmerId ?? null,
-        confirmedAt: item.confirmedAt ? item.confirmedAt.toISOString() : null
-      })),
-      page,
-      limit,
-      total
-    };
-  }
-
-  async getConfigOverview(): Promise<{
     generatedAt: string;
     runtimeProfile: 'development-like' | 'production-like';
     domains: Array<{
@@ -1184,6 +1146,17 @@ export class OpsService {
             return value !== undefined && isPlaceholderValue(value);
           })
         : [];
+
+    await this.appendAuditLog({
+      opsUserId: input.opsUserId,
+      actionType: 'ENV_READ',
+      actionStatus: 'EXECUTED',
+      requestId: `config-overview:${crypto.randomUUID()}`,
+      requestIp: input.requestIp,
+      requestPath: input.requestPath,
+      method: input.method,
+      summary: { runtimeProfile: profile, strictMissingCount: strictMissing.length }
+    });
 
     return {
       generatedAt: new Date().toISOString(),
@@ -1218,6 +1191,7 @@ export class OpsService {
     method: string;
     domain?: OpsConfigDomain;
     values: Record<string, OpsConfigValidationInputValue>;
+    skipAuditLog?: boolean;
   }): Promise<{
     valid: boolean;
     domain: OpsConfigDomain | null;
@@ -1331,216 +1305,411 @@ export class OpsService {
       requiresRestart: checkedKeys.length > 0
     };
 
+    if (!input.skipAuditLog) {
+      await this.appendAuditLog({
+        opsUserId: input.opsUserId,
+        actionType: 'ENV_READ',
+        actionStatus: result.valid ? 'EXECUTED' : 'FAILED',
+        requestId: crypto.randomUUID(),
+        requestIp: input.requestIp,
+        requestPath: input.requestPath,
+        method: input.method,
+        summary: {
+          dryRun: true,
+          domain: input.domain ?? null,
+          checkedKeys,
+          errors: errors.length,
+          warnings: warnings.length
+        }
+      });
+    }
+
+    return result;
+  }
+
+  /**
+   * Lists ops user invites, optionally filtered by status.
+   * @param query - Optional status filter and pagination params.
+   * @returns Paginated list of invites with metadata.
+   */
+  async listOpsInvites(query: {
+    status?: OpsUserInviteStatus;
+    page?: number;
+    limit?: number;
+  }): Promise<{
+    items: Array<{
+      id: string;
+      inviteEmail: string;
+      inviteName: string;
+      status: OpsUserInviteStatus;
+      permissions: string[];
+      ipAllowlist: string[];
+      expiresAt: string;
+      createdAt: string;
+      createdByOpsUserId: string | null;
+    }>;
+    page: number;
+    limit: number;
+    total: number;
+  }> {
+    const page = Math.max(1, query.page ?? 1);
+    const limit = Math.min(100, Math.max(1, query.limit ?? 20));
+    const skip = (page - 1) * limit;
+    const where: Record<string, unknown> = query.status ? { status: query.status } : {};
+
+    const [items, total] = await Promise.all([
+      this.prisma().opsUserInvite.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit
+      }),
+      this.prisma().opsUserInvite.count({ where })
+    ]);
+
+    return {
+      items: items.map((invite) => ({
+        id: invite.id,
+        inviteEmail: invite.inviteEmail,
+        inviteName: invite.inviteName,
+        status: invite.status,
+        permissions: invite.permissions,
+        ipAllowlist: invite.ipAllowlist,
+        expiresAt: invite.expiresAt.toISOString(),
+        createdAt: invite.createdAt.toISOString(),
+        createdByOpsUserId: invite.createdByOpsUserId ?? null
+      })),
+      page,
+      limit,
+      total
+    };
+  }
+
+  /**
+   * Revokes an active ops invite by ID, preventing it from being consumed.
+   * @param input - Invite ID, revoking ops user, and audit context.
+   * @returns The revoked invite ID and new status.
+   */
+  async revokeOpsInvite(input: {
+    inviteId: string;
+    revokerOpsUserId: string;
+    challengeId: string;
+    otpCode: string;
+    requestIp: string;
+    requestPath: string;
+    method: string;
+  }): Promise<{ inviteId: string; revoked: true }> {
+    await this.verifyEmailOtp({
+      opsUserId: input.revokerOpsUserId,
+      challengeId: input.challengeId,
+      code: input.otpCode,
+      requestIp: input.requestIp,
+      requestPath: input.requestPath,
+      method: input.method
+    });
+
+    const prisma = this.prisma();
+    const invite = await prisma.opsUserInvite.findUnique({ where: { id: input.inviteId } });
+
+    if (!invite) {
+      throw new AppError(ERROR_CODES.NOT_FOUND, 'Ops invite not found', 404);
+    }
+    if (!['CREATED', 'EMAIL_SENT'].includes(invite.status)) {
+      throw new AppError(ERROR_CODES.CONFLICT, 'Ops invite is no longer active and cannot be revoked', 409);
+    }
+
+    const revokeResult = await prisma.opsUserInvite.updateMany({
+      where: { id: input.inviteId, status: { in: ['CREATED', 'EMAIL_SENT'] } },
+      data: { status: 'CANCELLED' }
+    });
+    if (revokeResult.count === 0) {
+      throw new AppError(ERROR_CODES.CONFLICT, 'Ops invite was concurrently consumed or revoked', 409);
+    }
+
     await this.appendAuditLog({
-      opsUserId: input.opsUserId,
-      actionType: 'ENV_UPDATE',
-      actionStatus: result.valid ? 'EXECUTED' : 'FAILED',
-      requestId: crypto.randomUUID(),
+      opsUserId: input.revokerOpsUserId,
+      actionType: 'INVITE_REVOKED',
+      actionStatus: 'EXECUTED',
+      requestId: `invite-revoke:${input.inviteId}`,
       requestIp: input.requestIp,
       requestPath: input.requestPath,
       method: input.method,
       summary: {
-        dryRun: true,
-        domain: input.domain ?? null,
-        checkedKeys,
-        errors: errors.length,
-        warnings: warnings.length
+        inviteId: input.inviteId,
+        inviteEmail: invite.inviteEmail
       }
     });
 
-    return result;
+    return { inviteId: input.inviteId, revoked: true };
+  }
+
+  /**
+   * Lists ops users with optional active/inactive filter and pagination.
+   * @param query - Optional isActive filter and pagination params.
+   * @returns Paginated list of ops user summaries.
+   */
+  async listOpsUsers(query: {
+    isActive?: boolean;
+    page?: number;
+    limit?: number;
+  }): Promise<{
+    items: Array<{
+      id: string;
+      email: string;
+      name: string;
+      permissions: string[];
+      mfaEnabled: boolean;
+      isActive: boolean;
+      ipAllowlist: string[];
+      lastLoginAt: string | null;
+      createdAt: string;
+    }>;
+    page: number;
+    limit: number;
+    total: number;
+  }> {
+    const page = Math.max(1, query.page ?? 1);
+    const limit = Math.min(100, Math.max(1, query.limit ?? 20));
+    const skip = (page - 1) * limit;
+    const where: Record<string, unknown> = query.isActive !== undefined ? { isActive: query.isActive } : {};
+
+    const [items, total] = await Promise.all([
+      this.prisma().opsUser.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+        select: {
+          id: true,
+          email: true,
+          name: true,
+          permissions: true,
+          mfaEnabled: true,
+          isActive: true,
+          ipAllowlist: true,
+          lastLoginAt: true,
+          createdAt: true
+        }
+      }),
+      this.prisma().opsUser.count({ where })
+    ]);
+
+    return {
+      items: items.map((u) => ({
+        id: u.id,
+        email: u.email,
+        name: u.name,
+        permissions: u.permissions,
+        mfaEnabled: u.mfaEnabled,
+        isActive: u.isActive,
+        ipAllowlist: u.ipAllowlist,
+        lastLoginAt: u.lastLoginAt ? u.lastLoginAt.toISOString() : null,
+        createdAt: u.createdAt ? u.createdAt.toISOString() : new Date(0).toISOString()
+      })),
+      page,
+      limit,
+      total
+    };
+  }
+
+  /**
+   * Returns full profile for a single ops user by ID.
+   * @param opsUserId - The ops user's UUID.
+   * @returns Full profile including permissions, MFA status, and IP allowlist.
+   */
+  async getOpsUserById(opsUserId: string): Promise<{
+    id: string;
+    email: string;
+    name: string;
+    phone: string | null;
+    permissions: string[];
+    mfaEnabled: boolean;
+    isActive: boolean;
+    ipAllowlist: string[];
+    lastLoginAt: string | null;
+    createdAt: string;
+  }> {
+    const opsUser = await this.prisma().opsUser.findUnique({
+      where: { id: opsUserId },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        phone: true,
+        permissions: true,
+        mfaEnabled: true,
+        isActive: true,
+        ipAllowlist: true,
+        lastLoginAt: true,
+        createdAt: true
+      }
+    });
+
+    if (!opsUser) {
+      throw new AppError(ERROR_CODES.NOT_FOUND, 'Ops user not found', 404);
+    }
+
+    return {
+      id: opsUser.id,
+      email: opsUser.email,
+      name: opsUser.name,
+      phone: opsUser.phone ?? null,
+      permissions: opsUser.permissions,
+      mfaEnabled: opsUser.mfaEnabled,
+      isActive: opsUser.isActive,
+      ipAllowlist: opsUser.ipAllowlist,
+      lastLoginAt: opsUser.lastLoginAt ? opsUser.lastLoginAt.toISOString() : null,
+      createdAt: opsUser.createdAt ? opsUser.createdAt.toISOString() : new Date(0).toISOString()
+    };
+  }
+
+  /**
+   * Deactivates an ops user. All session guards perform a live isActive DB check,
+   * so any existing sessions are immediately rejected. Cannot deactivate self.
+   * @param input - Target user ID, requestor ID, and audit context.
+   * @returns Deactivation confirmation.
+   */
+  async deactivateOpsUser(input: {
+    targetOpsUserId: string;
+    requestorOpsUserId: string;
+    reason: string;
+    challengeId: string;
+    otpCode: string;
+    requestIp: string;
+    requestPath: string;
+    method: string;
+  }): Promise<{ opsUserId: string; deactivated: true }> {
+    await this.verifyEmailOtp({
+      opsUserId: input.requestorOpsUserId,
+      challengeId: input.challengeId,
+      code: input.otpCode,
+      requestIp: input.requestIp,
+      requestPath: input.requestPath,
+      method: input.method
+    });
+
+    if (input.targetOpsUserId === input.requestorOpsUserId) {
+      throw new AppError(ERROR_CODES.FORBIDDEN, 'Ops user cannot deactivate their own account', 403);
+    }
+
+    const target = await this.prisma().opsUser.findUnique({ where: { id: input.targetOpsUserId } });
+    if (!target) {
+      throw new AppError(ERROR_CODES.NOT_FOUND, 'Ops user not found', 404);
+    }
+    if (!target.isActive) {
+      throw new AppError(ERROR_CODES.CONFLICT, 'Ops user is already deactivated', 409);
+    }
+
+    // Atomic CAS: only deactivate if still active (prevents races with concurrent deactivation)
+    const deactivateResult = await this.prisma().opsUser.updateMany({
+      where: { id: input.targetOpsUserId, isActive: true },
+      data: { isActive: false }
+    });
+    if (deactivateResult.count === 0) {
+      throw new AppError(ERROR_CODES.CONFLICT, 'Ops user was concurrently deactivated', 409);
+    }
+
+    await this.appendAuditLog({
+      opsUserId: input.requestorOpsUserId,
+      actionType: 'USER_DEACTIVATED',
+      actionStatus: 'EXECUTED',
+      requestId: `user-deactivate:${input.targetOpsUserId}:${crypto.randomUUID()}`,
+      requestIp: input.requestIp,
+      requestPath: input.requestPath,
+      method: input.method,
+      summary: {
+        targetOpsUserId: input.targetOpsUserId,
+        targetEmail: target.email,
+        reason: input.reason
+      }
+    });
+
+    return { opsUserId: input.targetOpsUserId, deactivated: true };
+  }
+
+  /**
+   * Returns pending OTP challenges for the requesting ops user.
+   * Used to surface challenge state when the user suspects their OTP email was lost.
+   * @param opsUserId - The ops user requesting visibility.
+   * @returns List of pending challenges with action label and expiry.
+   */
+  async listPendingOtpChallenges(opsUserId: string): Promise<{
+    items: Array<{
+      id: string;
+      action: string;
+      expiresAt: string;
+    }>;
+  }> {
+    const challenges = await this.prisma().opsOtpChallenge.findMany({
+      where: {
+        opsUserId,
+        status: 'PENDING',
+        expiresAt: { gt: new Date() }
+      },
+      orderBy: { createdAt: 'desc' }
+    });
+
+    return {
+      items: challenges.map((c) => ({
+        id: c.id,
+        action: c.action,
+        expiresAt: c.expiresAt.toISOString()
+      }))
+    };
   }
 
   private prisma(): OpsPrismaLike {
     return this.fastify.prisma as unknown as OpsPrismaLike;
   }
 
-  async requestLoadShedChange(input: {
+  async setLoadShedModeDirect(input: {
+    request: FastifyRequest;
     requesterId: string;
     mode: LoadShedMode;
     reason: string;
+    challengeId: string;
+    otpCode: string;
     requestIp: string;
     requestPath: string;
     method: string;
-  }): Promise<{ requestId: string; status: 'PENDING_APPROVAL'; expiresAt: string }> {
-    const requestId = crypto.randomUUID();
-    const expiresAt = new Date(Date.now() + this.dualApprovalWindowMinutes() * 60_000);
-
-    await this.prisma().opsDualApprovalRequest.create({
-      data: {
-        requestId,
-        requesterId: input.requesterId,
-        actionType: 'LOAD_SHED_CHANGE',
-        status: 'PENDING_APPROVAL',
-        payload: {
-          mode: input.mode,
-          reason: input.reason
-        },
-        expiresAt
-      }
+  }): Promise<{ mode: LoadShedMode; updated: true }> {
+    await this.verifyEmailOtp({
+      opsUserId: input.requesterId,
+      challengeId: input.challengeId,
+      code: input.otpCode,
+      requestIp: input.requestIp,
+      requestPath: input.requestPath,
+      method: input.method
     });
+    await setLoadShedMode(input.request, input.mode);
 
+    const requestId = crypto.randomUUID();
     await this.appendAuditLog({
       opsUserId: input.requesterId,
-      actionStatus: 'PENDING_APPROVAL',
-      requestId,
-      requestIp: input.requestIp,
-      requestPath: input.requestPath,
-      method: input.method,
-      summary: {
-        requestedMode: input.mode,
-        reason: input.reason,
-        dualApproval: true
-      }
-    });
-
-    return {
-      requestId,
-      status: 'PENDING_APPROVAL',
-      expiresAt: expiresAt.toISOString()
-    };
-  }
-
-  async confirmLoadShedChange(input: {
-    request: FastifyRequest;
-    requestId: string;
-    confirmerId: string;
-    requestIp: string;
-    requestPath: string;
-    method: string;
-  }): Promise<{ mode: LoadShedMode; updated: true; requestId: string }> {
-    const pending = await this.prisma().opsDualApprovalRequest.findUnique({
-      where: { requestId: input.requestId }
-    });
-
-    if (!pending) {
-      throw new AppError(ERROR_CODES.NOT_FOUND, 'Ops approval request not found', 404);
-    }
-    if (pending.status !== 'PENDING_APPROVAL') {
-      throw new AppError(ERROR_CODES.CONFLICT, 'Ops approval request is not pending', 409);
-    }
-    if (pending.requesterId === input.confirmerId) {
-      throw new AppError(ERROR_CODES.FORBIDDEN, 'Requester cannot self-approve critical ops action', 403);
-    }
-    if (pending.expiresAt.getTime() < Date.now()) {
-      await this.prisma().opsDualApprovalRequest.updateMany({
-        where: { requestId: input.requestId, status: 'PENDING_APPROVAL' },
-        data: { status: 'REJECTED' }
-      });
-      throw new AppError(ERROR_CODES.CONFLICT, 'Ops approval request expired', 409);
-    }
-
-    const payload = pending.payload as { mode?: LoadShedMode };
-    if (!payload?.mode || !['normal', 'reduced', 'emergency'].includes(payload.mode)) {
-      throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Ops approval payload is invalid', 500);
-    }
-
-    // Atomic CAS update: only succeed if still PENDING_APPROVAL
-    const updateResult = await this.prisma().opsDualApprovalRequest.updateMany({
-      where: {
-        requestId: input.requestId,
-        status: 'PENDING_APPROVAL'
-      },
-      data: {
-        status: 'APPROVED',
-        confirmerId: input.confirmerId,
-        confirmedAt: new Date()
-      }
-    });
-
-    if (updateResult.count === 0) {
-      throw new AppError(ERROR_CODES.CONFLICT, 'Ops approval request is not pending or was already processed', 409);
-    }
-
-    await setLoadShedMode(input.request, payload.mode);
-
-    await this.appendAuditLog({
-      opsUserId: pending.requesterId,
+      actionType: 'LOAD_SHED_CHANGE',
       actionStatus: 'EXECUTED',
-      requestId: input.requestId,
+      requestId,
       requestIp: input.requestIp,
       requestPath: input.requestPath,
       method: input.method,
-      newState: { mode: payload.mode },
-      summary: {
-        approvedBy: input.confirmerId,
-        dualApproval: true
-      },
-      approvedByOpsUserId: input.confirmerId
+      newState: { mode: input.mode },
+      summary: { reason: input.reason }
     });
 
-    return { mode: payload.mode, updated: true, requestId: input.requestId };
-  }
-
-  async rejectLoadShedChange(input: {
-    requestId: string;
-    rejectorId: string;
-    reason: string;
-    requestIp: string;
-    requestPath: string;
-    method: string;
-  }): Promise<{ requestId: string; status: 'REJECTED'; rejected: true }> {
-    const pending = await this.prisma().opsDualApprovalRequest.findUnique({
-      where: { requestId: input.requestId }
-    });
-
-    if (!pending) {
-      throw new AppError(ERROR_CODES.NOT_FOUND, 'Ops approval request not found', 404);
-    }
-    if (pending.status !== 'PENDING_APPROVAL') {
-      throw new AppError(ERROR_CODES.CONFLICT, 'Ops approval request is not pending', 409);
-    }
-    if (pending.expiresAt.getTime() < Date.now()) {
-      throw new AppError(ERROR_CODES.CONFLICT, 'Ops approval request expired', 409);
-    }
-
-    // Atomic CAS update: only succeed if still PENDING_APPROVAL
-    const updateResult = await this.prisma().opsDualApprovalRequest.updateMany({
-      where: {
-        requestId: input.requestId,
-        status: 'PENDING_APPROVAL'
-      },
-      data: {
-        status: 'REJECTED',
-        confirmerId: input.rejectorId,
-        confirmedAt: new Date()
-      }
-    });
-
-    if (updateResult.count === 0) {
-      throw new AppError(ERROR_CODES.CONFLICT, 'Ops approval request is not pending or was already processed', 409);
-    }
-
-    await this.appendAuditLog({
-      opsUserId: pending.requesterId,
-      actionStatus: 'REJECTED',
-      requestId: input.requestId,
-      requestIp: input.requestIp,
-      requestPath: input.requestPath,
-      method: input.method,
-      summary: {
-        rejectedBy: input.rejectorId,
-        reason: input.reason,
-        dualApproval: true
-      },
-      approvedByOpsUserId: input.rejectorId
-    });
-
-    return {
-      requestId: input.requestId,
-      status: 'REJECTED',
-      rejected: true
-    };
+    return { mode: input.mode, updated: true };
   }
 
   async listAuditLogs(query: {
     actionStatus?: OpsActionStatusValue;
+    actionType?: OpsActionTypeValue | string;
+    opsUserId?: string;
     page?: number;
     limit?: number;
   }): Promise<{
     items: Array<{
       id: string;
       requestId: string;
+      actionType: OpsActionTypeValue;
       actionStatus: OpsActionStatusValue;
       requestPath: string;
       method: string;
@@ -1554,7 +1723,10 @@ export class OpsService {
     const page = Math.max(1, query.page ?? 1);
     const limit = Math.min(100, Math.max(1, query.limit ?? 20));
     const skip = (page - 1) * limit;
-    const where = query.actionStatus ? { actionStatus: query.actionStatus } : {};
+    const where: { actionStatus?: OpsActionStatusValue; actionType?: OpsActionTypeValue; opsUserId?: string } = {};
+    if (query.actionStatus) where.actionStatus = query.actionStatus;
+    if (query.actionType) where.actionType = query.actionType as OpsActionTypeValue;
+    if (query.opsUserId) where.opsUserId = query.opsUserId;
 
     const [items, total] = await Promise.all([
       this.prisma().opsAuditLog.findMany({
@@ -1565,6 +1737,7 @@ export class OpsService {
         select: {
           id: true,
           requestId: true,
+          actionType: true,
           actionStatus: true,
           requestPath: true,
           method: true,
@@ -1579,6 +1752,7 @@ export class OpsService {
       items: items.map((item) => ({
         id: item.id,
         requestId: item.requestId,
+        actionType: item.actionType,
         actionStatus: item.actionStatus,
         requestPath: item.requestPath,
         method: item.method,
@@ -1591,9 +1765,327 @@ export class OpsService {
     };
   }
 
+  /**
+   * Step 1 of browser login: send a 6-digit OTP to the ops user's registered email.
+   * The OTP hash is stored in Redis only (never DB). Returns same message regardless
+   * of whether the email exists to prevent user enumeration.
+   */
+  async requestLoginOtp(input: {
+    email: string;
+    requestIp: string;
+  }): Promise<{ message: string }> {
+    const email = input.email.trim().toLowerCase();
+    const prisma = this.prisma();
+    const opsUser = await prisma.opsUser.findUnique({ where: { email } });
+
+    if (!opsUser || !opsUser.isActive) {
+      // Blind audit: record the failed attempt using system actor to preserve anti-enumeration
+      // (same response regardless — attacker cannot distinguish found vs not-found)
+      const systemActorId = await this.resolveAuditActorOpsUserId(undefined);
+      await this.appendAuditLog({
+        opsUserId: systemActorId,
+        actionType: 'OTP_CHALLENGE_REQUESTED',
+        actionStatus: 'FAILED',
+        requestId: `ops-login-otp-notfound:${hashOpaqueToken(email)}:${Date.now()}`,
+        requestIp: input.requestIp,
+        requestPath: '/api/v1/ops/auth/login/request-otp',
+        method: 'POST',
+        summary: { reason: 'account_not_found_or_inactive' }
+      });
+      return { message: 'If a registered ops account exists for this email, an OTP has been sent.' };
+    }
+
+    const otp = crypto.randomInt(100000, 999999).toString();
+    const otpHash = hashOpaqueToken(otp);
+    const ttl = getLoginOtpTtlSeconds();
+
+    const otpKey = `ops:login-otp:${hashOpaqueToken(email)}`;
+    const attemptKey = `ops:login-otp-attempts:${hashOpaqueToken(email)}`;
+
+    await this.fastify.redis.set(otpKey, `${opsUser.id}||${otpHash}`, 'EX', ttl);
+    await this.fastify.redis.del(attemptKey);
+
+    const jobId = `ops-login-otp:${opsUser.id}:${Date.now()}`;
+    try {
+      await this.fastify.queues.notifications.add('send-email', {
+        to: opsUser.email,
+        template: 'OpsActionOtp',
+        data: {
+          name: opsUser.name,
+          action: 'ops-login',
+          code: otp,
+          expiresAt: new Date(Date.now() + ttl * 1000).toISOString()
+        }
+      }, { jobId });
+    } catch (error) {
+      await sendNotificationFailureAlert({
+        prisma: this.fastify.prisma,
+        template: 'OpsActionOtp',
+        channel: 'EMAIL',
+        recipient: opsUser.email,
+        errorMessage: error instanceof Error ? error.message : 'Unable to enqueue ops login OTP email',
+        failureStage: 'QUEUE_ENQUEUE',
+        queueName: 'notifications',
+        jobName: 'send-email',
+        jobId
+      });
+      throw error;
+    }
+
+    await this.appendAuditLog({
+      opsUserId: opsUser.id,
+      actionType: 'OTP_CHALLENGE_REQUESTED',
+      actionStatus: 'EXECUTED',
+      requestId: jobId,
+      requestIp: input.requestIp,
+      requestPath: '/api/v1/ops/auth/login/request-otp',
+      method: 'POST',
+      summary: { channel: 'email', action: 'ops-login' }
+    });
+
+    return { message: 'If a registered ops account exists for this email, an OTP has been sent.' };
+  }
+
+  /**
+   * Step 2 of browser login: verify the OTP and issue a short-lived httpOnly session token.
+   * The token is stored hashed in Redis with TTL. Never touches DB or localStorage.
+   * Returns the plaintext token for the route handler to set as a cookie.
+   */
+  async verifyLoginOtp(input: {
+    email: string;
+    otp: string;
+    requestIp: string;
+    requestPath: string;
+    method: string;
+  }): Promise<{
+    sessionToken: string;
+    opsUserId: string;
+    name: string;
+    email: string;
+    permissions: string[];
+    expiresAt: string;
+  }> {
+    const email = input.email.trim().toLowerCase();
+    const otpKey = `ops:login-otp:${hashOpaqueToken(email)}`;
+    const attemptKey = `ops:login-otp-attempts:${hashOpaqueToken(email)}`;
+
+    const stored = await this.fastify.redis.get(otpKey);
+    if (!stored) {
+      throw new AppError(ERROR_CODES.INVALID_CREDENTIALS, 'Invalid or expired login OTP', 401);
+    }
+
+    const separatorIndex = stored.indexOf('||');
+    const opsUserId = separatorIndex > 0 ? stored.slice(0, separatorIndex) : undefined;
+    const storedOtpHash = separatorIndex > 0 ? stored.slice(separatorIndex + 2) : undefined;
+    if (!opsUserId || !storedOtpHash) {
+      throw new AppError(ERROR_CODES.INVALID_CREDENTIALS, 'Invalid or expired login OTP', 401);
+    }
+
+    const incomingHash = hashOpaqueToken(input.otp.trim());
+    if (incomingHash !== storedOtpHash) {
+      const attempts = await this.fastify.redis.incr(attemptKey);
+      if (attempts === 1) {
+        await this.fastify.redis.expire(attemptKey, getLoginOtpTtlSeconds());
+      }
+      if (attempts >= OPS_LOGIN_OTP_MAX_ATTEMPTS) {
+        await this.fastify.redis.del(otpKey, attemptKey);
+      }
+      // Audit the failed OTP attempt against the ops user id extracted from the stored token
+      const systemActorId = await this.resolveAuditActorOpsUserId(opsUserId);
+      await this.appendAuditLog({
+        opsUserId: systemActorId,
+        actionType: 'OTP_CHALLENGE_FAILED',
+        actionStatus: 'FAILED',
+        requestId: `ops-login-otp-fail:${opsUserId}:${Date.now()}`,
+        requestIp: input.requestIp,
+        requestPath: input.requestPath,
+        method: input.method,
+        summary: { reason: 'invalid_otp', remainingAttempts: Math.max(0, OPS_LOGIN_OTP_MAX_ATTEMPTS - attempts) }
+      });
+      throw new AppError(ERROR_CODES.INVALID_CREDENTIALS, 'Invalid or expired login OTP', 401);
+    }
+
+    await this.fastify.redis.del(otpKey, attemptKey);
+
+    const prisma = this.prisma();
+    const opsUser = await prisma.opsUser.findUnique({ where: { id: opsUserId } });
+    if (!opsUser || !opsUser.isActive) {
+      throw new AppError(ERROR_CODES.UNAUTHORISED, 'Ops account is inactive or not found', 401);
+    }
+
+    const sessionToken = `opssess_${crypto.randomBytes(32).toString('base64url')}`;
+    const sessionTokenHash = hashOpaqueToken(sessionToken);
+    const sessionTtl = getBrowserSessionTtlSeconds();
+    const sessionKey = `${OPS_BROWSER_SESSION_REDIS_PREFIX}${sessionTokenHash}`;
+
+    await this.fastify.redis.set(sessionKey, JSON.stringify({
+      opsUserId: opsUser.id,
+      email: opsUser.email,
+      name: opsUser.name,
+      permissions: opsUser.permissions
+    }), 'EX', sessionTtl);
+
+    await prisma.opsUser.updateMany({
+      where: { id: opsUser.id, isActive: true },
+      data: { lastLoginAt: new Date() }
+    });
+
+    await this.appendAuditLog({
+      opsUserId: opsUser.id,
+      actionType: 'OPS_USER_LOGGED_IN',
+      actionStatus: 'EXECUTED',
+      requestId: `ops-login:${opsUser.id}:${Date.now()}`,
+      requestIp: input.requestIp,
+      requestPath: input.requestPath,
+      method: input.method,
+      summary: { loginMethod: 'browser-otp', email: opsUser.email }
+    });
+
+    return {
+      sessionToken,
+      opsUserId: opsUser.id,
+      name: opsUser.name,
+      email: opsUser.email,
+      permissions: opsUser.permissions,
+      expiresAt: new Date(Date.now() + sessionTtl * 1000).toISOString()
+    };
+  }
+
+  /**
+   * Resolves an ops browser session token from Redis. Returns null if not found/expired.
+   * Used by opsAuthGuard to validate cookie-based sessions.
+   */
+  async resolveBrowserSession(sessionToken: string): Promise<{
+    opsUserId: string;
+    email: string;
+    name: string;
+    permissions: string[];
+  } | null> {
+    const sessionTokenHash = hashOpaqueToken(sessionToken);
+    const sessionKey = `${OPS_BROWSER_SESSION_REDIS_PREFIX}${sessionTokenHash}`;
+    const raw = await this.fastify.redis.get(sessionKey);
+    if (!raw) return null;
+
+    try {
+      return JSON.parse(raw) as {
+        opsUserId: string;
+        email: string;
+        name: string;
+        permissions: string[];
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Queues a process restart via BullMQ cartCleanup queue.
+   * delayMinutes=0 means "restart now" (fires as soon as the job is picked up).
+   * Any positive value delays the job by that many minutes.
+   * The job persists in Redis — it survives the ops user logging out.
+   * PM2 / Docker restarts the process after process.exit(0).
+   */
+  async scheduleRestart(input: {
+    opsUserId: string;
+    delayMinutes: number;
+    challengeId: string;
+    otpCode: string;
+    requestIp: string;
+    requestPath: string;
+    method: string;
+  }): Promise<{ jobId: string; scheduledFor: string }> {
+    await this.verifyEmailOtp({
+      opsUserId: input.opsUserId,
+      challengeId: input.challengeId,
+      code: input.otpCode,
+      requestIp: input.requestIp,
+      requestPath: input.requestPath,
+      method: input.method
+    });
+
+    const delayMs = Math.max(0, Math.floor(input.delayMinutes)) * 60_000;
+    const scheduledFor = new Date(Date.now() + delayMs).toISOString();
+    const jobId = `ops-restart:${crypto.randomUUID()}`;
+
+    // Set load-shed to emergency immediately so checkout mutations receive a
+    // clean 503 ("Emergency degraded mode") rather than a connection-refused 502
+    // during the Fastify drain window when the container restarts.
+    // The cart-cleanup worker resets this to 'normal' before publishing the
+    // restart signal, so both containers come back up in normal serving mode.
+    await setLoadShedModeViaRedis(this.fastify.redis, 'emergency');
+
+    // Audit intent BEFORE enqueue — if the queue call fails, the audit record still proves
+    // the restart was requested. The cart-cleanup worker handles 'scheduled-process-restart'.
+    await this.appendAuditLog({
+      opsUserId: input.opsUserId,
+      actionType: 'CONTAINER_RESTART',
+      actionStatus: 'EXECUTED',
+      requestId: jobId,
+      requestIp: input.requestIp,
+      requestPath: input.requestPath,
+      method: input.method,
+      summary: { delayMinutes: input.delayMinutes, scheduledFor, jobId, stage: 'REQUESTED' }
+    });
+
+    try {
+      await this.fastify.queues.cartCleanup.add(
+        'scheduled-process-restart',
+        { requestedBy: input.opsUserId, scheduledFor },
+        { jobId, delay: delayMs }
+      );
+    } catch (enqueueErr) {
+      void sendTechnicalFailureAlert({
+        prisma: this.fastify.prisma,
+        template: 'ScheduledRestartEnqueue',
+        channel: 'UNKNOWN',
+        recipient: input.opsUserId,
+        errorMessage: enqueueErr instanceof Error ? enqueueErr.message : 'Unable to enqueue scheduled-process-restart job',
+        failureStage: 'QUEUE_ENQUEUE',
+        domain: 'ops',
+        component: 'scheduleRestart',
+        queueName: 'cart-cleanup',
+        jobName: 'scheduled-process-restart',
+        jobId
+      });
+      throw enqueueErr;
+    }
+
+    await this.appendAuditLog({
+      opsUserId: input.opsUserId,
+      actionType: 'CONTAINER_RESTART',
+      actionStatus: 'EXECUTED',
+      requestId: `${jobId}:enqueued`,
+      requestIp: input.requestIp,
+      requestPath: input.requestPath,
+      method: input.method,
+      summary: { delayMinutes: input.delayMinutes, scheduledFor, jobId, stage: 'ENQUEUED' }
+    });
+
+    return { jobId, scheduledFor };
+  }
+
+  /**
+   * Destroys the browser session token in Redis — called by POST /ops/auth/logout.
+   */
+  async logoutBrowserSession(sessionToken: string, requestIp: string, requestPath: string, method: string, opsUserId: string): Promise<void> {
+    const sessionTokenHash = hashOpaqueToken(sessionToken);
+    const sessionKey = `${OPS_BROWSER_SESSION_REDIS_PREFIX}${sessionTokenHash}`;
+    await this.fastify.redis.del(sessionKey);
+    await this.appendAuditLog({
+      opsUserId,
+      actionType: 'OPS_USER_LOGGED_OUT',
+      actionStatus: 'EXECUTED',
+      requestId: `ops-logout:${opsUserId}:${Date.now()}`,
+      requestIp,
+      requestPath,
+      method,
+      summary: { loginMethod: 'browser-otp', action: 'logout' }
+    });
+  }
+
   private async appendAuditLog(input: {
     opsUserId: string;
-    actionType?: OpsActionTypeValue;
+    actionType: OpsActionTypeValue;
     actionStatus: OpsActionStatusValue;
     requestId: string;
     requestIp: string;
@@ -1602,7 +2094,6 @@ export class OpsService {
     previousState?: unknown;
     newState?: unknown;
     summary?: unknown;
-    approvedByOpsUserId?: string;
   }): Promise<void> {
     await this.withOpsAuditChainLock(async () => {
       const previous = await this.prisma().opsAuditLog.findFirst({
@@ -1617,14 +2108,13 @@ export class OpsService {
         method: input.method,
         previousState: input.previousState,
         newState: input.newState,
-        summary: input.summary,
-        approvedByOpsUserId: input.approvedByOpsUserId
+        summary: input.summary
       });
 
       await this.prisma().opsAuditLog.create({
         data: {
           opsUserId: input.opsUserId,
-          actionType: input.actionType ?? 'LOAD_SHED_CHANGE',
+          actionType: input.actionType,
           actionStatus: input.actionStatus,
           requestId: input.requestId,
           requestIp: input.requestIp,
@@ -1634,8 +2124,7 @@ export class OpsService {
           ...(input.newState !== undefined ? { newState: input.newState } : {}),
           ...(input.summary !== undefined ? { summary: input.summary } : {}),
           chainHash,
-          previousChainHash,
-          ...(input.approvedByOpsUserId ? { approvedByOpsUserId: input.approvedByOpsUserId } : {})
+          previousChainHash
         }
       });
     });

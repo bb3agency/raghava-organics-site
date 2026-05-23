@@ -106,6 +106,43 @@ describe('rate-limit policies', () => {
     expect(key).not.toContain('Customer@Example.com');
   });
 
+  it('uses ops_session cookie as per-user key for admin-tier ops routes with no Bearer token', async () => {
+    const { rateLimitKeyGenerator } = await import('./rate-limit-policies');
+    const request = buildRequest({
+      url: '/api/v1/ops/config/overview',
+      headers: {
+        cookie: 'ops_session=super-secret-session-token'
+      }
+    });
+
+    const key = rateLimitKeyGenerator(request as never);
+
+    expect(key).toContain('tier:admin');
+    expect(key).toContain('path:/api/v1/ops/config/overview');
+    expect(key).toContain(':ops:');
+    expect(key).not.toContain('super-secret-session-token');
+  });
+
+  it('ops_session key differs per distinct session (per-user granularity)', async () => {
+    const { rateLimitKeyGenerator } = await import('./rate-limit-policies');
+
+    const req1 = buildRequest({
+      url: '/api/v1/ops/config/overview',
+      headers: { cookie: 'ops_session=session-user-a' }
+    });
+    const req2 = buildRequest({
+      url: '/api/v1/ops/config/overview',
+      headers: { cookie: 'ops_session=session-user-b' }
+    });
+
+    const key1 = rateLimitKeyGenerator(req1 as never);
+    const key2 = rateLimitKeyGenerator(req2 as never);
+
+    expect(key1).not.toBe(key2);
+    expect(key1).toContain(':ops:');
+    expect(key2).toContain(':ops:');
+  });
+
   it('reduces admin max in emergency mode but keeps checkout max unchanged', async () => {
     vi.stubEnv('LOAD_SHED_MODE', 'emergency');
     const { resolveRateLimitMax } = await import('./rate-limit-policies');

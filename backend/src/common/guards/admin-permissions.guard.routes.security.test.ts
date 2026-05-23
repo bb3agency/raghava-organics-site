@@ -107,21 +107,21 @@ describe('adminPermissionGuard route-level enforcement', () => {
     await app.close();
   });
 
-  it('enforces queues:inspect read access', async () => {
+  it('enforces ops:read permission path', async () => {
     const app = buildApp();
-    app.get('/t/queues-inspect', { preHandler: adminPermissionGuard('queues:inspect') }, async () => ({ ok: true }));
+    app.get('/t/ops-read', { preHandler: adminPermissionGuard('ops:read') }, async () => ({ ok: true }));
 
     const denied = await app.inject({
       method: 'GET',
-      url: '/t/queues-inspect',
+      url: '/t/ops-read',
       headers: { 'x-role': 'ADMIN', 'x-permissions': 'users:read' }
     });
     expect(denied.statusCode).toBe(403);
 
     const allowed = await app.inject({
       method: 'GET',
-      url: '/t/queues-inspect',
-      headers: { 'x-role': 'ADMIN', 'x-permissions': 'queues:inspect' }
+      url: '/t/ops-read',
+      headers: { 'x-role': 'ADMIN', 'x-permissions': 'ops:read,developer:*' }
     });
     expect(allowed.statusCode).toBe(200);
     await app.close();

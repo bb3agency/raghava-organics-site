@@ -6,13 +6,14 @@ export const LOAD_SHED_MODE_KEY = 'ops:load_shed:mode';
 const NON_CRITICAL_ADMIN_PREFIXES = [
   '/api/v1/admin/analytics',
   '/api/v1/admin/dashboard',
-  '/api/v1/admin/orders/export',
   '/api/v1/admin/coupons',
   '/api/v1/admin/settings',
   '/api/v1/admin/inventory',
   '/api/v1/admin/reviews',
   '/api/v1/admin/users',
-  '/api/v1/admin/queues'
+  '/api/v1/admin/products',
+  '/api/v1/admin/categories',
+  '/api/v1/admin/orders/export'
 ];
 const REDUCED_MODE_MUTATION_PREFIXES = ['/api/v1/orders', '/api/v1/payments/initiate', '/api/v1/cart'];
 const ALWAYS_ALLOWED_PREFIXES = ['/api/v1/health', '/api/v1/auth', '/api/v1/payments/webhook', '/api/v1/shipping/webhook'];
@@ -52,6 +53,26 @@ export async function setLoadShedMode(
   mode: 'normal' | 'reduced' | 'emergency'
 ): Promise<void> {
   await request.server.redis.set(LOAD_SHED_MODE_KEY, mode);
+  cachedMode = mode;
+  cachedAt = Date.now();
+}
+
+/**
+ * Sets the load-shed mode via a raw Redis client.
+ *
+ * For service-layer callers (e.g. `scheduleRestart`) and worker processes
+ * where a `FastifyRequest` is not available. Updates both Redis and the
+ * in-process cache immediately so subsequent `loadShedGuard` calls within the
+ * same process see the new mode without waiting for the 5-second cache TTL.
+ *
+ * @param redis - Any object exposing a `set(key, value)` Redis command.
+ * @param mode  - The load-shed mode to apply.
+ */
+export async function setLoadShedModeViaRedis(
+  redis: { set: (key: string, value: string) => Promise<unknown> },
+  mode: 'normal' | 'reduced' | 'emergency'
+): Promise<void> {
+  await redis.set(LOAD_SHED_MODE_KEY, mode);
   cachedMode = mode;
   cachedAt = Date.now();
 }

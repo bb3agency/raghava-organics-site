@@ -240,3 +240,28 @@ export const moderateReviewSchema = {
     ...standardAdminErrorResponses
   }
 } as const;
+
+export const adminDeleteReviewSchema = {
+  tags: ['admin', 'reviews'],
+  summary: 'Hard-delete a review (spam/illegal content removal)',
+  params: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['id'],
+    properties: {
+      id: { type: 'string', maxLength: 64 }
+    }
+  },
+  response: {
+    200: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['id', 'deleted'],
+      properties: {
+        id: { type: 'string' },
+        deleted: { type: 'boolean' }
+      }
+    },
+    ...standardAdminErrorResponses
+  }
+} as const;

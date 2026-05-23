@@ -8,6 +8,7 @@ type RefundsPrismaType = NonNullable<RefundsWorkerDeps['PrismaClient']>;
 
 describe('refunds worker', () => {
   let processor: undefined | ((job: { name: string; data: unknown }) => Promise<void>);
+  let failedHandler: ((job: unknown, error: Error) => void) | undefined;
   const refundsQueueAdd = vi.fn();
   const razorpayInitiateRefund = vi.fn();
   const orderFindUnique = vi.fn();
@@ -25,6 +26,7 @@ describe('refunds worker', () => {
 
   function MockWorker(_name: string, proc: (job: { name: string; data: unknown }) => Promise<void>) {
     processor = proc;
+    return { on: (event: string, handler: (job: unknown, error: Error) => void) => { if (event === 'failed') failedHandler = handler; } };
   }
 
   function MockPrismaClient() {
@@ -44,8 +46,12 @@ describe('refunds worker', () => {
     };
   }
 
+  const sendTechnicalFailureAlert = vi.fn().mockResolvedValue(undefined);
+
   beforeEach(() => {
     processor = undefined;
+    failedHandler = undefined;
+    sendTechnicalFailureAlert.mockReset();
     refundsQueueAdd.mockReset();
     razorpayInitiateRefund.mockReset();
     orderFindUnique.mockReset();
@@ -57,7 +63,8 @@ describe('refunds worker', () => {
     createRefundsWorker({} as never, {
       Worker: MockWorker as unknown as RefundsWorkerType,
       PrismaClient: MockPrismaClient as unknown as RefundsPrismaType,
-      createPaymentProvider: mockCreatePaymentProvider
+      createPaymentProvider: mockCreatePaymentProvider,
+      sendTechnicalFailureAlert
     });
     orderFindUnique.mockResolvedValue(null);
 
@@ -75,7 +82,8 @@ describe('refunds worker', () => {
     createRefundsWorker({} as never, {
       Worker: MockWorker as unknown as RefundsWorkerType,
       PrismaClient: MockPrismaClient as unknown as RefundsPrismaType,
-      createPaymentProvider: mockCreatePaymentProvider
+      createPaymentProvider: mockCreatePaymentProvider,
+      sendTechnicalFailureAlert
     });
     orderFindUnique.mockResolvedValue({
       id: 'order_1',
@@ -122,7 +130,8 @@ describe('refunds worker', () => {
     createRefundsWorker({} as never, {
       Worker: MockWorker as unknown as RefundsWorkerType,
       PrismaClient: MockPrismaClient as unknown as RefundsPrismaType,
-      createPaymentProvider: mockCreatePaymentProvider
+      createPaymentProvider: mockCreatePaymentProvider,
+      sendTechnicalFailureAlert
     });
     orderFindUnique.mockResolvedValue({
       id: 'order_2',
@@ -177,11 +186,48 @@ describe('refunds worker', () => {
     );
   });
 
+  it('sends terminal failure alert when refund job exhausts all attempts', () => {
+    createRefundsWorker({} as never, {
+      Worker: MockWorker as unknown as RefundsWorkerType,
+      PrismaClient: MockPrismaClient as unknown as RefundsPrismaType,
+      createPaymentProvider: mockCreatePaymentProvider,
+      sendTechnicalFailureAlert
+    });
+
+    const terminalJob = { name: 'initiate-razorpay-refund', id: 'job_r1', opts: { attempts: 3 }, attemptsMade: 3 };
+    failedHandler?.(terminalJob, new Error('provider timeout'));
+
+    expect(sendTechnicalFailureAlert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        queueName: 'refunds',
+        jobName: 'initiate-razorpay-refund',
+        jobId: 'job_r1',
+        terminalFailure: true,
+        errorMessage: 'provider timeout'
+      })
+    );
+  });
+
+  it('does NOT send alert when refund job still has remaining attempts', () => {
+    createRefundsWorker({} as never, {
+      Worker: MockWorker as unknown as RefundsWorkerType,
+      PrismaClient: MockPrismaClient as unknown as RefundsPrismaType,
+      createPaymentProvider: mockCreatePaymentProvider,
+      sendTechnicalFailureAlert
+    });
+
+    const retryJob = { name: 'initiate-razorpay-refund', id: 'job_r2', opts: { attempts: 3 }, attemptsMade: 1 };
+    failedHandler?.(retryJob, new Error('transient error'));
+
+    expect(sendTechnicalFailureAlert).not.toHaveBeenCalled();
+  });
+
   it('throws when provider payment id is missing', async () => {
     createRefundsWorker({} as never, {
       Worker: MockWorker as unknown as RefundsWorkerType,
       PrismaClient: MockPrismaClient as unknown as RefundsPrismaType,
-      createPaymentProvider: mockCreatePaymentProvider
+      createPaymentProvider: mockCreatePaymentProvider,
+      sendTechnicalFailureAlert
     });
     orderFindUnique.mockResolvedValue({
       id: 'order_1',

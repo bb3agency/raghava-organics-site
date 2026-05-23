@@ -47,8 +47,6 @@ Integration methodology note:
 | Meta WhatsApp | `META_WHATSAPP_PHONE_NUMBER_ID` | Notifications Owner | `vault://clients/<client>/notify/meta-wa/phone-id` | YYYY-MM-DD | YYYY-MM-DD | YYYY-MM-DD | YYYY-MM-DD | Active | WhatsApp Business phone number |
 | Meta WhatsApp | `META_WHATSAPP_WEBHOOK_VERIFY_TOKEN` | Notifications Owner | `vault://clients/<client>/notify/meta-wa/webhook-token` | YYYY-MM-DD | YYYY-MM-DD | YYYY-MM-DD | YYYY-MM-DD | Active | Webhook verification secret |
 | Invoice Storage | `INVOICE_STORAGE_ROOT` | Platform Owner | `vault://clients/<client>/runtime/invoice-storage-root` | YYYY-MM-DD | YYYY-MM-DD | YYYY-MM-DD | YYYY-MM-DD | Active | Ensure path exists and is writable by backend/workers |
-| Security Core | `ADMIN_MFA_ENCRYPTION_KEY` | Security/Ops Owner | `vault://clients/<client>/security/mfa/encryption-key` | YYYY-MM-DD | YYYY-MM-DD | YYYY-MM-DD | YYYY-MM-DD | Active | Must be independent from `JWT_REFRESH_SECRET` |
-| Ops Control Plane | `OPS_API_KEY_SALT` | Security/Ops Owner | `vault://clients/<client>/ops/api-key-salt` | YYYY-MM-DD | YYYY-MM-DD | YYYY-MM-DD | YYYY-MM-DD | Active | Rotate under compromise/credential-loss drill |
 | Ops Control Plane | `OPS_METRICS_TOKEN` | Security/Ops Owner | `vault://clients/<client>/ops/metrics-token` | YYYY-MM-DD | YYYY-MM-DD | YYYY-MM-DD | YYYY-MM-DD | Active | Required for `/api/v1/ops/metrics` authentication |
 | Admin Seed | `SEED_ADMIN_EMAIL` + `SEED_ADMIN_PASSWORD` | Engineering Lead | `vault://clients/<client>/admin/seed` | YYYY-MM-DD | YYYY-MM-DD | YYYY-MM-DD | YYYY-MM-DD | Active | Used by `upsert-admin.js` / `seed-admin.mjs`; never hardcoded |
 

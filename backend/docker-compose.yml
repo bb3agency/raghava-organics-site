@@ -32,6 +32,8 @@ services:
     environment:
       - NODE_ENV=production
       - OTEL_SERVICE_NAME=${CLIENT_ID:-ecom}-workers
+      # Payment drain timeout for scheduled-process-restart job (ms). Default: 300000 (5 min).
+      - RESTART_PAYMENT_DRAIN_TIMEOUT_MS=${RESTART_PAYMENT_DRAIN_TIMEOUT_MS:-300000}
     depends_on:
       postgres:
         condition: service_healthy

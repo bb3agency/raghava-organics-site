@@ -229,6 +229,23 @@ export class ReviewsService {
     };
   }
 
+  /**
+   * Hard-delete a review by ID. Used by admins to remove spam or illegal content.
+   * @param id - The review UUID
+   */
+  async adminDeleteReview(id: string) {
+    this.assertReviewsEnabled();
+    const existing = await this.fastify.prisma.review.findUnique({
+      where: { id },
+      select: { id: true }
+    });
+    if (!existing) {
+      throw new AppError(ERROR_CODES.NOT_FOUND, 'Review not found', 404);
+    }
+    await this.fastify.prisma.review.delete({ where: { id } });
+    return { id, deleted: true };
+  }
+
   private assertReviewsEnabled() {
     if (!featureFlags.reviews) {
       throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Reviews are disabled', 400);

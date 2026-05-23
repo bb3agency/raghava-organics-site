@@ -13,6 +13,20 @@ server {
   listen 443 ssl;
   server_name client1.com www.client1.com;
 
+  # ── Maintenance page ────────────────────────────────────────────────────────
+  # Served when the upstream Node process is temporarily unavailable (502) or
+  # when the app itself signals degraded mode (503). The 15-second Retry-After
+  # header tells well-behaved HTTP clients and CDNs to back off and retry.
+  # Deploy: copy nginx/maintenance.html → /etc/nginx/maintenance/maintenance.html
+  error_page 502 503 /maintenance.html;
+  location = /maintenance.html {
+    root /etc/nginx/maintenance;
+    internal;
+    add_header Cache-Control "no-store, no-cache, must-revalidate" always;
+    add_header Retry-After "15" always;
+  }
+  # ────────────────────────────────────────────────────────────────────────────
+
   ssl_certificate     /etc/letsencrypt/live/client1.com/fullchain.pem;
   ssl_certificate_key /etc/letsencrypt/live/client1.com/privkey.pem;
   ssl_protocols       TLSv1.2 TLSv1.3;

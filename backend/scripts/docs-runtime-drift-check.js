@@ -62,7 +62,7 @@ function collectDocsRuntimeDriftErrors(sources) {
   assertRegex(edgePolicy, /health:\s*\{[\s\S]*?appLimitPerMinute:\s*30/, 'edge policy health app limit', errors);
   assertRegex(edgePolicy, /default:\s*\{[\s\S]*?appLimitPerMinute:\s*120/, 'edge policy default app limit', errors);
   assertIncludes(trd, '| Auth sensitive (`/auth/send-otp`, `/auth/verify-otp`, `/auth/forgot-password`, `/auth/register`, `/auth/refresh`) | 6 per minute |', 'TRD auth-sensitive app limit', errors);
-  assertIncludes(trd, '| Auth login (`/auth/login`, `/auth/admin/login`) | 12 per minute + progressive lockout on failed credentials |', 'TRD auth-login app limit', errors);
+  assertIncludes(trd, '| Auth login (`/auth/login`, `/auth/admin/login/request-otp`, `/auth/admin/login/verify-otp`) | 12 per minute + progressive lockout on failed credentials |', 'TRD auth-login app limit', errors);
   assertIncludes(trd, '| Catalogue reads (`/products*`, `/reviews/product/*`) | 300 per minute (route profile) |', 'TRD catalog app limit', errors);
   assertIncludes(trd, '| Cart/user-session flows (`/cart*`, `/wishlist*`, `/users/me*`) | 90 per minute (route profile) |', 'TRD cart app limit', errors);
   assertIncludes(trd, '| Checkout/payment mutations (`/orders`, `/orders/:id/cancel`, `/payments/initiate`, `/payments/verify`) | 30 per minute (route profile) |', 'TRD checkout app limit', errors);

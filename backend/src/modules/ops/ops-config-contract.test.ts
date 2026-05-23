@@ -21,6 +21,22 @@ describe('ops config contract', () => {
     expect(isOpsConfigMutableKey('JWT_SECRET')).toBe(true);
   });
 
+  it('NODE_ENV and CLIENT_ID are not overlay-able (security regression guard)', () => {
+    expect(isOpsConfigMutableKey('NODE_ENV')).toBe(false);
+    expect(isOpsConfigRuntimeOverlayKey('NODE_ENV')).toBe(false);
+    expect(isOpsConfigMutableKey('CLIENT_ID')).toBe(false);
+    expect(isOpsConfigRuntimeOverlayKey('CLIENT_ID')).toBe(false);
+  });
+
+  it('newly added dbOverlay keys are correctly classified as mutable runtime overlay keys', () => {
+    expect(isOpsConfigMutableKey('EMAIL_PROVIDER')).toBe(true);
+    expect(isOpsConfigRuntimeOverlayKey('EMAIL_PROVIDER')).toBe(true);
+    expect(isOpsConfigMutableKey('REPLAY_AUDIT_RETENTION_DAYS')).toBe(true);
+    expect(isOpsConfigRuntimeOverlayKey('REPLAY_AUDIT_RETENTION_DAYS')).toBe(true);
+    expect(isOpsConfigMutableKey('TRUSTED_PROXY_ALLOWLIST_CIDR')).toBe(true);
+    expect(isOpsConfigRuntimeOverlayKey('TRUSTED_PROXY_ALLOWLIST_CIDR')).toBe(true);
+  });
+
   it('exposes expected mutable keys in allowlist', () => {
     const mutableKeys = listOpsConfigMutableKeys();
     expect(mutableKeys).toContain('PAYMENT_PROVIDER');
@@ -103,9 +119,6 @@ describe('ops config contract', () => {
     );
 
     expect(required).toContain('OPS_METRICS_TOKEN');
-    expect(required).toContain('OPS_API_KEY_SALT');
-    expect(required).toContain('ADMIN_MFA_ENCRYPTION_KEY');
-    expect(required).toContain('OPS_DUAL_APPROVAL_WINDOW_MINUTES');
     expect(required).toContain('REPLAY_APPROVAL_TOKEN');
     expect(required).toContain('DELHIVERY_WEBHOOK_TOKEN');
     expect(required).toContain('SMS_PROVIDER');
@@ -119,9 +132,6 @@ describe('ops config contract', () => {
       OPS_METRICS_TOKEN: 'token-present'
     });
 
-    expect(missing).toContain('OPS_API_KEY_SALT');
-    expect(missing).toContain('ADMIN_MFA_ENCRYPTION_KEY');
-    expect(missing).toContain('OPS_DUAL_APPROVAL_WINDOW_MINUTES');
     expect(missing).toContain('REPLAY_APPROVAL_TOKEN');
     expect(missing).toContain('DELHIVERY_API_KEY');
     expect(missing).toContain('DELHIVERY_WEBHOOK_TOKEN');

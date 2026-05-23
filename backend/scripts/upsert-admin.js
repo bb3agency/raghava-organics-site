@@ -39,8 +39,8 @@ async function main() {
     'dashboard:read',
     'analytics:read', 'analytics:export', 'analytics:replay',
     'orders:read', 'orders:write', 'orders:export', 'orders:refund', 'orders:notify',
-    'users:read',
-    'queues:inspect',
+    'users:read', 'users:write',
+    'shipments:read', 'payments:read',
     'ops:read', 'ops:write',
     'developer:*'
   ];

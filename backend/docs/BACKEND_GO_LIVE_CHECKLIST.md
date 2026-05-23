@@ -15,6 +15,10 @@ This checklist validates both:
 - [ ] No placeholder secrets remain (`replace_with_*`, `change_me*`, `<...>`).
 - [ ] `ENABLE_VERBOSE_VALIDATION_ERRORS=false` in production-like profiles.
 - [ ] `.env` inventory is reviewed against `.env.example` and required keys for enabled modules are present.
+- [ ] Bootstrap keys (`DATABASE_URL`, `REDIS_URL`, `OPS_DB_ENCRYPTION_KEY`, `JWT_SECRET`, `JWT_REFRESH_SECRET`, feature flags, OTEL, etc.) are set as **live values** in `.env`.
+- [ ] DB-overlay keys (provider credentials, webhook tokens, ops-security params — all keys marked `dbOverlay: true` in `scripts/env-runtime-contract.js`) are **not** populated in `.env` — they must be stored in `OpsConfigSecret` and applied via `applyOpsConfigRuntimeOverlay()` at boot.
+- [ ] `npm run config:parity-check` passes — validates `.env.example` two-tier layout (live values for bootstrap keys, commented stubs for DB-overlay keys).
+- [ ] `npm run ops:config-contract-drift-check` passes — validates ops config contract is consistent with `env-runtime-contract.js`.
 
 ## 2) Environment-to-Implementation Parity (Mandatory)
 
@@ -39,7 +43,6 @@ This checklist validates both:
 ### 2.3 Auth and session security
 - [ ] `JWT_SECRET` and `JWT_REFRESH_SECRET` are unique, non-placeholder, and rotated per policy.
 - [ ] `JWT_SECRET` fail-fast validation is active — `jwt.plugin.ts` throws `AppError(INTERNAL_ERROR)` if missing/empty at plugin registration. `JWT_REFRESH_SECRET` fail-fast validation is active — `auth.service.ts` `resolveRefreshSecret()` throws if missing/empty at token sign/verify time.
-- [ ] `ADMIN_MFA_ENCRYPTION_KEY` is configured as an independent secret and is not equal to `JWT_REFRESH_SECRET` (strict-profile startup rejection). Development-like fallback to refresh secret is treated as temporary only.
 - [ ] JWT signing and verification pinned to `HS256` algorithm for both access tokens (`@fastify/jwt`) and refresh tokens (`jsonwebtoken`) — no algorithm downgrade risk.
 - [ ] Auth flows behave correctly in target env (OTP/login/refresh/logout).
 - [ ] Phone OTP signup route `POST /api/v1/auth/signup-phone` is validated end-to-end (phone + otp required; optional `firstName`, `lastName`, `email`; issues auth tokens and sets refresh cookie).
@@ -84,7 +87,7 @@ This checklist validates both:
   - `GET /api/v1/orders/:id/invoice.pdf` (customer-owned order only)
   - `GET /api/v1/admin/orders/:id/invoice.pdf` (admin `orders:read`)
 - [ ] Order APIs expose invoice metadata via `invoice.hasPdf` only (no direct/public/signed invoice URLs).
-- [ ] Store/invoice envs (`STORE_*`) produce correct invoice and legal document outputs (GST fields, totals, seller metadata).
+- [ ] Store/invoice profile (DB-backed `StoreSettings`) produces correct invoice and legal document outputs (GST fields, totals, seller metadata). No `STORE_*` env fallbacks.
 
 ### 2.8 Ops metrics and observability
 - [ ] `OPS_METRICS_TOKEN` and optional `OPS_METRICS_ALLOWLIST` are configured and validated.
@@ -93,17 +96,19 @@ This checklist validates both:
 - [ ] Alert routing/on-call ownership is configured for go-live window.
 - [ ] All SLO alert rules in `observability/slo-rules.yml` have corresponding test cases in `observability/slo-rules.test.yml` (including `QueueDLQDepthHigh` and `AuthChallengeFailureSpike`).
 - [ ] `npm run test:slo-rules` passes (requires `promtool` in CI).
+- [ ] System-wide technical failure alerting is verified: at least one active Ops user and one active Admin user exist in DB (`role IN ('OPS', 'ADMIN')`, `isActive: true`). Resend (`RESEND_API_KEY` + `RESEND_FROM`) is configured for alert delivery.
+- [ ] `StoreSettings.storeName` and `StoreSettings.websiteUrl` are populated — alert emails carry client-identifying metadata. No env fallbacks.
+- [ ] Per-template primary notification channels are configured in `StoreSettings.primaryNotificationChannels` (DB JSON field). All 13 templates have primary channel set (`EMAIL` default). Merchant admin can override per-template via `PATCH /api/v1/admin/settings/notifications` with `primaryChannels` payload.
 
 ### 2.9 Ops control plane hardening
-- [ ] `/api/v1/ops/*` routes are protected by dedicated ops auth (`x-ops-key-id`, `x-ops-api-key`, `x-ops-mfa-code`) and not by merchant admin JWT flow.
-- [ ] Ops users are isolated from `User` admin identities and carry per-user allowlisted CIDR ranges.
-- [ ] First ops identity invite bootstrap is performed via `npm run ops:newuser -- --email=<ops@email> --name="Primary Ops" --ip-allowlist="<cidr>" --setup-base-url="https://<client-domain>" --yes` on trusted host session only.
+- [ ] `/api/v1/ops/*` routes are protected by browser session cookie (`ops_session`) issued via email-OTP login — not by merchant admin JWT flow. Privileged write actions additionally require an email OTP challenge (`challengeId`, `otpCode`) in the request body — verified by `opsAuthGuard` before the action commits.
+- [ ] Ops users are isolated from `User` admin identities (mutually exclusive email domains).
+- [ ] First ops identity invite bootstrap is performed via `npm run ops:newuser -- --email=<ops@email> --name="Primary Ops" --setup-base-url="https://<client-domain>" --yes` on trusted VPS host session (SSH) only.
 - [ ] Merchant admin invite bootstrap is performed via `npm run admin:newuser -- --email=<admin@email> --name="Merchant Admin" --setup-base-url="https://<client-domain>" --yes` (or ops-authenticated admin invite API fallback), never via local seed scripts.
 - [ ] Invite `setupBaseUrl` is passed as frontend base origin only (for example, `https://<client-domain>`), never path URLs like `/ops/setup` or `/admin/setup`; backend appends setup paths.
 - [ ] Cross-domain invite email boundaries are verified: ops invite fails `409 CONFLICT` when email exists in `User`, and admin invite fails `409 CONFLICT` when email exists in `OpsUser`.
 - [ ] Invite setup link expires within 10 minutes; expired unconsumed invite records are cleaned and auditable.
-- [ ] Privileged ops write actions require email OTP challenge verification.
-- [ ] Critical ops writes enforce dual approval (`ops:write` request + `ops:approve` confirm) with expiry window.
+- [ ] Ops write actions require email OTP challenge verification (`ops:write`) before committing.
 - [ ] Ops write actions persist tamper-evident audit-chain records (`OpsAuditLog` chain hash continuity).
 - [ ] Ops setup, endpoint usage, and frontend integration follow `docs/OPS_CONTROL_PLANE_GUIDE.md`.
 - [ ] Invite lifecycle boundaries are verified and documented: `POST /api/v1/admin/invites` and `POST /api/v1/admin/invites/cleanup-expired` are ops-authenticated Layer C controls; `POST /api/v1/admin/invites/consume` and `POST /api/v1/ops/invites/consume` are public, rate-limited, one-time token bootstrap endpoints only; neither consume endpoint creates an invite or grants permissions without a valid unexpired token.
@@ -114,13 +119,19 @@ This checklist validates both:
 - [ ] DB-backed ops config secrets are encrypted at rest (`OpsConfigSecret`) and only masked values are returned by read APIs.
 - [ ] Ops config key lifecycle is contract-driven (`src/modules/ops/ops-config-contract.ts`) with deny-by-default mutability.
 - [ ] Current contract policy is validated in release evidence: bootstrap-only keys (`DATABASE_URL`, initial `REDIS_URL`, `OPS_DB_ENCRYPTION_KEY`) are real-env only, while DB-overlay keys are editable only through developer Ops UI/API with ops auth + verified OTP + encrypted persistence + restart-required behavior.
-- [ ] API and worker processes apply the encrypted DB runtime overlay before provider/notification/shipping/payment initialization, and DB values override env only for contract-allowed non-bootstrap keys.
+- [ ] API and worker processes apply the encrypted DB runtime overlay (`applyOpsConfigRuntimeOverlay`) **before** provider/notification/shipping/payment initialization, and DB values override `process.env` only for contract-allowed non-bootstrap keys.
 - [ ] `npm run ops:config-contract-drift-check` passes and is included in guardrails before release cut.
+- [ ] **DB-overlay config verification steps (run after first ops invite bootstrap):**
+  - [ ] All `dbOverlay: true` keys have entries in `OpsConfigSecret` (verify via `GET /api/v1/ops/config/stored` with ops auth — returns masked list).
+  - [ ] `GET /api/v1/ops/config/overview` shows no required keys with `present: false` or `isPlaceholder: true` in the `strictProfileHealth` check.
+  - [ ] Backend and worker processes are restarted after saving all overlay values — `applyOpsConfigRuntimeOverlay()` is a boot-time operation.
+  - [ ] Confirm provider credentials in DB overlay are functional: complete a Razorpay test payment (or shipping dry-run) after overlay is applied to confirm the overlay values actually reach provider SDK calls.
+  - [ ] `POST /api/v1/ops/config/validate` with the full config payload returns no `required` or `unknown` key errors.
 
 ### 2.10 Atomic Operations & Concurrency Control (Race-Condition Hardening)
 
 - [ ] Critical state transitions use guarded CAS updates (`updateMany`/transaction guards) and return structured conflict/retry-safe errors.
-- [ ] CAS coverage includes admin invites, refresh tokens, dual approvals, reconciliation, webhook inbox claims, inventory, outbox dispatch, coupons, idempotency, and order confirmation paths.
+- [ ] CAS coverage includes admin invites, refresh tokens, reconciliation, webhook inbox claims, inventory, outbox dispatch, coupons, idempotency, and order confirmation paths.
 - [ ] Ops audit chain lock behavior is validated, including lock timeout as structured `503 ops_audit_chain_lock_timeout`.
 - [ ] CAS regression tests pass for hardened auth/admin/ops/reconciliation/idempotency/inventory/outbox/order paths.
 - [ ] Mock compatibility remains intact for unit tests while production paths keep guarded writes.
@@ -133,7 +144,7 @@ This checklist validates both:
 
 ### 2.12 Script and seed security
 - [ ] `scripts/upsert-admin.js` and `scripts/seed-admin.mjs` read admin credentials from `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD` environment variables — no hardcoded production credentials.
-- [ ] `scripts/ops-newuser.mjs` reads invite/email/encryption configuration from env and does not hardcode credentials.
+- [ ] `scripts/ops-newuser.mjs` reads invite/email/encryption configuration from env and does not hardcode credentials. `RESEND_API_KEY` and `RESEND_FROM` must be set as live values in `.env` before running this script (Phase 1 bootstrap — see `docs/PRODUCTION_FIRST_DEPLOY_CHECKLIST.md`). After first ops login they are managed via Ops UI.
 - [ ] `scripts/admin-contract-check.js` reads test admin credentials from `ADMIN_EMAIL` / `ADMIN_PASSWORD` environment variables and hard-fails at startup when either is absent — no hardcoded credentials that could leak into production environments.
 
 ## 3) Database & Prisma Readiness
@@ -170,6 +181,7 @@ This checklist validates both:
 - [ ] `confirm-order` and `deduct-inventory` jobs in `order-processing.worker.ts` are thin delegation stubs — they resolve the `orderId` from webhook data and immediately enqueue `process-order-update`. No order/payment status mutations occur in those handlers directly. `process-order-update` is the single authoritative entry point for order status transitions to `CONFIRMED`.
 - [ ] `process-order-update` is present in the `knownQueueJobs` set in `src/common/observability/metrics.ts` so queue metrics (retries, failures, backlog) are correctly tracked for this job.
 - [ ] `RECONCILIATION_AUTO_HEAL_ISSUES` env var is set intentionally: set to a comma-separated list to enable only specific auto-heals, or to empty string to disable all auto-heals for incident triage. Default (unset) enables all four safe types.
+- [ ] `RESTART_PAYMENT_DRAIN_TIMEOUT_MS` is set in the **workers** `.env` (not the API env). Default `300000` (5 min) is appropriate for production. In staging/test environments, set to a lower value (e.g. `10000`) to prevent long waits during scheduled-process-restart job testing. Verify it is present in `docker-compose.yml` workers service environment section.
 - [ ] Shipment booking (`create-shipment` job) does NOT hold a DB connection during the external provider HTTP call. The handler uses three phases: read-only validation → external call → write-only transaction. Verify no interactive transaction wraps the `createShipment()` call.
 - [ ] Credit note generation jobs carry a deterministic `jobId` on both the outbox path and the direct BullMQ fallback path, ensuring no duplicate credit note documents are generated on retry.
 - [ ] API (`start`) and workers (`start:workers`) are running as separate supervised long-lived processes/services; both remain stable (no crash loop) for at least 30 minutes.

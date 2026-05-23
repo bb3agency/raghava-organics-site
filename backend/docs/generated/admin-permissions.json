@@ -23,9 +23,7 @@
     "analytics:export",
     "analytics:replay",
     "users:read",
-    "queues:inspect",
     "ops:read",
-    "ops:write",
-    "ops:approve"
+    "ops:write"
   ]
 }

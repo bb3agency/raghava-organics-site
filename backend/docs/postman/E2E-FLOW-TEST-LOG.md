@@ -71,19 +71,36 @@ set PAYMENT_PROVIDER=noop&& npx tsx watch queues/workers/index.ts
 
 ## Folder 0 — Seed Data
 
-### 0.1 Admin Login
+### 0.1 Admin Login (2-step email OTP)
+
+#### 0.1a Request OTP
 | Field | Value |
 |---|---|
-| **Method** | `POST /api/v1/auth/admin/login` |
+| **Method** | `POST /api/v1/auth/admin/login/request-otp` |
 | **Body** | `{ email: adminEmail, password: adminPassword }` |
 | **Expected status** | `200` |
+| **Assertions** | `j.expiresAt` is a string |
+| **Side-effects** | OTP sent to admin email; stores `expiresAt` |
+| **Notes** | Does **not** issue a JWT — JWT is issued only after OTP verification |
+
+```json
+// Actual response shape
+{ "expiresAt": "2026-05-20T16:35:00.000Z" }
+```
+
+#### 0.1b Verify OTP
+| Field | Value |
+|---|---|
+| **Method** | `POST /api/v1/auth/admin/login/verify-otp` |
+| **Body** | `{ email: adminEmail, otp: adminOtp }` |
+| **Expected status** | `200` |
 | **Assertions** | `j.accessToken` is a string *(envelope disabled — field is at root)* |
-| **Side-effects** | Sets `adminToken` env var |
+| **Side-effects** | Sets `adminToken` env var; sets HTTP-only refresh cookie |
 | **Notes** | All subsequent admin requests use `Bearer {{adminToken}}` |
 
 ```json
 // Actual response shape (FEATURE_RESPONSE_ENVELOPE_ENABLED=false)
-{ "accessToken": "eyJ..." }
+{ "accessToken": "eyJ...", "admin": { "id": "...", "email": "...", "role": "ADMIN", "permissions": [] } }
 ```
 
 ---

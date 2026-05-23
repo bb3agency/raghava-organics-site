@@ -11,12 +11,17 @@ describe('notifications worker', () => {
   const createLog = vi.fn();
   const findStoreSettings = vi.fn();
   const findOpsConfigSecrets = vi.fn();
+  const findOpsUsers = vi.fn();
+  const findAdminUsers = vi.fn();
   const sendEmail = vi.fn();
   const sendSms = vi.fn();
   const sendWhatsapp = vi.fn();
 
-  function MockWorker(_name: string, proc: (job: { name: string; data: unknown }) => Promise<void>) {
-    processor = proc;
+  class MockWorker {
+    on(): void { /* no-op for tests */ }
+    constructor(_name: string, proc: (job: { name: string; data: unknown }) => Promise<void>) {
+      processor = proc;
+    }
   }
 
   function MockPrismaClient() {
@@ -29,6 +34,12 @@ describe('notifications worker', () => {
       },
       opsConfigSecret: {
         findMany: findOpsConfigSecrets
+      },
+      opsUser: {
+        findMany: findOpsUsers
+      },
+      user: {
+        findMany: findAdminUsers
       }
     };
   }
@@ -46,6 +57,8 @@ describe('notifications worker', () => {
     createLog.mockReset();
     findStoreSettings.mockReset();
     findOpsConfigSecrets.mockReset();
+    findOpsUsers.mockReset();
+    findAdminUsers.mockReset();
     sendEmail.mockReset();
     sendSms.mockReset();
     sendWhatsapp.mockReset();
@@ -57,8 +70,43 @@ describe('notifications worker', () => {
     process.env.MSG91_AUTH_KEY = 'msg91-key';
     process.env.META_WHATSAPP_ACCESS_TOKEN = 'meta-token';
     process.env.META_WHATSAPP_PHONE_NUMBER_ID = '123456789';
+    process.env.NOTIFY_PRIMARY_CHANNEL = 'SMS';
     findStoreSettings.mockResolvedValue(null);
     findOpsConfigSecrets.mockResolvedValue([]);
+    findOpsUsers.mockResolvedValue([]);
+    findAdminUsers.mockResolvedValue([]);
+  });
+
+  it('routes send-primary using configured global channel', async () => {
+    process.env.NOTIFY_PRIMARY_CHANNEL = 'EMAIL';
+    createNotificationsWorker({}, {
+      Worker: MockWorker as unknown as NotificationsWorkerType,
+      PrismaClient: MockPrismaClient as unknown as NotificationsPrismaType,
+      createNotificationProviders: mockCreateNotificationProviders
+    });
+    sendEmail.mockResolvedValue({ messageId: 'email_primary_1', providerPayload: {} });
+
+    await processor?.({
+      name: 'send-primary',
+      data: {
+        email: 'primary@example.com',
+        phone: '9876543210',
+        template: 'OrderConfirmed',
+        data: { orderId: '1' }
+      }
+    });
+
+    expect(sendEmail).toHaveBeenCalledTimes(1);
+    expect(sendSms).not.toHaveBeenCalled();
+    expect(sendWhatsapp).not.toHaveBeenCalled();
+    expect(createLog).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        channel: 'EMAIL',
+        recipient: 'primary@example.com',
+        template: 'OrderConfirmed',
+        status: 'SENT'
+      })
+    });
   });
 
   it('logs sent email notification on provider success', async () => {

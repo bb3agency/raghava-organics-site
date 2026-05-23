@@ -122,7 +122,6 @@ enum WebhookInboxStatus {
 enum OpsPermission {
   OPS_READ
   OPS_WRITE
-  OPS_APPROVE
 }
 
 enum OpsActionType {
@@ -136,15 +135,16 @@ enum OpsActionType {
   INVITE_CREATED
   INVITE_CONSUMED
   INVITE_EXPIRED_CLEANED
+  INVITE_REVOKED
   OTP_CHALLENGE_REQUESTED
   OTP_CHALLENGE_VERIFIED
   OTP_CHALLENGE_FAILED
+  USER_DEACTIVATED
+  OPS_USER_LOGGED_IN
+  OPS_USER_LOGGED_OUT
 }
 
 enum OpsActionStatus {
-  PENDING_APPROVAL
-  APPROVED
-  REJECTED
   EXECUTED
   FAILED
 }
@@ -195,16 +195,30 @@ model User {
   cart         Cart?
   reviews      Review[]
   refreshTokens RefreshToken[]
-  adminMfaEnabled Boolean @default(false)
-  adminMfaSecretEncrypted String?
   adminPermissionGrants AdminPermissionGrant[]
   adminAuditLogs AdminAuditLog[]
   returnRequests ReturnRequest[]
+  isBanned     Boolean   @default(false)
+  bannedAt     DateTime?
+  bannedReason String?
+  adminNotes   UserAdminNote[]
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
   @@index([email])
   @@index([phone])
+  @@index([isBanned])
+}
+
+model UserAdminNote {
+  id              String   @id @default(uuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  content         String   @db.Text
+  createdByAdminId String
+  createdAt       DateTime @default(now())
+
+  @@index([userId])
 }
 
 model AdminPermissionGrant {
@@ -244,10 +258,10 @@ model OpsUser {
   email               String                   @unique
   phone               String?                  @unique
   name                String
-  apiKeyId            String                   @unique
-  apiKeyHash          String
+  apiKeyId            String?                  @unique
+  apiKeyHash          String?
   mfaSecretEncrypted  String?
-  mfaEnabled          Boolean                  @default(true)
+  mfaEnabled          Boolean                  @default(false)
   ipAllowlist         String[]
   permissions         OpsPermission[]          @default([OPS_READ])
   isActive            Boolean                  @default(true)
@@ -255,8 +269,6 @@ model OpsUser {
   createdAt           DateTime                 @default(now())
   updatedAt           DateTime                 @updatedAt
   auditLogs           OpsAuditLog[]
-  requestedApprovals  OpsDualApprovalRequest[] @relation("OpsApprovalRequester")
-  confirmedApprovals  OpsDualApprovalRequest[] @relation("OpsApprovalConfirmer")
   createdInvites      OpsUserInvite[]          @relation("OpsInviteCreatedBy")
   createdAdminInvites AdminUserInvite[]        @relation("AdminInviteCreatedByOps")
   otpChallenges       OpsOtpChallenge[]
@@ -352,7 +364,6 @@ model OpsAuditLog {
   summary           Json?
   chainHash         String
   previousChainHash String?
-  approvedByOpsUserId String?
   createdAt         DateTime        @default(now())
 
   @@index([opsUserId, createdAt])
@@ -360,25 +371,6 @@ model OpsAuditLog {
   @@index([actionStatus, createdAt])
 }
 
-model OpsDualApprovalRequest {
-  id                String          @id @default(uuid())
-  requestId         String          @unique
-  requesterId       String
-  requester         OpsUser         @relation("OpsApprovalRequester", fields: [requesterId], references: [id], onDelete: Cascade)
-  actionType        OpsActionType
-  status            OpsActionStatus @default(PENDING_APPROVAL)
-  payload           Json
-  confirmerId       String?
-  confirmer         OpsUser?        @relation("OpsApprovalConfirmer", fields: [confirmerId], references: [id], onDelete: SetNull)
-  expiresAt         DateTime
-  confirmedAt       DateTime?
-  createdAt         DateTime        @default(now())
-  updatedAt         DateTime        @updatedAt
-
-  @@index([status, expiresAt])
-  @@index([requesterId, createdAt])
-  @@index([confirmerId])
-}
 
 model RefreshToken {
   id        String   @id @default(uuid())
@@ -506,6 +498,7 @@ model ProductVariant {
   cartItems      CartItem[]
   cartReservations CartReservation[]
   orderItems     OrderItem[]
+  inventoryAdjustments InventoryAdjustment[]
   createdAt      DateTime    @default(now())
   updatedAt      DateTime    @updatedAt
 
@@ -521,6 +514,19 @@ model Inventory {
   lowStockThreshold Int            @default(5)
   lowStockAlerted   Boolean        @default(false)
   updatedAt         DateTime       @updatedAt
+}
+
+model InventoryAdjustment {
+  id            String   @id @default(uuid())
+  variantId     String
+  variant       ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  delta         Int
+  quantityAfter Int
+  reason        String?
+  adminUserId   String?
+  createdAt     DateTime @default(now())
+
+  @@index([variantId, createdAt])
 }
 
 model Cart {
@@ -954,6 +960,7 @@ model StoreSettings {
   id                        String   @id @default(uuid())
   singletonKey              String   @unique @default("default")
   storeName                 String?
+  websiteUrl                String?
   logoUrl                   String?
   contactEmail              String?
   contactPhone              String?
@@ -966,8 +973,11 @@ model StoreSettings {
   notifyEmailEnabled        Boolean  @default(true)
   notifySmsEnabled          Boolean  @default(true)
   notifyWhatsappEnabled     Boolean  @default(false)
+  primaryNotificationChannels Json?
   smsTemplates              Json?
   defaultLowStockThreshold  Int      @default(5)
+  sellerLegalName           String?
+  sellerAddress             String?
   sellerState               String?
   createdAt                 DateTime @default(now())
   updatedAt                 DateTime @updatedAt

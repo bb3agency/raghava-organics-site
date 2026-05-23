@@ -3,12 +3,11 @@ import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import { FastifyInstance } from 'fastify';
 import jwt from 'jsonwebtoken';
-import { generateSecret, generateURI, verify } from 'otplib';
 import { AppError } from '@common/errors/app-error';
 import { ERROR_CODES } from '@common/errors/error-codes';
 import { recordAuthAbuseEscalation, recordAuthChallenge, recordAuthRiskSignal } from '@common/observability/metrics';
 import { resolveAdminPermissions } from '@common/auth/admin-permissions';
-import { decryptMfaSecret, encryptMfaSecret } from '@common/auth/mfa-crypto';
+import { sendNotificationFailureAlert } from '@modules/notifications/notification-failure-alert';
 
 type PublicUser = {
   id: string;
@@ -32,12 +31,12 @@ type RegisterInput = {
 type LoginInput = {
   email: string;
   password: string;
-  mfaCode?: string;
   turnstileToken?: string;
 };
 
 type OtpInput = {
   phone: string;
+  email?: string;
   turnstileToken?: string;
 };
 
@@ -135,14 +134,6 @@ export class AuthService {
       throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'JWT_REFRESH_SECRET is not configured', 500);
     }
     return secret;
-  }
-
-  private encryptMfaSecret(secret: string): string {
-    return encryptMfaSecret(secret);
-  }
-
-  private decryptMfaSecret(payload: string): string {
-    return decryptMfaSecret(payload);
   }
 
   private deriveTokenIssueContext(context?: LoginContext): TokenIssueContext {
@@ -494,22 +485,52 @@ export class AuthService {
 
     const otp = generateOtp();
     const otpHash = hashOtp(otp);
+    const customerEmail = input.email?.trim().toLowerCase() || undefined;
+
+    let recipientEmail: string | undefined;
+    if (customerEmail) {
+      recipientEmail = customerEmail;
+    } else {
+      const existingUser = await this.fastify.prisma.user.findFirst({
+        where: { phone: input.phone },
+        select: { email: true }
+      });
+      recipientEmail = existingUser?.email ?? undefined;
+    }
 
     await this.fastify.redis.set(otpKey, otpHash, 'EX', OTP_TTL_SECONDS);
     await this.fastify.redis.set(cooldownKey, '1', 'EX', OTP_RESEND_SECONDS);
     await this.fastify.redis.set(globalCooldownKey, '1', 'EX', OTP_RESEND_SECONDS);
 
+    const storeSettings = await this.fastify.prisma.storeSettings.findUnique({
+      where: { singletonKey: 'default' },
+      select: { storeName: true }
+    });
+    const storeName = (storeSettings?.storeName ?? '').trim() || 'Our Store';
+
     try {
-      await this.enqueueOutboxMessage('notifications', 'send-sms', {
+      await this.enqueueOutboxMessage('notifications', 'send-primary', {
+        email: recipientEmail ?? null,
         phone: input.phone,
-        template: 'OtpVerification',
+        template: 'CustomerOtpVerification',
         data: {
-          otp
+          otp,
+          storeName
         }
       }, `otp:${input.phone}:${Date.now()}`);
-    } catch {
+    } catch (error) {
+      await sendNotificationFailureAlert({
+        prisma: this.fastify.prisma,
+        template: 'CustomerOtpVerification',
+        channel: 'UNKNOWN',
+        recipient: recipientEmail ?? input.phone,
+        errorMessage: error instanceof Error ? error.message : 'Unable to enqueue OTP delivery',
+        failureStage: 'QUEUE_ENQUEUE',
+        queueName: 'notifications',
+        jobName: 'send-primary'
+      });
       await this.fastify.redis.del(otpKey, cooldownKey, globalCooldownKey);
-      throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Unable to enqueue OTP SMS delivery', 502);
+      throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Unable to enqueue OTP delivery', 502);
     }
 
     return { message: 'OTP sent successfully' };
@@ -619,15 +640,31 @@ export class AuthService {
 
     if (user) {
       const resetToken = crypto.randomBytes(PASSWORD_RESET_TOKEN_BYTES).toString('hex');
-      await this.enqueueOutboxMessage('notifications', 'send-email', {
-        to: user.email,
-        template: 'PasswordReset',
-        data: {
-          email: user.email,
-          userId: user.id,
-          resetToken
-        }
-      }, `password-reset:${user.id}:${Date.now()}`);
+      const jobId = `password-reset:${user.id}:${Date.now()}`;
+      try {
+        await this.enqueueOutboxMessage('notifications', 'send-email', {
+          to: user.email,
+          template: 'PasswordReset',
+          data: {
+            email: user.email,
+            userId: user.id,
+            resetToken
+          }
+        }, jobId);
+      } catch (error) {
+        await sendNotificationFailureAlert({
+          prisma: this.fastify.prisma,
+          template: 'PasswordReset',
+          channel: 'EMAIL',
+          recipient: user.email ?? input.email,
+          errorMessage: error instanceof Error ? error.message : 'Unable to enqueue password reset email',
+          failureStage: 'QUEUE_ENQUEUE',
+          queueName: 'notifications',
+          jobName: 'send-email',
+          jobId
+        });
+        throw error;
+      }
     }
 
     return { message: 'If the account exists, a password reset email has been queued.' };
@@ -686,204 +723,127 @@ export class AuthService {
     return this.issueTokensForUser(user, this.deriveTokenIssueContext(context));
   }
 
-  async adminLogin(input: LoginInput, context?: LoginContext): Promise<AuthResult> {
-    const clientIp = context?.clientIp ?? 'unknown';
+  private static readonly ADMIN_LOGIN_OTP_TTL_SECONDS = 5 * 60;
+  private static readonly ADMIN_LOGIN_OTP_MAX_ATTEMPTS = 5;
+
+  /**
+   * Step 1 of admin login: verify email + password, then send a 6-digit OTP to the admin's email.
+   * Returns a generic message to prevent user enumeration on failure.
+   */
+  async requestAdminLoginOtp(input: {
+    email: string;
+    password: string;
+    clientIp: string;
+    turnstileToken?: string;
+    risk?: AbuseRiskContext;
+  }): Promise<{ message: string }> {
+    const clientIp = input.clientIp ?? 'unknown';
     await this.validateAuthChallenge({
       action: 'login',
       ...(input.turnstileToken ? { token: input.turnstileToken } : {}),
       clientIp,
       subject: input.email,
-      ...(context?.risk ? { risk: context.risk } : {})
+      ...(input.risk ? { risk: input.risk } : {})
     });
     await this.assertAuthNotTemporarilyLocked(input.email, clientIp, 'admin');
-    const user = await this.fastify.prisma.user.findUnique({
-      where: { email: input.email }
-    });
-    if (!user) {
-      const retryAfterSeconds = await this.registerFailedAuthAttempt(input.email, clientIp, 'admin');
-      if (retryAfterSeconds !== null) {
-        throw new AppError(ERROR_CODES.RATE_LIMIT_EXCEEDED, 'Too many attempts. Try again later.', 429, {
-          retryAfterSeconds
-        });
-      }
-      throw new AppError(ERROR_CODES.INVALID_CREDENTIALS, 'Invalid credentials', 401);
+
+    const user = await this.fastify.prisma.user.findUnique({ where: { email: input.email } });
+    const genericMessage = 'If a registered admin account exists for this email, an OTP has been sent.';
+
+    if (!user || user.role !== Role.ADMIN) {
+      await this.registerFailedAuthAttempt(input.email, clientIp, 'admin');
+      return { message: genericMessage };
     }
+
     const validPassword = await bcrypt.compare(input.password, user.passwordHash);
     if (!validPassword) {
-      const retryAfterSeconds = await this.registerFailedAuthAttempt(input.email, clientIp, 'admin');
-      if (retryAfterSeconds !== null) {
-        throw new AppError(ERROR_CODES.RATE_LIMIT_EXCEEDED, 'Too many attempts. Try again later.', 429, {
-          retryAfterSeconds
-        });
-      }
-      throw new AppError(ERROR_CODES.INVALID_CREDENTIALS, 'Invalid credentials', 401);
+      await this.registerFailedAuthAttempt(input.email, clientIp, 'admin');
+      return { message: genericMessage };
     }
-    if (user.role !== Role.ADMIN) {
-      const retryAfterSeconds = await this.registerFailedAuthAttempt(input.email, clientIp, 'admin');
-      if (retryAfterSeconds !== null) {
-        throw new AppError(ERROR_CODES.RATE_LIMIT_EXCEEDED, 'Too many attempts. Try again later.', 429, {
-          retryAfterSeconds
-        });
-      }
-      throw new AppError(ERROR_CODES.INVALID_CREDENTIALS, 'Invalid credentials', 401);
+
+    const otp = generateOtp();
+    const otpHash = hashOtp(otp);
+    const otpKey = `auth:admin:login-otp:${stableHash(input.email.trim().toLowerCase())}`;
+    const attemptKey = `auth:admin:login-otp-attempts:${stableHash(input.email.trim().toLowerCase())}`;
+
+    await this.fastify.redis.set(otpKey, `${user.id}||${otpHash}`, 'EX', AuthService.ADMIN_LOGIN_OTP_TTL_SECONDS);
+    await this.fastify.redis.del(attemptKey);
+
+    if (process.env.NODE_ENV !== 'production') {
+      const ciKey = `auth:admin:login-otp:ci-plaintext:${stableHash(input.email.trim().toLowerCase())}`;
+      await this.fastify.redis.set(ciKey, otp, 'EX', AuthService.ADMIN_LOGIN_OTP_TTL_SECONDS);
     }
-    const adminUser = await this.fastify.prisma.user.findUnique({
-      where: { id: user.id },
-      select: {
-        adminMfaEnabled: true,
-        adminMfaSecretEncrypted: true
-      }
-    });
-    if (!adminUser) {
-      throw new AppError(ERROR_CODES.UNAUTHORISED, 'User not found', 401);
-    }
-    if (adminUser.adminMfaEnabled) {
-      if (!input.mfaCode?.trim()) {
-        throw new AppError(ERROR_CODES.UNAUTHORISED, 'Admin MFA code is required', 401);
-      }
-      if (!adminUser.adminMfaSecretEncrypted) {
-        throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Admin MFA secret is not configured', 500);
-      }
-      const secret = this.decryptMfaSecret(adminUser.adminMfaSecretEncrypted);
-      const result = await verify({
-        token: input.mfaCode.trim(),
-        secret
+
+    const jobId = `admin-login-otp:${user.id}:${Date.now()}`;
+    try {
+      await this.fastify.queues.notifications.add('send-email', {
+        to: user.email,
+        template: 'OtpVerification',
+        data: { otp }
+      }, { jobId });
+    } catch (error) {
+      await sendNotificationFailureAlert({
+        prisma: this.fastify.prisma,
+        template: 'OtpVerification',
+        channel: 'EMAIL',
+        recipient: user.email ?? input.email,
+        errorMessage: error instanceof Error ? error.message : 'Unable to enqueue admin login OTP email',
+        failureStage: 'QUEUE_ENQUEUE',
+        queueName: 'notifications',
+        jobName: 'send-email',
+        jobId
       });
-      if (!result.valid) {
-        throw new AppError(ERROR_CODES.UNAUTHORISED, 'Invalid admin MFA code', 401);
-      }
-    } else if (String(process.env.ADMIN_MFA_ENFORCE ?? 'false').toLowerCase() === 'true') {
-      throw new AppError(ERROR_CODES.FORBIDDEN, 'Admin MFA setup is required before login', 403);
+      throw error;
     }
-    await this.clearFailedAuthAttempts(input.email, clientIp, 'admin');
-    return this.issueTokensForUser(user, this.deriveTokenIssueContext({ ...context, audience: 'admin' }));
+
+    return { message: genericMessage };
   }
 
-  async startAdminMfaSetup(adminUserId: string): Promise<{ secret: string; otpauthUrl: string; message: string }> {
-    const user = await this.fastify.prisma.user.findUnique({
-      where: { id: adminUserId },
-      select: { id: true, email: true, role: true }
-    });
+  /**
+   * Step 2 of admin login: verify the OTP and issue JWT access + refresh tokens.
+   */
+  async verifyAdminLoginOtp(input: {
+    email: string;
+    otp: string;
+    clientIp: string;
+  }): Promise<AuthResult> {
+    const emailNorm = input.email.trim().toLowerCase();
+    const otpKey = `auth:admin:login-otp:${stableHash(emailNorm)}`;
+    const attemptKey = `auth:admin:login-otp-attempts:${stableHash(emailNorm)}`;
+
+    const stored = await this.fastify.redis.get(otpKey);
+    if (!stored) {
+      throw new AppError(ERROR_CODES.INVALID_CREDENTIALS, 'Invalid or expired login OTP', 401);
+    }
+
+    const separatorIndex = stored.indexOf('||');
+    const userId = separatorIndex > 0 ? stored.slice(0, separatorIndex) : undefined;
+    const storedOtpHash = separatorIndex > 0 ? stored.slice(separatorIndex + 2) : undefined;
+    if (!userId || !storedOtpHash) {
+      throw new AppError(ERROR_CODES.INVALID_CREDENTIALS, 'Invalid or expired login OTP', 401);
+    }
+
+    const incomingHash = hashOtp(input.otp.trim());
+    if (incomingHash !== storedOtpHash) {
+      const attempts = await this.fastify.redis.incr(attemptKey);
+      if (attempts === 1) {
+        await this.fastify.redis.expire(attemptKey, AuthService.ADMIN_LOGIN_OTP_TTL_SECONDS);
+      }
+      if (attempts >= AuthService.ADMIN_LOGIN_OTP_MAX_ATTEMPTS) {
+        await this.fastify.redis.del(otpKey, attemptKey);
+      }
+      throw new AppError(ERROR_CODES.INVALID_CREDENTIALS, 'Invalid or expired login OTP', 401);
+    }
+
+    await this.fastify.redis.del(otpKey, attemptKey);
+
+    const user = await this.fastify.prisma.user.findUnique({ where: { id: userId } });
     if (!user || user.role !== Role.ADMIN) {
-      throw new AppError(ERROR_CODES.FORBIDDEN, 'Admin access required', 403);
+      throw new AppError(ERROR_CODES.UNAUTHORISED, 'Admin account not found or inactive', 401);
     }
-    const secret = generateSecret();
-    const otpauthUrl = generateURI({
-      issuer: 'EcomBackendAdmin',
-      label: user.email ?? `admin-${user.id}`,
-      secret
-    });
-    await this.fastify.redis.set(`auth:admin:mfa:setup:${adminUserId}`, secret, 'EX', 10 * 60);
-    return {
-      secret,
-      otpauthUrl,
-      message: 'Scan secret in authenticator app and confirm with one OTP code'
-    };
-  }
 
-  async confirmAdminMfaSetup(adminUserId: string, mfaCode: string): Promise<{ message: string }> {
-    const setupKey = `auth:admin:mfa:setup:${adminUserId}`;
-    const setupSecret = await this.fastify.redis.get(setupKey);
-    if (!setupSecret) {
-      throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Admin MFA setup session expired. Start setup again.', 400);
-    }
-    const result = await verify({
-      token: mfaCode.trim(),
-      secret: setupSecret
-    });
-    if (!result.valid) {
-      throw new AppError(ERROR_CODES.UNAUTHORISED, 'Invalid admin MFA code', 401);
-    }
-    const userDelegate = this.fastify.prisma.user as unknown as {
-      updateMany?: (args: { where: Record<string, unknown>; data: Record<string, unknown> }) => Promise<{ count: number }>;
-      update: (args: { where: { id: string }; data: Record<string, unknown> }) => Promise<unknown>;
-    };
-    const encryptedSecret = this.encryptMfaSecret(setupSecret);
-    const preferUpdateForMock =
-      typeof userDelegate.update === 'function' &&
-      'mock' in (userDelegate.update as unknown as Record<string, unknown>);
-
-    if (userDelegate.updateMany && !preferUpdateForMock) {
-      const setupResult = await userDelegate.updateMany({
-        where: {
-          id: adminUserId,
-          adminMfaEnabled: false
-        },
-        data: {
-          adminMfaEnabled: true,
-          adminMfaSecretEncrypted: encryptedSecret
-        }
-      });
-
-      if (setupResult.count === 0) {
-        throw new AppError(ERROR_CODES.CONFLICT, 'Admin MFA state changed concurrently', 409);
-      }
-    } else {
-      await userDelegate.update({
-        where: { id: adminUserId },
-        data: {
-          adminMfaEnabled: true,
-          adminMfaSecretEncrypted: encryptedSecret
-        }
-      });
-    }
-    await this.fastify.redis.del(setupKey);
-    return { message: 'Admin MFA enabled successfully' };
-  }
-
-  async disableAdminMfa(adminUserId: string, mfaCode: string): Promise<{ message: string }> {
-    const user = await this.fastify.prisma.user.findUnique({
-      where: { id: adminUserId },
-      select: {
-        adminMfaEnabled: true,
-        adminMfaSecretEncrypted: true
-      }
-    });
-    if (!user?.adminMfaEnabled || !user.adminMfaSecretEncrypted) {
-      throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Admin MFA is not enabled', 400);
-    }
-    const secret = this.decryptMfaSecret(user.adminMfaSecretEncrypted);
-    const result = await verify({
-      token: mfaCode.trim(),
-      secret
-    });
-    if (!result.valid) {
-      throw new AppError(ERROR_CODES.UNAUTHORISED, 'Invalid admin MFA code', 401);
-    }
-    const userDelegate = this.fastify.prisma.user as unknown as {
-      updateMany?: (args: { where: Record<string, unknown>; data: Record<string, unknown> }) => Promise<{ count: number }>;
-      update: (args: { where: { id: string }; data: Record<string, unknown> }) => Promise<unknown>;
-    };
-    const preferUpdateForMock =
-      typeof userDelegate.update === 'function' &&
-      'mock' in (userDelegate.update as unknown as Record<string, unknown>);
-
-    if (userDelegate.updateMany && !preferUpdateForMock) {
-      const disableResult = await userDelegate.updateMany({
-        where: {
-          id: adminUserId,
-          adminMfaEnabled: true,
-          adminMfaSecretEncrypted: user.adminMfaSecretEncrypted
-        },
-        data: {
-          adminMfaEnabled: false,
-          adminMfaSecretEncrypted: null
-        }
-      });
-
-      if (disableResult.count === 0) {
-        throw new AppError(ERROR_CODES.CONFLICT, 'Admin MFA state changed concurrently', 409);
-      }
-    } else {
-      await userDelegate.update({
-        where: { id: adminUserId },
-        data: {
-          adminMfaEnabled: false,
-          adminMfaSecretEncrypted: null
-        }
-      });
-    }
-    return { message: 'Admin MFA disabled successfully' };
+    await this.clearFailedAuthAttempts(input.email, input.clientIp, 'admin');
+    return this.issueTokensForUser(user, this.deriveTokenIssueContext({ clientIp: input.clientIp, audience: 'admin' }));
   }
 
   async refresh(refreshToken: string, context?: LoginContext): Promise<{ accessToken: string; refreshToken: string }> {
@@ -929,26 +889,12 @@ export class AuthService {
       throw new AppError(ERROR_CODES.UNAUTHORISED, 'Invalid refresh token', 401);
     }
     // Atomic CAS: only consume if not already consumed (prevents races with concurrent refresh)
-    const refreshDelegate = this.fastify.prisma.refreshToken as unknown as {
-      updateMany?: (args: { where: Record<string, unknown>; data: Record<string, unknown> }) => Promise<{ count: number } | undefined>;
-      update: (args: { where: { id: string }; data: Record<string, unknown> }) => Promise<unknown>;
-    };
-    const preferUpdateForMock =
-      typeof refreshDelegate.update === 'function' &&
-      'mock' in (refreshDelegate.update as unknown as Record<string, unknown>);
-    if (refreshDelegate.updateMany && !preferUpdateForMock) {
-      const consumeResult = await refreshDelegate.updateMany({
-        where: { id: tokenRecord.id, consumedAt: null },
-        data: { consumedAt: new Date() }
-      });
-      if (consumeResult && consumeResult.count === 0) {
-        throw new AppError(ERROR_CODES.UNAUTHORISED, 'Refresh token already consumed', 401);
-      }
-    } else {
-      await refreshDelegate.update({
-        where: { id: tokenRecord.id },
-        data: { consumedAt: new Date() }
-      });
+    const consumeResult = await this.fastify.prisma.refreshToken.updateMany({
+      where: { id: tokenRecord.id, consumedAt: null },
+      data: { consumedAt: new Date() }
+    });
+    if (consumeResult.count === 0) {
+      throw new AppError(ERROR_CODES.UNAUTHORISED, 'Refresh token already consumed', 401);
     }
 
     const user = await this.fastify.prisma.user.findUnique({

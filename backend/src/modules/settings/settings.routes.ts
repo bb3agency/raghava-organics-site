@@ -3,12 +3,16 @@ import { FastifyInstance } from 'fastify';
 import { adminPermissionGuard } from '@common/guards/admin-permissions.guard';
 import { jwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import { rolesGuard } from '@common/guards/roles.guard';
+import { idempotencyOnSend, idempotencyPreHandler } from '@common/idempotency/idempotency';
 import { routeRateLimitProfiles } from '@common/rate-limit/rate-limit-policies';
+import { loadShedGuard } from '@common/reliability/load-shed.guard';
 import {
+  getCodSettingsSchema,
   getInventorySettingsSchema,
   getNotificationSettingsSchema,
   getShippingSettingsSchema,
   getStoreProfileSchema,
+  updateCodSettingsSchema,
   updateInventorySettingsSchema,
   updateNotificationSettingsSchema,
   updateShippingSettingsSchema,
@@ -19,6 +23,11 @@ import { SettingsService } from './settings.service';
 export async function registerSettingsRoutes(fastify: FastifyInstance): Promise<void> {
   const settingsService = new SettingsService(fastify);
   const adminGuard = [jwtAuthGuard, rolesGuard(Role.ADMIN)];
+
+  fastify.addHook('onSend', async (request, reply, payload) => {
+    await idempotencyOnSend(request, reply, payload);
+    return payload;
+  });
 
   fastify.get(
     '/api/v1/admin/settings/shipping',
@@ -36,7 +45,7 @@ export async function registerSettingsRoutes(fastify: FastifyInstance): Promise<
     '/api/v1/admin/settings/shipping',
     {
       schema: updateShippingSettingsSchema,
-      preHandler: [...adminGuard, adminPermissionGuard('settings:write')],
+      preHandler: [...adminGuard, adminPermissionGuard('settings:write'), loadShedGuard, idempotencyPreHandler],
       config: {
         rateLimit: routeRateLimitProfiles.adminWrite
       }
@@ -60,7 +69,7 @@ export async function registerSettingsRoutes(fastify: FastifyInstance): Promise<
     '/api/v1/admin/settings/store',
     {
       schema: updateStoreProfileSchema,
-      preHandler: [...adminGuard, adminPermissionGuard('settings:write')],
+      preHandler: [...adminGuard, adminPermissionGuard('settings:write'), loadShedGuard, idempotencyPreHandler],
       config: {
         rateLimit: routeRateLimitProfiles.adminWrite
       }
@@ -84,7 +93,7 @@ export async function registerSettingsRoutes(fastify: FastifyInstance): Promise<
     '/api/v1/admin/settings/notifications',
     {
       schema: updateNotificationSettingsSchema,
-      preHandler: [...adminGuard, adminPermissionGuard('settings:write')],
+      preHandler: [...adminGuard, adminPermissionGuard('settings:write'), loadShedGuard, idempotencyPreHandler],
       config: {
         rateLimit: routeRateLimitProfiles.adminWrite
       }
@@ -108,7 +117,7 @@ export async function registerSettingsRoutes(fastify: FastifyInstance): Promise<
     '/api/v1/admin/settings/inventory',
     {
       schema: updateInventorySettingsSchema,
-      preHandler: [...adminGuard, adminPermissionGuard('settings:write')],
+      preHandler: [...adminGuard, adminPermissionGuard('settings:write'), loadShedGuard, idempotencyPreHandler],
       config: {
         rateLimit: routeRateLimitProfiles.adminWrite
       }
@@ -119,22 +128,7 @@ export async function registerSettingsRoutes(fastify: FastifyInstance): Promise<
   fastify.get(
     '/api/v1/admin/settings/cod',
     {
-      schema: {
-        tags: ['admin', 'settings'],
-        summary: 'Get COD and cancellation settings',
-        response: {
-          200: {
-            type: 'object',
-            additionalProperties: false,
-            required: ['isCodEnabled', 'cancellationWindowHours'],
-            properties: {
-              isCodEnabled: { type: 'boolean' },
-              cancellationWindowHours: { type: 'integer', minimum: 1 },
-              sellerState: { anyOf: [{ type: 'string', maxLength: 100 }, { type: 'null' }] }
-            }
-          }
-        }
-      },
+      schema: getCodSettingsSchema,
       preHandler: [...adminGuard, adminPermissionGuard('settings:read')],
       config: { rateLimit: routeRateLimitProfiles.adminRead }
     },
@@ -144,32 +138,8 @@ export async function registerSettingsRoutes(fastify: FastifyInstance): Promise<
   fastify.patch(
     '/api/v1/admin/settings/cod',
     {
-      schema: {
-        tags: ['admin', 'settings'],
-        summary: 'Update COD and cancellation settings',
-        body: {
-          type: 'object',
-          additionalProperties: false,
-          properties: {
-            isCodEnabled: { type: 'boolean' },
-            cancellationWindowHours: { type: 'integer', minimum: 1, maximum: 720 },
-            sellerState: { anyOf: [{ type: 'string', maxLength: 100 }, { type: 'null' }] }
-          }
-        },
-        response: {
-          200: {
-            type: 'object',
-            additionalProperties: false,
-            required: ['isCodEnabled', 'cancellationWindowHours'],
-            properties: {
-              isCodEnabled: { type: 'boolean' },
-              cancellationWindowHours: { type: 'integer', minimum: 1 },
-              sellerState: { anyOf: [{ type: 'string', maxLength: 100 }, { type: 'null' }] }
-            }
-          }
-        }
-      },
-      preHandler: [...adminGuard, adminPermissionGuard('settings:write')],
+      schema: updateCodSettingsSchema,
+      preHandler: [...adminGuard, adminPermissionGuard('settings:write'), loadShedGuard, idempotencyPreHandler],
       config: { rateLimit: routeRateLimitProfiles.adminWrite }
     },
     async (request) => settingsService.updateCodSettings(request.body as never)

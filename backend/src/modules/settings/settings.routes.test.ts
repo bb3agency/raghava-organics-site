@@ -31,15 +31,30 @@ function createApp() {
       }
     });
   });
-  const storeSettingsFindUnique = vi.fn(async () => ({
+  const fullSettingsRecord = {
+    singletonKey: 'default',
     pickupPincode: '522006',
     minOrderValuePaise: 10000,
     defaultLowStockThreshold: 7,
     storeName: 'Test Store',
-    notifyEmailEnabled: true
-  }));
+    websiteUrl: null,
+    logoUrl: null,
+    contactEmail: null,
+    contactPhone: null,
+    gstin: null,
+    fssaiNumber: null,
+    notifyEmailEnabled: true,
+    notifySmsEnabled: true,
+    notifyWhatsappEnabled: false,
+    primaryNotificationChannels: null,
+    smsTemplates: null,
+    isCodEnabled: false,
+    cancellationWindowHours: 24,
+    sellerState: null
+  };
+  const storeSettingsFindUnique = vi.fn(async () => fullSettingsRecord);
   const storeSettingsUpsert = vi.fn(async (args: { create: Record<string, unknown>; update: Record<string, unknown> }) => ({
-    ...args.create,
+    ...fullSettingsRecord,
     ...args.update
   }));
   app.decorate('prisma', {
@@ -94,6 +109,72 @@ describe('settings routes', () => {
       }
     });
     expect(inventoryPatch.statusCode).toBe(200);
+
+    await app.close();
+  });
+
+  it('serves store profile routes', async () => {
+    const app = createApp();
+    await registerSettingsRoutes(app);
+
+    const getRes = await app.inject({
+      method: 'GET',
+      url: '/api/v1/admin/settings/store',
+      headers: { authorization: 'Bearer token' }
+    });
+    expect(getRes.statusCode).toBe(200);
+
+    const patchRes = await app.inject({
+      method: 'PATCH',
+      url: '/api/v1/admin/settings/store',
+      headers: { authorization: 'Bearer token' },
+      payload: { storeName: 'My Store' }
+    });
+    expect(patchRes.statusCode).toBe(200);
+
+    await app.close();
+  });
+
+  it('serves notification settings routes', async () => {
+    const app = createApp();
+    await registerSettingsRoutes(app);
+
+    const getRes = await app.inject({
+      method: 'GET',
+      url: '/api/v1/admin/settings/notifications',
+      headers: { authorization: 'Bearer token' }
+    });
+    expect(getRes.statusCode).toBe(200);
+
+    const patchRes = await app.inject({
+      method: 'PATCH',
+      url: '/api/v1/admin/settings/notifications',
+      headers: { authorization: 'Bearer token' },
+      payload: { notifyEmailEnabled: true }
+    });
+    expect(patchRes.statusCode).toBe(200);
+
+    await app.close();
+  });
+
+  it('serves COD settings routes', async () => {
+    const app = createApp();
+    await registerSettingsRoutes(app);
+
+    const getRes = await app.inject({
+      method: 'GET',
+      url: '/api/v1/admin/settings/cod',
+      headers: { authorization: 'Bearer token' }
+    });
+    expect(getRes.statusCode).toBe(200);
+
+    const patchRes = await app.inject({
+      method: 'PATCH',
+      url: '/api/v1/admin/settings/cod',
+      headers: { authorization: 'Bearer token' },
+      payload: { isCodEnabled: true }
+    });
+    expect(patchRes.statusCode).toBe(200);
 
     await app.close();
   });

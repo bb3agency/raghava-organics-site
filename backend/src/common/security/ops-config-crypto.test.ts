@@ -10,7 +10,6 @@ afterEach(() => {
 describe('ops config crypto', () => {
   it('fails closed when OPS_DB_ENCRYPTION_KEY is missing', () => {
     delete process.env.OPS_DB_ENCRYPTION_KEY;
-    process.env.ADMIN_MFA_ENCRYPTION_KEY = 'admin-mfa-key';
     process.env.JWT_REFRESH_SECRET = 'refresh-secret';
 
     expect(() => encryptOpsConfigValue('secret')).toThrow('OPS_DB_ENCRYPTION_KEY is not configured');
@@ -18,7 +17,6 @@ describe('ops config crypto', () => {
 
   it('does not fall back to other secrets', () => {
     process.env.OPS_DB_ENCRYPTION_KEY = '';
-    process.env.ADMIN_MFA_ENCRYPTION_KEY = 'admin-mfa-key';
     process.env.JWT_REFRESH_SECRET = 'refresh-secret';
 
     expect(() => encryptOpsConfigValue('secret')).toThrow('OPS_DB_ENCRYPTION_KEY is not configured');

@@ -33,15 +33,18 @@ This aligns with the mandatory `docs/NEXTJS_FRONTEND_INTEGRATION_GUIDE.md` §1.2
 
 When mapping dry-runs to slices, follow the mandated build order: Foundation -> Ops control plane -> Admin read -> Admin mutation -> Reliability -> Storefront customer journey.
 
-## 1) Integration inventory (env mapping)
+## 1) Integration inventory (env / ops config mapping)
+
+> **Two-tier config model:** Bootstrap keys (`DATABASE_URL`, `REDIS_URL`, `OPS_DB_ENCRYPTION_KEY`) come from `.env` only. All provider credentials and ops-security parameters listed below are **DB-overlay keys** — in production they must be saved via Ops UI (`POST /api/v1/ops/config/save`) and take effect after container restart. They must **not** be set in `.env` in production. See `docs/ENV_VS_DB_CONFIG_REFERENCE.md` for the full classification.
+>
+> **Exception — Resend (Phase 1 bootstrap):** `RESEND_API_KEY` and `RESEND_FROM` must be set as live values in `.env` before running `node scripts/ops-newuser.mjs` to send the first ops invite email. After first ops login, rotate and manage them exclusively via Ops UI. See `docs/PRODUCTION_FIRST_DEPLOY_CHECKLIST.md`.
 
 Cross-cutting credential governance notes:
-- `ADMIN_MFA_ENCRYPTION_KEY` is a protected security secret and must be managed independently from `JWT_REFRESH_SECRET` in production-like profiles.
 - `DATABASE_URL`, initial `REDIS_URL`, and `OPS_DB_ENCRYPTION_KEY` are bootstrap-only deployment env values and cannot be activated from DB-backed Ops config.
 - Contract-listed non-bootstrap infrastructure/security secrets can be edited through the developer Ops UI when `mutableViaOps: true` in `src/modules/ops/ops-config-contract.ts`; these edits require ops auth, `ops:write`, verified email OTP, encrypted DB persistence, and API/worker restart before runtime effect.
 - Admin access control changes are token-issuance scoped; if permissions are rotated during incident response, force session revocation/logout to enforce changes immediately.
 - Financial support runbooks must treat refunds as asynchronous queue/provider workflows; immediate API responses are not authoritative for final refunded state.
-- Race-condition hardening: Backend uses atomic Compare-And-Swap (CAS) patterns via Prisma `updateMany` with guard conditions for idempotency, invite consumption, token refresh, dual-approval, and reconciliation. All critical state transitions are protected against TOCTOU races.
+- Race-condition hardening: Backend uses atomic Compare-And-Swap (CAS) patterns via Prisma `updateMany` with guard conditions for idempotency, invite consumption, token refresh, and reconciliation. All critical state transitions are protected against TOCTOU races.
 
 ### 1.1 Payments (Razorpay)
 - `PAYMENT_PROVIDER=razorpay`
@@ -132,6 +135,14 @@ Dispatch policy (applies regardless of provider):
   - MSG91 delivery normalizes phone numbers to Indian `91XXXXXXXXXX` format; accepted inputs are 10-digit Indian numbers (with or without separators) or already `91`-prefixed values.
   - Meta WhatsApp uses E.164 phone format (`+91XXXXXXXXXX`) for all message sends.
 
+- Per-template primary notification channel (DB-backed):
+  - Primary channel for each template is configured in `StoreSettings.primaryNotificationChannels` (JSON object mapping template name to `EMAIL` | `SMS` | `WHATSAPP`).
+  - 13 supported templates: `OrderConfirmed`, `PaymentFailed`, `OrderShipped`, `OutForDelivery`, `OrderDelivered`, `OrderCancelled`, `LowStockAlert`, `OtpVerification`, `NotificationDeliveryFailure`, `PasswordReset`, `AdminInviteSetup`, `OpsInviteSetup`, `OpsActionOtp`.
+  - Default for all templates is `EMAIL`.
+  - No fallback: if the configured primary channel fails (disabled, missing credentials, provider error), the notification fails immediately and triggers a technical failure alert.
+  - Merchant admin configures per-template channels via `PATCH /api/v1/admin/settings/notifications` with `primaryChannels` payload.
+  - Worker reads primary channel from DB at job processing time, not from environment variables.
+
 ### 2.5 Fast2SMS (SMS/OTP — no DLT required)
 
 **Use when:** DLT registration is not available or cost-prohibitive.
@@ -208,22 +219,156 @@ Dispatch policy (applies regardless of provider):
 
 ## 2.3 Shiprocket
 
-### Account + API user
-1. In Shiprocket panel: `Settings -> API -> Configure`.
-2. Create a dedicated API user (separate from normal login).
-3. Use API user email/password for auth endpoint token generation.
+> **Important:** Shiprocket integration uses the **REST API** approach for custom e-commerce sites. Do NOT use the "Connect My Store" button in the Shiprocket dashboard — that is designed for pre-built platforms (Shopify, WooCommerce, etc.) only.
 
-### Token flow
-- Auth endpoint: `POST https://apiv2.shiprocket.in/v1/external/auth/login`.
-- Use `Authorization: Bearer <token>` for requests.
-- Token validity is documented as ~240 hours (10 days); refresh proactively.
+### Account + API Credentials
 
-### Env mapping
-- `SHIPPING_PROVIDER=shiprocket`
-- `SHIPROCKET_EMAIL=<api user email>`
-- `SHIPROCKET_PASSWORD=<api user password>`
-- `SHIPROCKET_WEBHOOK_TOKEN=<webhook token/secret>`
-- `SHIPROCKET_PICKUP_PINCODE=<client pickup pin>`
+1. **Register/Login** at [app.shiprocket.in](https://app.shiprocket.in/seller/homepage)
+2. **Complete KYC** — submit business documents (GST, bank details) for full API access
+3. **Generate API Credentials:**
+   - Navigate to `Settings → API` (or visit directly: `app.shiprocket.in/seller/settings/api`)
+   - Click **"Generate API Token"** or create a dedicated API user
+   - Note down the email/password — these are used to obtain a JWT token
+
+### Authentication Flow
+
+Shiprocket uses JWT tokens valid for ~10 days (240 hours). The backend handles automatic token refresh.
+
+**Auth endpoint:**
+```http
+POST https://apiv2.shiprocket.in/v1/external/auth/login
+Content-Type: application/json
+
+{
+  "email": "your-api-user@example.com",
+  "password": "your-api-password"
+}
+```
+
+**Response:**
+```json
+{
+  "token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...",
+  "expires_in": 864000
+}
+```
+
+**Authenticated requests:**
+```http
+Authorization: Bearer <token>
+Content-Type: application/json
+```
+
+### Key API Endpoints Used
+
+| Action | Endpoint | Purpose |
+|--------|----------|---------|
+| **Create Order** | `POST /v1/external/orders/create/adhoc` | Create a new shipping order in Shiprocket |
+| **Assign AWB** | `POST /v1/external/courier/assign/awb` | Generate tracking number (AWB) and assign courier |
+| **Schedule Pickup** | `POST /v1/external/courier/generate/pickup` | Request courier pickup from warehouse |
+| **Track Shipment** | `GET /v1/external/courier/track/awb/{awb}` | Get real-time tracking status |
+| **Check Serviceability** | `GET /v1/external/courier/serviceability` | Check if a pincode is serviceable |
+| **Calculate Rates** | `GET /v1/external/courier/serviceability` | Get shipping rates from available couriers |
+| **Cancel Order** | `POST /v1/external/orders/cancel` | Cancel a shipment before pickup |
+| **Generate Label** | `POST /v1/external/courier/generate/label` | Download shipping label PDF |
+
+### Typical Order Flow
+
+```
+┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
+│  Customer Order │────▶│  Admin Ship Action │────▶│ Create Shiprocket│
+│   Confirmed     │     │  (POST /admin/     │     │    Order         │
+└─────────────────┘     │  orders/:id/ship)│     └────────┬────────┘
+                          └──────────────────┘              │
+                                                            ▼
+                          ┌──────────────────┐     ┌─────────────────┐
+                          │  Update Order    │◄────│  Assign AWB     │
+                          │  Status → SHIPPED│     │  (Tracking #)   │
+                          └────────┬─────────┘     └─────────────────┘
+                                   │
+                                   ▼
+                          ┌──────────────────┐
+                          │ Schedule Pickup  │
+                          │ (Optional step)  │
+                          └────────┬─────────┘
+                                   │
+                                   ▼
+                          ┌──────────────────┐
+                          │  Webhook Updates │◄──── Real-time status
+                          │  (IN_TRANSIT →   │      from Shiprocket
+                          │   OUT_FOR_DELIVERY│
+                          │   → DELIVERED)   │
+                          └──────────────────┘
+```
+
+### Webhook Setup
+
+Receive real-time shipment status updates without polling.
+
+1. **In Shiprocket Dashboard:**
+   - Go to `Settings → API → Webhooks`
+   - Add your webhook endpoint URL: `https://yourdomain.com/api/v1/shipping/webhook`
+
+2. **Configure Events:**
+   - `shipment_status` — tracking updates (IN_TRANSIT, OUT_FOR_DELIVERY, DELIVERED)
+   - `order_status` — order lifecycle events
+
+3. **Security:**
+   - Set a webhook secret/token in Shiprocket dashboard
+   - Store it as `SHIPROCKET_WEBHOOK_TOKEN` in your environment
+   - Backend validates `Authorization: Bearer <token>` on every webhook request
+   - Optional: Configure `SHIPROCKET_WEBHOOK_ALLOWLIST_CIDR` for IP-level defense
+
+### Environment Mapping
+
+```bash
+# Core provider selection
+SHIPPING_PROVIDER=shiprocket
+
+# API credentials (from Settings → API)
+SHIPROCKET_EMAIL=your-api-user@example.com
+SHIPROCKET_PASSWORD=your-api-password
+
+# Webhook security (from Settings → API → Webhooks)
+SHIPROCKET_WEBHOOK_TOKEN=your-webhook-secret
+
+# Optional: IP allowlist for webhook ingress defense
+SHIPROCKET_WEBHOOK_ALLOWLIST_CIDR=
+
+# Pickup location pincode (your warehouse/fulfillment center)
+SHIPROCKET_PICKUP_PINCODE=560001
+
+# Optional: Override base URL (defaults to https://apiv2.shiprocket.in/v1/external)
+SHIPROCKET_BASE_URL=
+```
+
+### API Test/Validation
+
+1. **Test Authentication:**
+   ```bash
+   curl -X POST https://apiv2.shiprocket.in/v1/external/auth/login \
+     -H "Content-Type: application/json" \
+     -d '{"email":"YOUR_EMAIL","password":"YOUR_PASSWORD"}'
+   ```
+
+2. **Test Serviceability:**
+   ```bash
+   curl "https://apiv2.shiprocket.in/v1/external/courier/serviceability?\
+     pickup_postcode=560001&delivery_postcode=110001&weight=0.5&cod=0" \
+     -H "Authorization: Bearer YOUR_TOKEN"
+   ```
+
+3. **Full E2E Test (via admin API):**
+   - Create a test order
+   - Call `POST /api/v1/admin/orders/:id/ship`
+   - Verify shipment created with AWB in response
+   - Check `GET /api/v1/admin/orders/:id` returns tracking URL
+
+### Official Resources
+
+- **Full API Docs:** https://apidocs.shiprocket.in/
+- **Developer Portal:** https://www.shiprocket.in/developers/
+- **API Helpsheet:** https://support.shiprocket.in/support/solutions/articles/43000337456-shiprocket-api-document-helpsheet
 
 ## 2.4 Resend
 
@@ -431,11 +576,13 @@ Related ops configuration hardening:
 
 ## 4.3 Zero-downtime rotation pattern
 1. Create new key/secret in provider dashboard.
-2. Update vault and deployment env.
-3. If supported, keep overlap window:
+2. Update vault entry and credential register metadata.
+3. Save the new key via Ops UI (`POST /api/v1/ops/config/save`) — requires ops auth, `ops:write` permission, and email OTP challenge.
+4. If supported, keep overlap window before revoking old key:
    - Example: `RAZORPAY_WEBHOOK_SECRET_OLD` during transition.
-4. Deploy and verify live traffic.
-5. Remove old key/secret after verification window.
+5. Restart containers to apply the DB-overlay change: `docker compose up -d backend workers`.
+6. Verify live traffic succeeds with new credential.
+7. Revoke old key/secret after verification window.
 
 ## 4.4 Audit and ownership
 - Maintain owner, last-rotated date, and expiry date per integration.
@@ -494,19 +641,20 @@ Use 90 days as default for all integration secrets unless stricter policy applie
 Rotation execution checklist:
 1. Generate new provider credential.
 2. Update vault entry and credential register metadata.
-3. Update deployment env and redeploy.
-4. Verify provider flow in staging/production-safe path.
-5. Revoke old credential after overlap window.
+3. Save new credential via Ops UI (`POST /api/v1/ops/config/save`) — ops auth + email OTP required.
+4. Restart containers: `docker compose up -d backend workers`.
+5. Verify provider flow in staging/production-safe path.
+6. Revoke old credential after overlap window.
 
 ## 7) Compromise drill (run once immediately, then quarterly)
 
 Objective: prove the team can rotate and recover quickly under key leak conditions.
 
-Drill sequence (`revoke -> regenerate -> redeploy -> verify`):
+Drill sequence (`revoke -> regenerate -> ops-save -> restart -> verify`):
 1. Revoke selected credential in provider dashboard.
 2. Regenerate replacement credential.
-3. Update vault and environment.
-4. Redeploy backend/workers (`docker compose up -d`, not restart-only).
+3. Update vault and save new credential via Ops UI (`POST /api/v1/ops/config/save`) — ops auth + email OTP required.
+4. Restart containers: `docker compose up -d backend workers` (not restart-only).
 5. Verify affected flow succeeds and old credential is unusable.
 6. Record elapsed time, blockers, and remediation actions.
 

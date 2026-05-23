@@ -51,6 +51,6 @@ describe('admin permissions resolution', () => {
     expect(resolveAdminDutyRole(['merchant:superadmin:*'])).toBe('merchant');
     expect(resolveAdminDutyRole(['platform:ops:*'])).toBe('developer');
     expect(resolveAdminDutyRole(['security:auditor:*'])).toBe('developer');
-    expect(resolveAdminDutyRole(['ops:approve'])).toBe('developer');
+    expect(resolveAdminDutyRole(['ops:write'])).toBe('developer');
   });
 });

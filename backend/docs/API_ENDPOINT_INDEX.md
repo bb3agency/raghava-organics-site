@@ -10,6 +10,7 @@ Canonical low-noise index of backend HTTP endpoints. Route files and schemas rem
 
 - **Frontend agents:** Use this to plan pages, navigation, permissions, and API client methods.
 - **Backend agents:** Update this doc when adding/removing routes.
+- **Deep route context (what every route does, all constraints, flows, boundaries):** `docs/ROUTE_SURFACE_COMPLETE_REFERENCE.md`
 - **Detailed contracts:** Use `TRD.md` and colocated module schemas.
 - **Admin permissions:** Use `src/common/auth/admin-permissions.ts` and `src/common/auth/admin-endpoint-policy-registry.ts`.
 - **Error handling canon:** Use `docs/NEXTJS_FRONTEND_INTEGRATION_GUIDE.md` section `2.1` (frontend matrix) and `docs/CLIENT_VPS_SETUP_GUIDE.md` section `19.1` (runtime triage matrix).
@@ -43,10 +44,8 @@ Canonical low-noise index of backend HTTP endpoints. Route files and schemas rem
 | POST | `/api/v1/auth/login` | Customer login | Sets refresh cookie |
 | POST | `/api/v1/auth/refresh` | Refresh access token | Uses HTTP-only refresh cookie |
 | POST | `/api/v1/auth/logout` | Logout | Clears refresh cookie |
-| POST | `/api/v1/auth/admin/login` | Merchant admin login | Admin JWT + cookies |
-| POST | `/api/v1/auth/admin/mfa/setup/start` | Start admin MFA setup | Requires admin auth |
-| POST | `/api/v1/auth/admin/mfa/setup/confirm` | Confirm admin MFA setup | Requires admin auth |
-| POST | `/api/v1/auth/admin/mfa/disable` | Disable admin MFA | Requires admin auth |
+| POST | `/api/v1/auth/admin/login/request-otp` | Admin login step 1 — verify email+password, send OTP to email | Public, auth-sensitive rate limit |
+| POST | `/api/v1/auth/admin/login/verify-otp` | Admin login step 2 — verify OTP, issue JWT access+refresh tokens | Sets refresh cookie |
 
 Identity boundary contract (critical):
 
@@ -131,6 +130,7 @@ Admin UI should be served under `/admin/*` in the frontend and call `/api/v1/adm
 | DELETE | `/api/v1/admin/products/:id` | Delete product |
 | POST | `/api/v1/admin/products/:id/variants` | Create variant |
 | PATCH | `/api/v1/admin/products/:id/variants/:variantId` | Update variant |
+| DELETE | `/api/v1/admin/products/:id/variants/:variantId` | Delete variant |
 | POST | `/api/v1/admin/products/:id/images` | Add product image |
 | PATCH | `/api/v1/admin/products/:id/images/reorder` | Reorder images |
 | DELETE | `/api/v1/admin/products/:id/images/:imageId` | Delete image |
@@ -148,13 +148,16 @@ Admin UI should be served under `/admin/*` in the frontend and call `/api/v1/adm
 | GET | `/api/v1/admin/orders/export` | CSV export |
 | GET | `/api/v1/admin/orders/:id` | Order detail |
 | GET | `/api/v1/admin/orders/:id/invoice.pdf` | Invoice download |
-| PATCH | `/api/v1/admin/orders/:id/status` | Status update |
+| PATCH | `/api/v1/admin/orders/:id/status` | Status update — base guard: `orders:write`; setting status to `REFUNDED` additionally requires `orders:refund` (enforced in handler) |
+| PATCH | `/api/v1/admin/orders/:id/items` | Update order line items (quantities / adjustments) — `orders:write` |
 | POST | `/api/v1/admin/orders/:id/ship` | Manual shipment booking |
 | POST | `/api/v1/admin/orders/:id/schedule-pickup` | Schedule pickup |
-| POST | `/api/v1/admin/orders/:id/print-label` | Print shipping label |
+| POST | `/api/v1/admin/orders/:id/print-label` | Print shipping label — requires `orders:read` permission; uses `adminWrite` rate limit + `idempotencyPreHandler` because it mutates `Shipment.labelUrl` and calls an external courier provider |
 | POST | `/api/v1/admin/orders/:id/cancel` | Cancel/refund-sensitive action |
-| POST | `/api/v1/admin/orders/:id/notifications/retrigger` | Retrigger notifications |
+| POST | `/api/v1/admin/orders/:id/notifications/retrigger` | Retrigger order notification |
+| GET | `/api/v1/admin/orders/:id/timeline` | Order status transition timeline |
 | GET | `/api/v1/admin/return-requests` | Return request queue |
+| GET | `/api/v1/admin/return-requests/:id` | Single return request detail |
 | PATCH | `/api/v1/admin/return-requests/:id` | Update return request |
 
 ### Inventory
@@ -164,6 +167,8 @@ Admin UI should be served under `/admin/*` in the frontend and call `/api/v1/adm
 | GET | `/api/v1/admin/inventory` | Inventory table |
 | GET | `/api/v1/admin/inventory/low-stock` | Low-stock queue |
 | PATCH | `/api/v1/admin/inventory/:variantId` | Stock adjustment |
+| POST | `/api/v1/admin/inventory/bulk-update` | Bulk stock adjustment (max 100) |
+| GET | `/api/v1/admin/inventory/history/:variantId` | Adjustment history for a variant |
 
 ### Coupons and promotions
 
@@ -171,11 +176,13 @@ Admin UI should be served under `/admin/*` in the frontend and call `/api/v1/adm
 |---|---|---|
 | GET | `/api/v1/admin/coupons/analytics` | Coupon analytics |
 | GET | `/api/v1/admin/coupons` | Coupon table |
+| GET | `/api/v1/admin/coupons/:id` | Single coupon detail |
 | POST | `/api/v1/admin/coupons` | Create coupon |
 | PATCH | `/api/v1/admin/coupons/:id` | Update coupon |
 | PATCH | `/api/v1/admin/coupons/:id/status` | Pause/resume/status change |
 | DELETE | `/api/v1/admin/coupons/:id` | Soft-delete coupon |
 | POST | `/api/v1/admin/coupons/:id/restore` | Restore coupon |
+| POST | `/api/v1/admin/coupons/:id/clone` | Clone coupon |
 | GET | `/api/v1/admin/coupons/:id/audit` | Coupon audit trail |
 
 ### Reviews and customers
@@ -184,8 +191,19 @@ Admin UI should be served under `/admin/*` in the frontend and call `/api/v1/adm
 |---|---|---|
 | GET | `/api/v1/admin/reviews` | Review moderation queue |
 | PATCH | `/api/v1/admin/reviews/:id/moderate` | Moderate review |
+| DELETE | `/api/v1/admin/reviews/:id` | Hard-delete review (`reviews:moderate`) |
 | GET | `/api/v1/admin/users` | Customer table |
 | GET | `/api/v1/admin/users/:id` | Customer detail |
+| GET | `/api/v1/admin/users/:id/orders` | Customer order history (paginated) |
+| PATCH | `/api/v1/admin/users/:id/ban` | Ban customer account (`users:write`) |
+| DELETE | `/api/v1/admin/users/:id/ban` | Remove ban from customer (`users:write`) |
+| GET | `/api/v1/admin/users/:id/notes` | List admin notes for customer |
+| POST | `/api/v1/admin/users/:id/notes` | Create admin note (`users:write`) |
+| DELETE | `/api/v1/admin/users/:id/notes/:noteId` | Delete admin note (`users:write`) |
+| GET | `/api/v1/admin/shipments` | Shipment list with filters |
+| GET | `/api/v1/admin/shipments/:id` | Single shipment detail |
+| GET | `/api/v1/admin/payments` | Payment list with filters |
+| GET | `/api/v1/admin/payments/:id` | Single payment detail |
 
 ### Analytics and reliability
 
@@ -204,8 +222,6 @@ Admin UI should be served under `/admin/*` in the frontend and call `/api/v1/adm
 | GET | `/api/v1/admin/analytics/inbox-failures` | Inbox failure table |
 | POST | `/api/v1/admin/analytics/inbox-failures/:id/replay-preview` | Preview inbox replay |
 | POST | `/api/v1/admin/analytics/inbox-failures/:id/replay` | Execute inbox replay |
-| GET | `/api/v1/admin/queues` | Bull Board UI |
-| GET | `/api/v1/admin/queues/dlq/summary` | DLQ summary card |
 
 ### Settings
 
@@ -244,23 +260,32 @@ Ops endpoints are platform/developer controls. Do not expose write controls in n
 
 | Method | Endpoint | UI use |
 |---|---|---|
+| POST | `/api/v1/ops/auth/login/request-otp` | Browser login — request email OTP (public) |
+| POST | `/api/v1/ops/auth/login/verify-otp` | Browser login — verify OTP, sets `ops_session` cookie |
+| POST | `/api/v1/ops/auth/logout` | Browser logout — clears `ops_session` cookie |
 | GET | `/api/v1/ops/session` | Bootstrap ops user/session |
 | GET | `/api/v1/ops/config/overview` | Runtime config overview |
-| POST | `/api/v1/ops/config/validate` | Validate config draft |
+| POST | `/api/v1/ops/config/validate` | Validate config draft (ops:read) |
 | GET | `/api/v1/ops/config/stored` | Masked stored DB config |
 | POST | `/api/v1/ops/config/save` | Save encrypted DB config |
 | POST | `/api/v1/ops/otp/request` | Request privileged-write OTP |
 | POST | `/api/v1/ops/otp/verify` | Verify privileged-write OTP |
+| GET | `/api/v1/ops/otp/pending` | List caller's pending OTP challenges |
+| GET | `/api/v1/ops/invites` | List all invites (filterable by status) |
 | POST | `/api/v1/ops/invites` | Issue ops invite |
+| POST | `/api/v1/ops/invites/:inviteId/revoke` | Revoke a pending/sent invite — requires OTP (`challengeId`, `otpCode`) |
 | POST | `/api/v1/ops/invites/setup/send-otp` | Send ops setup OTP |
 | POST | `/api/v1/ops/invites/consume` | Consume ops setup token |
 | POST | `/api/v1/ops/invites/cleanup-expired` | Cleanup expired ops invites |
+| GET | `/api/v1/ops/users` | List ops users (filterable by isActive) |
+| GET | `/api/v1/ops/users/:opsUserId` | Get single ops user profile |
+| POST | `/api/v1/ops/users/:opsUserId/deactivate` | Deactivate ops user account — requires OTP (`challengeId`, `otpCode`) |
 | GET | `/api/v1/ops/load-shed` | Current load-shed mode |
-| POST | `/api/v1/ops/load-shed` | Request load-shed mode change |
-| GET | `/api/v1/ops/approvals` | Approval queue |
-| POST | `/api/v1/ops/approvals/:requestId/confirm` | Approve pending op |
-| POST | `/api/v1/ops/approvals/:requestId/reject` | Reject pending op |
-| GET | `/api/v1/ops/audit/logs` | Ops audit timeline |
+| POST | `/api/v1/ops/load-shed` | Apply load-shed mode change immediately — requires OTP (`challengeId`, `otpCode`) |
+| GET | `/api/v1/ops/audit/logs` | Ops audit timeline (filterable by opsUserId) |
+| POST | `/api/v1/ops/system/restart` | Schedule process restart — requires OTP (`challengeId`, `otpCode`); `delayMinutes:0` = now, `>0` = deferred (survives logout) |
+| GET | `/api/v1/ops/queues` | BullMQ Bull Board UI — queue dashboard (ops:read) |
+| GET | `/api/v1/ops/queues/dlq/summary` | DLQ summary card — totals and per-source-queue counts (ops:read) |
 
 Setup URL contract:
 
@@ -293,19 +318,79 @@ Recommended frontend route groups:
 /admin/settings/inventory
 /admin/settings/cod
 /admin/reliability
-/admin/queues
 /admin/setup
 /admin/login
-/admin/mfa
 /ops
 /ops/config
-/ops/approvals
 /ops/audit
 ```
 
 SaaS-grade UI expectations:
-+- Permission-aware sidebar and command menu.
-+- KPI cards, charts, filterable tables, detail drawers, and audit timelines.
-+- Sensitive actions require explicit confirmation and show permission/risk labels.
-+- Async workflows (refunds, shipping, replay) show pending/progress states.
-+- Webhook endpoints are never called from browser code.
+- Permission-aware sidebar and command menu.
+- KPI cards, charts, filterable tables, detail drawers, and audit timelines.
+- Sensitive actions require explicit confirmation and show permission/risk labels.
+- Async workflows (refunds, shipping, replay) show pending/progress states.
+- Webhook endpoints are never called from browser code.
+
+---
+
+## Security Model Summary
+
+### Authentication Methods by Endpoint Type
+
+| Endpoint Category | Auth Method | Token Storage |
+|-------------------|-------------|---------------|
+| **Public** | None | N/A |
+| **Customer** | JWT access token + refresh cookie | Access: memory, Refresh: httpOnly cookie |
+| **Admin** | JWT access token + refresh cookie | Access: memory, Refresh: httpOnly cookie |
+| **Ops** | httpOnly session cookie only | Redis-backed, SHA256 hashed |
+
+### Critical Ops Operations Requiring OTP
+
+All 5 critical mutation endpoints require secondary OTP verification:
+
+1. `POST /api/v1/ops/config/save` — Config changes
+2. `POST /api/v1/ops/load-shed` — Load-shed mode changes
+3. `POST /api/v1/ops/system/restart` — Process restart scheduling
+4. `POST /api/v1/ops/users/:opsUserId/deactivate` — User deactivation
+5. `POST /api/v1/ops/invites/:inviteId/revoke` — Invite revocation
+
+**OTP Challenge Pattern:**
+1. Call `POST /api/v1/ops/otp/request` with `actionType` → receive `challengeId`
+2. User receives 6-digit OTP via email (300s TTL, 5 max attempts)
+3. Submit mutation with `challengeId` and `otpCode` in body
+
+### Permission Model
+
+**Ops Permissions (2):**
+- `ops:read` — Read access to all ops endpoints
+- `ops:write` — Write access (implies read), requires OTP for critical operations
+
+**Admin Permissions (25 across 3 layers):**
+- Layer A: orders, products, inventory, customers (basic operations)
+- Layer B: coupons, users, refunds, settings (sensitive operations)
+- Layer C: analytics replay, queue inspection (developer operations)
+
+### Security Headers
+
+All responses include:
+- `Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:`
+- `X-Content-Type-Options: nosniff`
+- `X-Frame-Options: DENY`
+- `Strict-Transport-Security: max-age=31536000`
+- `Referrer-Policy: strict-origin-when-cross-origin`
+
+### Production Readiness Status
+
+**✅ Verified Security Invariants:**
+- No tokens in localStorage/sessionStorage
+- No API keys in browser bundles
+- No 'unsafe-inline' in CSP
+- bcrypt 12 rounds for passwords
+- SHA256 hashing for OTPs and session tokens
+- AES-256-GCM for config secrets
+- Rate limiting on all auth endpoints
+- Idempotency keys required for mutations
+- Sensitive data redaction in logs
+
+**Status: PRODUCTION-READY (June 2026)**

@@ -64,14 +64,19 @@ test('flags auth-admin route without permission guard wiring', () => {
   );
 });
 
-test('allows auth-admin login route without admin permission guard', () => {
-  const source = `
+test('allows auth-admin login OTP routes without admin permission guard', () => {
+  const sourceRequestOtp = `
     export async function registerX(fastify) {
-      fastify.post('/api/v1/auth/admin/login', { schema: s, preHandler: [idempotencyPreHandler] }, async () => ({}));
+      fastify.post('/api/v1/auth/admin/login/request-otp', { schema: s, preHandler: [idempotencyPreHandler] }, async () => ({}));
     }
   `;
-  const issues = inspectRouteFile('x.routes.ts', source);
-  assert.deepEqual(issues, []);
+  const sourceVerifyOtp = `
+    export async function registerX(fastify) {
+      fastify.post('/api/v1/auth/admin/login/verify-otp', { schema: s, preHandler: [idempotencyPreHandler] }, async () => ({}));
+    }
+  `;
+  assert.deepEqual(inspectRouteFile('x.routes.ts', sourceRequestOtp), []);
+  assert.deepEqual(inspectRouteFile('x.routes.ts', sourceVerifyOtp), []);
 });
 
 test('passes valid admin route shape', () => {

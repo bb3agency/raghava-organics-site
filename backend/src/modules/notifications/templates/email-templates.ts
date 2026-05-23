@@ -3,7 +3,10 @@ import { ERROR_CODES } from '@common/errors/error-codes';
 import { render } from '@react-email/render';
 import {
   AdminInviteSetupEmail,
+  CustomerOtpVerificationEmail,
   LowStockAlertEmail,
+  NotificationDeliveryFailureEmail,
+  OtpVerificationEmail,
   OrderCancelledEmail,
   OrderConfirmedEmail,
   OrderDeliveredEmail,
@@ -12,10 +15,11 @@ import {
   PasswordResetEmail,
   PaymentFailedEmail,
   OpsInviteSetupEmail,
-  OpsActionOtpEmail
+  OpsActionOtpEmail,
+  ProcessRestartAlertEmail
 } from './email-template-components';
 
-const supportedEmailTemplates = [
+export const supportedEmailTemplates = [
   'OrderConfirmed',
   'PaymentFailed',
   'OrderShipped',
@@ -23,10 +27,14 @@ const supportedEmailTemplates = [
   'OrderDelivered',
   'OrderCancelled',
   'LowStockAlert',
+  'OtpVerification',
+  'CustomerOtpVerification',
+  'NotificationDeliveryFailure',
   'PasswordReset',
   'AdminInviteSetup',
   'OpsInviteSetup',
-  'OpsActionOtp'
+  'OpsActionOtp',
+  'ProcessRestartAlert'
 ] as const;
 
 export type EmailTemplateName = (typeof supportedEmailTemplates)[number];
@@ -106,6 +114,67 @@ export async function renderNotificationEmail(template: string, data: Record<str
         html: await render(LowStockAlertEmail(items))
       };
       }
+    case 'OtpVerification':
+      {
+        const otp = escapeHtml(data.otp ?? 'N/A');
+      return {
+        subject: 'OTP verification code',
+        html: await render(OtpVerificationEmail(otp))
+      };
+      }
+    case 'CustomerOtpVerification':
+      {
+        const otp = escapeHtml(data.otp ?? 'N/A');
+        const storeName = escapeHtml(data.storeName ?? 'Our Store');
+        return {
+          subject: `Your sign-in code — ${storeName}`,
+          html: await render(CustomerOtpVerificationEmail(otp, storeName))
+        };
+      }
+    case 'NotificationDeliveryFailure':
+      {
+        const template = escapeHtml(data.template ?? 'UnknownTemplate');
+        const channel = escapeHtml(data.channel ?? 'UNKNOWN');
+        const recipient = escapeHtml(data.recipient ?? 'unknown');
+        const errorMessage = escapeHtml(data.errorMessage ?? 'Unknown delivery error');
+        const domain = escapeHtml(data.domain ?? 'system');
+        const component = escapeHtml(data.component ?? 'unknown-component');
+        const failureStage = escapeHtml(data.failureStage ?? 'UNKNOWN');
+        const queueName = escapeHtml(data.queueName ?? 'unknown');
+        const jobName = escapeHtml(data.jobName ?? 'unknown');
+        const jobId = escapeHtml(data.jobId ?? 'unknown');
+        const outboxMessageId = escapeHtml(data.outboxMessageId ?? 'n/a');
+        const route = escapeHtml(data.route ?? 'n/a');
+        const method = escapeHtml(data.method ?? 'n/a');
+        const statusCode = escapeHtml(data.statusCode ?? 500);
+        const terminalFailure = escapeHtml(data.terminalFailure ?? false);
+        const clientName = escapeHtml(data.clientName ?? 'Unknown Client');
+        const websiteUrl = escapeHtml(data.websiteUrl ?? 'https://unknown-client.local');
+        return {
+          subject: `Notification delivery failure - ${template}`,
+          html: await render(
+            NotificationDeliveryFailureEmail({
+              template,
+              channel,
+              recipient,
+              errorMessage,
+              domain,
+              component,
+              failureStage,
+              queueName,
+              jobName,
+              jobId,
+              outboxMessageId,
+              route,
+              method,
+              statusCode,
+              terminalFailure,
+              clientName,
+              websiteUrl
+            })
+          )
+        };
+      }
     case 'PasswordReset':
       {
         const email = escapeHtml(data.email ?? 'N/A');
@@ -143,6 +212,18 @@ export async function renderNotificationEmail(template: string, data: Record<str
         return {
           subject: 'Ops verification code',
           html: await render(OpsActionOtpEmail(action, code, expiresAt))
+        };
+      }
+    case 'ProcessRestartAlert':
+      {
+        const requestedBy = escapeHtml(data.requestedBy ?? 'unknown');
+        const scheduledFor = escapeHtml(data.scheduledFor ?? 'unknown');
+        const jobId = escapeHtml(data.jobId ?? 'unknown');
+        const clientName = escapeHtml(data.clientName ?? 'Unknown Client');
+        const websiteUrl = escapeHtml(data.websiteUrl ?? 'https://unknown-client.local');
+        return {
+          subject: `[ACTION REQUIRED] Process restart triggered — ${clientName}`,
+          html: await render(ProcessRestartAlertEmail({ requestedBy, scheduledFor, jobId, clientName, websiteUrl }))
         };
       }
   }

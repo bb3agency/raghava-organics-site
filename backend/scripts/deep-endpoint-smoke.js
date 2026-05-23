@@ -92,8 +92,10 @@ function jsonBodyFor(route) {
       return {
         email: `missing-${Date.now()}@example.com`
       };
-    case 'POST /api/v1/auth/admin/login':
+    case 'POST /api/v1/auth/admin/login/request-otp':
       return { email: ADMIN_EMAIL, password: ADMIN_PASSWORD };
+    case 'POST /api/v1/auth/admin/login/verify-otp':
+      return { email: ADMIN_EMAIL, otp: process.env.ADMIN_OTP ?? '000000' };
     case 'POST /api/v1/cart/items':
       return {
         variantId: '00000000-0000-4000-8000-000000000000',
@@ -169,9 +171,10 @@ function jsonBodyFor(route) {
 }
 
 async function loginAdmin() {
-  let response;
+  // Step 1: request OTP (verifies credentials, sends OTP to email)
+  let step1;
   try {
-    response = await fetch(`${BASE_URL}/api/v1/auth/admin/login`, {
+    step1 = await fetch(`${BASE_URL}/api/v1/auth/admin/login/request-otp`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ email: ADMIN_EMAIL, password: ADMIN_PASSWORD })
@@ -179,10 +182,34 @@ async function loginAdmin() {
   } catch (error) {
     throw error;
   }
-  if (!response.ok) {
-    throw new Error(`Admin login failed: ${response.status}`);
+  if (!step1.ok) {
+    throw new Error(`Admin login step 1 failed: ${step1.status}`);
   }
-  const body = await response.json();
+
+  // Step 2: verify OTP — requires ADMIN_OTP env var (the OTP sent to admin email).
+  // In automated environments without email access, set ADMIN_OTP to the OTP value
+  // obtained out-of-band. If ADMIN_OTP is not set, skip step 2 and return null so
+  // admin routes are hit unauthenticated (expected to return 401/403, not 5xx).
+  const adminOtp = process.env.ADMIN_OTP;
+  if (!adminOtp) {
+    logger.info('ADMIN_OTP not set — skipping admin token acquisition; admin routes will be exercised unauthenticated (expect 401/403, not 5xx)');
+    return null;
+  }
+
+  let step2;
+  try {
+    step2 = await fetch(`${BASE_URL}/api/v1/auth/admin/login/verify-otp`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email: ADMIN_EMAIL, otp: adminOtp })
+    });
+  } catch (error) {
+    throw error;
+  }
+  if (!step2.ok) {
+    throw new Error(`Admin login step 2 failed: ${step2.status}`);
+  }
+  const body = await step2.json();
   return body?.data?.accessToken ?? body?.accessToken ?? null;
 }
 

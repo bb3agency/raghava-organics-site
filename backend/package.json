@@ -7,8 +7,8 @@
     "node": ">=22"
   },
   "scripts": {
-    "dev": "tsx watch src/main.ts",
-    "dev:workers": "tsx watch queues/workers/index.ts",
+    "dev": "tsx --env-file .env watch src/main.ts",
+    "dev:workers": "tsx --env-file .env watch queues/workers/index.ts",
     "dev:e2e": "scripts\\dev-up.cmd",
     "dev:e2e:workers": "scripts\\dev-up-workers.cmd",
     "build": "node scripts/build.js",
@@ -63,6 +63,7 @@
   "dependencies": {
     "@bull-board/api": "^7.0.0",
     "@bull-board/fastify": "^7.0.0",
+    "@fastify/cookie": "^11.0.0",
     "@fastify/cors": "^11.2.0",
     "@fastify/helmet": "^13.0.2",
     "@fastify/jwt": "^10.0.0",

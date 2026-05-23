@@ -1,13 +1,6 @@
 import Fastify from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-
-const metricsState = vi.hoisted(() => ({
-  recordCheckoutPath: vi.fn()
-}));
-
-vi.mock('@common/observability/metrics', () => ({
-  recordCheckoutPath: metricsState.recordCheckoutPath
-}));
+import * as metricsModule from '@common/observability/metrics';
 
 import { AppError } from './app-error';
 import { ERROR_CODES } from './error-codes';
@@ -15,15 +8,17 @@ import { registerGlobalErrorHandler } from './error-handler';
 
 describe('global error handler', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
     vi.unstubAllEnvs();
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.unstubAllEnvs();
   });
 
   it('maps AppError responses and sets Retry-After for 429', async () => {
+    const recordCheckoutPathSpy = vi.spyOn(metricsModule, 'recordCheckoutPath').mockReturnValue(undefined);
+
     const app = Fastify();
     await registerGlobalErrorHandler(app);
 
@@ -40,7 +35,7 @@ describe('global error handler', () => {
     const body = response.json() as { error: { code: string; details: { retryAfterSeconds: number } } };
     expect(body.error.code).toBe(ERROR_CODES.RATE_LIMIT_EXCEEDED);
     expect(body.error.details.retryAfterSeconds).toBe(12);
-    expect(metricsState.recordCheckoutPath).toHaveBeenCalledWith('/api/v1/orders', 'failure');
+    expect(recordCheckoutPathSpy).toHaveBeenCalledWith('/api/v1/orders', 'failure');
 
     await app.close();
   });

@@ -1,6 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import { recordQueueHealthSnapshot } from '@common/observability/metrics';
 import { createQueueRegistry } from '@queues/queue-registry';
+import { sendTechnicalFailureAlert } from '@modules/notifications/notification-failure-alert';
 
 export async function registerBullmqPlugin(fastify: FastifyInstance): Promise<void> {
   const connection = fastify.redis.duplicate();
@@ -78,6 +79,16 @@ export async function registerBullmqPlugin(fastify: FastifyInstance): Promise<vo
         fastify.log.info('BullMQ job schedulers registered');
       } catch (err) {
         fastify.log.error({ err }, 'BullMQ job scheduler registration failed (non-fatal)');
+        void sendTechnicalFailureAlert({
+          prisma: fastify.prisma,
+          template: 'BullmqSchedulerRegistration',
+          channel: 'UNKNOWN',
+          recipient: 'bullmq-scheduler',
+          errorMessage: err instanceof Error ? err.message : 'BullMQ scheduler registration failed',
+          failureStage: 'CORE_LOGIC',
+          domain: 'queues',
+          component: 'bullmq-plugin'
+        });
       }
     })();
   });
@@ -118,6 +129,16 @@ export async function registerBullmqPlugin(fastify: FastifyInstance): Promise<vo
     for (const result of closeResults) {
       if (result.status === 'rejected') {
         instance.log.error({ err: result.reason }, 'Queue close error during plugin shutdown');
+        void sendTechnicalFailureAlert({
+          prisma: instance.prisma,
+          template: 'BullmqQueueClose',
+          channel: 'UNKNOWN',
+          recipient: 'bullmq-shutdown',
+          errorMessage: result.reason instanceof Error ? result.reason.message : String(result.reason),
+          failureStage: 'CORE_LOGIC',
+          domain: 'queues',
+          component: 'bullmq-plugin-shutdown'
+        });
       }
     }
     await connection.quit();

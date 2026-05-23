@@ -368,3 +368,202 @@ export const adminGetUserByIdSchema = {
   }
 } as const;
 
+export const adminGetCustomerOrdersSchema = {
+  tags: ['admin', 'users'],
+  summary: 'Paginated order history for a customer',
+  params: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['id'],
+    properties: { id: { type: 'string', maxLength: 64 } }
+  },
+  querystring: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      page: { type: 'integer', minimum: 1, default: 1 },
+      limit: { type: 'integer', minimum: 1, maximum: 100, default: 20 }
+    }
+  },
+  response: {
+    200: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['items', 'meta'],
+      properties: {
+        items: {
+          type: 'array',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['id', 'orderNumber', 'status', 'subtotal', 'shippingCharge', 'discountAmount', 'total', 'createdAt'],
+            properties: {
+              id: { type: 'string', maxLength: 64 },
+              orderNumber: { type: 'string', maxLength: 64 },
+              status: { type: 'string', maxLength: 40 },
+              subtotal: { type: 'integer', minimum: 0 },
+              shippingCharge: { type: 'integer', minimum: 0 },
+              discountAmount: { type: 'integer', minimum: 0 },
+              total: { type: 'integer', minimum: 0 },
+              createdAt: { type: 'string', maxLength: 64 },
+              shipmentStatus: { anyOf: [{ type: 'string', maxLength: 40 }, { type: 'null' }] },
+              awb: { anyOf: [{ type: 'string', maxLength: 100 }, { type: 'null' }] },
+              trackingUrl: { anyOf: [{ type: 'string', maxLength: 500 }, { type: 'null' }] },
+              latestShipmentEventStatus: { anyOf: [{ type: 'string', maxLength: 80 }, { type: 'null' }] },
+              latestShipmentEventAt: { anyOf: [{ type: 'string', maxLength: 64 }, { type: 'null' }] }
+            }
+          }
+        },
+        meta: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['page', 'limit', 'total', 'totalPages'],
+          properties: {
+            page: { type: 'integer' },
+            limit: { type: 'integer' },
+            total: { type: 'integer' },
+            totalPages: { type: 'integer' }
+          }
+        }
+      }
+    },
+    ...standardAdminErrorResponses
+  }
+} as const;
+
+const userNoteSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['id', 'userId', 'content', 'createdByAdminId', 'createdAt'],
+  properties: {
+    id: { type: 'string' },
+    userId: { type: 'string' },
+    content: { type: 'string' },
+    createdByAdminId: { type: 'string' },
+    createdAt: { type: 'string' }
+  }
+} as const;
+
+export const adminBanUserSchema = {
+  tags: ['admin', 'users'],
+  summary: 'Ban a customer account',
+  params: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['id'],
+    properties: { id: { type: 'string', maxLength: 64 } }
+  },
+  body: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['reason'],
+    properties: {
+      reason: { type: 'string', minLength: 1, maxLength: 500 }
+    }
+  },
+  response: {
+    200: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['userId', 'isBanned'],
+      properties: {
+        userId: { type: 'string' },
+        isBanned: { type: 'boolean' },
+        bannedAt: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+        bannedReason: { anyOf: [{ type: 'string' }, { type: 'null' }] }
+      }
+    },
+    ...standardAdminErrorResponses
+  }
+} as const;
+
+export const adminUnbanUserSchema = {
+  tags: ['admin', 'users'],
+  summary: 'Remove ban from a customer account',
+  params: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['id'],
+    properties: { id: { type: 'string', maxLength: 64 } }
+  },
+  response: {
+    200: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['userId', 'isBanned'],
+      properties: {
+        userId: { type: 'string' },
+        isBanned: { type: 'boolean' }
+      }
+    },
+    ...standardAdminErrorResponses
+  }
+} as const;
+
+export const adminListUserNotesSchema = {
+  tags: ['admin', 'users'],
+  summary: 'List admin notes for a customer',
+  params: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['id'],
+    properties: { id: { type: 'string', maxLength: 64 } }
+  },
+  response: {
+    200: {
+      type: 'array',
+      items: userNoteSchema
+    },
+    ...standardAdminErrorResponses
+  }
+} as const;
+
+export const adminCreateUserNoteSchema = {
+  tags: ['admin', 'users'],
+  summary: 'Create an admin note for a customer',
+  params: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['id'],
+    properties: { id: { type: 'string', maxLength: 64 } }
+  },
+  body: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['content'],
+    properties: {
+      content: { type: 'string', minLength: 1, maxLength: 2000 }
+    }
+  },
+  response: {
+    201: userNoteSchema,
+    ...standardAdminErrorResponses
+  }
+} as const;
+
+export const adminDeleteUserNoteSchema = {
+  tags: ['admin', 'users'],
+  summary: 'Delete an admin note',
+  params: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['id', 'noteId'],
+    properties: {
+      id: { type: 'string', maxLength: 64 },
+      noteId: { type: 'string', maxLength: 64 }
+    }
+  },
+  response: {
+    200: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['deleted', 'noteId'],
+      properties: {
+        deleted: { type: 'boolean' },
+        noteId: { type: 'string' }
+      }
+    },
+    ...standardAdminErrorResponses
+  }
+} as const;
+

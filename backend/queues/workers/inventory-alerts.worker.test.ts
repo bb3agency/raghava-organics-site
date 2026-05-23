@@ -5,16 +5,14 @@ import { createInventoryAlertsWorker } from './inventory-alerts.worker';
 type InventoryAlertsDeps = NonNullable<Parameters<typeof createInventoryAlertsWorker>[1]>;
 type InventoryAlertsWorkerType = NonNullable<InventoryAlertsDeps['Worker']>;
 type InventoryAlertsPrismaType = NonNullable<InventoryAlertsDeps['PrismaClient']>;
-type InventoryAlertsQueueType = NonNullable<InventoryAlertsDeps['notificationsQueue']>;
 
 describe('inventory alerts worker', () => {
-  let processor: ((job: { name: string; data: unknown }) => Promise<void>) | undefined;
-  const notificationsAdd = vi.fn();
+  let processor: ((job: { name: string; data: unknown; id?: string }) => Promise<void>) | undefined;
   const inventoryFindMany = vi.fn();
   const inventoryUpdateMany = vi.fn();
   const lowStockAlertEventCreateMany = vi.fn();
 
-  function MockWorker(_name: string, proc: (job: { name: string; data: unknown }) => Promise<void>) {
+  function MockWorker(_name: string, proc: (job: { name: string; data: unknown; id?: string }) => Promise<void>) {
     processor = proc;
   }
 
@@ -30,24 +28,20 @@ describe('inventory alerts worker', () => {
     };
   }
 
-  const mockQueue = { add: notificationsAdd } as unknown as InventoryAlertsQueueType;
-
   const workerDeps = {
     Worker: MockWorker as unknown as InventoryAlertsWorkerType,
-    PrismaClient: MockPrismaClient as unknown as InventoryAlertsPrismaType,
-    notificationsQueue: mockQueue
+    PrismaClient: MockPrismaClient as unknown as InventoryAlertsPrismaType
   };
 
   beforeEach(() => {
     processor = undefined;
-    notificationsAdd.mockReset();
     inventoryFindMany.mockReset();
     inventoryUpdateMany.mockReset();
     lowStockAlertEventCreateMany.mockReset();
     process.env.ADMIN_ALERT_EMAIL = 'admin@example.com';
   });
 
-  it('enqueues LowStockAlert and marks rows as alerted', async () => {
+  it('marks low-stock rows as alerted and creates alert events', async () => {
     createInventoryAlertsWorker({}, workerDeps);
     inventoryFindMany.mockResolvedValue([
       {
@@ -56,9 +50,8 @@ describe('inventory alerts worker', () => {
         quantity: 2,
         lowStockThreshold: 5,
         variant: {
-          product: {
-            name: 'Product 1'
-          },
+          product: { name: 'Product 1' },
+          id: 'var_1',
           sku: 'SKU-1',
           name: 'Variant 1'
         }
@@ -67,18 +60,8 @@ describe('inventory alerts worker', () => {
     inventoryUpdateMany.mockResolvedValue({ count: 1 });
     lowStockAlertEventCreateMany.mockResolvedValue({ count: 1 });
 
-    await processor?.({
-      name: 'check-low-stock',
-      data: {}
-    });
+    await processor?.({ name: 'check-low-stock', data: {}, id: 'job_1' });
 
-    expect(notificationsAdd).toHaveBeenCalledWith(
-      'send-email',
-      expect.objectContaining({
-        to: 'admin@example.com',
-        template: 'LowStockAlert'
-      })
-    );
     expect(inventoryUpdateMany).toHaveBeenCalledWith({
       where: { id: 'inv_1', lowStockAlerted: false },
       data: { lowStockAlerted: true }
@@ -96,5 +79,24 @@ describe('inventory alerts worker', () => {
         }
       ]
     });
+  });
+
+  it('does nothing when no low-stock items exist', async () => {
+    createInventoryAlertsWorker({}, workerDeps);
+    inventoryFindMany.mockResolvedValue([]);
+
+    await processor?.({ name: 'check-low-stock', data: {} });
+
+    expect(inventoryUpdateMany).not.toHaveBeenCalled();
+    expect(lowStockAlertEventCreateMany).not.toHaveBeenCalled();
+  });
+
+  it('skips unknown job names', async () => {
+    createInventoryAlertsWorker({}, workerDeps);
+    inventoryFindMany.mockResolvedValue([]);
+
+    await processor?.({ name: 'unknown-job', data: {} });
+
+    expect(inventoryFindMany).not.toHaveBeenCalled();
   });
 });

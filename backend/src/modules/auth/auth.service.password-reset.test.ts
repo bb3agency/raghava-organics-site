@@ -1,8 +1,12 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { AuthService } from './auth.service';
 
 describe('AuthService requestPasswordReset', () => {
+  beforeEach(() => {
+    delete process.env.TURNSTILE_SECRET_KEY;
+  });
+
   it('enqueues PasswordReset email when user exists', async () => {
     const add = vi.fn().mockResolvedValue(undefined);
     const findUnique = vi.fn().mockResolvedValue({
@@ -12,14 +16,18 @@ describe('AuthService requestPasswordReset', () => {
 
     const fastify = {
       prisma: {
-        user: {
-          findUnique
-        }
+        user: { findUnique }
       },
       queues: {
-        notifications: {
-          add
-        }
+        notifications: { add }
+      },
+      redis: {
+        get: vi.fn().mockResolvedValue(null),
+        set: vi.fn().mockResolvedValue('OK'),
+        del: vi.fn().mockResolvedValue(1),
+        incr: vi.fn().mockResolvedValue(1),
+        expire: vi.fn().mockResolvedValue(1),
+        ttl: vi.fn().mockResolvedValue(-1)
       }
     } as unknown as FastifyInstance;
 

@@ -6,6 +6,7 @@ function createHarness() {
   const adminUserInviteCreate = vi.fn(async () => ({ id: 'invite_1' }));
   const adminUserInviteUpdate = vi.fn(async () => ({ id: 'invite_1' }));
   const adminUserInviteFindUnique = vi.fn();
+  const adminUserInviteFindFirst = vi.fn(async (): Promise<unknown> => null);
   const adminUserInviteUpdateMany = vi.fn(async () => ({ count: 2 }));
   const userFindUnique = vi.fn(async () => null);
   const userFindFirst = vi.fn(async () => null);
@@ -22,23 +23,25 @@ function createHarness() {
     lastName: 'Owner'
   }));
   const txGrantCreateMany = vi.fn(async () => ({ count: 3 }));
-  const txInviteUpdate = vi.fn(async () => ({ id: 'invite_1' }));
+  const txInviteUpdateMany = vi.fn(async () => ({ count: 1 }));
   const transaction = vi.fn(
     async (
       callback: (tx: {
         user: { create: typeof txUserCreate };
         adminPermissionGrant: { createMany: typeof txGrantCreateMany };
-        adminUserInvite: { update: typeof txInviteUpdate };
+        adminUserInvite: { updateMany: typeof txInviteUpdateMany };
       }) => Promise<unknown>
     ) =>
       callback({
         user: { create: txUserCreate },
         adminPermissionGrant: { createMany: txGrantCreateMany },
-        adminUserInvite: { update: txInviteUpdate }
+        adminUserInvite: { updateMany: txInviteUpdateMany }
       })
   );
   const notificationsAdd = vi.fn(async () => ({ id: 'job_1' }));
+  const logInfo = vi.fn();
   const fastify = {
+    log: { info: logInfo, warn: vi.fn(), error: vi.fn() },
     prisma: {
       user: { findUnique: userFindUnique, findFirst: userFindFirst },
       opsUser: { findUnique: opsUserFindUnique },
@@ -46,6 +49,7 @@ function createHarness() {
         create: adminUserInviteCreate,
         update: adminUserInviteUpdate,
         findUnique: adminUserInviteFindUnique,
+        findFirst: adminUserInviteFindFirst,
         updateMany: adminUserInviteUpdateMany
       },
       $transaction: transaction
@@ -67,6 +71,7 @@ function createHarness() {
       adminUserInviteCreate,
       adminUserInviteUpdate,
       adminUserInviteFindUnique,
+      adminUserInviteFindFirst,
       adminUserInviteUpdateMany,
       userFindUnique,
       userFindFirst,
@@ -78,7 +83,7 @@ function createHarness() {
       redisExpire,
       txUserCreate,
       txGrantCreateMany,
-      txInviteUpdate,
+      txInviteUpdateMany,
       transaction,
       notificationsAdd
     }
@@ -86,14 +91,15 @@ function createHarness() {
 }
 
 describe('AdminInvitesService', () => {
-  it('creates merchant admin invites with default merchant permissions and admin setup URL', async () => {
+  it('creates merchant admin invites with explicitly provided permissions and admin setup URL', async () => {
     const { service, mocks } = createHarness();
 
     const result = await service.createAdminInvite({
       createdByOpsUserId: 'ops_1',
       inviteEmail: 'Merchant@Example.com',
       inviteName: 'Merchant Owner',
-      setupBaseUrl: 'https://client.example.com'
+      setupBaseUrl: 'https://client.example.com',
+      permissions: ['products:write', 'orders:read']
     });
 
     expect(result.setupUrl).toContain('/admin/setup?token=');
@@ -112,13 +118,15 @@ describe('AdminInvitesService', () => {
       to: 'merchant@example.com',
       template: 'AdminInviteSetup'
     }), expect.any(Object));
-    expect(mocks.adminUserInviteUpdate).toHaveBeenCalledWith({
-      where: { id: 'invite_1' },
-      data: { status: 'EMAIL_SENT' }
-    });
+    expect(mocks.adminUserInviteUpdateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ id: 'invite_1', status: 'CREATED' }),
+        data: { status: 'EMAIL_SENT' }
+      })
+    );
   });
 
-  it('rejects developer permissions in merchant admin invites', async () => {
+  it('rejects developer/disallowed permissions in merchant admin invites', async () => {
     const { service } = createHarness();
 
     await expect(service.createAdminInvite({
@@ -127,6 +135,13 @@ describe('AdminInvitesService', () => {
       setupBaseUrl: 'https://client.example.com',
       permissions: ['products:read', 'ops:read']
     })).rejects.toThrow('Permission is not allowed for merchant admin invite: ops:read');
+
+    await expect(service.createAdminInvite({
+      inviteEmail: 'merchant2@example.com',
+      inviteName: 'Merchant Owner 2',
+      setupBaseUrl: 'https://client.example.com',
+      permissions: ['products:read', 'queues:inspect']
+    })).rejects.toThrow('Permission is not allowed for merchant admin invite: queues:inspect');
   });
 
   it('consumes an active invite by creating an admin user and permission grants once', async () => {
@@ -165,8 +180,7 @@ describe('AdminInvitesService', () => {
       adminUserId: 'admin_1',
       email: 'merchant@example.com',
       name: 'Merchant Owner',
-      permissions: ['products:read', 'orders:read'],
-      mfaRequired: false
+      permissions: ['products:read', 'orders:read']
     });
     expect(mocks.txUserCreate).toHaveBeenCalledWith({
       data: expect.objectContaining({
@@ -186,10 +200,12 @@ describe('AdminInvitesService', () => {
       ],
       skipDuplicates: true
     });
-    expect(mocks.txInviteUpdate).toHaveBeenCalledWith({
-      where: { id: 'invite_1' },
-      data: expect.objectContaining({ status: 'CONSUMED' })
-    });
+    expect(mocks.txInviteUpdateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ id: 'invite_1' }),
+        data: expect.objectContaining({ status: 'CONSUMED' })
+      })
+    );
   });
 
   it('marks expired invites as expired and fails closed', async () => {
@@ -207,11 +223,118 @@ describe('AdminInvitesService', () => {
       inviteToken: 'token_1234567890',
       otp: '123456'
     })).rejects.toThrow('Admin invite has expired');
-    expect(mocks.adminUserInviteUpdate).toHaveBeenCalledWith({
-      where: { id: 'invite_1' },
-      data: { status: 'EXPIRED_CLEANED' }
-    });
+    expect(mocks.adminUserInviteUpdateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ id: 'invite_1' }),
+        data: { status: 'EXPIRED_CLEANED' }
+      })
+    );
     expect(mocks.transaction).not.toHaveBeenCalled();
+  });
+
+  it('sendSetupOtp accepts name + password without phone and stores null phone in Redis', async () => {
+    const { service, mocks } = createHarness();
+    mocks.adminUserInviteFindUnique.mockResolvedValue({
+      id: 'invite_1',
+      inviteEmail: 'merchant@example.com',
+      inviteName: 'Merchant Owner',
+      status: 'EMAIL_SENT',
+      permissions: ['products:read'],
+      expiresAt: new Date(Date.now() + 60_000)
+    });
+
+    const result = await service.sendSetupOtp({
+      inviteToken: 'token_1234567890',
+      name: 'Merchant Owner',
+      password: 'securepassword'
+    });
+
+    expect(result.message).toBe('OTP sent successfully');
+    const redisSetCall = mocks.redisSet.mock.calls.find(
+      (c: unknown[]) => typeof c[0] === 'string' && (c[0] as string).includes('payload')
+    ) as [string, string, ...unknown[]] | undefined;
+    expect(redisSetCall).toBeDefined();
+    const stored = JSON.parse(redisSetCall![1]) as { name: string; phone: string | null };
+    expect(stored.name).toBe('Merchant Owner');
+    expect(stored.phone).toBeNull();
+    expect(mocks.notificationsAdd).toHaveBeenCalledWith(
+      'send-email',
+      expect.objectContaining({ template: 'OtpVerification', to: 'merchant@example.com' }),
+      expect.any(Object)
+    );
+  });
+
+  it('sendSetupOtp rejects when name is missing', async () => {
+    const { service, mocks } = createHarness();
+    mocks.adminUserInviteFindUnique.mockResolvedValue({
+      id: 'invite_1',
+      inviteEmail: 'merchant@example.com',
+      inviteName: 'Merchant Owner',
+      status: 'EMAIL_SENT',
+      permissions: ['products:read'],
+      expiresAt: new Date(Date.now() + 60_000)
+    });
+
+    await expect(
+      service.sendSetupOtp({
+        inviteToken: 'token_1234567890',
+        name: '   ',
+        password: 'securepassword'
+      })
+    ).rejects.toThrow('Name is required');
+  });
+
+  it('sendSetupOtp stores phone when provided and checks uniqueness', async () => {
+    const { service, mocks } = createHarness();
+    mocks.adminUserInviteFindUnique.mockResolvedValue({
+      id: 'invite_1',
+      inviteEmail: 'merchant@example.com',
+      inviteName: 'Merchant Owner',
+      status: 'EMAIL_SENT',
+      permissions: ['products:read'],
+      expiresAt: new Date(Date.now() + 60_000)
+    });
+    mocks.userFindFirst.mockResolvedValueOnce({ id: 'other_user', phone: '+911234567890' } as unknown as null);
+
+    await expect(
+      service.sendSetupOtp({
+        inviteToken: 'token_1234567890',
+        name: 'Merchant Owner',
+        password: 'securepassword',
+        phone: '+911234567890'
+      })
+    ).rejects.toThrow('User already exists for invite phone number');
+  });
+
+  it('consumeAdminInvite creates admin user with null phone when phone was not provided at setup', async () => {
+    const { service, mocks } = createHarness();
+    mocks.adminUserInviteFindUnique.mockResolvedValue({
+      id: 'invite_1',
+      inviteEmail: 'merchant@example.com',
+      inviteName: 'Merchant Owner',
+      status: 'EMAIL_SENT',
+      permissions: ['products:read'],
+      expiresAt: new Date(Date.now() + 60_000)
+    });
+
+    const inviteTokenHash = crypto.createHash('sha256').update('token_1234567890').digest('hex');
+    const otpHash = crypto.createHash('sha256').update('123456').digest('hex');
+    mocks.redisGet.mockImplementation(async (key: string) => {
+      if (key === `admin-invite:setup:payload:${inviteTokenHash}`) {
+        return JSON.stringify({ name: 'Merchant Owner', phone: null, passwordHash: 'hashed-pw' });
+      }
+      if (key === `admin-invite:setup:otp:${inviteTokenHash}`) {
+        return otpHash;
+      }
+      return null;
+    });
+
+    await service.consumeAdminInvite({ inviteToken: 'token_1234567890', otp: '123456' });
+
+    expect(mocks.txUserCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({ phone: null })
+    });
+    expect(mocks.userFindFirst).not.toHaveBeenCalled();
   });
 
   it('cleans up expired active merchant admin invites', async () => {
@@ -235,9 +358,49 @@ describe('AdminInvitesService', () => {
       service.createAdminInvite({
         inviteEmail: 'shared@example.com',
         inviteName: 'Merchant Owner',
-        setupBaseUrl: 'https://client.example.com'
+        setupBaseUrl: 'https://client.example.com',
+        permissions: ['products:read']
       })
     ).rejects.toThrow('Email is already in use by an ops account');
+
+    expect(mocks.adminUserInviteCreate).not.toHaveBeenCalled();
+  });
+
+  it('rejects ops:read and ops:write in merchant admin invites', async () => {
+    const { service } = createHarness();
+
+    await expect(service.createAdminInvite({
+      inviteEmail: 'developer@example.com',
+      inviteName: 'Dev Admin',
+      setupBaseUrl: 'https://client.example.com',
+      permissions: ['products:read', 'ops:read']
+    })).rejects.toThrow('Permission is not allowed for merchant admin invite: ops:read');
+
+    await expect(service.createAdminInvite({
+      inviteEmail: 'developer2@example.com',
+      inviteName: 'Dev Admin 2',
+      setupBaseUrl: 'https://client.example.com',
+      permissions: ['products:read', 'ops:write']
+    })).rejects.toThrow('Permission is not allowed for merchant admin invite: ops:write');
+  });
+
+  it('rejects createAdminInvite when active invite already exists for email (Gap 9)', async () => {
+    const { service, mocks } = createHarness();
+    mocks.opsUserFindUnique.mockResolvedValueOnce(null);
+    mocks.adminUserInviteFindFirst.mockResolvedValueOnce({
+      id: 'existing_1',
+      inviteEmail: 'merchant@example.com',
+      status: 'EMAIL_SENT'
+    });
+
+    await expect(
+      service.createAdminInvite({
+        inviteEmail: 'merchant@example.com',
+        inviteName: 'Merchant Owner',
+        setupBaseUrl: 'https://client.example.com',
+        permissions: ['products:read']
+      })
+    ).rejects.toMatchObject({ statusCode: 409 });
 
     expect(mocks.adminUserInviteCreate).not.toHaveBeenCalled();
   });

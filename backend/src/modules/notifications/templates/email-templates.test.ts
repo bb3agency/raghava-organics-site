@@ -26,6 +26,55 @@ describe('renderNotificationEmail', () => {
     expect(rendered.html).toContain('reset-token-123');
   });
 
+  it('renders OtpVerification template with otp in body', async () => {
+    const rendered = await renderNotificationEmail('OtpVerification', {
+      otp: '123456'
+    });
+    expect(rendered.subject).toContain('OTP verification code');
+    expect(rendered.html).toContain('123456');
+  });
+
+  it('renders CustomerOtpVerification with store-branded subject and anti-sharing message', async () => {
+    const rendered = await renderNotificationEmail('CustomerOtpVerification', {
+      otp: '654321',
+      storeName: 'Acme Shop'
+    });
+    expect(rendered.subject).toContain('Acme Shop');
+    expect(rendered.html).toContain('654321');
+    expect(rendered.html).toContain('Acme Shop');
+    expect(rendered.html).toContain('never ask you for it');
+  });
+
+  it('renders CustomerOtpVerification with Our Store fallback when storeName is missing', async () => {
+    const rendered = await renderNotificationEmail('CustomerOtpVerification', {
+      otp: '111222'
+    });
+    expect(rendered.subject).toContain('Our Store');
+    expect(rendered.html).toContain('111222');
+    expect(rendered.html).toContain('Our Store');
+  });
+
+  it('renders NotificationDeliveryFailure with channel and recipient context', async () => {
+    const rendered = await renderNotificationEmail('NotificationDeliveryFailure', {
+      template: 'OrderShipped',
+      channel: 'WHATSAPP',
+      recipient: '9876543210',
+      errorMessage: 'Meta API timeout',
+      failureStage: 'OUTBOX_DISPATCH',
+      queueName: 'notifications',
+      jobName: 'send-primary',
+      jobId: 'job_123',
+      outboxMessageId: 'outbox_123'
+    });
+    expect(rendered.subject).toContain('Notification delivery failure - OrderShipped');
+    expect(rendered.html).toContain('WHATSAPP');
+    expect(rendered.html).toContain('9876543210');
+    expect(rendered.html).toContain('Meta API timeout');
+    expect(rendered.html).toContain('OUTBOX_DISPATCH');
+    expect(rendered.html).toContain('send-primary');
+    expect(rendered.html).toContain('outbox_123');
+  });
+
   it('renders AdminInviteSetup template with admin setup URL and expiry', async () => {
     const rendered = await renderNotificationEmail('AdminInviteSetup', {
       email: 'merchant@example.com',

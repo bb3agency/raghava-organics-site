@@ -32,10 +32,11 @@ export const ADMIN_PERMISSIONS = [
   'analytics:export',
   'analytics:replay',
   'users:read',
-  'queues:inspect',
+  'users:write',
+  'shipments:read',
+  'payments:read',
   'ops:read',
-  'ops:write',
-  'ops:approve'
+  'ops:write'
 ] as const;
 
 export type AdminPermission = (typeof ADMIN_PERMISSIONS)[number];
@@ -60,7 +61,10 @@ export const MERCHANT_DEFAULT_PERMISSIONS: readonly AdminPermission[] = [
   'orders:export',
   'orders:notify',
   'analytics:export',
-  'users:read'
+  'users:read',
+  'users:write',
+  'shipments:read',
+  'payments:read'
 ] as const;
 
 export type AdminControlPolicy = {
@@ -118,10 +122,11 @@ export const ADMIN_CONTROL_POLICY_REGISTRY: Record<AdminPermission, AdminControl
   'analytics:export': { permission: 'analytics:export', layer: 'A', ownerRole: 'merchant', riskLevel: 'low', requiresApproval: false },
   'analytics:replay': { permission: 'analytics:replay', layer: 'B', ownerRole: 'merchant', riskLevel: 'high', requiresApproval: true },
   'users:read': { permission: 'users:read', layer: 'A', ownerRole: 'merchant', riskLevel: 'medium', requiresApproval: false },
-  'queues:inspect': { permission: 'queues:inspect', layer: 'C', ownerRole: 'developer', riskLevel: 'high', requiresApproval: false },
+  'users:write': { permission: 'users:write', layer: 'B', ownerRole: 'merchant', riskLevel: 'high', requiresApproval: true },
+  'shipments:read': { permission: 'shipments:read', layer: 'A', ownerRole: 'merchant', riskLevel: 'low', requiresApproval: false },
+  'payments:read': { permission: 'payments:read', layer: 'A', ownerRole: 'merchant', riskLevel: 'low', requiresApproval: false },
   'ops:read': { permission: 'ops:read', layer: 'C', ownerRole: 'developer', riskLevel: 'high', requiresApproval: false },
-  'ops:write': { permission: 'ops:write', layer: 'C', ownerRole: 'developer', riskLevel: 'critical', requiresApproval: true },
-  'ops:approve': { permission: 'ops:approve', layer: 'C', ownerRole: 'developer', riskLevel: 'critical', requiresApproval: true }
+  'ops:write': { permission: 'ops:write', layer: 'C', ownerRole: 'developer', riskLevel: 'critical', requiresApproval: true }
 };
 
 const ROLE_SCOPE_HINTS: Record<AdminDutyRole, readonly string[]> = {
@@ -158,7 +163,7 @@ export function resolveAdminDutyRole(permissions: readonly string[] | undefined)
   if (entries.includes('merchant:*') || entries.includes('merchant:ops:*') || entries.includes('merchant:superadmin:*')) {
     return 'merchant';
   }
-  if (entries.includes('ops:write') || entries.includes('ops:read') || entries.includes('ops:approve')) {
+  if (entries.includes('ops:write') || entries.includes('ops:read')) {
     return 'developer';
   }
   return 'merchant';

@@ -47,7 +47,7 @@ function buildOrder(overrides?: Partial<Record<string, unknown>>) {
 }
 
 describe('OrdersService admin ship enqueue', () => {
-  it('enqueues create-shipment and merchant SMS/WhatsApp notifications', async () => {
+  it('enqueues create-shipment and merchant primary notification', async () => {
     const shippingAdd = vi.fn().mockResolvedValue(undefined);
     const notificationAdd = vi.fn().mockResolvedValue(undefined);
     const order = buildOrder();
@@ -57,6 +57,7 @@ describe('OrdersService admin ship enqueue', () => {
         storeSettings: {
           findUnique: vi.fn().mockResolvedValue({
             pickupPincode: '500001',
+            contactEmail: 'merchant@example.com',
             contactPhone: '9888877777',
             notifySmsEnabled: true,
             notifyWhatsappEnabled: true,
@@ -93,25 +94,15 @@ describe('OrdersService admin ship enqueue', () => {
       })
     );
     expect(notificationAdd).toHaveBeenCalledWith(
-      'send-sms',
+      'send-primary',
       expect.objectContaining({
+        email: 'merchant@example.com',
         phone: '9888877777',
         template: 'OrderShipped',
         data: { orderId: 'order_1' }
       }),
       expect.objectContaining({
-        jobId: 'merchant:notifications:sms:order_1:OrderShipped'
-      })
-    );
-    expect(notificationAdd).toHaveBeenCalledWith(
-      'send-whatsapp',
-      expect.objectContaining({
-        phone: '9888877777',
-        template: 'OrderShipped',
-        data: { orderId: 'order_1' }
-      }),
-      expect.objectContaining({
-        jobId: 'merchant:notifications:whatsapp:order_1:OrderShipped'
+        jobId: 'merchant:notifications:primary:order_1:OrderShipped'
       })
     );
     expect(result).toEqual(

@@ -459,7 +459,14 @@ export const adminUpdateProductVariantSchema = {
 
 export const adminListProductsSchema = {
   params: emptyParamsSchema,
-  querystring: listProductsSchema.querystring,
+  querystring: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      ...listProductsSchema.querystring.properties,
+      sku: { type: 'string', maxLength: 100 }
+    }
+  },
   response: {
     ...listProductsSchema.response,
     ...standardAdminErrorResponses
@@ -498,6 +505,30 @@ export const adminUpdateProductSchema = {
   },
   response: {
     200: productListItemSchema,
+    ...standardAdminErrorResponses
+  }
+} as const;
+
+export const adminDeleteProductVariantSchema = {
+  params: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['id', 'variantId'],
+    properties: {
+      id: { type: 'string', maxLength: 64 },
+      variantId: { type: 'string', maxLength: 64 }
+    }
+  },
+  querystring: emptyQuerystringSchema,
+  response: {
+    200: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['message'],
+      properties: {
+        message: { type: 'string', maxLength: 100 }
+      }
+    },
     ...standardAdminErrorResponses
   }
 } as const;

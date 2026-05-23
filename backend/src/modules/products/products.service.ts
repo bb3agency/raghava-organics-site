@@ -5,6 +5,7 @@ import { ERROR_CODES } from '@common/errors/error-codes';
 import { buildProductsListCacheKey, invalidateProductsListCache } from '@common/cache/products-list-cache';
 import { featureFlags } from '@config/feature-flags';
 import { SettingsService } from '@modules/settings/settings.service';
+import { sendTechnicalFailureAlert } from '@modules/notifications/notification-failure-alert';
 import {
   AdminCategoryListQuery,
   CreateProductImageInput,
@@ -707,10 +708,18 @@ export class ProductsService {
           ...(query.maxPrice !== undefined ? { lte: query.maxPrice } : {})
         }
       : undefined;
+    const skuFilter = ('sku' in query ? (query as { sku?: string }).sku : undefined)?.trim() || undefined;
     const variantWhere: Prisma.ProductVariantWhereInput = {
       ...(priceFilter ? { price: priceFilter } : {}),
-      ...(inStockOnly ? { inventory: { is: { quantity: { gt: 0 } } } } : {})
+      ...(inStockOnly ? { inventory: { is: { quantity: { gt: 0 } } } } : {}),
+      ...(skuFilter ? { sku: { contains: skuFilter, mode: 'insensitive' as const } } : {})
     };
+
+    const hasVariantFilter =
+      query.minPrice !== undefined ||
+      query.maxPrice !== undefined ||
+      inStockOnly ||
+      !!skuFilter;
 
     const where: Prisma.ProductWhereInput = {
       ...(query.category ? { category: { slug: query.category } } : {}),
@@ -723,7 +732,7 @@ export class ProductsService {
           }
         : {}),
       ...(tagsFilter.length > 0 ? { tags: { hasSome: tagsFilter } } : {}),
-      ...(query.minPrice !== undefined || query.maxPrice !== undefined || inStockOnly
+      ...(hasVariantFilter
         ? {
             variants: {
               some: variantWhere
@@ -838,6 +847,24 @@ export class ProductsService {
     );
     await this.invalidateProductListCacheSafe();
     return { updated: input.images.length };
+  }
+
+  async adminDeleteProductVariant(productId: string, variantId: string) {
+    await this.assertProductExists(productId);
+    const variant = await this.fastify.prisma.productVariant.findFirst({
+      where: { id: variantId, productId },
+      select: { id: true }
+    });
+    if (!variant) {
+      throw new AppError(ERROR_CODES.NOT_FOUND, 'Product variant not found', 404);
+    }
+    const variantCount = await this.fastify.prisma.productVariant.count({ where: { productId } });
+    if (variantCount <= 1) {
+      throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Cannot delete the last variant of a product', 400);
+    }
+    await this.fastify.prisma.productVariant.delete({ where: { id: variantId } });
+    await this.invalidateProductListCacheSafe();
+    return { message: 'Product variant deleted' };
   }
 
   async adminDeleteProductImage(productId: string, imageId: string) {
@@ -1248,6 +1275,16 @@ export class ProductsService {
       }
       return JSON.parse(payload) as { items: unknown[]; meta: { page: number; limit: number; total: number; totalPages: number } };
     } catch (error) {
+      await sendTechnicalFailureAlert({
+        prisma: this.fastify.prisma,
+        template: 'ProductCacheRead',
+        channel: 'UNKNOWN',
+        recipient: cacheKey,
+        errorMessage: error instanceof Error ? error.message : 'Unknown product cache read error',
+        failureStage: 'CORE_LOGIC',
+        domain: 'products',
+        component: 'products-cache-read'
+      });
       this.fastify.log.error(
         { cacheKey, error: error instanceof Error ? error.message : 'Unknown product cache read error' },
         'Failed to read product list cache'
@@ -1263,6 +1300,16 @@ export class ProductsService {
     try {
       await this.fastify.redis.set(cacheKey, JSON.stringify(response), 'EX', 60);
     } catch (error) {
+      await sendTechnicalFailureAlert({
+        prisma: this.fastify.prisma,
+        template: 'ProductCacheWrite',
+        channel: 'UNKNOWN',
+        recipient: cacheKey,
+        errorMessage: error instanceof Error ? error.message : 'Unknown product cache write error',
+        failureStage: 'CORE_LOGIC',
+        domain: 'products',
+        component: 'products-cache-write'
+      });
       this.fastify.log.error(
         { cacheKey, error: error instanceof Error ? error.message : 'Unknown product cache write error' },
         'Failed to write product list cache'
@@ -1274,6 +1321,16 @@ export class ProductsService {
     try {
       await invalidateProductsListCache(this.fastify.redis);
     } catch (error) {
+      await sendTechnicalFailureAlert({
+        prisma: this.fastify.prisma,
+        template: 'ProductCacheInvalidate',
+        channel: 'UNKNOWN',
+        recipient: 'products-list-cache',
+        errorMessage: error instanceof Error ? error.message : 'Unknown product cache invalidation error',
+        failureStage: 'CORE_LOGIC',
+        domain: 'products',
+        component: 'products-cache-invalidate'
+      });
       this.fastify.log.error(
         { error: error instanceof Error ? error.message : 'Unknown product cache invalidation error' },
         'Failed to invalidate product list cache'
@@ -1319,6 +1376,18 @@ export class ProductsService {
         occurredAt: new Date().toISOString()
       }, `analytics:${eventType}:${sessionId}:${Date.now()}`);
     } catch (error) {
+      await sendTechnicalFailureAlert({
+        prisma: this.fastify.prisma,
+        template: eventType,
+        channel: 'UNKNOWN',
+        recipient: sessionId,
+        errorMessage: error instanceof Error ? error.message : 'Unknown analytics enqueue error',
+        failureStage: 'QUEUE_ENQUEUE',
+        domain: 'analytics',
+        component: 'products-service',
+        queueName: 'analytics',
+        jobName: 'record-event'
+      });
       this.fastify.log.error(
         {
           eventType,

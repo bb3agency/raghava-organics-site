@@ -1,7 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import { Role } from '@prisma/client';
 import { getCurrentUser } from '@common/decorators/current-user';
-import { adminPermissionGuard } from '@common/guards/admin-permissions.guard';
 import { jwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import { opsAuthGuard } from '@common/guards/ops-auth.guard';
 import { opsPermissionGuard } from '@common/guards/ops-permissions.guard';
@@ -15,10 +14,8 @@ import {
   adminInviteSetupOtpSchema,
   adminInviteConsumeSchema,
   adminInviteCreateSchema,
-  adminMfaDisableSchema,
-  adminMfaSetupConfirmSchema,
-  adminMfaSetupStartSchema,
-  adminLoginSchema,
+  adminLoginRequestOtpSchema,
+  adminLoginVerifyOtpSchema,
   forgotPasswordSchema,
   loginSchema,
   logoutSchema,
@@ -261,18 +258,39 @@ export async function registerAuthRoutes(fastify: FastifyInstance): Promise<void
   );
 
   fastify.post(
-    '/api/v1/auth/admin/login',
+    '/api/v1/auth/admin/login/request-otp',
     {
-      schema: adminLoginSchema,
-      preHandler: [idempotencyPreHandler],
+      schema: adminLoginRequestOtpSchema,
       config: {
-        rateLimit: routeRateLimitProfiles.authLogin
+        rateLimit: routeRateLimitProfiles.authSensitive
+      }
+    },
+    async (request) => {
+      const body = request.body as { email: string; password: string; turnstileToken?: string };
+      return authService.requestAdminLoginOtp({
+        email: body.email,
+        password: body.password,
+        clientIp: request.ip,
+        ...(body.turnstileToken ? { turnstileToken: body.turnstileToken } : {}),
+        risk: extractAbuseRiskContext(request.headers as Record<string, unknown>)
+      });
+    }
+  );
+
+  fastify.post(
+    '/api/v1/auth/admin/login/verify-otp',
+    {
+      schema: adminLoginVerifyOtpSchema,
+      config: {
+        rateLimit: routeRateLimitProfiles.authSensitive
       }
     },
     async (request, reply) => {
-      const auth = await authService.adminLogin(request.body as never, {
-        clientIp: request.ip,
-        risk: extractAbuseRiskContext(request.headers as Record<string, unknown>)
+      const body = request.body as { email: string; otp: string };
+      const auth = await authService.verifyAdminLoginOtp({
+        email: body.email,
+        otp: body.otp,
+        clientIp: request.ip
       });
       setRefreshTokenCookie(reply, auth.refreshToken);
       return {
@@ -295,14 +313,14 @@ export async function registerAuthRoutes(fastify: FastifyInstance): Promise<void
       const body = request.body as {
         email: string;
         name: string;
-        permissions?: string[];
+        permissions: string[];
         setupBaseUrl: string;
       };
       return adminInvitesService.createAdminInvite({
         ...(request.opsUser?.id ? { createdByOpsUserId: request.opsUser.id } : {}),
         inviteEmail: body.email,
         inviteName: body.name,
-        ...(body.permissions ? { permissions: body.permissions } : {}),
+        permissions: body.permissions,
         setupBaseUrl: body.setupBaseUrl
       });
     }
@@ -317,12 +335,12 @@ export async function registerAuthRoutes(fastify: FastifyInstance): Promise<void
       }
     },
     async (request) => {
-      const body = request.body as { token: string; password: string; phone: string; name?: string };
+      const body = request.body as { token: string; name: string; password: string; phone?: string };
       return adminInvitesService.sendSetupOtp({
         inviteToken: body.token,
+        name: body.name,
         password: body.password,
-        phone: body.phone,
-        ...(body.name ? { name: body.name } : {})
+        ...(body.phone ? { phone: body.phone } : {})
       });
     }
   );
@@ -353,52 +371,11 @@ export async function registerAuthRoutes(fastify: FastifyInstance): Promise<void
         rateLimit: routeRateLimitProfiles.opsCritical
       }
     },
-    async () => adminInvitesService.cleanupExpiredAdminInvites()
-  );
-
-  fastify.post(
-    '/api/v1/auth/admin/mfa/setup/start',
-    {
-      schema: adminMfaSetupStartSchema,
-      preHandler: [jwtAuthGuard, rolesGuard(Role.ADMIN), adminPermissionGuard('users:read')],
-      config: {
-        rateLimit: routeRateLimitProfiles.authSensitive
-      }
-    },
     async (request) => {
-      const user = getCurrentUser(request);
-      return authService.startAdminMfaSetup(user.sub);
+      const opsUser = (request as unknown as { opsUser?: { id: string } }).opsUser;
+      return adminInvitesService.cleanupExpiredAdminInvites(opsUser ? { actorOpsUserId: opsUser.id } : {});
     }
   );
 
-  fastify.post(
-    '/api/v1/auth/admin/mfa/setup/confirm',
-    {
-      schema: adminMfaSetupConfirmSchema,
-      preHandler: [jwtAuthGuard, rolesGuard(Role.ADMIN), adminPermissionGuard('users:read')],
-      config: {
-        rateLimit: routeRateLimitProfiles.authSensitive
-      }
-    },
-    async (request) => {
-      const user = getCurrentUser(request);
-      return authService.confirmAdminMfaSetup(user.sub, (request.body as { mfaCode: string }).mfaCode);
-    }
-  );
-
-  fastify.post(
-    '/api/v1/auth/admin/mfa/disable',
-    {
-      schema: adminMfaDisableSchema,
-      preHandler: [jwtAuthGuard, rolesGuard(Role.ADMIN), adminPermissionGuard('users:read')],
-      config: {
-        rateLimit: routeRateLimitProfiles.authSensitive
-      }
-    },
-    async (request) => {
-      const user = getCurrentUser(request);
-      return authService.disableAdminMfa(user.sub, (request.body as { mfaCode: string }).mfaCode);
-    }
-  );
 }
 

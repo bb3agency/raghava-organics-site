@@ -90,6 +90,40 @@ const couponsServiceState = vi.hoisted(() => ({
   getCouponAuditLogs: vi.fn(async () => ({
     items: [],
     meta: { page: 1, limit: 20, total: 0, totalPages: 0 }
+  })),
+  adminGetCouponById: vi.fn(async () => ({
+    id: 'coupon_1',
+    code: 'WELCOME10',
+    type: 'PERCENTAGE_OFF',
+    value: 10,
+    minOrderPaise: 0,
+    maxUsesTotal: null,
+    maxUsesPerUser: null,
+    usesCount: 0,
+    isActive: true,
+    validFrom: new Date().toISOString(),
+    validUntil: null,
+    status: 'active',
+    applicableTo: null,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  })),
+  adminCloneCoupon: vi.fn(async () => ({
+    id: 'coupon_2',
+    code: 'WELCOME10-CLONE',
+    type: 'PERCENTAGE_OFF',
+    value: 10,
+    minOrderPaise: 0,
+    maxUsesTotal: null,
+    maxUsesPerUser: null,
+    usesCount: 0,
+    isActive: true,
+    validFrom: new Date().toISOString(),
+    validUntil: null,
+    status: 'active',
+    applicableTo: null,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
   }))
 }));
 
@@ -103,6 +137,8 @@ vi.mock('./coupons.service', () => {
     adminDeleteCoupon = couponsServiceState.adminDeleteCoupon;
     adminRestoreCoupon = couponsServiceState.adminRestoreCoupon;
     getCouponAuditLogs = couponsServiceState.getCouponAuditLogs;
+    adminGetCouponById = couponsServiceState.adminGetCouponById;
+    adminCloneCoupon = couponsServiceState.adminCloneCoupon;
     constructor(_fastify: unknown) {}
 
     static getInstance(fastify: unknown) {
@@ -118,6 +154,39 @@ import { registerCouponsRoutes } from './coupons.routes';
 describe('coupons routes', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('all coupon write routes have idempotencyPreHandler in preHandler chain', async () => {
+    const app = Fastify();
+    const routes: Array<{ method: string | string[]; url: string; preHandler: unknown[] | undefined }> = [];
+
+    app.addHook('onRoute', (routeOptions) => {
+      routes.push({
+        method: routeOptions.method,
+        url: routeOptions.url,
+        preHandler: routeOptions.preHandler as unknown[] | undefined
+      });
+    });
+
+    await registerCouponsRoutes(app);
+
+    const writeRoutes = [
+      { url: '/api/v1/admin/coupons', method: 'POST' },
+      { url: '/api/v1/admin/coupons/:id', method: 'PATCH' },
+      { url: '/api/v1/admin/coupons/:id/status', method: 'PATCH' },
+      { url: '/api/v1/admin/coupons/:id', method: 'DELETE' },
+      { url: '/api/v1/admin/coupons/:id/restore', method: 'POST' },
+      { url: '/api/v1/admin/coupons/:id/clone', method: 'POST' }
+    ];
+
+    for (const { url, method } of writeRoutes) {
+      const route = routes.find((r) => r.url === url && r.method === method);
+      expect(route, `route ${method} ${url} should be registered`).toBeDefined();
+      expect(Array.isArray(route?.preHandler), `${method} ${url} should have preHandler array`).toBe(true);
+      expect((route?.preHandler as unknown[]).length, `${method} ${url} should have ≥4 preHandlers`).toBeGreaterThanOrEqual(4);
+    }
+
+    await app.close();
   });
 
   it('registers admin coupon routes with schema and guards', async () => {
@@ -157,6 +226,24 @@ describe('coupons routes', () => {
 
     const del = routes.find((route) => route.url === '/api/v1/admin/coupons/:id' && route.method === 'DELETE');
     expect(del).toBeDefined();
+
+    const getById = routes.find((route) => route.url === '/api/v1/admin/coupons/:id' && route.method === 'GET');
+    expect(getById).toBeDefined();
+    expect(getById?.preHandler).toBeDefined();
+    expect((getById?.schema as { response?: Record<number, unknown> }).response?.[200]).toBeDefined();
+
+    const clone = routes.find((route) => route.url === '/api/v1/admin/coupons/:id/clone' && route.method === 'POST');
+    expect(clone).toBeDefined();
+    expect(clone?.preHandler).toBeDefined();
+
+    const restore = routes.find((route) => route.url === '/api/v1/admin/coupons/:id/restore' && route.method === 'POST');
+    expect(restore).toBeDefined();
+    expect(restore?.preHandler).toBeDefined();
+
+    const auditLogs = routes.find((route) => route.url === '/api/v1/admin/coupons/:id/audit' && route.method === 'GET');
+    expect(auditLogs).toBeDefined();
+    expect(auditLogs?.preHandler).toBeDefined();
+    expect((auditLogs?.schema as { response?: Record<number, unknown> }).response?.[200]).toBeDefined();
 
     await app.close();
   });

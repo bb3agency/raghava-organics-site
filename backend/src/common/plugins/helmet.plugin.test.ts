@@ -23,7 +23,7 @@ describe('registerHelmetPlugin', () => {
           directives: expect.objectContaining({
             defaultSrc: ["'self'"],
             scriptSrc: ["'self'"],
-            styleSrc: ["'self'", "'unsafe-inline'"],
+            styleSrc: ["'self'"],
             imgSrc: ["'self'", 'data:']
           })
         }),

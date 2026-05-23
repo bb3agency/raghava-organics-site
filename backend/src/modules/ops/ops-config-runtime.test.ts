@@ -55,6 +55,22 @@ describe('applyOpsConfigRuntimeOverlay', () => {
     expect(report.skippedUnknownKeys).toEqual(['UNKNOWN_SECRET']);
   });
 
+  it('skips NODE_ENV and CLIENT_ID even when present in DB (not overlay keys)', async () => {
+    process.env.OPS_DB_ENCRYPTION_KEY = 'test-overlay-key';
+    process.env.NODE_ENV = 'production';
+    process.env.CLIENT_ID = 'original-client';
+
+    const report = await applyOpsConfigRuntimeOverlay(prismaWithRows([
+      { secretKey: 'NODE_ENV', encryptedValue: encryptOpsConfigValue('development') },
+      { secretKey: 'CLIENT_ID', encryptedValue: encryptOpsConfigValue('hacked-client') }
+    ]));
+
+    expect(process.env.NODE_ENV).toBe('production');
+    expect(process.env.CLIENT_ID).toBe('original-client');
+    expect(report.skippedUnknownKeys).toEqual(['NODE_ENV', 'CLIENT_ID']);
+    expect(report.appliedKeys).toEqual([]);
+  });
+
   it('records decrypt failures in development-like runtime without applying value', async () => {
     process.env.NODE_ENV = 'test';
     process.env.OPS_DB_ENCRYPTION_KEY = 'test-overlay-key';

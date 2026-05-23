@@ -25,7 +25,7 @@
 | Storefront port (assigned) | e.g. `3101` |
 | Payment provider | `razorpay` / `cod` |
 | Shipping provider | `delhivery` / `shiprocket` |
-| Notification channels | email (`resend`) / SMS (`msg91`) / WhatsApp (`msg91`) |
+| Notification channels | email (`resend`) / SMS (`msg91` or `fast2sms`) / WhatsApp (`meta-whatsapp`) |
 | VPS IP (for later) | — (fill when VPS provisioned in Phase 6) |
 | Backend repo path | `client-<client-id>/backend` |
 | Frontend repo path | `client-<client-id>/frontend` |
@@ -84,17 +84,11 @@
 
 - [ ] Backend template cloned into `client-<client-id>/backend`
 - [ ] `.env.example` copied to `.env`
-- [ ] All required env variables filled (no `replace_with` placeholders remain)
-- [ ] `CLIENT_ID` set correctly
-- [ ] `JWT_SECRET` generated — unique to this client
-- [ ] `JWT_REFRESH_SECRET` generated — unique, different from `JWT_SECRET`
-- [ ] `ADMIN_MFA_ENCRYPTION_KEY` generated — unique, different from `JWT_REFRESH_SECRET`
-- [ ] `OPS_API_KEY_SALT` generated
-- [ ] `DATABASE_URL` points to local Docker DB for this client
-- [ ] `REDIS_URL` and `REDIS_PASSWORD` set
+- [ ] **Bootstrap keys** filled in `.env` (no `replace_with` placeholders): `CLIENT_ID`, `DATABASE_URL`, `REDIS_URL`, `REDIS_PASSWORD`, `JWT_SECRET`, `JWT_REFRESH_SECRET`, `OPS_DB_ENCRYPTION_KEY`, `OPS_COOKIE_SECRET`, `PAYMENT_PROVIDER`, `SHIPPING_PROVIDER`, feature flags, OTEL vars
+  - **Also set** `RESEND_API_KEY` and `RESEND_FROM` — required for `node scripts/ops-newuser.mjs` invite email (Phase 1). After first ops login, manage via Ops UI. See `docs/PRODUCTION_FIRST_DEPLOY_CHECKLIST.md`.
+  > **Note:** All other provider credentials (`RAZORPAY_*`, `DELHIVERY_*`, `MSG91_*`, etc.) and ops-security params (`OPS_METRICS_TOKEN`, `REPLAY_APPROVAL_TOKEN`, etc.) are **DB-overlay keys** — they are NOT set in `.env` in production. They are provisioned via Ops UI after Phase 8. For local dev (Phase 2–5), you may temporarily set them in `.env` for dry-runs. See `docs/ENV_VS_DB_CONFIG_REFERENCE.md`.
 - [ ] `PAYMENT_PROVIDER` set (not `noop` unless explicitly staging-only)
 - [ ] `SHIPPING_PROVIDER` set (not `noop` unless explicitly staging-only)
-- [ ] All provider credentials from Phase 1 filled into `.env`
 - [ ] `npm ci` — passes
 - [ ] `npm run build` — passes
 - [ ] `npm run validate:env` — passes
@@ -129,7 +123,7 @@
 | Delhivery / Shiprocket | Ship order → AWB created → tracking webhook received | [ ] | — | — | |
 | Resend | Order confirmation email received at test inbox | [ ] | — | — | |
 | MSG91 SMS | Notification delivered to test number | [ ] | — | — | |
-| MSG91 WhatsApp | Notification delivered to test number | [ ] | — | — | |
+| Meta WhatsApp | Notification delivered to test number | [ ] | — | — | |
 
 - [ ] All dry-run results logged in `docs/CLIENT_INTEGRATION_CREDENTIAL_REGISTER_TEMPLATE.md` with timestamps
 

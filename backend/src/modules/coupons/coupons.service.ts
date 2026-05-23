@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import { FastifyInstance } from 'fastify';
+import { sendTechnicalFailureAlert } from '@modules/notifications/notification-failure-alert';
 import { Coupon, CouponType, Prisma } from '@prisma/client';
 import { AppError } from '@common/errors/app-error';
 import { ERROR_CODES } from '@common/errors/error-codes';
@@ -777,6 +778,16 @@ export class CouponsService {
       });
     } catch (error) {
       // Log error but don't fail the operation
+      void sendTechnicalFailureAlert({
+        prisma: this.fastify.prisma,
+        template: 'CouponAuditLog',
+        channel: 'UNKNOWN',
+        recipient: data.couponId,
+        errorMessage: error instanceof Error ? error.message : 'Unknown coupon audit log error',
+        failureStage: 'CORE_LOGIC',
+        domain: 'coupons',
+        component: 'coupon-audit-log'
+      });
       this.fastify.log.warn({
         error: error instanceof Error ? error.message : 'Unknown error',
         couponId: data.couponId,
@@ -882,5 +893,99 @@ export class CouponsService {
         totalPages: Math.ceil(total / limit)
       }
     };
+  }
+
+  /**
+   * Clone an existing coupon with a new code and optionally overridden dates.
+   * @param id - Source coupon UUID
+   * @param newCode - New unique coupon code for the clone
+   * @param adminUserId - Admin performing the clone
+   * @param overrides - Optional date overrides for the clone
+   * @param metadata - Audit metadata
+   */
+  async adminCloneCoupon(
+    id: string,
+    newCode: string,
+    adminUserId: string,
+    overrides?: { validFrom?: string; validUntil?: string },
+    metadata?: AuditMetadata
+  ) {
+    const source = await this.fastify.prisma.coupon.findUnique({ where: { id } });
+    if (!source) {
+      throw new AppError(ERROR_CODES.NOT_FOUND, 'Coupon not found', 404);
+    }
+
+    const code = newCode.trim().toUpperCase();
+    const existing = await this.fastify.prisma.coupon.findFirst({
+      where: { code, deletedAt: null }
+    });
+    if (existing) {
+      throw new AppError(ERROR_CODES.VALIDATION_ERROR, `Coupon code '${code}' already exists`, 409);
+    }
+
+    const validFrom = overrides?.validFrom
+      ? this.parseDateOrThrow(overrides.validFrom, 'validFrom')
+      : source.validFrom;
+    const validUntil = overrides?.validUntil
+      ? this.parseDateOrThrow(overrides.validUntil, 'validUntil')
+      : source.validUntil;
+
+    let cloned: Coupon;
+    try {
+      cloned = await this.fastify.prisma.coupon.create({
+        data: {
+          code,
+          type: source.type,
+          value: source.value,
+          minOrderPaise: source.minOrderPaise,
+          maxUsesTotal: source.maxUsesTotal,
+          maxUsesPerUser: source.maxUsesPerUser,
+          validFrom,
+          validUntil,
+          applicableTo: source.applicableTo ?? Prisma.JsonNull,
+          isActive: false,
+          createdBy: adminUserId
+        }
+      });
+    } catch (error) {
+      if (this.isUniqueConstraintViolation(error)) {
+        throw new AppError(ERROR_CODES.VALIDATION_ERROR, `Coupon code '${code}' already exists`, 409);
+      }
+      throw error;
+    }
+
+    await this.logAuditLog({
+      couponId: cloned.id,
+      action: 'CREATE',
+      actorId: adminUserId,
+      actorType: 'ADMIN',
+      newState: this.serializeCouponWithAudit(cloned),
+      ipAddress: metadata?.ipAddress,
+      userAgent: metadata?.userAgent
+    });
+
+    return this.serializeCouponWithAudit(cloned);
+  }
+
+  /**
+   * Get a single coupon by ID with full detail.
+   * @param id - The coupon UUID
+   */
+  async adminGetCouponById(id: string) {
+    const cached = this.getFromCache(`id:${id}`);
+    if (cached) {
+      return this.serializeCouponWithAudit(cached);
+    }
+
+    const coupon = await this.fastify.prisma.coupon.findUnique({
+      where: { id }
+    });
+
+    if (!coupon) {
+      throw new AppError(ERROR_CODES.NOT_FOUND, 'Coupon not found', 404);
+    }
+
+    this.setCache(`id:${coupon.id}`, coupon);
+    return this.serializeCouponWithAudit(coupon);
   }
 }

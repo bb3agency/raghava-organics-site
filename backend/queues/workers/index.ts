@@ -18,6 +18,8 @@ import { createOutboxDispatchWorker } from './outbox-dispatch.worker';
 import { createReconciliationWorker } from './reconciliation.worker';
 import { createDeadLetterWorker } from './dead-letter.worker';
 import { attachWorkerLogging } from './worker-logging';
+import { sendTechnicalFailureAlert } from '../../src/modules/notifications/notification-failure-alert';
+import { SYSTEM_RESTART_CHANNEL } from '../../src/common/restart/system-restart';
 
 dotenv.config();
 
@@ -39,7 +41,6 @@ function validateWorkerEnv(): void {
   if (isStrictProfile) {
     requireWorkerEnv('DATABASE_URL');
     requireWorkerEnv('REPLAY_APPROVAL_TOKEN');
-    requireWorkerEnv('ADMIN_MFA_ENCRYPTION_KEY');
     requireWorkerEnv('OPS_DB_ENCRYPTION_KEY');
   }
   if (isEnabled(process.env.NOTIFY_EMAIL_ENABLED)) {
@@ -57,12 +58,7 @@ function validateWorkerEnv(): void {
       throw new Error(`Unsupported SMS_PROVIDER for workers: ${smsProvider}`);
     }
   }
-  if (isEnabled(process.env.FEATURE_GST_INVOICING_ENABLED)) {
-    requireWorkerEnv('STORE_LEGAL_NAME');
-    requireWorkerEnv('STORE_SELLER_ADDRESS');
-    requireWorkerEnv('STORE_SELLER_STATE');
-    requireWorkerEnv('STORE_SELLER_GSTIN');
-  }
+  // GST invoicing fields are DB-backed; validated post-overlay below.
   if (isEnabled(process.env.OTEL_TRACING_ENABLED)) {
     requireWorkerEnv('OTEL_EXPORTER_OTLP_ENDPOINT');
   }
@@ -86,6 +82,51 @@ async function bootstrapWorkers(): Promise<void> {
   const overlayReport = await applyOpsConfigRuntimeOverlay(prismaClient as unknown as OpsConfigRuntimePrismaLike);
   refreshFeatureFlags();
   validateWorkerEnv();
+
+  // Validate required DB-backed StoreSettings metadata (no fallback)
+  try {
+    const settings = await prismaClient.storeSettings.findUnique({
+      where: { singletonKey: 'default' },
+      select: { storeName: true, websiteUrl: true, sellerLegalName: true, sellerAddress: true, sellerState: true, gstin: true }
+    });
+    const missing: string[] = [];
+    if (!settings?.storeName || settings.storeName.trim().length === 0) {
+      missing.push('StoreSettings.storeName');
+    }
+    if (!settings?.websiteUrl || settings.websiteUrl.trim().length === 0) {
+      missing.push('StoreSettings.websiteUrl');
+    }
+    // If GST invoicing feature is enabled, ensure seller fields exist in DB.
+    if (isEnabled(process.env.FEATURE_GST_INVOICING_ENABLED)) {
+      if (!settings?.sellerLegalName || settings.sellerLegalName.trim().length === 0) missing.push('StoreSettings.sellerLegalName');
+      if (!settings?.sellerAddress || settings.sellerAddress.trim().length === 0) missing.push('StoreSettings.sellerAddress');
+      if (!settings?.sellerState || settings.sellerState.trim().length === 0) missing.push('StoreSettings.sellerState');
+      if (!settings?.gstin || settings.gstin.trim().length === 0) missing.push('StoreSettings.gstin');
+    }
+    if (missing.length > 0) {
+      void sendTechnicalFailureAlert({
+        prisma: prismaClient,
+        template: 'ConfigurationMissing',
+        channel: 'UNKNOWN',
+        recipient: 'worker-runtime',
+        errorMessage: `Missing required DB-backed configuration: ${missing.join(', ')}`,
+        failureStage: 'CORE_LOGIC',
+        domain: 'workers',
+        component: 'startup-config-check'
+      });
+    }
+  } catch (err) {
+    void sendTechnicalFailureAlert({
+      prisma: prismaClient,
+      template: 'ConfigurationCheckError',
+      channel: 'UNKNOWN',
+      recipient: 'worker-runtime',
+      errorMessage: err instanceof Error ? err.message : 'Unknown configuration check error',
+      failureStage: 'CORE_LOGIC',
+      domain: 'workers',
+      component: 'startup-config-check'
+    });
+  }
 
   const redisUrl = process.env.REDIS_URL;
   if (!redisUrl) {
@@ -116,9 +157,29 @@ async function bootstrapWorkers(): Promise<void> {
   // Error listeners prevent unhandled 'error' events from crashing the worker process
   redis.on('error', (err) => {
     logger.error({ err: err.message }, 'Worker Redis client error (primary)');
+    void sendTechnicalFailureAlert({
+      prisma: prismaClient,
+      template: 'WorkerRedisPrimary',
+      channel: 'UNKNOWN',
+      recipient: 'worker-runtime',
+      errorMessage: err.message,
+      failureStage: 'CORE_LOGIC',
+      domain: 'workers',
+      component: 'worker-redis-primary'
+    });
   });
   workerRedis.on('error', (err) => {
     logger.error({ err: err.message }, 'Worker Redis client error (worker)');
+    void sendTechnicalFailureAlert({
+      prisma: prismaClient,
+      template: 'WorkerRedisWorker',
+      channel: 'UNKNOWN',
+      recipient: 'worker-runtime',
+      errorMessage: err.message,
+      failureStage: 'CORE_LOGIC',
+      domain: 'workers',
+      component: 'worker-redis-worker'
+    });
   });
 
   const orderProcessingWorker = createOrderProcessingWorker(workerRedis);
@@ -138,6 +199,16 @@ async function bootstrapWorkers(): Promise<void> {
   const dlqConnection = workerRedis.duplicate();
   dlqConnection.on('error', (err) => {
     logger.error({ err: err.message }, 'Worker Redis client error (DLQ)');
+    void sendTechnicalFailureAlert({
+      prisma: prismaClient,
+      template: 'WorkerRedisDlq',
+      channel: 'UNKNOWN',
+      recipient: 'worker-runtime',
+      errorMessage: err.message,
+      failureStage: 'CORE_LOGIC',
+      domain: 'workers',
+      component: 'worker-redis-dlq'
+    });
   });
 
   const deadLetterQueue = new Queue('dead-letter', {
@@ -145,16 +216,90 @@ async function bootstrapWorkers(): Promise<void> {
     defaultJobOptions: dlqJobOptions
   });
 
-  attachWorkerLogging(orderProcessingWorker, logger, deadLetterQueue);
-  attachWorkerLogging(shippingWorker, logger, deadLetterQueue);
-  attachWorkerLogging(notificationsWorker, logger, deadLetterQueue);
-  attachWorkerLogging(inventoryAlertsWorker, logger, deadLetterQueue);
-  attachWorkerLogging(refundsWorker, logger, deadLetterQueue);
-  attachWorkerLogging(cartCleanupWorker, logger, deadLetterQueue);
-  attachWorkerLogging(analyticsWorker, logger, deadLetterQueue);
-  attachWorkerLogging(outboxDispatchWorker, logger, deadLetterQueue);
-  attachWorkerLogging(reconciliationWorker, logger, deadLetterQueue);
-  attachWorkerLogging(deadLetterWorker, logger);
+  const failureAlertHandler = (context: {
+    queue: string;
+    jobName: string;
+    jobId: string;
+    attempt: number;
+    maxAttempts: number;
+    terminalFailure: boolean;
+    errorMessage: string;
+    originalData: unknown;
+  }) => {
+    const payload = context.originalData;
+    const template =
+      payload && typeof payload === 'object' && typeof (payload as Record<string, unknown>).template === 'string'
+        ? String((payload as Record<string, unknown>).template)
+        : `${context.queue}:${context.jobName}`;
+    const recipient = (() => {
+      if (!payload || typeof payload !== 'object') {
+        return 'system-worker';
+      }
+      const p = payload as Record<string, unknown>;
+      const val = (typeof p['to'] === 'string' ? p['to'] : undefined)
+        ?? (typeof p['email'] === 'string' ? p['email'] : undefined)
+        ?? (typeof p['phone'] === 'string' ? p['phone'] : undefined);
+      return val ?? 'system-worker';
+    })();
+
+    void sendTechnicalFailureAlert({
+      prisma: prismaClient,
+      template,
+      channel: 'UNKNOWN',
+      recipient,
+      errorMessage: context.errorMessage,
+      failureStage: context.terminalFailure ? 'WORKER_TERMINAL' : 'WORKER_DELIVERY',
+      domain: 'workers',
+      component: context.queue,
+      queueName: context.queue,
+      jobName: context.jobName,
+      jobId: context.jobId,
+      terminalFailure: context.terminalFailure
+    });
+  };
+
+  const dlqFailureAlertHandler = (context: { queue: string; jobName: string; jobId: string; errorMessage: string }) => {
+    void sendTechnicalFailureAlert({
+      prisma: prismaClient,
+      template: `${context.queue}:${context.jobName}`,
+      channel: 'UNKNOWN',
+      recipient: 'dead-letter-queue',
+      errorMessage: context.errorMessage,
+      failureStage: 'WORKER_TERMINAL',
+      domain: 'workers',
+      component: 'dead-letter-enqueue',
+      queueName: context.queue,
+      jobName: context.jobName,
+      jobId: context.jobId,
+      terminalFailure: true
+    });
+  };
+
+  const stallAlertHandler = (context: { queue: string; jobId: string }) => {
+    void sendTechnicalFailureAlert({
+      prisma: prismaClient,
+      template: `${context.queue}:stalled`,
+      channel: 'UNKNOWN',
+      recipient: 'worker-stall',
+      errorMessage: `Job ${context.jobId} stalled in queue ${context.queue}`,
+      failureStage: 'WORKER_STALL',
+      domain: 'workers',
+      component: context.queue,
+      queueName: context.queue,
+      jobId: context.jobId
+    });
+  };
+
+  attachWorkerLogging(orderProcessingWorker, logger, deadLetterQueue, failureAlertHandler, dlqFailureAlertHandler, stallAlertHandler);
+  attachWorkerLogging(shippingWorker, logger, deadLetterQueue, failureAlertHandler, dlqFailureAlertHandler, stallAlertHandler);
+  attachWorkerLogging(notificationsWorker, logger, deadLetterQueue, failureAlertHandler, dlqFailureAlertHandler, stallAlertHandler);
+  attachWorkerLogging(inventoryAlertsWorker, logger, deadLetterQueue, failureAlertHandler, dlqFailureAlertHandler, stallAlertHandler);
+  attachWorkerLogging(refundsWorker, logger, deadLetterQueue, failureAlertHandler, dlqFailureAlertHandler, stallAlertHandler);
+  attachWorkerLogging(cartCleanupWorker, logger, deadLetterQueue, failureAlertHandler, dlqFailureAlertHandler, stallAlertHandler);
+  attachWorkerLogging(analyticsWorker, logger, deadLetterQueue, failureAlertHandler, dlqFailureAlertHandler, stallAlertHandler);
+  attachWorkerLogging(outboxDispatchWorker, logger, deadLetterQueue, failureAlertHandler, dlqFailureAlertHandler, stallAlertHandler);
+  attachWorkerLogging(reconciliationWorker, logger, deadLetterQueue, failureAlertHandler, dlqFailureAlertHandler, stallAlertHandler);
+  attachWorkerLogging(deadLetterWorker, logger, undefined, failureAlertHandler, dlqFailureAlertHandler, stallAlertHandler);
 
   let shiprocketRefreshQueue: Queue | null = null;
   let shiprocketRefreshConnection: IORedis | null = null;
@@ -162,6 +307,16 @@ async function bootstrapWorkers(): Promise<void> {
     shiprocketRefreshConnection = workerRedis.duplicate();
     shiprocketRefreshConnection.on('error', (err) => {
       logger.error({ err: err.message }, 'Worker Redis client error (Shiprocket refresh queue)');
+      void sendTechnicalFailureAlert({
+        prisma: prismaClient,
+        template: 'WorkerRedisShiprocketRefresh',
+        channel: 'UNKNOWN',
+        recipient: 'worker-runtime',
+        errorMessage: err.message,
+        failureStage: 'CORE_LOGIC',
+        domain: 'workers',
+        component: 'worker-redis-shiprocket-refresh'
+      });
     });
     shiprocketRefreshQueue = new Queue('shipping', { connection: shiprocketRefreshConnection });
     shiprocketRefreshQueue
@@ -175,12 +330,24 @@ async function bootstrapWorkers(): Promise<void> {
       )
       .catch((err: unknown) => {
         logger.warn({ err }, 'Failed to register shiprocket-token-refresh repeatable job');
+        void sendTechnicalFailureAlert({
+          prisma: prismaClient,
+          template: 'ShiprocketTokenRefreshSchedule',
+          channel: 'UNKNOWN',
+          recipient: 'shiprocket-scheduler',
+          errorMessage: err instanceof Error ? err.message : String(err),
+          failureStage: 'CORE_LOGIC',
+          domain: 'shipping',
+          component: 'shiprocket-token-refresh-schedule'
+        });
       });
   }
 
   logger.info('All background workers started successfully and are listening for jobs.');
 
   // --- Shutdown orchestration ---
+  // restartSubscriber is declared here so shutdown() can close it on any exit path.
+  let restartSubscriber: ReturnType<typeof workerRedis.duplicate> | null = null;
   let shuttingDown = false;
 
   const shutdown = async () => {
@@ -204,10 +371,21 @@ async function bootstrapWorkers(): Promise<void> {
     for (const result of closeResults) {
       if (result.status === 'rejected') {
         logger.error({ err: result.reason }, 'Worker/queue close error during shutdown');
+        void sendTechnicalFailureAlert({
+          prisma: prismaClient,
+          template: 'WorkerShutdownClose',
+          channel: 'UNKNOWN',
+          recipient: 'worker-runtime',
+          errorMessage: result.reason instanceof Error ? result.reason.message : String(result.reason),
+          failureStage: 'CORE_LOGIC',
+          domain: 'workers',
+          component: 'worker-shutdown-close'
+        });
       }
     }
     // Redis quit() must always run regardless of close() failures above
     await Promise.allSettled([
+      restartSubscriber ? restartSubscriber.quit() : Promise.resolve(),
       shiprocketRefreshConnection ? shiprocketRefreshConnection.quit() : Promise.resolve(),
       dlqConnection.quit(),
       workerRedis.quit(),
@@ -215,6 +393,27 @@ async function bootstrapWorkers(): Promise<void> {
     ]);
     await prismaClient.$disconnect();
   };
+
+  // --- Restart signal subscriber ---
+  // Subscribes to the same channel the cart-cleanup worker publishes to when a
+  // scheduled-process-restart BullMQ job fires. This ensures the worker process
+  // also initiates a graceful shutdown alongside the API process.
+  // A duplicate connection is used because ioredis pub/sub mode blocks the connection.
+  restartSubscriber = workerRedis.duplicate();
+  restartSubscriber.on('error', (err) => {
+    logger.warn({ err: err.message }, 'Restart subscriber Redis error — restart signal may not be received');
+  });
+  restartSubscriber.subscribe(SYSTEM_RESTART_CHANNEL, (err) => {
+    if (err) {
+      logger.warn({ err: err.message }, 'Failed to subscribe to restart channel');
+    }
+  });
+  restartSubscriber.on('message', (channel: string) => {
+    if (channel !== SYSTEM_RESTART_CHANNEL) return;
+    logger.info('System restart signal received — initiating graceful worker shutdown');
+    // shutdown() already calls restartSubscriber.quit() internally.
+    void shutdown().finally(() => process.exit(0));
+  });
 
   // --- Signal handlers (M3) ---
   // process.once() prevents double-invocation if operator sends SIGINT twice quickly
@@ -235,11 +434,33 @@ async function bootstrapWorkers(): Promise<void> {
   // We log and attempt an orderly shutdown.
   process.on('unhandledRejection', (reason: unknown) => {
     logger.fatal({ reason }, 'Worker unhandled promise rejection — initiating shutdown');
+    void sendTechnicalFailureAlert({
+      prisma: prismaClient,
+      template: 'WorkerUnhandledRejection',
+      channel: 'UNKNOWN',
+      recipient: 'worker-runtime',
+      errorMessage: reason instanceof Error ? reason.message : String(reason),
+      failureStage: 'PROCESS_RESTART',
+      domain: 'workers',
+      component: 'worker-process',
+      terminalFailure: true
+    });
     void shutdown().finally(() => process.exit(1));
   });
 
   process.on('uncaughtException', (error: Error) => {
     logger.fatal({ error: error.message, stack: error.stack }, 'Worker uncaught exception — initiating shutdown');
+    void sendTechnicalFailureAlert({
+      prisma: prismaClient,
+      template: 'WorkerUncaughtException',
+      channel: 'UNKNOWN',
+      recipient: 'worker-runtime',
+      errorMessage: error.message,
+      failureStage: 'PROCESS_RESTART',
+      domain: 'workers',
+      component: 'worker-process',
+      terminalFailure: true
+    });
     void shutdown().finally(() => process.exit(1));
   });
 }

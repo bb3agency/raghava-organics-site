@@ -10,6 +10,7 @@ type ReconciliationQueueType = NonNullable<ReconciliationDeps['Queue']>;
 describe('reconciliation worker', () => {
   const originalAutoHealEnv = process.env.RECONCILIATION_AUTO_HEAL_ISSUES;
   let processor: undefined | ((job: { name: string }) => Promise<void>);
+  let failedHandler: ((job: unknown, error: Error) => void) | undefined;
   let orders: Array<Record<string, unknown>> = [];
   const issueCreate = vi.fn();
   const issueFindFirst = vi.fn();
@@ -20,6 +21,7 @@ describe('reconciliation worker', () => {
 
   function MockWorker(_name: string, proc: (job: { name: string }) => Promise<void>) {
     processor = proc;
+    return { on: (event: string, handler: (job: unknown, error: Error) => void) => { if (event === 'failed') failedHandler = handler; } };
   }
 
   function MockPrismaClient() {
@@ -40,14 +42,19 @@ describe('reconciliation worker', () => {
     return { add: queueAdd, close: queueClose };
   }
 
+  const sendTechnicalFailureAlert = vi.fn().mockResolvedValue(undefined);
+
   const workerDeps = {
     Worker: MockWorker as unknown as ReconciliationWorkerType,
     PrismaClient: MockPrismaClient as unknown as ReconciliationPrismaType,
-    Queue: MockQueue as unknown as ReconciliationQueueType
+    Queue: MockQueue as unknown as ReconciliationQueueType,
+    sendTechnicalFailureAlert
   };
 
   beforeEach(() => {
     processor = undefined;
+    failedHandler = undefined;
+    sendTechnicalFailureAlert.mockReset();
     process.env.RECONCILIATION_AUTO_HEAL_ISSUES = 'ORDER_SHIPPED_WITHOUT_SHIPMENT,PAYMENT_CAPTURED_ORDER_NOT_CONFIRMED,REFUNDED_STATUS_MISMATCH,STALE_PENDING_PAYMENT';
     orders = [];
     issueCreate.mockReset();
@@ -120,6 +127,32 @@ describe('reconciliation worker', () => {
     expect(orderUpdate).not.toHaveBeenCalledWith(
       expect.objectContaining({ data: { status: 'CONFIRMED' } })
     );
+  });
+
+  it('sends terminal failure alert when reconciliation job exhausts all attempts', () => {
+    createReconciliationWorker({} as never, workerDeps);
+
+    const terminalJob = { name: 'run-order-lifecycle-check', id: 'job_rec1', opts: { attempts: 2 }, attemptsMade: 2 };
+    failedHandler?.(terminalJob, new Error('db scan failed'));
+
+    expect(sendTechnicalFailureAlert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        queueName: 'reconciliation',
+        jobName: 'run-order-lifecycle-check',
+        jobId: 'job_rec1',
+        terminalFailure: true,
+        errorMessage: 'db scan failed'
+      })
+    );
+  });
+
+  it('does NOT send alert when reconciliation job still has remaining attempts', () => {
+    createReconciliationWorker({} as never, workerDeps);
+
+    const retryJob = { name: 'run-order-lifecycle-check', id: 'job_rec2', opts: { attempts: 3 }, attemptsMade: 1 };
+    failedHandler?.(retryJob, new Error('transient error'));
+
+    expect(sendTechnicalFailureAlert).not.toHaveBeenCalled();
   });
 
   it('does not auto-heal partially refunded payments to refunded order status', async () => {

@@ -20,6 +20,14 @@ describe('AuthService sendOtp', () => {
         notifications: {
           add: vi.fn().mockResolvedValue(undefined)
         }
+      },
+      prisma: {
+        user: {
+          findFirst: vi.fn().mockResolvedValue(null)
+        },
+        storeSettings: {
+          findUnique: vi.fn().mockResolvedValue({ storeName: 'Test Store' })
+        }
       }
     } as unknown as FastifyInstance;
     const service = new AuthService(fastify);
@@ -35,7 +43,7 @@ describe('AuthService sendOtp', () => {
     delete process.env.TURNSTILE_SECRET_KEY;
   });
 
-  it('enqueues OTP SMS when cooldown and attempts allow', async () => {
+  it('enqueues OTP via send-primary when cooldown and attempts allow', async () => {
     const redisGet = vi.fn().mockResolvedValue(null);
     const redisSet = vi.fn().mockResolvedValue('OK');
     const notificationsAdd = vi.fn().mockResolvedValue(undefined);
@@ -53,6 +61,14 @@ describe('AuthService sendOtp', () => {
         notifications: {
           add: notificationsAdd
         }
+      },
+      prisma: {
+        user: {
+          findFirst: vi.fn().mockResolvedValue({ email: 'customer@example.com' })
+        },
+        storeSettings: {
+          findUnique: vi.fn().mockResolvedValue({ storeName: 'Acme Shop' })
+        }
       }
     } as unknown as FastifyInstance;
 
@@ -66,12 +82,14 @@ describe('AuthService sendOtp', () => {
     expect(redisSet).toHaveBeenCalledWith('otp:9876543210', expect.any(String), 'EX', 300);
     expect(redisSet).toHaveBeenCalledWith('otp:cooldown:9876543210', '1', 'EX', 60);
     expect(notificationsAdd).toHaveBeenCalledWith(
-      'send-sms',
+      'send-primary',
       expect.objectContaining({
+        email: 'customer@example.com',
         phone: '9876543210',
-        template: 'OtpVerification',
+        template: 'CustomerOtpVerification',
         data: expect.objectContaining({
-          otp: expect.any(String)
+          otp: expect.any(String),
+          storeName: 'Acme Shop'
         })
       }),
       expect.objectContaining({
@@ -80,7 +98,38 @@ describe('AuthService sendOtp', () => {
     );
   });
 
-  it('cleans redis OTP keys and throws when SMS enqueue fails', async () => {
+  it('uses Our Store fallback when storeSettings is missing', async () => {
+    const notificationsAdd = vi.fn().mockResolvedValue(undefined);
+    const fastify = {
+      redis: {
+        get: vi.fn().mockResolvedValue(null),
+        set: vi.fn().mockResolvedValue('OK'),
+        del: vi.fn().mockResolvedValue(1),
+        ttl: vi.fn().mockResolvedValue(-1),
+        incr: vi.fn().mockResolvedValue(1),
+        expire: vi.fn().mockResolvedValue(1)
+      },
+      queues: { notifications: { add: notificationsAdd } },
+      prisma: {
+        user: { findFirst: vi.fn().mockResolvedValue(null) },
+        storeSettings: { findUnique: vi.fn().mockResolvedValue(null) }
+      }
+    } as unknown as FastifyInstance;
+
+    const service = new AuthService(fastify);
+    await service.sendOtp({ phone: '9876543210' });
+
+    expect(notificationsAdd).toHaveBeenCalledWith(
+      'send-primary',
+      expect.objectContaining({
+        template: 'CustomerOtpVerification',
+        data: expect.objectContaining({ storeName: 'Our Store' })
+      }),
+      expect.any(Object)
+    );
+  });
+
+  it('cleans redis OTP keys and throws when OTP enqueue fails', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({ success: true })
@@ -103,6 +152,14 @@ describe('AuthService sendOtp', () => {
       queues: {
         notifications: {
           add: notificationsAdd
+        }
+      },
+      prisma: {
+        user: {
+          findFirst: vi.fn().mockResolvedValue(null)
+        },
+        storeSettings: {
+          findUnique: vi.fn().mockResolvedValue({ storeName: 'Test Store' })
         }
       }
     } as unknown as FastifyInstance;

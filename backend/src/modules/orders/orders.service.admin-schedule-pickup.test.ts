@@ -2,10 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { OrdersService } from './orders.service';
 
-function buildFastify(
-  shipmentOverrides?: Record<string, unknown>,
-  opsSecrets: Array<{ secretKey: string; encryptedValue: string }> = [],
-) {
+function buildFastify(shipmentOverrides?: Record<string, unknown>) {
   const shipment = {
     id: 'shipment_1',
     orderId: 'order_1',
@@ -23,9 +20,6 @@ function buildFastify(
     shipment: {
       findFirst: vi.fn().mockResolvedValue(shipment),
       update: vi.fn().mockResolvedValue({ ...shipment, pickupScheduledDate: new Date('2026-05-06') })
-    },
-    opsConfigSecret: {
-      findMany: vi.fn().mockResolvedValue(opsSecrets)
     }
   };
 
@@ -67,13 +61,6 @@ describe('OrdersService adminSchedulePickup', () => {
     const result = await service.adminSchedulePickup('order_1');
 
     expect(result.scheduled).toBe(true);
-    expect(fastify.prisma.opsConfigSecret.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: expect.objectContaining({
-          secretKey: { in: expect.arrayContaining(['SHIPROCKET_EMAIL', 'SHIPPING_PROVIDER']) }
-        })
-      })
-    );
     expect(fastify.prisma.shipment.update).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({

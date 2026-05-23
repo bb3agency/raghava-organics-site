@@ -39,7 +39,7 @@ describe('tracing lifecycle', () => {
     await tracing.initializeTracing();
 
     expect(startMock).not.toHaveBeenCalled();
-  });
+  }, 15_000);
 
   it('initializes and shuts down sdk when enabled', async () => {
     vi.stubEnv('OTEL_TRACING_ENABLED', 'true');

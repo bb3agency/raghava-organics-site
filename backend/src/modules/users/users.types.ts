@@ -33,3 +33,8 @@ export type AdminUsersListQuery = {
   search?: string;
 };
 
+export type AdminCustomerOrdersQuery = {
+  page?: number;
+  limit?: number;
+};
+

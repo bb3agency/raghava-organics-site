@@ -50,6 +50,25 @@ function readAuthToken(request: FastifyRequest): string | undefined {
   return token.length > 0 ? token : undefined;
 }
 
+function readOpsSession(request: FastifyRequest): string | undefined {
+  const cookieHeader = request.headers.cookie;
+  if (!cookieHeader) {
+    return undefined;
+  }
+
+  const tokenPart = cookieHeader
+    .split(';')
+    .map((part) => part.trim())
+    .find((part) => part.startsWith('ops_session='));
+
+  if (!tokenPart) {
+    return undefined;
+  }
+
+  const rawSession = tokenPart.replace('ops_session=', '').trim();
+  return rawSession.length > 0 ? rawSession : undefined;
+}
+
 function readCartSession(request: FastifyRequest): string | undefined {
   const cookieHeader = request.headers.cookie;
   if (!cookieHeader) {
@@ -169,6 +188,12 @@ export function rateLimitKeyGenerator(request: FastifyRequest): string {
   const token = readAuthToken(request);
   if (tier === 'admin' && token) {
     return `tier:${tier}:path:${path}:token:${hashValue(token)}:ip:${ip}`;
+  }
+  if (tier === 'admin') {
+    const opsSession = readOpsSession(request);
+    if (opsSession) {
+      return `tier:${tier}:path:${path}:ops:${hashValue(opsSession)}:ip:${ip}`;
+    }
   }
 
   if (tier === 'cart') {

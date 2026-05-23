@@ -65,6 +65,45 @@ export function PasswordResetEmail(email: string, resetToken: string): ReactElem
   });
 }
 
+export function OtpVerificationEmail(otp: string): ReactElement {
+  return BaseEmailTemplate({
+    title: 'OTP Verification',
+    message: `Your verification OTP is ${otp}. This code is valid for a limited time. Do not share it with anyone.`
+  });
+}
+
+export function CustomerOtpVerificationEmail(otp: string, storeName: string): ReactElement {
+  return BaseEmailTemplate({
+    title: `Sign-in code for ${storeName}`,
+    message: `Your one-time sign-in code is ${otp}. This code expires in 5 minutes. Do not share this code with anyone — ${storeName} will never ask you for it.`
+  });
+}
+
+export function NotificationDeliveryFailureEmail(args: {
+  template: string;
+  channel: string;
+  recipient: string;
+  errorMessage: string;
+  domain?: string;
+  component?: string;
+  failureStage?: string;
+  queueName?: string;
+  jobName?: string;
+  jobId?: string;
+  outboxMessageId?: string;
+  route?: string;
+  method?: string;
+  statusCode?: string;
+  terminalFailure?: string;
+  clientName?: string;
+  websiteUrl?: string;
+}): ReactElement {
+  return BaseEmailTemplate({
+    title: 'Technical Failure Alert',
+    message: `Client: ${args.clientName ?? 'Unknown Client'} (${args.websiteUrl ?? 'https://unknown-client.local'}). Domain: ${args.domain ?? 'system'}. Component: ${args.component ?? 'unknown-component'}. Template: '${args.template}'. Channel: ${args.channel}. Recipient: ${args.recipient}. Stage: ${args.failureStage ?? 'UNKNOWN'}. Queue: ${args.queueName ?? 'unknown'}. Job: ${args.jobName ?? 'unknown'} (${args.jobId ?? 'unknown'}). Outbox: ${args.outboxMessageId ?? 'n/a'}. Route: ${args.method ?? 'n/a'} ${args.route ?? 'n/a'}. Status: ${args.statusCode ?? '500'}. Terminal: ${args.terminalFailure ?? 'false'}. Error: ${args.errorMessage}`
+  });
+}
+
 export function OpsInviteSetupEmail(email: string, setupUrl: string, expiresAt: string): ReactElement {
   return BaseEmailTemplate({
     title: 'Ops Account Setup',
@@ -83,5 +122,18 @@ export function OpsActionOtpEmail(action: string, code: string, expiresAt: strin
   return BaseEmailTemplate({
     title: 'Ops Action Verification Code',
     message: `Use OTP ${code} to authorize action '${action}'. Code expires at ${expiresAt}.`
+  });
+}
+
+export function ProcessRestartAlertEmail(args: {
+  requestedBy: string;
+  scheduledFor: string;
+  jobId: string;
+  clientName?: string;
+  websiteUrl?: string;
+}): ReactElement {
+  return BaseEmailTemplate({
+    title: 'Process Restart Alert — Action Required If Server Stalls',
+    message: `A scheduled process restart was triggered for ${args.clientName ?? 'Unknown Client'} (${args.websiteUrl ?? 'https://unknown-client.local'}). Requested by ops user: ${args.requestedBy}. Scheduled for: ${args.scheduledFor}. Job ID: ${args.jobId}. The process is about to exit. PM2 / Docker should restart it automatically. If the server does not come back online within a few minutes, manual intervention is required. Check PM2 logs or Docker container status immediately.`
   });
 }

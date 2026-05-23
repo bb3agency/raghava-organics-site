@@ -2,8 +2,50 @@ import { Worker, type ConnectionOptions } from 'bullmq';
 import { PrismaClient as RealPrismaClient } from '@prisma/client';
 import { createQueueRegistry } from '@queues/queue-registry';
 import { recordOutboxDeadLetterDepth, recordOutboxLag, recordQueueDeadLetterGrowth } from '@common/observability/metrics';
+import { sendTechnicalFailureAlert, type TechnicalFailureChannel } from '@modules/notifications/notification-failure-alert';
 
 const MAX_OUTBOX_ATTEMPTS = 5;
+
+function mapChannelFromJob(jobName: string): TechnicalFailureChannel {
+  if (jobName === 'send-email') {
+    return 'EMAIL';
+  }
+  if (jobName === 'send-sms') {
+    return 'SMS';
+  }
+  if (jobName === 'send-whatsapp') {
+    return 'WHATSAPP';
+  }
+  return 'UNKNOWN';
+}
+
+function resolveRecipient(payload: unknown): string {
+  if (!payload || typeof payload !== 'object') {
+    return 'unknown-recipient';
+  }
+  const record = payload as Record<string, unknown>;
+  const to = typeof record.to === 'string' ? record.to.trim() : '';
+  if (to) {
+    return to;
+  }
+  const email = typeof record.email === 'string' ? record.email.trim() : '';
+  if (email) {
+    return email;
+  }
+  const phone = typeof record.phone === 'string' ? record.phone.trim() : '';
+  if (phone) {
+    return phone;
+  }
+  return 'unknown-recipient';
+}
+
+function resolveTemplate(payload: unknown): string {
+  if (!payload || typeof payload !== 'object') {
+    return 'UnknownTemplate';
+  }
+  const template = (payload as Record<string, unknown>).template;
+  return typeof template === 'string' && template.trim() ? template : 'UnknownTemplate';
+}
 
 type OutboxDispatchWorkerDeps = {
   PrismaClient?: typeof RealPrismaClient;
@@ -85,6 +127,21 @@ export function createOutboxDispatchWorker(
                 }
               });
               recordQueueDeadLetterGrowth('outbox-dispatch', item.jobName);
+              await sendTechnicalFailureAlert({
+                prisma,
+                template: resolveTemplate(item.payload),
+                channel: mapChannelFromJob(item.jobName),
+                recipient: resolveRecipient(item.payload),
+                errorMessage: `Unknown queue: ${item.queueName}`,
+                failureStage: 'OUTBOX_DISPATCH',
+                domain: 'outbox',
+                component: 'outbox-dispatch-worker',
+                queueName: item.queueName,
+                jobName: item.jobName,
+                ...(item.jobId ? { jobId: item.jobId } : {}),
+                outboxMessageId: item.id,
+                terminalFailure: true
+              });
               continue;
             }
 
@@ -108,6 +165,21 @@ export function createOutboxDispatchWorker(
             });
             if (nextStatus === 'FAILED') {
               recordQueueDeadLetterGrowth('outbox-dispatch', item.jobName);
+              await sendTechnicalFailureAlert({
+                prisma,
+                template: resolveTemplate(item.payload),
+                channel: mapChannelFromJob(item.jobName),
+                recipient: resolveRecipient(item.payload),
+                errorMessage: error instanceof Error ? error.message : 'Unknown outbox dispatch error',
+                failureStage: 'OUTBOX_DISPATCH',
+                domain: 'outbox',
+                component: 'outbox-dispatch-worker',
+                queueName: item.queueName,
+                jobName: item.jobName,
+                ...(item.jobId ? { jobId: item.jobId } : {}),
+                outboxMessageId: item.id,
+                terminalFailure: true
+              });
             }
           }
         }

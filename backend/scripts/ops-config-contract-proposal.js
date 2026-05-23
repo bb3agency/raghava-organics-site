@@ -73,7 +73,7 @@ function suggestDomain(key) {
   if (key.startsWith('SHIPPING_') || key.startsWith('DELHIVERY_') || key.startsWith('SHIPROCKET_')) {
     return 'shipping';
   }
-  if (key.startsWith('OPS_') || key === 'ADMIN_MFA_ENCRYPTION_KEY' || key === 'REPLAY_APPROVAL_TOKEN') {
+  if (key.startsWith('OPS_') || key === 'REPLAY_APPROVAL_TOKEN') {
     return 'opsSecurity';
   }
   return 'core';

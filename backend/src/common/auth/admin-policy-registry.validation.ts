@@ -65,8 +65,8 @@ function parseGuardedRoutesFromWorkspace(workspaceRoot: string): GuardedRouteRec
     const source = fs.readFileSync(filePath, 'utf8');
     records.push(...parseGuardedRoutesFromSource(source));
   }
-  records.push({ method: 'GET', path: '/api/v1/admin/queues', permission: 'queues:inspect' });
-  records.push({ method: 'GET', path: '/api/v1/admin/queues/dlq/summary', permission: 'queues:inspect' });
+  records.push({ method: 'GET', path: '/api/v1/ops/queues', permission: 'ops:read' });
+  records.push({ method: 'GET', path: '/api/v1/ops/queues/dlq/summary', permission: 'ops:read' });
   records.push({ method: 'GET', path: '/api/v1/admin/settings/cod', permission: 'settings:read' });
   records.push({ method: 'PATCH', path: '/api/v1/admin/settings/cod', permission: 'settings:write' });
   return records;

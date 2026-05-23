@@ -5,8 +5,6 @@ const { parseFastifyRouteConfigsFromAst } = require('./route-ast-utils.js');
 
 const EXEMPT_ENDPOINTS = new Set(['GET /api/v1/ops/metrics']);
 const EXEMPT_ADMIN_LAYER_C_ENDPOINTS = new Set([
-  'GET /api/v1/admin/queues',
-  'GET /api/v1/admin/queues/dlq/summary',
   'POST /api/v1/admin/invites',
   'POST /api/v1/admin/invites/cleanup-expired'
 ]);
@@ -79,8 +77,8 @@ function parseGuardedAdminOpsRoutes(workspaceRoot) {
     records.push(...parseGuardedAdminOpsRoutesFromSource(source));
   }
   // Bull board + DLQ summary routes are plugin-driven and guarded via scoped onRequest hook.
-  records.push({ method: 'GET', path: '/api/v1/admin/queues', permission: 'queues:inspect' });
-  records.push({ method: 'GET', path: '/api/v1/admin/queues/dlq/summary', permission: 'queues:inspect' });
+  records.push({ method: 'GET', path: '/api/v1/ops/queues', permission: 'ops:read' });
+  records.push({ method: 'GET', path: '/api/v1/ops/queues/dlq/summary', permission: 'ops:read' });
   return records;
 }
 
@@ -139,7 +137,7 @@ function runAdminLayerDriftCheck(workspaceRoot = process.cwd()) {
     ) {
       errors.push(`Merchant admin route ${key} cannot be Layer C.`);
     }
-    if (entry.layer === 'B' && !['orders:refund', 'analytics:replay', 'ops:write'].includes(entry.permission)) {
+    if (entry.layer === 'B' && !['orders:refund', 'analytics:replay', 'ops:write', 'users:write'].includes(entry.permission)) {
       errors.push(`Layer B permission mapping is suspicious for ${key}.`);
     }
     const expectedPolicyLayer = permissionPolicyLayers.get(entry.permission);

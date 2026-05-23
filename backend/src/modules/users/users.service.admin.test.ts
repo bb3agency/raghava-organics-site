@@ -85,6 +85,106 @@ describe('UsersService admin APIs', () => {
     expect(result.addresses[0]?.id).toBe('addr_1');
   });
 
+  it('returns paginated customer orders with shipment projection', async () => {
+    const fastify = {
+      prisma: {
+        user: {
+          findFirst: vi.fn().mockResolvedValue({ id: 'user_1' })
+        },
+        order: {
+          findMany: vi.fn().mockResolvedValue([
+            {
+              id: 'order_1',
+              orderNumber: 'ORD-001',
+              status: 'DELIVERED',
+              subtotal: 2000,
+              shippingCharge: 100,
+              discountAmount: 0,
+              total: 2100,
+              createdAt: new Date('2026-04-27T00:00:00.000Z'),
+              shipment: {
+                status: 'DELIVERED',
+                awbNumber: 'AWB001',
+                trackingUrl: 'https://track.example/AWB001',
+                events: [{ status: 'DELIVERED', occurredAt: new Date('2026-04-28T10:00:00.000Z') }]
+              }
+            }
+          ]),
+          count: vi.fn().mockResolvedValue(1)
+        },
+        $transaction: vi.fn().mockImplementation(async (queries: Array<Promise<unknown>>) => Promise.all(queries))
+      }
+    } as unknown as FastifyInstance;
+
+    const service = new UsersService(fastify);
+    const result = await service.adminGetCustomerOrders('user_1', { page: 1, limit: 20 });
+
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]).toMatchObject({
+      id: 'order_1',
+      orderNumber: 'ORD-001',
+      shipmentStatus: 'DELIVERED',
+      awb: 'AWB001',
+      trackingUrl: 'https://track.example/AWB001',
+      latestShipmentEventStatus: 'DELIVERED',
+      latestShipmentEventAt: '2026-04-28T10:00:00.000Z'
+    });
+    expect(result.meta.total).toBe(1);
+  });
+
+  it('throws 404 when customer not found in adminGetCustomerOrders', async () => {
+    const fastify = {
+      prisma: {
+        user: {
+          findFirst: vi.fn().mockResolvedValue(null)
+        }
+      }
+    } as unknown as FastifyInstance;
+
+    const service = new UsersService(fastify);
+    await expect(
+      service.adminGetCustomerOrders('nonexistent', { page: 1, limit: 20 })
+    ).rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  it('returns null shipment fields when order has no shipment in adminGetCustomerOrders', async () => {
+    const fastify = {
+      prisma: {
+        user: {
+          findFirst: vi.fn().mockResolvedValue({ id: 'user_1' })
+        },
+        order: {
+          findMany: vi.fn().mockResolvedValue([
+            {
+              id: 'order_2',
+              orderNumber: 'ORD-002',
+              status: 'PROCESSING',
+              subtotal: 1000,
+              shippingCharge: 0,
+              discountAmount: 0,
+              total: 1000,
+              createdAt: new Date('2026-04-27T00:00:00.000Z'),
+              shipment: null
+            }
+          ]),
+          count: vi.fn().mockResolvedValue(1)
+        },
+        $transaction: vi.fn().mockImplementation(async (queries: Array<Promise<unknown>>) => Promise.all(queries))
+      }
+    } as unknown as FastifyInstance;
+
+    const service = new UsersService(fastify);
+    const result = await service.adminGetCustomerOrders('user_1', { page: 1, limit: 20 });
+
+    expect(result.items[0]).toMatchObject({
+      shipmentStatus: null,
+      awb: null,
+      trackingUrl: null,
+      latestShipmentEventStatus: null,
+      latestShipmentEventAt: null
+    });
+  });
+
   it('returns shipment projection fields in admin user order detail', async () => {
     const fastify = {
       prisma: {

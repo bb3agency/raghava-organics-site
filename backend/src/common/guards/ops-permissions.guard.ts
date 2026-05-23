@@ -3,13 +3,6 @@ import { AppError } from '@common/errors/app-error';
 import { ERROR_CODES } from '@common/errors/error-codes';
 import { hasOpsPermission, OpsPermissionScope } from '@common/auth/ops-permissions';
 
-function requiresDualApproval(permission: OpsPermissionScope, method: string): boolean {
-  if (permission === 'ops:write' && ['POST', 'PATCH', 'PUT', 'DELETE'].includes(method.toUpperCase())) {
-    return true;
-  }
-  return false;
-}
-
 export function opsPermissionGuard(requiredPermission: OpsPermissionScope) {
   return async function enforceOpsPermission(request: FastifyRequest, _reply: FastifyReply): Promise<void> {
     if (!request.opsUser) {
@@ -30,8 +23,7 @@ export function opsPermissionGuard(requiredPermission: OpsPermissionScope) {
     }
 
     request.opsControlDecision = {
-      permission: requiredPermission,
-      requiresDualApproval: requiresDualApproval(requiredPermission, request.method)
+      permission: requiredPermission
     };
   };
 }

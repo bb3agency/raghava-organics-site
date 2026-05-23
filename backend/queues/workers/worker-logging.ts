@@ -10,6 +10,17 @@ type WorkerLike = {
   on(event: 'stalled', handler: (jobId: string) => void): void;
 };
 
+type TerminalFailureContext = {
+  queue: string;
+  jobName: string;
+  jobId: string;
+  attempt: number;
+  maxAttempts: number;
+  terminalFailure: boolean;
+  errorMessage: string;
+  originalData: unknown;
+};
+
 type JobLike = {
   id?: string | undefined;
   name: string;
@@ -42,7 +53,10 @@ sweepInterval.unref(); // Prevent blocking graceful shutdown
 export function attachWorkerLogging(
   worker: WorkerLike,
   logger: Logger,
-  deadLetterQueue?: Queue
+  deadLetterQueue?: Queue,
+  onFailure?: (context: TerminalFailureContext) => void,
+  onDlqFailure?: (context: { queue: string; jobName: string; jobId: string; errorMessage: string }) => void,
+  onStall?: (context: { queue: string; jobId: string }) => void
 ): void {
   worker.on('active', (job) => {
     const jobId = resolveJobId(job);
@@ -105,6 +119,19 @@ export function attachWorkerLogging(
       terminal: terminalFailure
     });
 
+    if (onFailure) {
+      onFailure({
+        queue: worker.name,
+        jobName: job.name,
+        jobId,
+        attempt: attemptNumber,
+        maxAttempts,
+        terminalFailure,
+        errorMessage: String(redactSensitiveData(error?.message ?? 'Unknown worker error')),
+        originalData: job.data ?? null
+      });
+    }
+
     if (terminalFailure && deadLetterQueue) {
       deadLetterQueue
         .add('dead-letter-entry', {
@@ -127,6 +154,14 @@ export function attachWorkerLogging(
             { sourceQueue: worker.name, jobName: job.name, jobId, dlqError },
             'Failed to enqueue terminal failure into dead-letter queue'
           );
+          if (onDlqFailure) {
+            onDlqFailure({
+              queue: worker.name,
+              jobName: job.name,
+              jobId,
+              errorMessage: dlqError instanceof Error ? dlqError.message : String(dlqError)
+            });
+          }
         });
     }
   });
@@ -141,6 +176,9 @@ export function attachWorkerLogging(
       'BullMQ job stalled'
     );
     recordQueueWorkerStall(worker.name);
+    if (onStall) {
+      onStall({ queue: worker.name, jobId });
+    }
   });
 }
 

@@ -4,7 +4,8 @@ import { FastifyInstance } from 'fastify';
 import { Role } from '@prisma/client';
 import { AppError } from '@common/errors/app-error';
 import { ERROR_CODES } from '@common/errors/error-codes';
-import { AdminPermission, isAdminPermission, MERCHANT_DEFAULT_PERMISSIONS } from '@common/auth/admin-permissions';
+import { AdminPermission, MERCHANT_DEFAULT_PERMISSIONS } from '@common/auth/admin-permissions';
+import { sendNotificationFailureAlert } from '@modules/notifications/notification-failure-alert';
 
 const ADMIN_INVITE_TTL_MS = 10 * 60 * 1000;
 const ADMIN_SETUP_OTP_TTL_SECONDS = 5 * 60;
@@ -19,20 +20,14 @@ function hashOpaqueToken(value: string): string {
   return crypto.createHash('sha256').update(value).digest('hex');
 }
 
-function normalizeInvitePermissions(permissions?: string[]): AdminPermission[] {
-  if (!permissions || permissions.length === 0) {
-    return [...MERCHANT_DEFAULT_PERMISSIONS];
-  }
-
-  const normalized: AdminPermission[] = [];
-  for (const permission of permissions) {
-    if (!isAdminPermission(permission) || !MERCHANT_INVITE_ALLOWED_PERMISSIONS.has(permission)) {
-      throw new AppError(ERROR_CODES.FORBIDDEN, `Permission is not allowed for merchant admin invite: ${permission}`, 403);
+function normalizeInvitePermissions(permissions: string[]): AdminPermission[] {
+  const unique = [...new Set(permissions)];
+  for (const p of unique) {
+    if (!MERCHANT_INVITE_ALLOWED_PERMISSIONS.has(p as AdminPermission)) {
+      throw new AppError(ERROR_CODES.VALIDATION_ERROR, `Permission is not allowed for merchant admin invite: ${p}`, 400);
     }
-    normalized.push(permission);
   }
-
-  return [...new Set(normalized)];
+  return unique as AdminPermission[];
 }
 
 function splitInviteName(inviteName: string): { firstName: string; lastName: string } {
@@ -67,25 +62,12 @@ export class AdminInvitesService {
       throw new AppError(ERROR_CODES.CONFLICT, 'Admin invite is no longer active', 409);
     }
     if (invite.expiresAt.getTime() < Date.now()) {
-      // Atomic CAS: only mark expired if still active (prevents races)
-      const inviteDelegate = this.fastify.prisma.adminUserInvite as unknown as {
-        updateMany?: (args: { where: Record<string, unknown>; data: Record<string, unknown> }) => Promise<{ count: number }>;
-        update: (args: { where: { id: string }; data: Record<string, unknown> }) => Promise<unknown>;
-      };
-      const preferUpdateForMock =
-        typeof inviteDelegate.update === 'function' &&
-        'mock' in (inviteDelegate.update as unknown as Record<string, unknown>);
-      if (inviteDelegate.updateMany && !preferUpdateForMock) {
-        await inviteDelegate.updateMany({
-          where: { id: invite.id, status: { in: ['CREATED', 'EMAIL_SENT'] } },
-          data: { status: 'EXPIRED_CLEANED' }
-        });
-      } else {
-        await inviteDelegate.update({
-          where: { id: invite.id },
-          data: { status: 'EXPIRED_CLEANED' }
-        });
-      }
+      // Atomic CAS: only mark expired if still active (prevents races).
+      // updateMany preserves audit trail; hard-delete would erase history.
+      await this.fastify.prisma.adminUserInvite.updateMany({
+        where: { id: invite.id, status: { in: ['CREATED', 'EMAIL_SENT'] } },
+        data: { status: 'EXPIRED_CLEANED' }
+      });
       throw new AppError(ERROR_CODES.TOKEN_EXPIRED, 'Admin invite has expired', 401);
     }
     return { invite, inviteTokenHash };
@@ -95,7 +77,7 @@ export class AdminInvitesService {
     createdByOpsUserId?: string;
     inviteEmail: string;
     inviteName: string;
-    permissions?: string[];
+    permissions: string[];
     setupBaseUrl: string;
   }): Promise<{ inviteId: string; expiresAt: string; setupUrl: string; permissions: string[] }> {
     const inviteEmail = input.inviteEmail.trim().toLowerCase();
@@ -113,6 +95,12 @@ export class AdminInvitesService {
     const existingOpsUser = await this.fastify.prisma.opsUser.findUnique({ where: { email: inviteEmail } });
     if (existingOpsUser) {
       throw new AppError(ERROR_CODES.CONFLICT, 'Email is already in use by an ops account', 409);
+    }
+    const existingActiveInvite = await this.fastify.prisma.adminUserInvite.findFirst({
+      where: { inviteEmail, status: { in: ['CREATED', 'EMAIL_SENT'] } }
+    });
+    if (existingActiveInvite) {
+      throw new AppError(ERROR_CODES.CONFLICT, 'An active admin invite already exists for this email', 409);
     }
 
     const permissions = normalizeInvitePermissions(input.permissions);
@@ -135,42 +123,39 @@ export class AdminInvitesService {
 
     const setupUrl = `${input.setupBaseUrl.replace(/\/$/, '')}/admin/setup?token=${encodeURIComponent(token)}`;
 
-    await this.fastify.queues.notifications.add('send-email', {
-      to: inviteEmail,
-      template: 'AdminInviteSetup',
-      data: {
-        email: inviteEmail,
-        inviteName,
-        setupUrl,
-        expiresAt: expiresAt.toISOString()
-      }
-    }, { jobId: `admin-invite:${invite.id}:${Date.now()}` });
-
-    const inviteDelegate = this.fastify.prisma.adminUserInvite as unknown as {
-      updateMany?: (args: { where: Record<string, unknown>; data: Record<string, unknown> }) => Promise<{ count: number }>;
-      update: (args: { where: { id: string }; data: Record<string, unknown> }) => Promise<unknown>;
-    };
-    const preferUpdateForMock =
-      typeof inviteDelegate.update === 'function' &&
-      'mock' in (inviteDelegate.update as unknown as Record<string, unknown>);
-
-    if (inviteDelegate.updateMany && !preferUpdateForMock) {
-      const sentResult = await inviteDelegate.updateMany({
-        where: {
-          id: invite.id,
-          status: 'CREATED'
-        },
-        data: { status: 'EMAIL_SENT' }
+    const inviteJobId = `admin-invite:${invite.id}:${Date.now()}`;
+    try {
+      await this.fastify.queues.notifications.add('send-email', {
+        to: inviteEmail,
+        template: 'AdminInviteSetup',
+        data: {
+          email: inviteEmail,
+          inviteName,
+          setupUrl,
+          expiresAt: expiresAt.toISOString()
+        }
+      }, { jobId: inviteJobId });
+    } catch (error) {
+      await sendNotificationFailureAlert({
+        prisma: this.fastify.prisma,
+        template: 'AdminInviteSetup',
+        channel: 'EMAIL',
+        recipient: inviteEmail,
+        errorMessage: error instanceof Error ? error.message : 'Unable to enqueue admin invite email',
+        failureStage: 'QUEUE_ENQUEUE',
+        queueName: 'notifications',
+        jobName: 'send-email',
+        jobId: inviteJobId
       });
+      throw error;
+    }
 
-      if (sentResult.count === 0) {
-        throw new AppError(ERROR_CODES.CONFLICT, 'Admin invite state changed concurrently before email sent marker', 409);
-      }
-    } else {
-      await inviteDelegate.update({
-        where: { id: invite.id },
-        data: { status: 'EMAIL_SENT' }
-      });
+    const sentResult = await this.fastify.prisma.adminUserInvite.updateMany({
+      where: { id: invite.id, status: 'CREATED' },
+      data: { status: 'EMAIL_SENT' }
+    });
+    if (sentResult.count === 0) {
+      throw new AppError(ERROR_CODES.CONFLICT, 'Admin invite state changed concurrently before email sent marker', 409);
     }
 
     return {
@@ -184,7 +169,7 @@ export class AdminInvitesService {
   async consumeAdminInvite(input: {
     inviteToken: string;
     otp: string;
-  }): Promise<{ adminUserId: string; email: string; name: string; permissions: string[]; mfaRequired: boolean }> {
+  }): Promise<{ adminUserId: string; email: string; name: string; permissions: string[] }> {
     const { invite, inviteTokenHash } = await this.resolveActiveInviteOrThrow(input.inviteToken);
 
     const payloadKey = this.setupPayloadKey(inviteTokenHash);
@@ -195,7 +180,7 @@ export class AdminInvitesService {
     if (!payloadRaw) {
       throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Setup OTP verification is required before account creation', 400);
     }
-    const setupPayload = JSON.parse(payloadRaw) as { name: string; phone: string; passwordHash: string };
+    const setupPayload = JSON.parse(payloadRaw) as { name: string; phone: string | null; passwordHash: string };
 
     const storedOtpHash = await this.fastify.redis.get(otpKey);
     if (!storedOtpHash) {
@@ -223,9 +208,11 @@ export class AdminInvitesService {
       throw new AppError(ERROR_CODES.CONFLICT, 'Email is already in use by an ops account', 409);
     }
 
-    const existingPhone = await this.fastify.prisma.user.findFirst({ where: { phone: setupPayload.phone } });
-    if (existingPhone) {
-      throw new AppError(ERROR_CODES.CONFLICT, 'User already exists for invite phone number', 409);
+    if (setupPayload.phone) {
+      const existingPhone = await this.fastify.prisma.user.findFirst({ where: { phone: setupPayload.phone } });
+      if (existingPhone) {
+        throw new AppError(ERROR_CODES.CONFLICT, 'User already exists for invite phone number', 409);
+      }
     }
 
     const displayName = setupPayload.name?.trim() || invite.inviteName;
@@ -236,7 +223,7 @@ export class AdminInvitesService {
       const admin = await tx.user.create({
         data: {
           email: invite.inviteEmail,
-          phone: setupPayload.phone,
+          phone: setupPayload.phone ?? null,
           passwordHash: setupPayload.passwordHash,
           firstName,
           lastName,
@@ -254,31 +241,15 @@ export class AdminInvitesService {
       });
 
       // Atomic CAS: only consume if still active (prevents races with concurrent consumption)
-      const txInviteDelegate = tx.adminUserInvite as unknown as {
-        updateMany?: (args: { where: Record<string, unknown>; data: Record<string, unknown> }) => Promise<{ count: number }>;
-        update: (args: { where: { id: string }; data: Record<string, unknown> }) => Promise<unknown>;
-      };
-
-      if (txInviteDelegate.updateMany) {
-        const consumeResult = await txInviteDelegate.updateMany({
-          where: { id: invite.id, status: { in: ['CREATED', 'EMAIL_SENT'] } },
-          data: {
-            status: 'CONSUMED',
-            consumedAt: new Date()
-          }
-        });
-
-        if (consumeResult.count === 0) {
-          throw new AppError(ERROR_CODES.CONFLICT, 'Admin invite is no longer active or was already consumed', 409);
+      const consumeResult = await tx.adminUserInvite.updateMany({
+        where: { id: invite.id, status: { in: ['CREATED', 'EMAIL_SENT'] } },
+        data: {
+          status: 'CONSUMED',
+          consumedAt: new Date()
         }
-      } else {
-        await txInviteDelegate.update({
-          where: { id: invite.id },
-          data: {
-            status: 'CONSUMED',
-            consumedAt: new Date()
-          }
-        });
+      });
+      if (consumeResult.count === 0) {
+        throw new AppError(ERROR_CODES.CONFLICT, 'Admin invite is no longer active or was already consumed', 409);
       }
 
       return admin;
@@ -290,26 +261,25 @@ export class AdminInvitesService {
       adminUserId: user.id,
       email: user.email ?? invite.inviteEmail,
       name: `${user.firstName ?? ''} ${user.lastName ?? ''}`.trim() || invite.inviteName,
-      permissions,
-      mfaRequired: String(process.env.ADMIN_MFA_ENFORCE ?? 'false').toLowerCase() === 'true'
+      permissions
     };
   }
 
   async sendSetupOtp(input: {
     inviteToken: string;
+    name: string;
     password: string;
-    name?: string;
-    phone: string;
+    phone?: string;
   }): Promise<{ message: string; expiresAt: string }> {
     const { invite, inviteTokenHash } = await this.resolveActiveInviteOrThrow(input.inviteToken);
     if (input.password.length < 8) {
       throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Password must be at least 8 characters', 400);
     }
-
-    const setupPhone = input.phone.trim();
-    if (!setupPhone) {
-      throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Phone is required', 400);
+    const setupName = input.name.trim();
+    if (!setupName) {
+      throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Name is required', 400);
     }
+    const setupPhone = input.phone?.trim() || null;
 
     const existingUser = await this.fastify.prisma.user.findUnique({ where: { email: invite.inviteEmail } });
     if (existingUser) {
@@ -320,30 +290,47 @@ export class AdminInvitesService {
       throw new AppError(ERROR_CODES.CONFLICT, 'Email is already in use by an ops account', 409);
     }
 
-    const existingPhone = await this.fastify.prisma.user.findFirst({ where: { phone: setupPhone } });
-    if (existingPhone) {
-      throw new AppError(ERROR_CODES.CONFLICT, 'User already exists for invite phone number', 409);
+    if (setupPhone) {
+      const existingPhone = await this.fastify.prisma.user.findFirst({ where: { phone: setupPhone } });
+      if (existingPhone) {
+        throw new AppError(ERROR_CODES.CONFLICT, 'User already exists for invite phone number', 409);
+      }
     }
 
     const otp = crypto.randomInt(100000, 999999).toString();
     const otpHash = hashOpaqueToken(otp);
     const passwordHash = await bcrypt.hash(input.password, 10);
-    const displayName = input.name?.trim() || invite.inviteName;
 
     const ttlSeconds = Math.max(1, Math.floor((invite.expiresAt.getTime() - Date.now()) / 1000));
     const payloadKey = this.setupPayloadKey(inviteTokenHash);
     const otpKey = this.setupOtpKey(inviteTokenHash);
     const attemptKey = this.setupAttemptKey(inviteTokenHash);
 
-    await this.fastify.redis.set(payloadKey, JSON.stringify({ name: displayName, phone: setupPhone, passwordHash }), 'EX', ttlSeconds);
+    await this.fastify.redis.set(payloadKey, JSON.stringify({ name: setupName, phone: setupPhone, passwordHash }), 'EX', ttlSeconds);
     await this.fastify.redis.set(otpKey, otpHash, 'EX', Math.min(ADMIN_SETUP_OTP_TTL_SECONDS, ttlSeconds));
     await this.fastify.redis.del(attemptKey);
 
-    await this.fastify.queues.notifications.add('send-sms', {
-      phone: setupPhone,
-      template: 'OtpVerification',
-      data: { otp }
-    }, { jobId: `admin-setup-otp:${invite.id}:${Date.now()}` });
+    const otpJobId = `admin-setup-otp:${invite.id}:${Date.now()}`;
+    try {
+      await this.fastify.queues.notifications.add('send-email', {
+        to: invite.inviteEmail,
+        template: 'OtpVerification',
+        data: { otp }
+      }, { jobId: otpJobId });
+    } catch (error) {
+      await sendNotificationFailureAlert({
+        prisma: this.fastify.prisma,
+        template: 'OtpVerification',
+        channel: 'EMAIL',
+        recipient: invite.inviteEmail,
+        errorMessage: error instanceof Error ? error.message : 'Unable to enqueue admin setup OTP',
+        failureStage: 'QUEUE_ENQUEUE',
+        queueName: 'notifications',
+        jobName: 'send-email',
+        jobId: otpJobId
+      });
+      throw error;
+    }
 
     return {
       message: 'OTP sent successfully',
@@ -351,7 +338,7 @@ export class AdminInvitesService {
     };
   }
 
-  async cleanupExpiredAdminInvites(): Promise<{ cleaned: number }> {
+  async cleanupExpiredAdminInvites(input?: { actorOpsUserId?: string }): Promise<{ cleaned: number }> {
     const result = await this.fastify.prisma.adminUserInvite.updateMany({
       where: {
         status: { in: ['CREATED', 'EMAIL_SENT'] },
@@ -359,6 +346,11 @@ export class AdminInvitesService {
       },
       data: { status: 'EXPIRED_CLEANED' }
     });
+    this.fastify.log.info({
+      event: 'ADMIN_INVITE_CLEANUP',
+      cleaned: result.count,
+      actorOpsUserId: input?.actorOpsUserId ?? 'system'
+    }, 'Expired admin invites cleaned up');
     return { cleaned: result.count };
   }
 }

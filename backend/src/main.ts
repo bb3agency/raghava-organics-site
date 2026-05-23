@@ -6,6 +6,7 @@ import { registerApp } from './app';
 import { registerGlobalErrorHandler } from './common/errors/error-handler';
 import { registerBullmqPlugin } from './common/plugins/bullmq.plugin';
 import { registerCorsPlugin } from './common/plugins/cors.plugin';
+import { registerCookiePlugin } from './common/plugins/cookie.plugin';
 import { registerHelmetPlugin } from './common/plugins/helmet.plugin';
 import { registerJwtPlugin } from './common/plugins/jwt.plugin';
 import { registerMultipartPlugin } from './common/plugins/multipart.plugin';
@@ -18,9 +19,13 @@ import { loadShedGuard } from '@common/reliability/load-shed.guard';
 import { initializeTracing, shutdownTracing } from '@common/observability/tracing';
 import { registerResponseEnvelopeHook } from '@common/hooks/response-envelope.hook';
 import { featureFlags, refreshFeatureFlags } from '@config/feature-flags';
+import { sendTechnicalFailureAlert } from '@modules/notifications/notification-failure-alert';
 import { recordProcessCrash } from '@common/observability/metrics';
 import { isIpAllowlisted, parseWebhookIpAllowlist } from '@common/security/webhook-allowlist';
 import { applyOpsConfigRuntimeOverlay, type OpsConfigRuntimePrismaLike } from './modules/ops/ops-config-runtime';
+import Redis from 'ioredis';
+import { redisConfig } from '@config/redis.config';
+import { SYSTEM_RESTART_CHANNEL, type RestartSignalPayload } from '@common/restart/system-restart';
 
 function normalizeRoutePath(url: string): string {
   const rawPath = url.split('?')[0] ?? '';
@@ -132,9 +137,10 @@ async function bootstrap(): Promise<void> {
   );
 
   // Locked order from TRD §4.2 / rules §7:
-  // helmet -> cors -> jwt -> rate-limit -> multipart -> swagger -> prisma -> redis -> bullmq -> modules
+  // helmet -> cors -> cookie -> jwt -> rate-limit -> multipart -> swagger -> prisma -> redis -> bullmq -> modules
   await registerHelmetPlugin(fastify);
   await registerCorsPlugin(fastify);
+  await registerCookiePlugin(fastify);
   await registerJwtPlugin(fastify);
   await registerRateLimitPlugin(fastify);
   await registerMultipartPlugin(fastify);
@@ -154,12 +160,15 @@ async function bootstrap(): Promise<void> {
   }
 
   // Graceful shutdown — defined before listen() so crash handlers can reference it.
+  // restartSubscriber is declared here so gracefulShutdown() can close it on any exit path.
+  let restartSubscriber: InstanceType<typeof Redis> | null = null;
   let shuttingDown = false;
   const gracefulShutdown = async () => {
     if (shuttingDown) return;
     shuttingDown = true;
     await fastify.close();
     await shutdownTracing();
+    await restartSubscriber?.quit().catch(() => { /* best-effort */ });
   };
 
   await fastify.listen({
@@ -175,6 +184,43 @@ async function bootstrap(): Promise<void> {
     void gracefulShutdown();
   });
 
+  // --- Restart signal subscriber ---
+  // A dedicated subscriber connection (ioredis pub/sub requires its own connection).
+  // The worker's scheduled-process-restart BullMQ job publishes to this channel
+  // so both the API container and the worker container restart cleanly when the
+  // ops-triggered restart fires. Fastify.close() drains in-flight requests before
+  // process.exit(0); Docker restart: unless-stopped brings the API back up.
+  restartSubscriber = new Redis(redisConfig.url, {
+    maxRetriesPerRequest: null,
+    retryStrategy: (times: number) => Math.min(times * 300, 3_000),
+    family: 4,
+  });
+  restartSubscriber.on('error', (err: unknown) => {
+    fastify.log.warn({ err }, 'Restart subscriber Redis error — restart signal may not be received');
+    void sendTechnicalFailureAlert({
+      prisma: prismaClient,
+      template: 'RestartSubscriberRedisError',
+      channel: 'UNKNOWN',
+      recipient: 'restart-subscriber',
+      errorMessage: err instanceof Error ? err.message : String(err),
+      failureStage: 'CORE_LOGIC',
+      domain: 'infrastructure',
+      component: 'restart-subscriber'
+    });
+  });
+  await restartSubscriber.subscribe(SYSTEM_RESTART_CHANNEL);
+  restartSubscriber.on('message', (channel: string, message: string) => {
+    if (channel !== SYSTEM_RESTART_CHANNEL) return;
+    let payload: Partial<RestartSignalPayload> = {};
+    try { payload = JSON.parse(message) as Partial<RestartSignalPayload>; } catch { /* ignore */ }
+    fastify.log.info(
+      { jobId: payload.jobId, scheduledFor: payload.scheduledFor, requestedBy: payload.requestedBy },
+      'System restart signal received — initiating graceful shutdown'
+    );
+    // gracefulShutdown() already calls restartSubscriber.quit() internally.
+    void gracefulShutdown().finally(() => process.exit(0));
+  });
+
   // --- Process crash boundary handlers ---
   // Node 22 defaults to --unhandled-rejections=throw; without these handlers an
   // unhandled rejection in any async path (plugin, hook, background timer) kills
@@ -182,12 +228,34 @@ async function bootstrap(): Promise<void> {
   process.on('unhandledRejection', (reason: unknown) => {
     fastify.log.fatal({ reason }, 'Unhandled promise rejection — initiating shutdown');
     recordProcessCrash('unhandled_rejection');
+    void sendTechnicalFailureAlert({
+      prisma: prismaClient,
+      template: 'ApiUnhandledRejection',
+      channel: 'UNKNOWN',
+      recipient: 'api-process',
+      errorMessage: reason instanceof Error ? reason.message : String(reason),
+      failureStage: 'PROCESS_RESTART',
+      domain: 'infrastructure',
+      component: 'api-process',
+      terminalFailure: true
+    });
     void gracefulShutdown().finally(() => process.exit(1));
   });
 
   process.on('uncaughtException', (error: Error) => {
     fastify.log.fatal({ error: error.message, stack: error.stack }, 'Uncaught exception — initiating shutdown');
     recordProcessCrash('uncaught_exception');
+    void sendTechnicalFailureAlert({
+      prisma: prismaClient,
+      template: 'ApiUncaughtException',
+      channel: 'UNKNOWN',
+      recipient: 'api-process',
+      errorMessage: error.message,
+      failureStage: 'PROCESS_RESTART',
+      domain: 'infrastructure',
+      component: 'api-process',
+      terminalFailure: true
+    });
     void gracefulShutdown().finally(() => process.exit(1));
   });
 }

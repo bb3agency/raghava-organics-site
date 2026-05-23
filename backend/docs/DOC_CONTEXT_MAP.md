@@ -8,11 +8,14 @@ Use this map to keep AI/developer context small while ensuring no detail is lost
 2. `docs/CLIENT_ONBOARDING_EXECUTION_ORDER.md` — strict phase sequencing and evidence gates.
 3. `docs/NEXTJS_FRONTEND_INTEGRATION_GUIDE.md` — frontend contract + slice methodology.
 4. `docs/API_ENDPOINT_INDEX.md` — endpoint inventory mapped to frontend/admin/ops UI surfaces.
-5. `docs/BACKEND_GO_LIVE_CHECKLIST.md` — backend release/parity gate.
-6. `docs/FRONTEND_AI_GO_LIVE_CHECKLIST.md` — frontend release gate.
+5. `docs/ENV_VS_DB_CONFIG_REFERENCE.md` — authoritative config source-of-truth (env vs DB), validation/alerting, recent hardening.
+6. `docs/PRODUCTION_FIRST_DEPLOY_CHECKLIST.md` — step-by-step Phase 1/2 model: what goes in `.env` vs Ops UI, ops-newuser flow.
+7. `docs/BACKEND_GO_LIVE_CHECKLIST.md` — backend release/parity gate.
+8. `docs/FRONTEND_AI_GO_LIVE_CHECKLIST.md` — frontend release gate.
 
 ## Development-time supporting references (read only when needed)
 
+- `docs/ROUTE_SURFACE_COMPLETE_REFERENCE.md` — deep per-route reference: what every route does, permissions, data touched, flows, hard boundaries, and what cannot be done.
 - `docs/THIRD_PARTY_INTEGRATIONS_SETUP_AND_KEY_MANAGEMENT_GUIDE.md` — provider setup/rotation/incident policy.
 - `docs/CLIENT_INTEGRATION_CREDENTIAL_REGISTER_TEMPLATE.md` — credential ownership artifact.
 - `docs/CLIENT_DEV_LOG_TEMPLATE.md` — client build log template.
@@ -29,6 +32,8 @@ Use this map to keep AI/developer context small while ensuring no detail is lost
 - `docs/CLIENT_ONBOARDING_EXECUTION_ORDER.md`
 - `docs/NEXTJS_FRONTEND_INTEGRATION_GUIDE.md`
 - `docs/API_ENDPOINT_INDEX.md`
+- `docs/ENV_VS_DB_CONFIG_REFERENCE.md`
+- `docs/PRODUCTION_FIRST_DEPLOY_CHECKLIST.md`
 - `.env.example`
 - `docs/THIRD_PARTY_INTEGRATIONS_SETUP_AND_KEY_MANAGEMENT_GUIDE.md`
 - Completed client artifacts (`CLIENT_DEV_LOG.md`, `FRONTEND_DEV_LOG.md`, `CLIENT_VPS_DEPLOYMENT_LOG.md`)

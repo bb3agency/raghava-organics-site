@@ -350,3 +350,47 @@ export const adminListCouponAuditSchema = {
     ...standardAdminErrorResponses
   }
 } as const;
+
+export const adminCloneCouponSchema = {
+  tags: ['admin', 'coupons'],
+  summary: 'Clone an existing coupon with a new code',
+  params: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['id'],
+    properties: {
+      id: { type: 'string', maxLength: 64 }
+    }
+  },
+  body: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['newCode'],
+    properties: {
+      newCode: { type: 'string', minLength: 1, maxLength: 100 },
+      validFrom: { type: 'string', format: 'date-time' },
+      validUntil: { type: 'string', format: 'date-time' }
+    }
+  },
+  response: {
+    201: couponSchema,
+    ...standardAdminErrorResponses
+  }
+} as const;
+
+export const adminGetCouponByIdSchema = {
+  tags: ['admin', 'coupons'],
+  summary: 'Get a single coupon by ID',
+  params: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['id'],
+    properties: {
+      id: { type: 'string', maxLength: 64 }
+    }
+  },
+  response: {
+    200: couponSchema,
+    ...standardAdminErrorResponses
+  }
+} as const;

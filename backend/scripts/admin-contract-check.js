@@ -1,7 +1,64 @@
+const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
+const Redis = require('ioredis');
+
+// Load .env so REDIS_URL / ADMIN_EMAIL etc. are available when run outside CI
+const envPath = path.resolve(__dirname, '..', '.env');
+if (fs.existsSync(envPath)) {
+  for (const line of fs.readFileSync(envPath, 'utf8').split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const eqIdx = trimmed.indexOf('=');
+    if (eqIdx === -1) continue;
+    const key = trimmed.slice(0, eqIdx).trim();
+    const val = trimmed.slice(eqIdx + 1).trim();
+    if (!(key in process.env)) process.env[key] = val;
+  }
+}
+
 const BASE_URL = process.env.BASE_URL || 'http://127.0.0.1:3000';
 const FETCH_TIMEOUT_MS = Number(process.env.CONTRACT_ADMIN_FETCH_TIMEOUT_MS || 10000);
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@example.com';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'Admin@12345';
+
+function stableHash(value) {
+  return crypto.createHash('sha256').update(value).digest('hex');
+}
+
+async function fetchOtpFromRedis(email) {
+  // REDIS_URL_LOCAL lets scripts running on the host use a different Redis URL than
+  // the backend (which may use a Docker service-name like redis://redis:6379).
+  // Set REDIS_URL_LOCAL=redis://:password@localhost:6379 in .env when running the
+  // backend in Docker Compose with Redis port-mapped to the host.
+  const redisUrl = process.env.REDIS_URL_LOCAL || process.env.REDIS_URL;
+  if (!redisUrl) {
+    process.stderr.write('[admin-contract-check] REDIS_URL not set — cannot auto-read OTP from Redis.\n');
+    return null;
+  }
+
+  const ciKey = `auth:admin:login-otp:ci-plaintext:${stableHash(email.trim().toLowerCase())}`;
+  const client = new Redis(redisUrl, { lazyConnect: true, enableOfflineQueue: false, connectTimeout: 3000 });
+  try {
+    await client.connect();
+    const otp = await client.get(ciKey);
+    if (otp) return otp;
+    // Connected but key not present — backend likely running with NODE_ENV=production
+    process.stderr.write(
+      `[admin-contract-check] Connected to Redis but ci-plaintext OTP key not found.\n` +
+      '  Ensure the backend is NOT running with NODE_ENV=production (ci-plaintext key is only written in non-production).\n'
+    );
+    return null;
+  } catch (err) {
+    process.stderr.write(
+      `[admin-contract-check] Redis connect failed (${redisUrl}): ${err instanceof Error ? err.message : String(err)}\n` +
+      '  If the backend runs in Docker, set REDIS_URL_LOCAL=redis://:password@localhost:6379 in .env.\n'
+    );
+    return null;
+  } finally {
+    client.disconnect();
+  }
+}
 
 function formatFetchFailure(path, error) {
   const reason = error instanceof Error ? error.message : String(error);
@@ -47,16 +104,33 @@ async function main() {
     throw new Error(`Expected 401 on unauthenticated admin route probe, received ${unauthProbe.status}`);
   }
 
-  const loginRes = await requestJson('/api/v1/auth/admin/login', {
+  // Step 1 — verify credentials and trigger OTP email
+  const loginStep1Res = await requestJson('/api/v1/auth/admin/login/request-otp', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ email: ADMIN_EMAIL, password: ADMIN_PASSWORD })
   });
+  if (loginStep1Res.status !== 200) {
+    throw new Error(`Admin login step 1 failed: ${loginStep1Res.status} ${JSON.stringify(loginStep1Res.json)}`);
+  }
+
+  // Step 2 — verify OTP: prefer ADMIN_OTP env var, fall back to Redis CI plaintext key (NODE_ENV=test only)
+  let adminOtp = process.env.ADMIN_OTP;
+  if (!adminOtp) {
+    adminOtp = await fetchOtpFromRedis(ADMIN_EMAIL);
+  }
+  if (!adminOtp) {
+    throw new Error('ADMIN_OTP env var is required for admin-contract-check. Set it to the OTP sent to the admin email after step 1. In CI (NODE_ENV=test), it is auto-read from Redis.');
+  }
+  const loginRes = await requestJson('/api/v1/auth/admin/login/verify-otp', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ email: ADMIN_EMAIL, otp: adminOtp })
+  });
 
   const token = loginRes.json?.data?.accessToken ?? loginRes.json?.accessToken;
   if (loginRes.status !== 200 || !token) {
-
-    throw new Error(`Admin login failed: ${loginRes.status} ${JSON.stringify(loginRes.json)}`);
+    throw new Error(`Admin login step 2 failed: ${loginRes.status} ${JSON.stringify(loginRes.json)}`);
   }
 
   const authHeaders = { authorization: `Bearer ${token}` };
@@ -234,14 +308,15 @@ async function main() {
     process.stdout.write('No refunded orders found; skipped refunded order detail creditNotes validation.\n');
   }
 
-  const queuesRes = await request('/api/v1/admin/queues', {
+  // Bull Board is ops-session protected (not admin Bearer). Verify the route exists and
+  // returns 401 when accessed without a valid ops session — this proves registration + guard.
+  const queuesRes = await request('/api/v1/ops/queues', {
     headers: authHeaders
   });
-  const contentType = queuesRes.headers.get('content-type') || '';
-  process.stdout.write(`/api/v1/admin/queues => ${queuesRes.status} content-type=${contentType}\n`);
+  process.stdout.write(`/api/v1/ops/queues => ${queuesRes.status} (expect 401 — ops-session guard)\n`);
 
-  if (queuesRes.status !== 200 || !contentType.includes('text/html')) {
-    throw new Error('Bull Board contract check failed');
+  if (queuesRes.status !== 401) {
+    throw new Error(`Bull Board contract check failed: expected 401 (ops-session guard), got ${queuesRes.status}`);
   }
 
 

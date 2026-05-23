@@ -2,10 +2,12 @@ import { FastifyInstance } from 'fastify';
 import { AppError } from '@common/errors/app-error';
 import { ERROR_CODES } from '@common/errors/error-codes';
 import { SmsTemplateRegistry } from '@modules/notifications/sms-template-registry';
+import { supportedEmailTemplates } from '@modules/notifications/templates/email-templates';
 import {
   InventorySettingsResponse,
   NotificationFlags,
   NotificationSettingsResponse,
+  PrimaryNotificationChannel,
   ShippingSettingsResponse,
   StoreProfileResponse,
   UpdateInventorySettingsInput,
@@ -16,8 +18,31 @@ import {
 
 export class SettingsService {
   private static readonly singletonKey = 'default';
+  private static readonly defaultPrimaryChannel: PrimaryNotificationChannel = 'EMAIL';
 
   constructor(private readonly fastify: FastifyInstance) {}
+
+  private normalizePrimaryChannels(value: unknown): Record<string, PrimaryNotificationChannel> {
+    const defaults = Object.fromEntries(
+      supportedEmailTemplates.map((template) => [template, SettingsService.defaultPrimaryChannel])
+    ) as Record<string, PrimaryNotificationChannel>;
+
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return defaults;
+    }
+
+    const normalized: Record<string, PrimaryNotificationChannel> = { ...defaults };
+    for (const [template, channel] of Object.entries(value as Record<string, unknown>)) {
+      if (!supportedEmailTemplates.includes(template as (typeof supportedEmailTemplates)[number])) {
+        continue;
+      }
+      if (channel === 'EMAIL' || channel === 'SMS' || channel === 'WHATSAPP') {
+        normalized[template] = channel;
+      }
+    }
+
+    return normalized;
+  }
 
   async getShippingSettings(): Promise<ShippingSettingsResponse> {
     const settings = await this.fastify.prisma.storeSettings.findUnique({
@@ -72,6 +97,7 @@ export class SettingsService {
       where: { singletonKey: SettingsService.singletonKey },
       select: {
         storeName: true,
+        websiteUrl: true,
         logoUrl: true,
         contactEmail: true,
         contactPhone: true,
@@ -82,6 +108,7 @@ export class SettingsService {
 
     return {
       storeName: settings?.storeName ?? null,
+      websiteUrl: settings?.websiteUrl ?? null,
       logoUrl: settings?.logoUrl ?? null,
       contactEmail: settings?.contactEmail ?? null,
       contactPhone: settings?.contactPhone ?? null,
@@ -95,6 +122,7 @@ export class SettingsService {
       where: { singletonKey: SettingsService.singletonKey },
       update: {
         ...(input.storeName !== undefined ? { storeName: input.storeName } : {}),
+        ...(input.websiteUrl !== undefined ? { websiteUrl: input.websiteUrl } : {}),
         ...(input.logoUrl !== undefined ? { logoUrl: input.logoUrl } : {}),
         ...(input.contactEmail !== undefined ? { contactEmail: input.contactEmail } : {}),
         ...(input.contactPhone !== undefined ? { contactPhone: input.contactPhone } : {}),
@@ -106,6 +134,7 @@ export class SettingsService {
         pickupPincode: process.env.SHIPROCKET_PICKUP_PINCODE ?? process.env.DELHIVERY_PICKUP_PINCODE ?? '500001',
         defaultLowStockThreshold: 5,
         ...(input.storeName !== undefined ? { storeName: input.storeName } : {}),
+        ...(input.websiteUrl !== undefined ? { websiteUrl: input.websiteUrl } : {}),
         ...(input.logoUrl !== undefined ? { logoUrl: input.logoUrl } : {}),
         ...(input.contactEmail !== undefined ? { contactEmail: input.contactEmail } : {}),
         ...(input.contactPhone !== undefined ? { contactPhone: input.contactPhone } : {}),
@@ -114,6 +143,7 @@ export class SettingsService {
       },
       select: {
         storeName: true,
+        websiteUrl: true,
         logoUrl: true,
         contactEmail: true,
         contactPhone: true,
@@ -124,6 +154,7 @@ export class SettingsService {
 
     return {
       storeName: updated.storeName,
+      websiteUrl: updated.websiteUrl,
       logoUrl: updated.logoUrl,
       contactEmail: updated.contactEmail,
       contactPhone: updated.contactPhone,
@@ -139,6 +170,7 @@ export class SettingsService {
         notifyEmailEnabled: true,
         notifySmsEnabled: true,
         notifyWhatsappEnabled: true,
+        primaryNotificationChannels: true,
         smsTemplates: true
       }
     });
@@ -147,6 +179,7 @@ export class SettingsService {
       emailEnabled: settings?.notifyEmailEnabled ?? true,
       smsEnabled: settings?.notifySmsEnabled ?? true,
       whatsappEnabled: settings?.notifyWhatsappEnabled ?? false,
+      primaryChannels: this.normalizePrimaryChannels(settings?.primaryNotificationChannels),
       smsTemplates: SmsTemplateRegistry.normalizeTemplateOverrides(settings?.smsTemplates)
     };
   }
@@ -161,6 +194,9 @@ export class SettingsService {
         ...(input.emailEnabled !== undefined ? { notifyEmailEnabled: input.emailEnabled } : {}),
         ...(input.smsEnabled !== undefined ? { notifySmsEnabled: input.smsEnabled } : {}),
         ...(input.whatsappEnabled !== undefined ? { notifyWhatsappEnabled: input.whatsappEnabled } : {}),
+        ...(input.primaryChannels !== undefined
+          ? { primaryNotificationChannels: this.normalizePrimaryChannels(input.primaryChannels) }
+          : {}),
         ...(normalizedSmsTemplates !== undefined ? { smsTemplates: normalizedSmsTemplates } : {})
       },
       create: {
@@ -170,12 +206,16 @@ export class SettingsService {
         ...(input.emailEnabled !== undefined ? { notifyEmailEnabled: input.emailEnabled } : {}),
         ...(input.smsEnabled !== undefined ? { notifySmsEnabled: input.smsEnabled } : {}),
         ...(input.whatsappEnabled !== undefined ? { notifyWhatsappEnabled: input.whatsappEnabled } : {}),
+        ...(input.primaryChannels !== undefined
+          ? { primaryNotificationChannels: this.normalizePrimaryChannels(input.primaryChannels) }
+          : { primaryNotificationChannels: this.normalizePrimaryChannels(undefined) }),
         ...(normalizedSmsTemplates !== undefined ? { smsTemplates: normalizedSmsTemplates } : {})
       },
       select: {
         notifyEmailEnabled: true,
         notifySmsEnabled: true,
         notifyWhatsappEnabled: true,
+        primaryNotificationChannels: true,
         smsTemplates: true
       }
     });
@@ -184,6 +224,7 @@ export class SettingsService {
       emailEnabled: updated.notifyEmailEnabled,
       smsEnabled: updated.notifySmsEnabled,
       whatsappEnabled: updated.notifyWhatsappEnabled,
+      primaryChannels: this.normalizePrimaryChannels(updated.primaryNotificationChannels),
       smsTemplates: SmsTemplateRegistry.normalizeTemplateOverrides(updated.smsTemplates)
     };
   }

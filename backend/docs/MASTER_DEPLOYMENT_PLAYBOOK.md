@@ -6,6 +6,15 @@
 
 ---
 
+## Configuration Source of Truth (read first)
+
+- Read `docs/ENV_VS_DB_CONFIG_REFERENCE.md` for the authoritative env vs DB map, validation/alerting behaviors, and May 2026 hardening summary.
+- Bootstrap/infra keys are env-only (e.g., `DATABASE_URL`, initial `REDIS_URL`, `OPS_DB_ENCRYPTION_KEY`).
+- Mutable runtime provider keys/toggles/allowlists/tokens/skew limits are DB-backed via OpsConfigSecret (encrypted overlay) and edited through Ops UI/API (restart required). No runtime env fallbacks in production.
+- Merchant-facing settings (store profile, notification primary channels/templates, GST/FSSAI) are DB-backed via `StoreSettings`. No runtime env fallbacks.
+
+---
+
 ## Project folder structure (per client)
 
 ```
@@ -89,6 +98,7 @@ Current operational highlights (required for go-live checks):
 - Webhook integrity, replay controls, and strict schema/error handling.
 - SQL injection guardrail wired into CI (`security:sql-injection-guard`).
 - Observability + alert-test coverage for reliability gates.
+- System-wide technical failure alerting via email to all active Ops + Admin users (every `catch`/`log.error` path emits `sendTechnicalFailureAlert`).
 
 ---
 
@@ -135,13 +145,17 @@ git commit -m "init: bootstrapped from ecommerce-backend-template v2.0"
 cp .env.example .env
 ```
 
-Open `.env` and fill every variable. Generate unique secrets:
+Open `.env` and fill **bootstrap/infra keys only**. Generate unique secrets:
 
 ```bash
 node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 ```
 
-**Key variables to set (dev mode):**
+> **Two-tier config model:** `.env` is for bootstrap/infra keys only. Provider credentials, webhook tokens, and ops-security parameters are **DB-overlay keys** — they are stored encrypted in `OpsConfigSecret` via the Ops UI after first invite bootstrap (Phase 8). Do **not** put them in `.env` in production. See `docs/ENV_VS_DB_CONFIG_REFERENCE.md` §2–§3 for full detail on every key including generation, rotation impact, and mechanism.
+>
+> **First-deploy exception:** `RESEND_API_KEY` and `RESEND_FROM` must be set as live values in `.env` before running `node scripts/ops-newuser.mjs` to send the first ops invite email. After first ops login, manage via Ops UI. See `docs/PRODUCTION_FIRST_DEPLOY_CHECKLIST.md`.
+
+**Bootstrap keys to set in `.env` (dev mode):**
 *(Rule for AI Agents: Before running any backend infrastructure or databases, proactively ask the user for their client-specific details, database name, and API keys, and automatically generate this `.env` file for them based on `.env.example`.)*
 
 ```env
@@ -155,12 +169,16 @@ STOREFRONT_URL=http://localhost:3000
 ADMIN_URL=http://localhost:3000
 JWT_SECRET=<64-char-hex>
 JWT_REFRESH_SECRET=<different-64-char-hex>
-
-# Paste all keys from Phase 1
-RAZORPAY_KEY_ID=rzp_test_xxxxx
-RAZORPAY_KEY_SECRET=<from phase 1>
-RAZORPAY_WEBHOOK_SECRET=<from phase 1>
-# ... etc for all providers
+REDIS_KEY_PEPPER=<32-char-hex>
+OPS_DB_ENCRYPTION_KEY=<32-char-hex>
+OPS_COOKIE_SECRET=<32-char-hex>
+ADMIN_ALERT_EMAIL=ops@yourclientdomain.com
+TURNSTILE_SECRET_KEY=<from Cloudflare>
+AUDIT_ANCHOR_SECRET=<32-char-hex>
+IDEMPOTENCY_SCOPE_SECRET=<32-char-hex>
+# Phase 1 bootstrap — needed for ops-newuser.mjs invite email; manage via Ops UI after first login
+RESEND_API_KEY=<your Resend API key>
+RESEND_FROM=My Store <noreply@yourdomain.com>
 
 # Feature flags — match what client needs
 FEATURE_COUPONS_ENABLED=true
@@ -168,15 +186,26 @@ FEATURE_REVIEWS_ENABLED=true
 FEATURE_WISHLIST_ENABLED=true
 FEATURE_GST_INVOICING_ENABLED=true
 FEATURE_RESPONSE_ENVELOPE_ENABLED=false
-
-# Seller profile (for GST invoices)
-STORE_LEGAL_NAME=FoodStore Pvt Ltd
-STORE_SELLER_ADDRESS=123 Main Road, City, State
-STORE_SELLER_STATE=Telangana
-STORE_SELLER_GSTIN=36XXXXX1234X1Z5
 ```
 
-> See `.env.example` for the complete variable list with descriptions.
+**DB-overlay keys (provider credentials) — set via Ops UI after Phase 8, NOT in `.env`:**
+
+In local dev (`NODE_ENV=development`), you may temporarily set provider keys in `.env` to test locally before ops bootstrap. In production, these must live in `OpsConfigSecret` only.
+
+```env
+# LOCAL DEV ONLY — remove from .env before production deployment
+# PAYMENT_PROVIDER=razorpay
+# RAZORPAY_KEY_ID=rzp_test_xxxxx
+# RAZORPAY_KEY_SECRET=<from phase 1>
+# RAZORPAY_WEBHOOK_SECRET=<from phase 1>
+# SHIPPING_PROVIDER=delhivery
+# DELHIVERY_API_KEY=<from phase 1>
+# ... etc — full list in .env.example commented stubs
+```
+
+**Store/GST seller profile** — set via admin settings API (`PATCH /api/v1/admin/settings`) stored in `StoreSettings` DB row. Not env-based: `storeName`, `sellerLegalName`, `sellerAddress`, `sellerState`, `gstin`, `fssaiNumber`.
+
+> See `.env.example` for the complete variable list with descriptions. All `dbOverlay: true` keys appear as commented stubs (`# KEY=`) there.
 
 ### 2.2.1 How `docker-compose.yml` reads your `.env` (critical concept)
 
@@ -195,20 +224,23 @@ environment:
 ```
 
 ```env
-# In .env (this is what you edit)
-RAZORPAY_KEY_ID=rzp_live_abc123
+# In .env (this is what you edit — bootstrap keys only in production)
 JWT_SECRET=a0b1c2d3e4f5...
+DATABASE_URL=postgresql://postgres:secret@localhost:5432/mydb
+FEATURE_COUPONS_ENABLED=true
 ```
 
-When Docker starts the container, it sees `RAZORPAY_KEY_ID=rzp_live_abc123` inside the container environment — no `${...}` interpolation needed for application vars.
+When Docker starts the container, it sees these values inside the container environment — no `${...}` interpolation needed for application vars.
+
+> **DB-overlay keys (provider credentials, webhook tokens, ops-security params) are stored in `OpsConfigSecret` via Ops UI, not in `.env`. `applyOpsConfigRuntimeOverlay()` writes them into `process.env` at boot time after connecting to the DB.**
 
 **The daily operational workflow is:**
 
 | Task | What you do | What you don’t do |
 |------|------------|-------------------|
-| Change an API key | Edit `.env` → restart containers | Edit docker-compose.yml |
+| Change a bootstrap/infra key | Edit `.env` → restart containers | Edit docker-compose.yml |
+| Rotate a provider API key | Ops UI (`POST /api/v1/ops/config/save`) → restart containers | Edit `.env` |
 | Toggle a feature flag | Edit `.env` → restart containers | Edit docker-compose.yml |
-| Rotate a secret | Edit `.env` → restart containers | Edit docker-compose.yml |
 | Add a new client | Copy the whole project folder, create new `.env` | Share docker-compose.yml between clients |
 
 **Restart after `.env` changes:**
@@ -320,9 +352,9 @@ See `docs/postman/E2E-FLOW-TEST-LOG.md` for full per-step assertion details, env
 
 ### 2.7 Create first admin user
 
-1. Register via `POST /api/v1/auth/register`
-2. Promote to ADMIN in database
-3. Login via `POST /api/v1/auth/admin/login`
+1. Issue merchant admin invite via `POST /api/v1/admin/invites` (ops-authenticated, `ops:write`).
+2. Complete setup at `/admin/setup?token=...` within 10 minutes (name + password creation + email OTP).
+3. Login via 2-step email OTP: `POST /api/v1/auth/admin/login/request-otp` → `POST /api/v1/auth/admin/login/verify-otp`.
 
 ---
 
@@ -371,9 +403,8 @@ Use this sequence by default:
 2. **Ops control plane surfaces**
    - `GET /ops/session`
    - `GET/POST /ops/load-shed`
-   - `GET /ops/approvals`
-   - `POST /ops/approvals/:requestId/confirm|reject`
    - `GET /ops/audit/logs`
+   - `POST /ops/system/restart` (schedule payment-safe container restart — `delayMinutes: 0` = immediate, `> 0` = deferred; job persists in Redis and survives logout)
 3. **Admin read surfaces**
    - dashboard KPIs/charts
    - orders list + order detail
@@ -430,7 +461,7 @@ A slice is done only if all are true:
 - Runtime/infra control UX must use `/api/v1/ops/*` only.
 - Never proxy merchant actions through ops APIs.
 - Never expose ops credentials in browser storage/query params/logs.
-- Model ops dual-approval as explicit 2-step UX (`request` then `confirm/reject`).
+- Ops load-shed change is applied immediately via `POST /ops/load-shed` (single-step with OTP confirmation).
 
 ### 3.1 Initialise Next.js project
 
@@ -519,7 +550,7 @@ Required storefront surfaces:
 > Admin routes live inside the **same** Next.js app under `/admin`.
 > Full endpoint matrix: `docs/API_ENDPOINT_INDEX.md`
 
-**Auth:** `POST /api/v1/auth/admin/login` — returns admin JWT with permission scopes.
+**Auth:** 2-step email OTP — `POST /api/v1/auth/admin/login/request-otp` (verifies password, sends OTP) → `POST /api/v1/auth/admin/login/verify-otp` (verifies OTP, returns JWT + sets refresh cookie).
 **Rule:** Hide/disable nav items based on JWT permissions. Don't rely on 403 as UX.
 
 Required admin surfaces:
@@ -569,7 +600,7 @@ The backend template ships with these security measures already implemented. Ver
 | **SLO alert test coverage** | All alert rules in `observability/slo-rules.yml` have corresponding `promtool` test cases (including `QueueDLQDepthHigh` and `AuthChallengeFailureSpike`). | `observability/slo-rules.test.yml` |
 | **Table housekeeping** | Scheduled purge of expired `IdempotencyRecord`, `RefreshToken`, and published `OutboxMessage` rows to prevent unbounded growth. | `cart-cleanup.worker.ts`, `bullmq.plugin.ts` |
 | **Password storage** | bcrypt cost 12. Refresh tokens bcrypt-hashed before DB storage. | `auth.service.ts` |
-| **MFA encryption** | Admin TOTP secrets AES-256-GCM encrypted at rest with per-row random IV. | `auth.service.ts` |
+| **MFA encryption** | Admin login uses mandatory 2-step email OTP (request-otp → verify-otp). TOTP fully removed from hot path. Legacy `mfaSecretEncrypted` field retained as schema stub only. | `auth.service.ts` |
 
 > For the full decision log with rationale, see [`docs/DECISIONS.md`](DECISIONS.md).
 
@@ -662,7 +693,7 @@ Use this section as the final release candidate sign-off artifact before deploym
 - Circuit breaker state is process-local per replica for payment/shipping unless explicitly redesigned for shared state.
 - Shipping webhook `noop` acceptance remains intentionally permissive for development-like simulation and is blocked by production-like startup guardrails.
 - `promtool`-based SLO tests may be skipped locally on dev machines; CI remains source of truth.
-- `contract:admin` gate requires a running seeded backend — cannot pass in offline/local environment; runs only in CI with provisioned environment.
+- `contract:admin` gate requires a running seeded backend — cannot pass in offline/local environment; runs only in CI with provisioned environment. Requires `ADMIN_EMAIL` and `ADMIN_PASSWORD` set in `.env` matching a real seeded admin account. The script auto-reads the OTP from Redis when `NODE_ENV != production` (backend writes a `ci-plaintext` key); set `NODE_ENV=development` in `.env` for local runs. See `.env.example` CI/contract-check section.
 
 #### Rollback strategy (backend)
 
@@ -781,6 +812,8 @@ Required hardening checks before first production client:
 - `unattended-upgrades` enabled
 - `timedatectl` shows synchronized clock
 
+> **Port 22 after runner setup:** Once the self-hosted GitHub Actions runner is registered and confirmed Online (see `CLIENT_VPS_SETUP_GUIDE.md` §22), port 22 no longer needs to be open to `0.0.0.0/0`. Restrict it to your office CIDR only — deployments use HTTPS outbound from the runner, not inbound SSH.
+
 Capacity signals before onboarding each additional client:
 - RAM sustained usage should stay <75%
 - CPU sustained usage should stay <70%
@@ -796,6 +829,8 @@ Capacity signals before onboarding each additional client:
 | N | 3000+N | 3100+N |
 
 ### 5.4 Deploy this client
+
+> **First-time bootstrap only.** The steps below (git clone, docker compose up) are run once to set up the client stack. After completing `CLIENT_VPS_SETUP_GUIDE.md` §22 (self-hosted runner setup), all subsequent deploys happen automatically — every `git push` to `main` triggers the CI/CD pipeline: CI gates → runner picks up job → build → migrate → container swap → health check. No SSH required for re-deploys.
 
 ```bash
 ssh deploy@your-vps
@@ -815,19 +850,22 @@ CREATE USER foodstore_user WITH PASSWORD 'strong_password';
 GRANT ALL PRIVILEGES ON DATABASE foodstore_prod TO foodstore_user;
 \q
 
-# 4. Configure backend .env (PRODUCTION values)
+# 4. Configure backend .env (PRODUCTION — bootstrap keys ONLY)
 cd /var/www/foodstore/backend
 cp .env.example .env
 nano .env
 # NODE_ENV=production
 # DATABASE_URL=postgresql://foodstore_user:password@host.docker.internal:5432/foodstore_prod
+# REDIS_URL=redis://:strong_redis_password@redis:6379
+# REDIS_PASSWORD=strong_redis_password
 # BACKEND_PORT=3001
 # STOREFRONT_URL=https://foodstore.com
 # ADMIN_URL=https://foodstore.com
-# RAZORPAY_KEY_ID=rzp_live_xxxxx  ← LIVE keys!
+# OPS_DB_ENCRYPTION_KEY=<unique 32-char hex>  ← NEVER reuse across clients
 # ENABLE_VERBOSE_VALIDATION_ERRORS=false
 # Generate NEW JWT_SECRET and JWT_REFRESH_SECRET (different from dev!)
-# Generate NEW REDIS_PASSWORD
+# ⚠️ Provider credentials (RAZORPAY_*, SHIPPING_*, NOTIFY_*, etc.) are NOT set here.
+# They are stored in OpsConfigSecret via the Ops UI after Phase 8 ops bootstrap.
 
 # 5. Start infrastructure (if using Docker-based Postgres instead of host Postgres)
 # docker compose up -d postgres redis
@@ -843,18 +881,27 @@ npx prisma migrate deploy
 docker compose up -d --build
 curl http://127.0.0.1:3001/api/v1/health  # verify
 
-# 7. Build and start frontend
+# 7. Build and start frontend (FIRST-TIME BOOTSTRAP ONLY)
+# After completing §22 (runner setup), all subsequent frontend deploys are automated:
+# git push → CI → runner → vps-frontend-deploy.sh → npm run build → pm2 reload (zero downtime)
 cd /var/www/foodstore/frontend
 npm ci
-# Set production env vars
+# Set production env vars in .env.local (CLIENT_ID, STOREFRONT_PORT, NEXT_PUBLIC_* keys)
+nano .env.local
 npm run build
 pm2 start npm --name "foodstore-frontend" -- start -- -p 3101
+pm2 save          # persist process list (survives pm2 restarts)
+pm2 startup       # install boot hook — run the printed sudo command to survive reboots
 
 # 8. Nginx config
 sudo cp /var/www/foodstore/backend/nginx/client.conf.template \
         /etc/nginx/sites-available/foodstore.com
 sudo cp /var/www/foodstore/backend/nginx/rate-zones.conf.template \
         /etc/nginx/snippets/rate-zones.conf
+# Deploy maintenance page (served on 502/503 during restarts/outages)
+sudo mkdir -p /etc/nginx/maintenance
+sudo cp /var/www/foodstore/backend/nginx/maintenance.html \
+        /etc/nginx/maintenance/maintenance.html
 sudo nano /etc/nginx/sites-available/foodstore.com
 # Replace: server_name → foodstore.com
 # Replace: certificate paths → /etc/letsencrypt/live/foodstore.com/
@@ -871,31 +918,64 @@ sudo certbot --nginx -d foodstore.com -d www.foodstore.com
 # 11. Update Razorpay/shipping provider webhook URLs to production domain
 ```
 
+
 > **Mandatory runtime gate before go-live sign-off:** execute the runtime stability validation in `docs/CLIENT_VPS_SETUP_GUIDE.md` section **10.1** (separate API/workers supervision, RSS/heap trend capture, sustained OTP/login soak, and notification worker liveness verification).
+
+### 5.5a Runtime validation — Per-template primary notification channels (DB-backed)
+
+Perform these steps on staging before switching traffic:
+
+- Read current notification settings:
+  - `GET /api/v1/admin/settings/notifications`
+  - Confirm `primaryChannels` is present and lists 13 templates with defaults (`EMAIL`).
+- Pick a non-critical template and set a temporary primary channel:
+  - `PATCH /api/v1/admin/settings/notifications` with `{ "primaryChannels": { "LowStockAlert": "SMS" } }` (example)
+  - Verify response reflects the change; re-read with `GET` and confirm.
+- Trigger a test notification for that template (via admin action or test job) and observe delivery only on the configured primary channel.
+  - Confirm there is no fallback to other channels.
+  - If delivery fails (disabled channel or bad credentials), verify:
+    - `NotificationLog.status` is `FAILED` for that attempt
+    - A technical failure alert email was sent to active Ops and verified Admin users.
+- Revert the temporary change (`LowStockAlert` back to `EMAIL`).
 
 ### 5.5 Production `.env` checklist
 
-> **Pre-launch audit.** Verify each variable below before running `docker compose up -d --build`.
+> **Pre-launch audit.** Verify each bootstrap variable below before running `docker compose up -d --build`.
 > All application env vars are injected via `env_file: .env`. See §2.2.1 for how that works.
+>
+> **DB-overlay keys (provider credentials, webhook tokens, ops-security params) are NOT set here** — they are stored in `OpsConfigSecret` via the Ops UI after Phase 5.6 ops bootstrap. They appear as commented stubs in `.env.example`.
+
+**Bootstrap keys — must be live values in `.env`:**
 
 | Variable | Must be | Why |
 |----------|---------|-----|
-| `NODE_ENV` | `production` | Activates strict-profile validation (requires production-only vars below) |
-| `CLIENT_ID` | Client-unique slug | Used in container names and OTEL service names |
+| `NODE_ENV` | `production` | Activates strict-profile validation |
+| `CLIENT_ID` | Client-unique slug | Container names and OTEL service names |
 | `DATABASE_URL` | Uses `host.docker.internal` | Container can't reach `localhost` PostgreSQL |
 | `REDIS_URL` | Uses `redis` (service name) | Points to the docker-compose Redis container |
 | `REDIS_PASSWORD` | Unique per client, 32+ chars | Must match the password in `REDIS_URL` |
 | `STOREFRONT_URL` / `ADMIN_URL` | `https://clientdomain.com` | CORS + cookie domain — must be HTTPS in production |
 | `JWT_SECRET` / `JWT_REFRESH_SECRET` | Unique per client, 64+ chars | Generate fresh: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` |
-| `RAZORPAY_KEY_ID` | `rzp_live_*` (not test!) | Test keys will reject real payments |
-| `RAZORPAY_WEBHOOK_SECRET` | Matches Razorpay dashboard | Mismatched → all webhooks rejected → orders stuck in PENDING_PAYMENT |
-| `RAZORPAY_WEBHOOK_ALLOWLIST_CIDR` | Set to Razorpay IP ranges | Startup warning if empty; defense-in-depth against spoofed webhooks |
-| `DELHIVERY_WEBHOOK_TOKEN` (when `SHIPPING_PROVIDER=delhivery`) OR `SHIPROCKET_WEBHOOK_TOKEN` (when `SHIPPING_PROVIDER=shiprocket`) | Set | Required by strict-profile validation — server won't start without it |
-| `REPLAY_APPROVAL_TOKEN` | Set | Required by strict-profile validation |
-| `OPS_METRICS_TOKEN` | Set | Required by strict-profile validation — protects `/metrics` |
-| `ADMIN_MFA_ENCRYPTION_KEY` | Set | Required by strict-profile validation — AES key for MFA secrets |
-| `INVOICE_STORAGE_ROOT` | Set | Invoice PDF storage/read routes fail when path is invalid or unwritable |
-| `RESEND_FROM` | Verified domain | Unverified → emails bounce or hit spam |
+| `OPS_DB_ENCRYPTION_KEY` | Unique per client, 32-char hex | Required to decrypt `OpsConfigSecret`; bootstrap-only — never in DB |
+| `ADMIN_ALERT_EMAIL` | Valid ops email | Fallback alert delivery if DB overlay unavailable |
+| `TURNSTILE_SECRET_KEY` | From Cloudflare | Bot protection on auth endpoints |
+| `AUDIT_ANCHOR_SECRET` | 32-char hex | Tamper-evident audit chain |
+| `IDEMPOTENCY_SCOPE_SECRET` | 32-char hex | Scopes idempotency keys per client |
+| `REDIS_KEY_PEPPER` | 32-char hex | Token storage hardening |
+| Feature flags | `true`/`false` | Modules enabled per client contract |
+
+**DB-overlay keys — set via Ops UI after Phase 5.6, NOT in `.env`:**
+
+All provider credentials, webhook tokens, and ops-security parameters are stored in `OpsConfigSecret` and applied by `applyOpsConfigRuntimeOverlay()` at startup. After saving via `POST /api/v1/ops/config/save`, restart containers:
+
+| Domain | Representative keys | Notes |
+|--------|--------------------|----|
+| Payments | `PAYMENT_PROVIDER`, `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET`, `PAYMENT_CB_*` | Live keys — never test keys in production |
+| Shipping | `SHIPPING_PROVIDER`, `DELHIVERY_API_KEY`, `SHIPROCKET_EMAIL`, `SHIPROCKET_PASSWORD`, `SHIPPING_CB_*` | Allowlist + token also overlay |
+| Webhook security | `RAZORPAY_WEBHOOK_ALLOWLIST_CIDR`, `DELHIVERY_WEBHOOK_TOKEN`, `SHIPROCKET_WEBHOOK_TOKEN`, skew windows | Strict-profile requires non-empty |
+| Notifications | `RESEND_API_KEY`, `RESEND_FROM`, `MSG91_AUTH_KEY`, `FAST2SMS_API_KEY`, `META_WHATSAPP_*`, `SMS_PROVIDER` | `RESEND_FROM` must use verified domain |
+| Invoice | `INVOICE_STORAGE_ROOT` | PDF storage path — must be writable |
+| Ops security | `OPS_METRICS_TOKEN`, `REPLAY_APPROVAL_TOKEN`, `TRUSTED_PROXY_ALLOWLIST_CIDR` | Strict-profile requires these |
 
 **After editing `.env`:**
 
@@ -907,39 +987,36 @@ docker compose logs -f backend    # verify no startup errors
 
 > **Gotcha:** `docker compose restart` does NOT re-read `.env` — it reuses the old container environment. Always use `docker compose up -d` after any `.env` change.
 
-> **Ops config overlay gotcha:** DB-backed Ops config changes are encrypted in `OpsConfigSecret` and are applied only during API/worker startup. After saving non-bootstrap keys through `/api/v1/ops/config/save`, restart/recreate backend and worker containers with `docker compose up -d` so both processes load the same overlay before providers initialize. Bootstrap-only keys (`DATABASE_URL`, initial `REDIS_URL`, `OPS_DB_ENCRYPTION_KEY`) must still be changed in deployment env/secret manager.
+> **Ops config overlay gotcha:** DB-backed Ops config changes are encrypted in `OpsConfigSecret` and are applied only during API/worker startup. After saving non-bootstrap keys through `/api/v1/ops/config/save`, restart/recreate backend and worker containers so both processes load the same overlay before providers initialize. Bootstrap-only keys (`DATABASE_URL`, initial `REDIS_URL`, `OPS_DB_ENCRYPTION_KEY`) must still be changed in deployment env/secret manager.
+>
+> **Two ways to restart after a config save:** (1) **SSH/VPS:** `docker compose up -d` — recreates containers and picks up the new overlay. (2) **Ops UI (no SSH required):** `POST /api/v1/ops/system/restart` — schedules a payment-safe restart via BullMQ; drains `PENDING_PAYMENT` orders first (default 5 min timeout, override via `RESTART_PAYMENT_DRAIN_TIMEOUT_MS`), then publishes to the `system:restart` Redis pub/sub channel — both backend and worker containers restart automatically via Docker `restart: unless-stopped`. Prefer this method in production to maintain audit trail and avoid direct server access.
 
 ### 5.6 Ops control plane invite bootstrap on VPS (mandatory)
 
 Run this once per environment after migrations and before go-live sign-off.
 
 1. Ensure required env exists in backend `.env`:
-   - `OPS_API_KEY_SALT`
-   - `OPS_MFA_ENFORCE=true`
-   - `ADMIN_MFA_ENCRYPTION_KEY`
    - `OPS_DB_ENCRYPTION_KEY`
-   - `OPS_DUAL_APPROVAL_WINDOW_MINUTES`
 2. Run invite bootstrap from a trusted shell session on the backend host:
 
 ```bash
 cd /var/www/foodstore/backend
-npm run ops:newuser -- --email=ops@foodstore.com --name="Primary Ops" --ip-allowlist="203.0.113.10/32" --setup-base-url="https://foodstore.com" --yes
+npm run ops:newuser -- --email=ops@foodstore.com --name="Primary Ops" --setup-base-url="https://foodstore.com" --yes
 ```
+
+**Pre-requisite:** Ensure your domain is **"Verified"** in Resend Dashboard → Domains before running this. If still "Pending", the invite email will fail with: *"You can only send testing emails to your own email address..."* See `docs/PRODUCTION_FIRST_DEPLOY_CHECKLIST.md` §Step 1b for complete domain + email setup instructions.
 
 `--setup-base-url` must be base origin only (for example, `https://foodstore.com`), not `https://foodstore.com/ops/setup`. Backend appends `/ops/setup?token=...`.
 
 3. Complete invite setup from emailed link (`/ops/setup`) within 10 minutes.
-4. Store generated runtime credentials in vault after setup completion.
-5. Verify from an allowlisted IP:
-   - `GET /api/v1/ops/session`
-   - `GET /api/v1/ops/load-shed`
-6. Verify Ops config UI/API visibility for contract-managed domains:
+4. Verify email OTP login completes and `GET /api/v1/ops/session` returns 200.
+5. Verify Ops config UI/API visibility for contract-managed domains:
    - Core Runtime: bootstrap-only `DATABASE_URL`, initial `REDIS_URL`, `OPS_DB_ENCRYPTION_KEY` are read-only environment values; JWT secrets and `INVOICE_STORAGE_ROOT` are DB-overlay eligible
    - Payments, Shipping, Notifications provider keys
-   - Ops Security: `OPS_API_KEY_SALT`, `ADMIN_MFA_ENCRYPTION_KEY`, `REPLAY_APPROVAL_TOKEN`; `OPS_DB_ENCRYPTION_KEY` remains bootstrap-only
-7. Confirm `/api/v1/ops/config/save` requires verified email OTP, rejects bootstrap-only keys with `BOOTSTRAP_KEY_NOT_DB_APPLICABLE`, and stores only encrypted/masked DB-overlay values.
-8. Confirm expired unconsumed invites are cleaned and visible in ops audit timeline.
-9. Remove shell output/history artifacts where policy requires.
+   - Ops Security: `REPLAY_APPROVAL_TOKEN`; `OPS_DB_ENCRYPTION_KEY` remains bootstrap-only
+6. Confirm `/api/v1/ops/config/save` requires verified email OTP, rejects bootstrap-only keys with `BOOTSTRAP_KEY_NOT_DB_APPLICABLE`, and stores only encrypted/masked DB-overlay values.
+7. Confirm expired unconsumed invites are cleaned and visible in ops audit timeline.
+8. Remove shell output/history artifacts where policy requires.
 
 Fail-closed identity rule: ops invite creation must return `409 CONFLICT` if invite email already exists in customer/admin (`User`) domain.
 
@@ -949,22 +1026,22 @@ If credentials are compromised, deactivate the affected `OpsUser`, bootstrap a n
 
 Run this after Ops bootstrap is verified and before frontend go-live sign-off.
 
-1. From an allowlisted ops context, create the merchant admin invite:
+1. From an authenticated ops browser session, create the merchant admin invite:
    - Route: `POST /api/v1/admin/invites`
-   - Auth: `x-ops-key-id`, `x-ops-api-key`, and MFA header when enforced
+   - Auth: `ops_session` cookie (email-OTP login) with OTP challenge for privileged write
    - Permission: `ops:write`
    - Body: `email`, `name`, `setupBaseUrl`, optional merchant-only `permissions`
    - `setupBaseUrl` must be base origin only (for example, `https://foodstore.com`), not `https://foodstore.com/admin/setup`; backend appends `/admin/setup?token=...`
 2. Complete setup at `/admin/setup?token=...` within 10 minutes.
 3. Confirm the backend created `User(role=ADMIN)` and explicit merchant `AdminPermissionGrant` rows.
-4. Verify login via `POST /api/v1/auth/admin/login` and confirm JWT `permissions` contains expected merchant scopes only.
-5. Enroll admin MFA when `ADMIN_MFA_ENFORCE=true`.
+4. Verify login via 2-step email OTP (`POST /api/v1/auth/admin/login/request-otp` → `POST /api/v1/auth/admin/login/verify-otp`) and confirm JWT `permissions` contains expected merchant scopes only.
+5. Confirm no ops/developer scopes are present in the issued JWT.
 6. Verify expired invite cleanup from ops context with `POST /api/v1/admin/invites/cleanup-expired`.
 7. Record invite creation, consumption time, permissions granted, and cleanup evidence in `CLIENT_VPS_DEPLOYMENT_LOG.md`.
 
 Fail-closed identity rule: merchant admin invite creation/setup must return `409 CONFLICT` if invite email already exists in ops (`OpsUser`) domain.
 
-Do not use local/legacy admin seed scripts as production go-live provisioning. Do not grant `ops:*`, `queues:inspect`, `developer:*`, provider-secret, database, Redis, or ops-control permissions through merchant admin setup.
+Do not use local/legacy admin seed scripts as production go-live provisioning. Do not grant `ops:*`, `developer:*`, provider-secret, database, Redis, or ops-control permissions through merchant admin setup.
 
 ---
 
@@ -1136,39 +1213,37 @@ Repeat Phases 2–6 with a new project folder, new database, new ports, new doma
 
 ### A.2 Auth — Admin
 
-#### `POST /api/v1/auth/admin/login`
+Admin login uses a mandatory 2-step email OTP flow. There is no single-step login and no TOTP/authenticator-app MFA.
+
+#### `POST /api/v1/auth/admin/login/request-otp` (step 1)
 
 ```jsonc
 // Request body
 {
-  "email": "admin@store.com",        // required
-  "password": "securepass",          // required (8–128)
-  "mfaCode": "123456",              // optional (6–8 chars, required if MFA enabled)
-  "turnstileToken": "optional"
+  "email": "admin@store.com",   // required
+  "password": "securepass"      // required (8–128)
+}
+// Response 200 → data
+{ "expiresAt": "2026-05-20T16:35:00.000Z" }
+// Side effect: 6-digit OTP sent to admin's registered email (TTL 300s, max 5 attempts)
+// Anti-enumeration: generic response regardless of credential correctness
+```
+
+#### `POST /api/v1/auth/admin/login/verify-otp` (step 2)
+
+```jsonc
+// Request body
+{
+  "email": "admin@store.com",   // required
+  "otp": "123456"               // required (6 digits)
 }
 // Response 200 → data
 {
   "accessToken": "eyJhbG...",
-  "admin": { "id": "uuid", "email": "...", "phone": "...", "firstName": "...", "lastName": "...", "role": "ADMIN", "isVerified": true }
+  "admin": { "id": "uuid", "email": "...", "role": "ADMIN", "permissions": [] }
 }
-// JWT payload includes: permissions[] array
-```
-
-#### `POST /api/v1/auth/admin/mfa/setup/start` — requires admin JWT
-
-```jsonc
-// No body
-// Response 200 → data
-{ "secret": "BASE32SECRET", "otpauthUrl": "otpauth://totp/...", "message": "Scan QR code" }
-```
-
-#### `POST /api/v1/auth/admin/mfa/setup/confirm` — requires admin JWT
-
-```jsonc
-// Request body
-{ "mfaCode": "123456" }
-// Response 200 → data
-{ "message": "MFA enabled successfully" }
+// Side effect: sets HTTP-only refresh cookie
+// JWT payload includes: permissions[] array (merchant scopes only)
 ```
 
 ### A.3 Products — Public
@@ -1717,13 +1792,11 @@ if (!response.success) {
 // Response: paginated user list (no passwords ever exposed)
 ```
 
-### C.10 Queues — Admin (Developer only)
+### C.10 Queues — Ops plane only
 
 ```jsonc
-// GET /api/v1/admin/queues             [queues:inspect]
-// Response: { queues: [{ name, waiting, active, completed, failed, delayed }] }
-// GET /api/v1/admin/queues/:name/jobs  [queues:inspect]
-// POST /api/v1/admin/queues/:name/retry-all [ops:write]
+// GET /api/v1/ops/queues             [ops:read]  — Bull Board UI
+// GET /api/v1/ops/queues/dlq/summary [ops:read]  — DLQ summary card
 ```
 
 ---
@@ -1756,7 +1829,6 @@ if (!response.success) {
 | `orders:refund` | B | merchant | high | **Yes** |
 | `orders:notify` | A | merchant | medium | No |
 | `users:read` | A | merchant | medium | No |
-| `queues:inspect` | C | developer | high | No |
 | `ops:read` | C | developer | high | No |
 | `ops:write` | C | developer | critical | **Yes** |
 
@@ -1771,7 +1843,7 @@ if (!response.success) {
 When `ADMIN_DEFAULT_PERMISSIONS` env var is unset, new admins get:
 `products:read/write, categories:read/write, inventory:read/write, coupons:read/write, settings:read/write, reviews:read/moderate, dashboard:read, analytics:read/export, orders:read/write/export/notify, users:read`
 
-**Notably excluded from defaults:** `orders:refund`, `analytics:replay`, `queues:inspect`, `ops:read`, `ops:write`
+**Notably excluded from defaults:** `orders:refund`, `analytics:replay`, `ops:read`, `ops:write`
 
 ### D.4 Frontend RBAC integration
 
@@ -2003,13 +2075,9 @@ Token: <SHIPROCKET_WEBHOOK_TOKEN>
 |----------|----------|---------|-------|
 | `REPLAY_APPROVAL_TOKEN` | **Prod** | `random-token` | Required in production profile for secure replay approval flows. |
 | `REPLAY_AUDIT_RETENTION_DAYS` | No | `90` | Replay audit trail retention in days. NDJSON entries older than this are pruned. Default: `90`. |
-| `OPS_API_KEY_SALT` | Yes | `random-salt` | Salt for ops API key derivation. |
-| `OPS_DUAL_APPROVAL_WINDOW_MINUTES` | No | `15` | Expiry window for ops dual-approval requests. Default: `15`. |
 | `OPS_MFA_ENFORCE` | No | `true` | Require MFA for ops control plane access. Default: `true`. |
 | `OPS_METRICS_ALLOWLIST` | No | `10.0.0.1,10.0.0.2` | IP allowlist for `/metrics` endpoint. |
 | `OPS_METRICS_TOKEN` | **Prod** | `metrics-bearer-token` | Bearer token protecting metrics scrape endpoint. |
-| `ADMIN_MFA_ENFORCE` | No | `false` | Require MFA for all admin logins. Default: `false`. |
-| `ADMIN_MFA_ENCRYPTION_KEY` | **Prod** | `32-char-key` | AES key for encrypting MFA secrets at rest. Required in production. |
 | `ADMIN_DEFAULT_PERMISSIONS` | No | *(empty)* | Override default admin permissions (comma-separated). See `src/common/auth/admin-permissions.ts`. When unset, new admins get the built-in default set. |
 | `ADMIN_SCOPE_ENFORCEMENT` | No | `true` | Enable admin permission scope enforcement. Default: `true`. |
 | `ALLOW_ADMIN_SCOPE_BYPASS` | No | `false` | Allow admin scope bypass (dev only). Set to `true` + `ADMIN_SCOPE_ENFORCEMENT=false` in dev to skip permission enforcement. Default: `false`. |

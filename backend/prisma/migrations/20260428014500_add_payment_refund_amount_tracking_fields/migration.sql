@@ -1,3 +1,0 @@
-ALTER TABLE "Payment"
-ADD COLUMN "refundPendingAmountPaise" INTEGER NOT NULL DEFAULT 0,
-ADD COLUMN "refundedAmountPaise" INTEGER NOT NULL DEFAULT 0;

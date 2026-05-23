@@ -27,11 +27,14 @@ const MERCHANT_ADMIN_PERMISSIONS = new Set([
   'analytics:export',
   'users:read',
   'orders:refund',
-  'analytics:replay'
+  'analytics:replay',
+  'users:write',
+  'shipments:read',
+  'payments:read'
 ]);
 
 function printUsage() {
-  process.stdout.write(`\nUsage:\n  node scripts/admin-newuser.mjs --email=<email> --name="Merchant Admin" --setup-base-url="https://client.com" [--permissions=products:read,orders:read] [--created-by-email=ops@example.com] --yes\n\n`);
+  process.stdout.write(`\nUsage:\n  node scripts/admin-newuser.mjs --email=<email> --name="Merchant Admin" --setup-base-url="https://client.com" --permissions=products:read,orders:read [--created-by-email=ops@example.com] --yes\n\n`);
 }
 
 function parseArgs(argv) {
@@ -67,34 +70,17 @@ function hashOpaqueToken(value) {
 }
 
 function normalizePermissions(raw) {
-  const source = String(raw || '')
+  if (!raw || !String(raw).trim()) {
+    throw new Error('--permissions is required. Pass a comma-separated list of permissions (e.g. --permissions=products:read,orders:read)');
+  }
+
+  const source = String(raw)
     .split(',')
     .map((entry) => entry.trim())
     .filter(Boolean);
 
   if (source.length === 0) {
-    return [
-      'products:read',
-      'products:write',
-      'categories:read',
-      'categories:write',
-      'inventory:read',
-      'inventory:write',
-      'coupons:read',
-      'coupons:write',
-      'settings:read',
-      'settings:write',
-      'reviews:read',
-      'reviews:moderate',
-      'dashboard:read',
-      'analytics:read',
-      'orders:read',
-      'orders:write',
-      'orders:export',
-      'orders:notify',
-      'analytics:export',
-      'users:read'
-    ];
+    throw new Error('--permissions must contain at least one valid permission');
   }
 
   const unique = [...new Set(source)];

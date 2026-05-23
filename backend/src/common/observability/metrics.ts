@@ -207,6 +207,7 @@ const knownQueueJobs = new Set([
   'record-event',
   'replay-dead-letter',
   'send-email',
+  'send-primary',
   'send-sms',
   'send-whatsapp',
   'shiprocket-token-refresh',

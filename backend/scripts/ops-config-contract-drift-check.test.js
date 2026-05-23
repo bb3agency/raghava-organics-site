@@ -18,7 +18,6 @@ test('candidate key detection includes ops/payment/shipping/notify families', ()
   assert.equal(isOpsConfigCandidateKey('OPS_METRICS_TOKEN'), true);
   assert.equal(isOpsConfigCandidateKey('RAZORPAY_KEY_ID'), true);
   assert.equal(isOpsConfigCandidateKey('NOTIFY_EMAIL_ENABLED'), true);
-  assert.equal(isOpsConfigCandidateKey('ADMIN_MFA_ENCRYPTION_KEY'), true);
   assert.equal(isOpsConfigCandidateKey('DATABASE_URL'), true);
 });
 

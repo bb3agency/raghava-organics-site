@@ -75,7 +75,9 @@
 
 - [ ] Backend repo cloned / updated at `/var/www/<client-id>/backend`
 - [ ] `.env` copied from secure source (not git) — no `replace_with` placeholders
-- [ ] `.env` includes ops config encryption key (`OPS_DB_ENCRYPTION_KEY`) and invoice storage root (`INVOICE_STORAGE_ROOT`)
+- [ ] `.env` contains **bootstrap keys only**: `CLIENT_ID`, `DATABASE_URL`, `REDIS_URL`, `REDIS_PASSWORD`, `JWT_SECRET`, `JWT_REFRESH_SECRET`, `OPS_DB_ENCRYPTION_KEY`, `OPS_COOKIE_SECRET`, `AUDIT_ANCHOR_SECRET`, feature flags, OTEL vars
+  - **Also set** `RESEND_API_KEY` and `RESEND_FROM` as live values — required for `node scripts/ops-newuser.mjs` (Phase 1 only; manage via Ops UI after first ops login). See `docs/PRODUCTION_FIRST_DEPLOY_CHECKLIST.md`.
+  > All other provider credentials (`RAZORPAY_*`, `DELHIVERY_*`, `MSG91_*`, etc.) and ops-security params must **not** be in `.env` — they are DB-overlay keys provisioned via Ops UI after Phase 8. See `docs/ENV_VS_DB_CONFIG_REFERENCE.md`.
 - [ ] `npm ci --omit=dev` — passes
 - [ ] `npm run prisma:migrate:deploy` — passes (all migrations applied)
 - [ ] `docker compose -p <client-id> up -d --build` — all containers start
@@ -108,7 +110,7 @@
 ### 7.5 Post-deploy smoke test
 
 - [ ] `curl https://<domain>/api/v1/health` — returns 200
-- [ ] `curl -H "x-ops-token: <OPS_METRICS_TOKEN>" https://<domain>/api/v1/ops/metrics` — returns 200 with Prometheus text
+- [ ] `curl -H "Authorization: Bearer <OPS_METRICS_TOKEN>" https://<domain>/api/v1/ops/metrics` — returns 200 with Prometheus text
 - [ ] Authenticated invoice download routes validated:
   - `GET /api/v1/orders/:id/invoice.pdf` (owner-only)
   - `GET /api/v1/admin/orders/:id/invoice.pdf` (admin `orders:read`)
@@ -127,25 +129,22 @@
 
 **Prerequisite:** Client frontend `/ops/setup` page must be deployed and functional (invite expires in 10 minutes).
 
-- [ ] Invite created via `npm run ops:newuser` with `--email`, `--name`, `--ip-allowlist`, `--setup-base-url`
+- [ ] Invite created via `npm run ops:newuser` with `--email`, `--name`, `--setup-base-url`
 - [ ] Invite email received and setup link clicked within 10 minutes
-- [ ] Setup completed at `https://<domain>/ops/setup` — API credentials issued
-- [ ] `keyId` captured and stored in vault
-- [ ] `apiKey` captured and stored in vault (shown once at setup completion)
-- [ ] Email OTP MFA verified during setup — enrollment confirmed
+- [ ] Setup completed at `https://<domain>/ops/setup` — ops user account created
+- [ ] Email OTP login verified — `GET /api/v1/ops/session` returns 200
+- [ ] **DB-overlay keys provisioned via Ops UI** (`POST /api/v1/ops/config/save` — requires ops auth + email OTP): all provider credentials (`RAZORPAY_*`, `DELHIVERY_*` or `SHIPROCKET_*`, `RESEND_API_KEY`, `MSG91_AUTH_KEY` / `FAST2SMS_API_KEY`, `META_WHATSAPP_*` if enabled) and ops-security params (`OPS_METRICS_TOKEN`, `REPLAY_APPROVAL_TOKEN`, etc.) saved and encrypted in `OpsConfigSecret`
+- [ ] Containers restarted to apply DB-overlay: `docker compose -p <client-id> up -d backend workers`
 - [ ] Ops status endpoint tested: `GET /api/v1/ops/session` returns 200 with email-OTP verification
 - [ ] Ops config save hardening validated: `POST /api/v1/ops/config/save` requires OTP and returns masked/encrypted persistence metadata
-- [ ] IP allowlist enforcement confirmed: non-allowed IP returns 403
 - [ ] Expired invite cleanup verified: `POST /api/v1/ops/invites/cleanup-expired` accessible to ops users
 - [ ] Ops user recorded in `docs/CLIENT_INTEGRATION_CREDENTIAL_REGISTER_TEMPLATE.md`
 
 | Field | Value |
 |---|---|
 | Ops user email | |
-| IP allowlist | |
-| Vault path for keyId/apiKey | |
-| MFA enrolled on | |
 | Invite consumed at | |
+| First OTP login verified at | |
 
 **Phase 8 cleared on:** —
 
@@ -160,8 +159,8 @@
 - [ ] Merchant admin invite created from ops-authenticated context: `POST /api/v1/admin/invites`
 - [ ] `/admin/setup?token=...` completed before 10-minute expiry using `POST /api/v1/admin/invites/consume`
 - [ ] Admin permissions explicitly granted by invite consumption (`AdminPermissionGrant`; fail-closed — zero implicit permissions)
-- [ ] Admin login tested: `POST /api/v1/auth/admin/login` returns token with expected `permissions` claim
-- [ ] Admin MFA enrolled (if `ADMIN_MFA_ENFORCE=true`)
+- [ ] Admin login tested via 2-step email OTP: `POST /api/v1/auth/admin/login/request-otp` → `POST /api/v1/auth/admin/login/verify-otp` returns token with expected `permissions` claim
+- [ ] No TOTP/authenticator-app enrollment required (email OTP is the sole second factor)
 - [ ] Expired invite cleanup route verified from ops context: `POST /api/v1/admin/invites/cleanup-expired`
 
 | Field | Value |
@@ -205,7 +204,7 @@
 
 **Status:** `[ ]` not started · `[~]` in progress · `[x]` done
 
-| Provider | Live webhook URL registered | Webhook secret matches `.env`? | Test webhook received? |
+| Provider | Live webhook URL registered | Webhook secret saved via Ops UI (`OpsConfigSecret`)? | Test webhook received? |
 |---|---|---|---|
 | Razorpay | `https://<domain>/api/v1/payments/webhook` [ ] | [ ] | [ ] |
 | Delhivery | `https://<domain>/api/v1/shipping/webhook` [ ] | [ ] | [ ] |

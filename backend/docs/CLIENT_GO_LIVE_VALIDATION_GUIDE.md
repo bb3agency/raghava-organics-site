@@ -36,15 +36,11 @@ Phase 4 frontend build evidence must follow the mandatory sequence: Foundation -
 | **`REDIS_PASSWORD`** unique per client and non-placeholder | Verified |
 | **`REDIS_URL`** uses auth format (`redis://:<password>@redis:6379` in Compose) | Verified |
 | **`JWT_SECRET`**, **`JWT_REFRESH_SECRET`** unique — **never** shared across clients (`ECOM_MASTER.md` §5). Both fail-fast if missing/empty (config `requireEnv()` + auth service `resolveRefreshSecret()`) | Verified |
-| **`ADMIN_MFA_ENCRYPTION_KEY`** present and distinct from `JWT_REFRESH_SECRET` | Strict-profile startup rejects missing/same-key; dev fallback is not used in production |
 | `PAYMENT_PROVIDER` is **not** `noop` — must be `razorpay` (or `cod` for COD-only deployments) | Never `noop` in production-like profiles (`NODE_ENV` is not `development`/`test`) |
 | `SHIPPING_PROVIDER` is **not** `noop` — must be `delhivery` or `shiprocket` | Never `noop` in production-like profiles (`NODE_ENV` is not `development`/`test`) |
 | Razorpay **live** keys for production (`RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET`) | Match Razorpay dashboard |
 | **Shipping provider credentials** — Delhivery `DELHIVERY_API_KEY` + `DELHIVERY_BASE_URL` OR Shiprocket `SHIPROCKET_EMAIL` + `SHIPROCKET_PASSWORD` (depending on `SHIPPING_PROVIDER`) | Verified |
 | **`REPLAY_APPROVAL_TOKEN`** set when production replay endpoints are enabled | Per ops policy |
-| **`OPS_API_KEY_SALT`** set and non-placeholder | Required for ops API key hashing materialization |
-| **`OPS_MFA_ENFORCE`** is `true` for production | Prevents MFA bypass on ops headers |
-| **`OPS_DUAL_APPROVAL_WINDOW_MINUTES`** is configured | Controls critical-action approval expiry window |
 | **`OPS_METRICS_TOKEN`** (production required) + optional **`OPS_METRICS_ALLOWLIST`** defense-in-depth for `/api/v1/ops/metrics` | Scraper can authenticate |
 | Admin permission snapshot caveat acknowledged in ops SOP | Mid-window permission grant/revoke changes require token revocation/logout for immediate effect |
 | Fresh-admin fail-closed provisioning validated | Admin with no `AdminPermissionGrant` rows gets no effective privileged access until explicit grants are created |
@@ -56,6 +52,7 @@ Phase 4 frontend build evidence must follow the mandatory sequence: Foundation -
 | **`MSG91_AUTH_KEY`**, **`MSG91_SENDER_ID`**, **`MSG91_ROUTE`** | MSG91 SMS provider credentials (runtime) |
 | **`META_WHATSAPP_ACCESS_TOKEN`**, **`META_WHATSAPP_PHONE_NUMBER_ID`**, **`META_WHATSAPP_WEBHOOK_VERIFY_TOKEN`** | Meta Cloud API WhatsApp credentials (required when `NOTIFY_WHATSAPP_ENABLED=true`) |
 | **`META_WHATSAPP_API_VERSION`** | Meta Graph API version (default: `v21.0`) |
+| **Per-template primary notification channels** | `StoreSettings.primaryNotificationChannels` configured in DB; all 13 templates have primary channel set (`EMAIL` default); merchant admin can override per-template via admin UI. No fallback — if primary channel fails, notification fails and triggers alert. |
 | **`ENABLE_VERBOSE_VALIDATION_ERRORS`** | Disabled in production (`false`) so validation responses remain minimal/redacted |
 | Feature flags (`FEATURE_*`) | Match commercial agreement (`ECOM_MASTER.md` §12.2) |
 | **`FEATURE_RESPONSE_ENVELOPE_ENABLED`** matches frontend expectation | If `true`, frontend must parse `{ success, data }` wrapper on all 2xx |
@@ -68,7 +65,7 @@ Phase 4 frontend build evidence must follow the mandatory sequence: Foundation -
 
 Atomic operations and TOCTOU prevention are code-level patterns requiring verification via:
 - Unit test pass: `ops.service.test.ts`, `auth.service.mfa-refresh.test.ts`, `admin-invites.service.test.ts`, `reconciliation.worker.test.ts`, `idempotency.test.ts`
-- CAS pattern review: Confirm `updateMany` with guard conditions used in all state transitions (invite consumption, token refresh, dual-approval, reconciliation, webhook inbox claiming)
+- CAS pattern review: Confirm `updateMany` with guard conditions used in all state transitions (invite consumption, token refresh, reconciliation, webhook inbox claiming)
 - Audit chain lock verification: `503 ops_audit_chain_lock_timeout` returned on lock contention (not 500)
 
 ---
@@ -79,7 +76,7 @@ Atomic operations and TOCTOU prevention are code-level patterns requiring verifi
 | --- | --- |
 | Docker **`backend`**, **`workers`**, **`postgres`**, **`redis`** healthy | `docker compose ps` |
 | **`npm run start`** command parity | Image runs `node bootstrap-backend.js` (`Dockerfile` / `package.json`) |
-| Workers processing BullMQ | No sustained backlog; **`GET /api/v1/admin/queues`** accessible with admin JWT |
+| Workers processing BullMQ | No sustained backlog; **`GET /api/v1/ops/queues`** accessible with ops session (`ops:read`) |
 | Postgres reachable | `/api/v1/health` → DB **connected** |
 | Redis reachable | `/api/v1/health` → Redis **connected** |
 | Redis secure mode | `docker compose exec redis redis-cli -a "$REDIS_PASSWORD" ping` returns `PONG`; no public Redis port exposed |
@@ -238,9 +235,9 @@ Canonical source note: keep route/control ownership and permission matrix canoni
 | --- | --- |
 | Refresh + cart cookies **`httpOnly`**, **`secure`**, **`sameSite: strict`** | C-20 |
 | Admin routes — JWT + role + permissions | §6.3, §7.9 |
-| `/api/v1/ops/*` routes use dedicated ops headers (`x-ops-key-id`, `x-ops-api-key`, `x-ops-mfa-code`) | `docs/OPS_CONTROL_PLANE_GUIDE.md` |
-| First ops identity invite was provisioned via trusted CLI (`npm run ops:newuser ... --setup-base-url="https://<client-domain>" --yes`) and completed from email within 10 min | Release evidence must include operator + timestamp + invite completion proof + vault capture proof |
-| Critical ops writes require dual approval (`ops:write` request + `ops:approve` confirm/reject) | Validate pending request + confirm/reject path on `/api/v1/ops/approvals/*` |
+| `/api/v1/ops/*` routes use browser session cookie (`ops_session`) issued via email-OTP login; privileged write actions require email OTP challenge in request body | `docs/OPS_CONTROL_PLANE_GUIDE.md` |
+| First ops identity invite was provisioned via trusted CLI (`npm run ops:newuser ... --setup-base-url="https://<client-domain>" --yes`) on VPS via SSH and completed from email within 10 min | Release evidence must include operator + timestamp + invite completion proof |
+| Ops write actions require email OTP challenge (`ops:write`) and are audit-logged | Validate OTP challenge flow and audit log entries |
 | **`/api/v1/ops/metrics`** not public | Production token required; allowlist is defense-in-depth |
 | Logs — no raw secrets | Pino redact paths in **`src/main.ts`** |
 | Webhooks — verify on buffer/string pipeline | §7.10 |
@@ -306,7 +303,7 @@ Merchant admins should operate **almost entirely inside the admin app** (same ex
 
 | Area | Pass criteria |
 | --- | --- |
-| **Matrix coverage** | For **§9.1** in **`docs/NEXTJS_FRONTEND_INTEGRATION_GUIDE.md`**, every listed module has a real screen or embedded tool (Bull Board for **`/admin/queues`**) — no “API-only” levers for day‑two ops |
+| **Matrix coverage** | For **§9.1** in **`docs/NEXTJS_FRONTEND_INTEGRATION_GUIDE.md`**, every listed module has a real screen or embedded tool (Bull Board at **`/api/v1/ops/queues`**, ops plane only) — no "API-only" levers for day‑two ops |
 | **Settings depth** | **Shipping**, **store** profile, **notification** toggles, and **inventory defaults** are all editable (not a single thin settings page) |
 | **Order desk** | List filters, order 360°, manual status, ship, cancel/refund, CSV export, notification retrigger |
 | **Reliability** | Reconciliation issues list; outbox dead-letter + inbox failure lists; **replay-preview** before **replay**; approval token path works when required |

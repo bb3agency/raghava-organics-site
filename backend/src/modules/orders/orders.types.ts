@@ -76,6 +76,26 @@ export type ShippingTrackParams = {
   awb: string;
 };
 
+export type AdminShipmentListQuery = {
+  page?: number;
+  limit?: number;
+  status?: string;
+  awbNumber?: string;
+  orderId?: string;
+  from?: string;
+  to?: string;
+};
+
+export type AdminPaymentListQuery = {
+  page?: number;
+  limit?: number;
+  status?: string;
+  method?: string;
+  orderId?: string;
+  from?: string;
+  to?: string;
+};
+
 export type AdminRetriggerNotificationInput = {
   template: 'OrderConfirmed' | 'PaymentFailed' | 'OrderShipped' | 'OutForDelivery' | 'OrderDelivered' | 'OrderCancelled';
   channels?: Array<'EMAIL' | 'SMS' | 'WHATSAPP'>;

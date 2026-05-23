@@ -1,6 +1,7 @@
 import { Worker, type ConnectionOptions } from 'bullmq';
 import { OrderStatus, PaymentStatus, PrismaClient as RealPrismaClient } from '@prisma/client';
 import { createPaymentProvider } from '@modules/payments/payment-provider';
+import { sendTechnicalFailureAlert } from '../../src/modules/notifications/notification-failure-alert';
 
 type InitiateRazorpayRefundJobData = {
   orderId: string;
@@ -14,6 +15,7 @@ type RefundsWorkerDeps = {
   PrismaClient?: typeof RealPrismaClient;
   Worker?: typeof Worker;
   createPaymentProvider?: typeof createPaymentProvider;
+  sendTechnicalFailureAlert?: typeof sendTechnicalFailureAlert;
 };
 
 export function createRefundsWorker(
@@ -23,10 +25,11 @@ export function createRefundsWorker(
   const PrismaClientCtor = deps?.PrismaClient ?? RealPrismaClient;
   const WorkerCtor = deps?.Worker ?? Worker;
   const resolvePaymentProvider = deps?.createPaymentProvider ?? createPaymentProvider;
+  const alertFn = deps?.sendTechnicalFailureAlert ?? sendTechnicalFailureAlert;
   const prisma = new PrismaClientCtor();
   const paymentProvider = resolvePaymentProvider();
 
-  return new WorkerCtor(
+  const worker = new WorkerCtor(
     'refunds',
     async (job) => {
       if (job.name !== 'initiate-razorpay-refund') {
@@ -139,5 +142,27 @@ export function createRefundsWorker(
     },
     { connection }
   );
+
+  worker.on('failed', (job, error) => {
+    if (!job) return;
+    const attempts = job.opts.attempts ?? 1;
+    if (job.attemptsMade < attempts) return;
+    void alertFn({
+      prisma,
+      template: 'RefundsWorkerTerminalFailure',
+      channel: 'UNKNOWN',
+      recipient: 'refunds-worker',
+      errorMessage: error instanceof Error ? error.message : String(error),
+      failureStage: 'WORKER_TERMINAL',
+      queueName: 'refunds',
+      jobName: job.name,
+      jobId: job.id ?? 'unknown',
+      domain: 'payments',
+      component: 'refunds-worker',
+      terminalFailure: true
+    });
+  });
+
+  return worker;
 }
 

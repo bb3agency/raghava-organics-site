@@ -71,6 +71,7 @@ export const sendOtpSchema = {
     required: ['phone'],
     properties: {
       phone: { type: 'string', maxLength: 20 },
+      email: { type: 'string', format: 'email', maxLength: 255 },
       turnstileToken: { type: 'string', maxLength: 4096 }
     }
   },
@@ -94,7 +95,7 @@ export const verifyOtpSchema = {
     required: ['phone', 'otp'],
     properties: {
       phone: { type: 'string', maxLength: 20 },
-      otp: { type: 'string', minLength: 6, maxLength: 6 }
+      otp: { type: 'string', minLength: 6, maxLength: 6, pattern: '^[0-9]{6}$' }
     }
   },
   response: {
@@ -120,7 +121,7 @@ export const signupPhoneSchema = {
     required: ['phone', 'otp'],
     properties: {
       phone: { type: 'string', maxLength: 20 },
-      otp: { type: 'string', minLength: 6, maxLength: 6 },
+      otp: { type: 'string', minLength: 6, maxLength: 6, pattern: '^[0-9]{6}$' },
       firstName: { type: 'string', maxLength: 100 },
       lastName: { type: 'string', maxLength: 100 },
       email: { type: 'string', format: 'email', maxLength: 255 }
@@ -224,7 +225,7 @@ export const logoutSchema = {
   }
 } as const;
 
-export const adminLoginSchema = {
+export const adminLoginRequestOtpSchema = {
   params: emptyParamsSchema,
   querystring: emptyQuerystringSchema,
   body: {
@@ -234,8 +235,32 @@ export const adminLoginSchema = {
     properties: {
       email: { type: 'string', format: 'email', maxLength: 255 },
       password: { type: 'string', minLength: 8, maxLength: 128 },
-      mfaCode: { type: 'string', minLength: 6, maxLength: 8 },
       turnstileToken: { type: 'string', maxLength: 4096 }
+    }
+  },
+  response: {
+    200: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['message'],
+      properties: {
+        message: messageSchema
+      }
+    },
+    ...standardErrorResponses
+  }
+} as const;
+
+export const adminLoginVerifyOtpSchema = {
+  params: emptyParamsSchema,
+  querystring: emptyQuerystringSchema,
+  body: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['email', 'otp'],
+    properties: {
+      email: { type: 'string', format: 'email', maxLength: 255 },
+      otp: { type: 'string', minLength: 6, maxLength: 6, pattern: '^[0-9]{6}$' }
     }
   },
   response: {
@@ -276,7 +301,10 @@ const merchantAdminPermissionSchema = {
     'orders:notify',
     'analytics:export',
     'analytics:replay',
-    'users:read'
+    'users:read',
+    'users:write',
+    'shipments:read',
+    'payments:read'
   ],
   maxLength: 40
 } as const;
@@ -287,14 +315,13 @@ export const adminInviteCreateSchema = {
   body: {
     type: 'object',
     additionalProperties: false,
-    required: ['email', 'name', 'setupBaseUrl'],
+    required: ['email', 'name', 'setupBaseUrl', 'permissions'],
     properties: {
       email: { type: 'string', format: 'email', maxLength: 255 },
       name: { type: 'string', minLength: 1, maxLength: 160 },
       setupBaseUrl: { type: 'string', minLength: 8, maxLength: 300 },
       permissions: {
         type: 'array',
-        minItems: 1,
         maxItems: 32,
         items: merchantAdminPermissionSchema
       }
@@ -322,12 +349,12 @@ export const adminInviteSetupOtpSchema = {
   body: {
     type: 'object',
     additionalProperties: false,
-    required: ['token', 'phone', 'password'],
+    required: ['token', 'name', 'password'],
     properties: {
       token: { type: 'string', minLength: 10, maxLength: 500 },
-      phone: { type: 'string', minLength: 6, maxLength: 20 },
+      name: { type: 'string', minLength: 1, maxLength: 160 },
       password: { type: 'string', minLength: 8, maxLength: 128 },
-      name: { type: 'string', minLength: 1, maxLength: 160 }
+      phone: { type: 'string', minLength: 6, maxLength: 20 }
     }
   },
   response: {
@@ -353,20 +380,19 @@ export const adminInviteConsumeSchema = {
     required: ['token', 'otp'],
     properties: {
       token: { type: 'string', minLength: 10, maxLength: 500 },
-      otp: { type: 'string', minLength: 6, maxLength: 6 }
+      otp: { type: 'string', minLength: 6, maxLength: 6, pattern: '^[0-9]{6}$' }
     }
   },
   response: {
     200: {
       type: 'object',
       additionalProperties: false,
-      required: ['adminUserId', 'email', 'name', 'permissions', 'mfaRequired'],
+      required: ['adminUserId', 'email', 'name', 'permissions'],
       properties: {
         adminUserId: idSchema,
         email: { type: 'string', maxLength: 255 },
         name: { type: 'string', maxLength: 160 },
-        permissions: { type: 'array', items: merchantAdminPermissionSchema },
-        mfaRequired: { type: 'boolean' }
+        permissions: { type: 'array', items: merchantAdminPermissionSchema }
       }
     },
     ...standardErrorResponses
@@ -388,48 +414,4 @@ export const adminInviteCleanupSchema = {
   }
 } as const;
 
-export const adminMfaSetupStartSchema = {
-  params: emptyParamsSchema,
-  querystring: emptyQuerystringSchema,
-  body: emptyBodySchema,
-  response: {
-    200: {
-      type: 'object',
-      additionalProperties: false,
-      required: ['secret', 'otpauthUrl', 'message'],
-      properties: {
-        secret: { type: 'string', maxLength: 128 },
-        otpauthUrl: { type: 'string', maxLength: 2048 },
-        message: messageSchema
-      }
-    },
-    ...standardErrorResponses
-  }
-} as const;
-
-export const adminMfaSetupConfirmSchema = {
-  params: emptyParamsSchema,
-  querystring: emptyQuerystringSchema,
-  body: {
-    type: 'object',
-    additionalProperties: false,
-    required: ['mfaCode'],
-    properties: {
-      mfaCode: { type: 'string', minLength: 6, maxLength: 8 }
-    }
-  },
-  response: {
-    200: {
-      type: 'object',
-      additionalProperties: false,
-      required: ['message'],
-      properties: {
-        message: messageSchema
-      }
-    },
-    ...standardErrorResponses
-  }
-} as const;
-
-export const adminMfaDisableSchema = adminMfaSetupConfirmSchema;
 

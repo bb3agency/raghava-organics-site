@@ -228,13 +228,27 @@ Expected:
 
 1. `git clone <repo-url> /var/www/<client-id>/backend`
 2. Copy **`.env.example`** → **`.env`** at repo root.
-3. Set **client-specific** values (full inventory is in `.env.example`; narrative checklist in `ECOM_MASTER.md` §12.1):
+3. Set **client-specific** values following the **two-tier config model** (full classification in `docs/ENV_VS_DB_CONFIG_REFERENCE.md`):
 
-   | Group | Variables (representative) | Why |
+   > **Config model:** The `.env` file is for **bootstrap/infra keys only**. All provider credentials, webhook tokens, and ops-security parameters are **DB-overlay keys** — they must be stored in `OpsConfigSecret` via the Ops UI/API (`POST /api/v1/ops/config/save`) after first ops invite bootstrap. They must **not** be added to `.env` in production. See `docs/ENV_VS_DB_CONFIG_REFERENCE.md` §2 for the full classification.
+   >
+   > **First-deploy exception:** `RESEND_API_KEY` and `RESEND_FROM` must be set as live values in `.env` before running `node scripts/ops-newuser.mjs` (needed to send the ops invite email). After first ops login they can be managed exclusively via Ops UI. See `docs/PRODUCTION_FIRST_DEPLOY_CHECKLIST.md`.
+
+   **Bootstrap/infra keys — set in `.env` (live values required):**
+
+   | Group | Variables | Notes |
    | --- | --- | --- |
    | Identity / routing | `CLIENT_ID`, `BACKEND_PORT`, `STOREFRONT_URL`, `ADMIN_URL` | Compose names, CORS, emails, redirects |
-   | Core | `NODE_ENV=production`, `DATABASE_URL`, `REDIS_URL`, `REDIS_PASSWORD` | Runtime (Redis URL must include auth in production-like profiles) |
-   | Auth | `JWT_SECRET`, `JWT_REFRESH_SECRET`, `ADMIN_MFA_ENCRYPTION_KEY`, optional `REDIS_KEY_PEPPER` | Tokens and MFA secret encryption. JWT secrets fail fast if missing/empty; `ADMIN_MFA_ENCRYPTION_KEY` must be independent and must not equal `JWT_REFRESH_SECRET` in production-like profiles. |
+   | Core | `NODE_ENV=production`, `DATABASE_URL`, `REDIS_URL`, `REDIS_PASSWORD` | Redis URL must include auth in production-like profiles |
+   | Auth | `JWT_SECRET`, `JWT_REFRESH_SECRET`, `REDIS_KEY_PEPPER` | Tokens. JWT secrets fail fast if missing/empty. |
+   | Security | `TURNSTILE_SECRET_KEY`, `AUDIT_ANCHOR_SECRET`, `IDEMPOTENCY_SCOPE_SECRET` | Request integrity |
+   | Ops bootstrap | `OPS_DB_ENCRYPTION_KEY`, `OPS_COOKIE_SECRET` | Required to decrypt `OpsConfigSecret` and sign session cookies; bootstrap-only |
+   | Alert recipient | `ADMIN_ALERT_EMAIL` | Fallback alert email if overlay unavailable |
+   | **Email bootstrap** | `RESEND_API_KEY`, `RESEND_FROM` | **Phase 1 only** — needed for `ops-newuser.mjs` invite email. After first ops login, manage via Ops UI. |
+   | Features | `FEATURE_COUPONS_ENABLED`, `FEATURE_REVIEWS_ENABLED`, `FEATURE_WISHLIST_ENABLED`, `FEATURE_GST_INVOICING_ENABLED`, `FEATURE_RESPONSE_ENVELOPE_ENABLED` | Toggle modules |
+   | Runtime tuning | `RISK_*`, `HOT_SKU_*`, `CART_RESERVATION_TTL_MINUTES`, `HEALTH_*`, `LOAD_SHED_MODE` | Ops/risk thresholds |
+   | Validation verbosity | `ENABLE_VERBOSE_VALIDATION_ERRORS` | Keep `false` in production |
+   | Observability | `OTEL_TRACING_ENABLED`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_SERVICE_NAME` | Distributed tracing |
 
 **`NODE_ENV` profile classification:**
 
@@ -243,24 +257,20 @@ Expected:
 | `development`, `test` | development-like | `noop` providers allowed |
 | `production`, `staging`, `qa`, `uat`, or any other value | production-like | `noop` blocked; placeholder secrets blocked |
 
-   | Group | Variables (representative) | Why |
+   **DB-overlay keys — stored via Ops UI, NOT in `.env`:**
+
+   These appear as **commented stubs** (`# KEY=`) in `.env.example` for documentation purposes only. They must be populated in `OpsConfigSecret` via `POST /api/v1/ops/config/save` after ops invite bootstrap. After saving, **restart both backend and workers** for the overlay to take effect.
+
+   | Group | Keys (representative) | Notes |
    | --- | --- | --- |
-   | Prod gates | `REPLAY_APPROVAL_TOKEN`, `OPS_METRICS_ALLOWLIST`, `OPS_METRICS_TOKEN` | Replay APIs and `/api/v1/ops/metrics` protection (`src/common/plugins/observability.plugin.ts`) |
-   | Webhooks (defense in depth) | `RAZORPAY_WEBHOOK_ALLOWLIST_CIDR`, `SHIPPING_WEBHOOK_ALLOWLIST_CIDR` (falls back to `DELHIVERY_WEBHOOK_ALLOWLIST_CIDR`), skew windows | Optional IP allowlists **plus** mandatory crypto/token verification (`TRD.md` §7.12) |
-   | Risk | `RISK_VELOCITY_ENABLED`, `RISK_PAYMENT_INIT_MAX_PER_HOUR` | Redis velocity on payment initiate (`TRD.md` §7.13) |
-   | Payments | `PAYMENT_PROVIDER` (`razorpay` or `cod`; `noop` **dev/E2E only — never in production**), `RAZORPAY_*`, optional `RAZORPAY_WEBHOOK_SECRET_OLD` | `cod` = COD-only store (no Razorpay); COD can also be toggled per-store via admin settings without changing `PAYMENT_PROVIDER` |
-   | Provider resilience | `PAYMENT_CB_FAILURE_THRESHOLD`, `PAYMENT_CB_COOLDOWN_MS`, `SHIPPING_CB_FAILURE_THRESHOLD`, `SHIPPING_CB_COOLDOWN_MS` | Circuit-breaker tuning. Current implementation is process-local (not cross-replica shared state) — account for this in incident/SRE playbooks. |
-   | Shipping | `SHIPPING_PROVIDER` is **not** `noop` — must be `delhivery` or `shiprocket` | Never `noop` in production-like profiles (`NODE_ENV` is not `development`/`test`) |
-   | Shipping credentials | Delhivery `DELHIVERY_API_KEY` + `DELHIVERY_BASE_URL` OR Shiprocket `SHIPROCKET_EMAIL` + `SHIPROCKET_PASSWORD` (depending on `SHIPPING_PROVIDER`) | Verified |
-   | Shipping dispatch policy | Manual-only: shipment is created only from admin `POST /api/v1/admin/orders/:id/ship` after ship eligibility checks | No payment-confirmation auto-dispatch |
-   | Shipping webhook auth | `DELHIVERY_WEBHOOK_TOKEN`, `SHIPROCKET_WEBHOOK_TOKEN`, optional allowlists (`DELHIVERY_WEBHOOK_ALLOWLIST_CIDR`, `SHIPROCKET_WEBHOOK_ALLOWLIST_CIDR`) | Prefer explicit webhook token validation path for provider callbacks |
-   | Validation verbosity | `ENABLE_VERBOSE_VALIDATION_ERRORS` | Keep `false` in production to avoid leaking validation internals |
-   | Notifications | `NOTIFY_*`, `RESEND_*`, active SMS provider key (`MSG91_AUTH_KEY`/`MSG91_SENDER_ID`/`MSG91_ROUTE` when `SMS_PROVIDER=msg91` or `FAST2SMS_API_KEY` when `SMS_PROVIDER=fast2sms`), `ADMIN_ALERT_EMAIL` | Queue-backed (`TRD.md` §10) |
+   | Payments | `PAYMENT_PROVIDER`, `RAZORPAY_*`, `PAYMENT_CB_*` | `PAYMENT_PROVIDER`: `razorpay` or `cod`; never `noop` in production |
+   | Shipping | `SHIPPING_PROVIDER`, `DELHIVERY_*`, `SHIPROCKET_*`, `SHIPPING_*` | Must be `delhivery` or `shiprocket`; never `noop` in production |
+   | Webhook security | `RAZORPAY_WEBHOOK_ALLOWLIST_CIDR`, `SHIPPING_WEBHOOK_ALLOWLIST_CIDR`, skew windows, webhook tokens | Hard-fail in production-like profiles if missing |
+   | Notifications | `NOTIFY_*`, `RESEND_*`, `MSG91_*`, `FAST2SMS_API_KEY`, `META_WHATSAPP_*`, `SMS_PROVIDER` | Provider credentials; per-template channels configured in `StoreSettings` |
    | Invoice storage | `INVOICE_STORAGE_ROOT` | Local filesystem root for invoice PDFs |
-   | Ops config encryption | `OPS_DB_ENCRYPTION_KEY` | Required for `/api/v1/ops/config/save` encrypted persistence |
-   | Store / GST | `STORE_*` seller fields | Invoicing (`TRD.md` §8.8) |
-   | Features | `FEATURE_COUPONS_ENABLED`, `FEATURE_REVIEWS_ENABLED`, `FEATURE_WISHLIST_ENABLED`, `FEATURE_GST_INVOICING_ENABLED`, `FEATURE_RESPONSE_ENVELOPE_ENABLED` | Toggle modules (`ECOM_MASTER.md` §12.2) |
-   | Observability | `OTEL_TRACING_ENABLED`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS` | Distributed tracing to hosted collector |
+   | Ops security | `OPS_METRICS_TOKEN`, `OPS_METRICS_ALLOWLIST`, `REPLAY_APPROVAL_TOKEN`, `REPLAY_AUDIT_RETENTION_DAYS`, `TRUSTED_PROXY_ALLOWLIST_CIDR` | Managed via Ops UI after first invite |
+
+   **Store/GST seller profile:** `storeName`, `sellerLegalName`, `sellerAddress`, `sellerState`, `gstin`, `fssaiNumber` — set via admin settings API (`PATCH /api/v1/admin/settings`), stored in `StoreSettings` DB row. No env fallback.
 
 4. **`npm ci`** on the host (or in CI) before image build so `package-lock.json` is respected.
 
@@ -330,7 +340,7 @@ Verify:
 
 1. Containers: `${CLIENT_ID}-postgres`, `${CLIENT_ID}-redis`, `${CLIENT_ID}-backend`, `${CLIENT_ID}-workers`.
 2. Health: `curl -sS http://127.0.0.1:<BACKEND_PORT>/api/v1/health` — must report DB + Redis connected (`TRD.md` §4.3).
-3. Workers processing: trigger a test flow or inspect **`GET /api/v1/admin/queues`** (Bull Board, admin JWT — `TRD.md` §10.1).
+3. Workers processing: trigger a test flow or inspect **`GET /api/v1/ops/queues`** (Bull Board, ops session + `ops:read` — `TRD.md` §10.1).
 
 ---
 
@@ -445,6 +455,12 @@ Evidence to archive before go-live:
    - **Rate-limit zones**: copy **`nginx/rate-zones.conf.template`** to `/etc/nginx/snippets/rate-zones.conf` and add `include /etc/nginx/snippets/rate-zones.conf;` inside the `http {}` block of your top-level `nginx.conf`. The template defines `limit_req_zone` for all route classes (auth, checkout, admin, catalog, cart, webhook, health, default). Per-route `limit_req` directives stay in dedicated `location` blocks inside `client.conf.template` — never inside `if` blocks.
    - **`client_max_body_size 20M`**
    - **`proxy_set_header`** `X-Real-IP`, `X-Forwarded-For`, `X-Forwarded-Proto` — required because Fastify uses **`trustProxy: true`** (`src/main.ts`) for correct client IP behind Nginx.
+   - **Maintenance page**: the template configures `error_page 502 503 /maintenance.html` — deploy the static page before enabling the site:
+     ```bash
+     sudo mkdir -p /etc/nginx/maintenance
+     sudo cp nginx/maintenance.html /etc/nginx/maintenance/maintenance.html
+     ```
+     The page auto-refreshes every 15 s and includes a `Retry-After: 15` header. It is served during the ~3–5 s restart window when a process restart is scheduled via `POST /api/v1/ops/system/restart`.
 2. Replace **`server_name`**, certificate paths, **`proxy_pass`** backend port (`127.0.0.1:<BACKEND_PORT>`), and storefront upstream (e.g. `3101`).
 3. **Webhook paths** must proxy to the **same** backend without stripping body: `location /api/` → backend. Webhook URLs for provider dashboards:
    - `https://<customer-domain>/api/v1/payments/webhook`
@@ -530,27 +546,26 @@ Run from backend path on the VPS only, after env and migrations are ready:
 
 ```bash
 cd /var/www/<client-id>/backend
-npm run ops:newuser -- --email=<ops@email> --name="Primary Ops" --ip-allowlist="<cidr>" --setup-base-url="https://<client-domain>" --yes
+npm run ops:newuser -- --email=<ops@email> --name="Primary Ops" --setup-base-url="https://<client-domain>" --yes
 ```
 
 `--setup-base-url` must be base origin only (for example, `https://<client-domain>`), not `https://<client-domain>/ops/setup`. Backend appends `/ops/setup?token=...`.
 
 Pre-checks:
-- `OPS_API_KEY_SALT`, `ADMIN_MFA_ENCRYPTION_KEY`, `OPS_DB_ENCRYPTION_KEY`, `OPS_MFA_ENFORCE=true`, and `OPS_DUAL_APPROVAL_WINDOW_MINUTES` are configured.
+- `OPS_DB_ENCRYPTION_KEY` is configured.
 - Command is executed from a trusted operator shell (not CI logs, not shared terminal sessions).
 - Invite email must not already exist in `User` (customer/admin) domain; cross-domain email reuse fails closed with `409 CONFLICT`.
 
 Post-checks:
 - Invite email is received and setup is completed from `https://<client-domain>/ops/setup?...` within 10 minutes.
 - Runtime credentials are stored in vault after setup completion.
-- Connectivity validation from allowlisted network succeeds on `GET /api/v1/ops/session`.
+- Login validation succeeds: email OTP flow completes and `GET /api/v1/ops/session` returns 200.
 - Expired unconsumed invites are cleaned and logged in ops audit timeline.
 
 Compromise/loss runbook:
 - Deactivate compromised `OpsUser` record immediately.
 - Issue replacement invite via `ops:newuser`.
-- Rotate any downstream secret references that used old key material.
-- Re-verify `/api/v1/ops/*` access only from intended CIDRs.
+- Issue new invite and verify ops login flow (email OTP) succeeds.
 
 ### 15.3 First-time merchant admin invite bootstrap (mandatory)
 
@@ -575,7 +590,7 @@ Pre-check:
 Post-checks:
 
 - Invite email is received and setup is completed from `https://<client-domain>/admin/setup?...` within 10 minutes.
-- Merchant admin can login via `POST /api/v1/auth/admin/login`.
+- Merchant admin can login via 2-step email OTP (`POST /api/v1/auth/admin/login/request-otp` → `POST /api/v1/auth/admin/login/verify-otp`) and JWT is issued with merchant-only permissions.
 - Admin JWT permissions include merchant-only scopes (no ops/developer scopes).
 - Invite lifecycle is auditable (`CREATED -> EMAIL_SENT -> CONSUMED`) and expired invite cleanup path remains available.
 
@@ -699,6 +714,218 @@ Next.js integration for storefront/admin is **`docs/NEXTJS_FRONTEND_INTEGRATION_
 **Frontend delivery model requirement:** Before go-live, frontend/admin/ops delivery must follow **simultaneous build + integration via contract-first vertical slices**. UI-only page completion is not accepted as release evidence. Each slice must have: real backend route integration, permission-aware UX, `idempotency-key` on critical writes, and passing integration + UI tests. See `docs/NEXTJS_FRONTEND_INTEGRATION_GUIDE.md` §1.2 and `docs/FRONTEND_AI_GO_LIVE_CHECKLIST.md` §8.1 for the mandatory gate checklist.
 
 Canonical matrix note: route/control and permission ownership matrices remain canonical in `TRD.md`; this VPS guide intentionally references that source instead of duplicating full matrices.
+
+---
+
+## 22. Continuous Deployment (push-to-deploy via GitHub Actions)
+
+This template ships with a push-to-deploy pipeline: every `git push` to `main` on a client repo automatically builds the Docker image, runs migrations, and restarts the backend stack on their Hetzner VPS.
+
+**Mechanism:** A self-hosted GitHub Actions runner is installed directly on the VPS. It maintains a persistent outbound HTTPS connection to GitHub — GitHub never opens an inbound connection to the VPS. No SSH is involved during deploys, so port 22 can be locked to your office IP only.
+
+**The pipeline is opt-in.** The template repo itself never deploys — `VPS_DEPLOY_ENABLED=true` must be set in each client's GitHub repo to activate it.
+
+### How it works
+
+```
+git push origin main
+  → Reliability CI (.github/workflows/ci.yml) runs all gates
+  → if CI passes → deploy job queued on GitHub
+      → self-hosted runner on VPS picks up job via outbound HTTPS (port 443)
+      → git pull + SHA verification
+      → docker compose build   (new image built; old containers still serve)
+      → npx prisma migrate deploy   (migrations run before container swap)
+      → docker compose up -d   (container swap — ~3–5s window)
+      → nginx maintenance page auto-serves during the window
+      → health check: /api/v1/health (30 retries × 2s)
+      → done ✅ (or deploy marked failed if health check times out)
+```
+
+No inbound connection is made to the VPS at any point. The runner pulls job instructions, executes `vps-deploy.sh` locally, and reports results back over the same HTTPS channel.
+
+### One-time setup per client (VPS side)
+
+Run once as the deploy user. The exact download URL and registration token are shown at **GitHub repo → Settings → Actions → Runners → New self-hosted runner** (token expires after 1 hour).
+
+```bash
+# Create runner directory
+mkdir -p ~/actions-runner && cd ~/actions-runner
+
+# Download the runner — use the exact version shown on the GitHub page
+curl -o actions-runner-linux-x64.tar.gz -L \
+  https://github.com/actions/runner/releases/download/v2.x.x/actions-runner-linux-x64-2.x.x.tar.gz
+tar xzf ./actions-runner-linux-x64.tar.gz
+
+# Configure with the registration token shown on the GitHub page
+# --labels must include both 'self-hosted' AND a unique client label.
+# The unique label prevents cross-client deploy misfires when multiple
+# client runners share the same VPS (each repo targets its own runner).
+./config.sh \
+  --url https://github.com/<org-or-user>/<client-repo> \
+  --token <REGISTRATION_TOKEN> \
+  --name "<client-id>-vps" \
+  --labels "self-hosted,<client-id>-vps" \
+  --unattended
+
+# Install as a systemd service so it survives VPS reboots
+sudo ./svc.sh install
+sudo ./svc.sh start
+
+# Confirm it is online
+sudo ./svc.sh status
+```
+
+After this, the runner shows as **Online** under **Settings → Actions → Runners** in the repo. Once confirmed, restrict SSH port 22 to your office CIDR — deploys no longer use SSH at all.
+
+### One-time setup per client (GitHub repo side)
+
+Go to **Settings → Secrets and variables → Actions** in the client's GitHub repo and add:
+
+| Type | Name | Value |
+|------|------|-------|
+| Secret | `VPS_CLIENT_PATH` | `/var/www/<client-id>/backend` |
+| **Variable** | `VPS_DEPLOY_ENABLED` | `true` |
+| **Variable** | `VPS_RUNNER_LABEL` | `<client-id>-vps` (e.g. `greengrocer-vps`) |
+
+> **Secrets vs Variables:** `VPS_DEPLOY_ENABLED` and `VPS_RUNNER_LABEL` must be *Variables* (not Secrets) because the workflow reads them via `vars.*` to control job routing and gating.
+
+> **Multi-client VPS:** `VPS_RUNNER_LABEL` is critical when multiple clients share one VPS. Without it, GitHub may route GreenGrocer's deploy job to FreshMart's runner. Each client repo must set this to the unique label registered in `config.sh` above. The workflow warns (not fails) if unset, and falls back to the generic `self-hosted` label.
+
+### Deploy flow details
+
+| Step | What happens | Notes |
+|------|-------------|-------|
+| CI gate | Reliability CI must pass | Deploy never runs on CI failure |
+| SHA verification | Script checks pulled SHA matches CI-validated SHA | Prevents race if another push lands mid-deploy |
+| Migrations first | `prisma migrate deploy` runs before container swap | Migrations must be backward-compatible (additive) |
+| Container swap | `docker compose up -d` | Uses `restart: unless-stopped` — stays up after future VPS reboots |
+| Health check | 30 retries × 2s = 60s window | Fails deploy + dumps logs if backend doesn't come up |
+| Worker check | Verifies `workers` container is running | Emits warning (not hard failure) if workers are degraded |
+| Image cleanup | `docker image prune -f` | Removes dangling images from previous builds |
+
+### What is never touched by the pipeline
+
+- `.env` on the VPS — secrets stay on VPS only; the pipeline has zero knowledge of them
+- DB-overlay keys in `OpsConfigSecret` — unaffected
+- Nginx config — not modified by deploy
+- The `main` branch of the **template** repo — pipeline only runs on client repos where `VPS_DEPLOY_ENABLED=true`
+
+### Runner maintenance
+
+GitHub periodically deprecates old runner versions (approximately once or twice per year) and sends email warnings. When that happens, re-register on the VPS:
+
+```bash
+cd ~/actions-runner
+sudo ./svc.sh stop
+# Download new version, extract to same directory
+./config.sh remove --token <REMOVAL_TOKEN>
+./config.sh --url https://github.com/<org>/<repo> --token <NEW_TOKEN> --name "<client-id>-vps" --labels "self-hosted,<client-id>-vps" --unattended
+sudo ./svc.sh install && sudo ./svc.sh start
+```
+
+This is the only ongoing maintenance cost of this approach (~5 minutes per client, once or twice per year).
+
+### Rollback procedure
+
+```bash
+# Option A: revert commit + push (pipeline re-runs automatically, redeploys previous code)
+git revert HEAD
+git push origin main
+
+# Option B: manual on VPS (immediate, bypasses pipeline)
+cd /var/www/<client-id>/backend
+git checkout <previous-good-sha>
+docker compose up -d --build
+```
+
+### Downtime expectation
+
+~3–5 seconds during `docker compose up -d`. The nginx maintenance page (`/etc/nginx/maintenance/maintenance.html`) is configured via `error_page 502 503` in the nginx config template and serves automatically during this window with a `Retry-After: 15` header and 15s auto-refresh.
+
+For zero-downtime deploys, a blue-green or Docker Swarm approach would be required — outside the scope of the current single-VPS model.
+
+---
+
+### Frontend CD pipeline (Next.js + PM2)
+
+For monorepo setups where the Next.js frontend lives alongside the backend in the same repository, the same self-hosted runner handles automated frontend deploys via PM2 — achieving **zero-downtime** hot swaps.
+
+**How it works:**
+
+```
+git push origin main
+  → CI passes
+  → deploy-frontend job picked up by runner
+  → vps-frontend-deploy.sh runs locally on VPS:
+      → git pull + SHA verification
+      → detect if frontend-relevant files changed (skips build if not)
+      → npm ci + npm run build
+      → pm2 reload <client-id>-frontend --update-env  (zero-downtime)
+      → health check: http://127.0.0.1:<STOREFRONT_PORT>/
+```
+
+**Backend and frontend deploy independently.** Changing only a CSS file will not trigger `docker compose build`. Changing only a Prisma schema will not restart the frontend PM2 process.
+
+#### One-time PM2 setup per client (VPS side)
+
+Run once after the first manual frontend build:
+
+```bash
+cd /var/www/<client-id>/frontend
+
+# Start the PM2 process (replace port with client's STOREFRONT_PORT, e.g. 3101)
+pm2 start npm --name "<client-id>-frontend" -- start -- -p <STOREFRONT_PORT>
+
+# Persist the process list (survives pm2 restarts)
+pm2 save
+
+# Install startup hook (survives VPS reboots)
+pm2 startup
+# Run the command that pm2 startup prints — it looks like:
+# sudo env PATH=... pm2 startup systemd -u <user> --hp /home/<user>
+```
+
+After this, `vps-frontend-deploy.sh` uses `pm2 reload` for all subsequent deploys — zero downtime.
+
+> **PM2 process name convention:** `<client-id>-frontend` (e.g. `foodstore-frontend`). The script auto-derives this from `CLIENT_ID` in the frontend `.env.local` file, or falls back to the parent directory name.
+
+#### One-time GitHub repo setup (frontend)
+
+Add to **Settings → Secrets and variables → Actions** in the client repo:
+
+| Type | Name | Value |
+|------|------|-------|
+| **Variable** | `FRONTEND_DEPLOY_ENABLED` | `true` |
+| Secret | `VPS_FRONTEND_PATH` | `/var/www/<client-id>/frontend` |
+
+> **API-only clients:** Do not set `FRONTEND_DEPLOY_ENABLED`. The `deploy-frontend` job will remain dormant — only the backend job runs.
+
+#### Frontend `.env.local` requirements
+
+The script reads `CLIENT_ID` and `STOREFRONT_PORT` from `.env.local` (or `.env.production.local`) at `VPS_FRONTEND_PATH`. Ensure these are present:
+
+```env
+CLIENT_ID=foodstore
+STOREFRONT_PORT=3101
+```
+
+`.env.local` is **never written by the deploy script** — it must be placed on the VPS manually before the first deploy, just like the backend `.env`.
+
+#### Frontend downtime expectation
+
+**Zero.** PM2 `reload` is graceful: a new worker process starts and begins accepting connections, the old worker drains its existing connections, then exits. Nginx routes to the port throughout — no maintenance page needed.
+
+---
+
+### Relevant files
+
+| File | Purpose |
+|------|---------|
+| `.github/workflows/deploy.yml` | GitHub Actions deploy workflow (`runs-on: ${{ vars.VPS_RUNNER_LABEL \|\| 'self-hosted' }}`) — two jobs: `deploy-backend` and `deploy-frontend` |
+| `scripts/vps-deploy.sh` | Backend deploy script — Docker Compose build + migration + container swap |
+| `scripts/vps-frontend-deploy.sh` | Frontend deploy script — Next.js build + PM2 zero-downtime reload |
+| `nginx/client.conf.template` | Nginx config with `error_page 502 503 /maintenance.html` |
+| `nginx/maintenance.html` | Maintenance page served during the backend restart window |
 
 ---
 

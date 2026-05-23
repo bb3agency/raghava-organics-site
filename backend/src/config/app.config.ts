@@ -82,39 +82,6 @@ function validateSecureFlowEnv(): void {
   }
 }
 
-function validateMfaKeyIsolation(): void {
-  const mfaKey = process.env.ADMIN_MFA_ENCRYPTION_KEY?.trim();
-  const refreshSecret = process.env.JWT_REFRESH_SECRET?.trim();
-  const nodeEnv = getNormalizedNodeEnv();
-  const isStrictProfile = isProductionLikeProfile(nodeEnv);
-
-  if (!mfaKey) {
-    if (isStrictProfile) {
-      // Already enforced as required by validateConditionalEnv; this path won't be reached in practice.
-      throw new Error('Missing required env var: ADMIN_MFA_ENCRYPTION_KEY');
-    }
-    // In development-like profiles, fall back to JWT_REFRESH_SECRET but emit a clear warning so the
-    // coupling is never invisible.  A missing ADMIN_MFA_ENCRYPTION_KEY means a JWT_REFRESH_SECRET
-    // rotation will silently re-key all stored admin MFA secrets.
-    process.stderr.write(
-      '[WARN] ADMIN_MFA_ENCRYPTION_KEY is not set. ' +
-      'MFA secrets will be encrypted with JWT_REFRESH_SECRET as a fallback. ' +
-      'Set ADMIN_MFA_ENCRYPTION_KEY to an independent 32-byte value before going to production.\n'
-    );
-    return;
-  }
-
-  if (mfaKey === refreshSecret) {
-    const msg =
-      'ADMIN_MFA_ENCRYPTION_KEY must not be the same value as JWT_REFRESH_SECRET. ' +
-      'Using the same key couples MFA secret re-keying to JWT token invalidation.';
-    if (isStrictProfile) {
-      throw new Error(msg);
-    }
-    process.stderr.write(`[WARN] ${msg}\n`);
-  }
-}
-
 function validateConditionalEnv(): void {
   const nodeEnv = getNormalizedNodeEnv();
   const isStrictProfile = isProductionLikeProfile(nodeEnv);
@@ -152,12 +119,7 @@ function validateConditionalEnv(): void {
     requireEnv('META_WHATSAPP_APP_SECRET');
   }
 
-  if (isEnabled(process.env.FEATURE_GST_INVOICING_ENABLED)) {
-    requireEnv('STORE_LEGAL_NAME');
-    requireEnv('STORE_SELLER_ADDRESS');
-    requireEnv('STORE_SELLER_STATE');
-    requireEnv('STORE_SELLER_GSTIN');
-  }
+  // GST invoicing seller fields are DB-backed via StoreSettings; validated at runtime (API/workers) with alerts.
 
   if (isEnabled(process.env.OTEL_TRACING_ENABLED)) {
     requireEnv('OTEL_EXPORTER_OTLP_ENDPOINT');
@@ -181,10 +143,7 @@ function validateConditionalEnv(): void {
 
   if (isStrictProfile) {
     requireEnv('OPS_METRICS_TOKEN');
-    requireEnv('ADMIN_MFA_ENCRYPTION_KEY');
     requireEnv('OPS_DB_ENCRYPTION_KEY');
-    requireEnv('OPS_API_KEY_SALT');
-    requireEnv('OPS_DUAL_APPROVAL_WINDOW_MINUTES');
   }
 }
 
@@ -219,9 +178,7 @@ function validateProductionProviderSafetyEnv(): void {
   assertEnvNotPlaceholder('JWT_SECRET');
   assertEnvNotPlaceholder('JWT_REFRESH_SECRET');
   assertEnvNotPlaceholder('OPS_METRICS_TOKEN');
-  assertEnvNotPlaceholder('ADMIN_MFA_ENCRYPTION_KEY');
   assertEnvNotPlaceholder('OPS_DB_ENCRYPTION_KEY');
-  assertEnvNotPlaceholder('OPS_API_KEY_SALT');
 
   if (paymentProvider === 'razorpay') {
     assertEnvNotPlaceholder('RAZORPAY_KEY_ID');
@@ -248,7 +205,6 @@ export function validateRuntimeEnv(): void {
   requireEnv('JWT_REFRESH_SECRET');
   validateSecureFlowEnv();
   validateConditionalEnv();
-  validateMfaKeyIsolation();
   validateProductionProviderSafetyEnv();
 }
 

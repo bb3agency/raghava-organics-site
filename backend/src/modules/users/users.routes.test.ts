@@ -66,7 +66,19 @@ const usersServiceState = vi.hoisted(() => ({
     createdAt: new Date().toISOString(),
     addresses: [],
     orders: []
-  }))
+  })),
+  adminGetCustomerOrders: vi.fn(async () => ({ items: [], meta: { page: 1, limit: 20, total: 0, totalPages: 0 } })),
+  adminBanUser: vi.fn(async () => ({ userId: 'user_1', isBanned: true, bannedAt: new Date().toISOString(), bannedReason: 'spam' })),
+  adminUnbanUser: vi.fn(async () => ({ userId: 'user_1', isBanned: false })),
+  adminListUserNotes: vi.fn(async () => []),
+  adminCreateUserNote: vi.fn(async () => ({
+    id: 'note_1',
+    userId: 'user_1',
+    content: 'Test note',
+    createdByAdminId: 'admin_1',
+    createdAt: new Date().toISOString()
+  })),
+  adminDeleteUserNote: vi.fn(async () => ({ deleted: true, noteId: 'note_1' }))
 }));
 
 vi.mock('./users.service', () => {
@@ -80,6 +92,12 @@ vi.mock('./users.service', () => {
     listOrders = usersServiceState.listOrders;
     adminListUsers = usersServiceState.adminListUsers;
     adminGetUserById = usersServiceState.adminGetUserById;
+    adminGetCustomerOrders = usersServiceState.adminGetCustomerOrders;
+    adminBanUser = usersServiceState.adminBanUser;
+    adminUnbanUser = usersServiceState.adminUnbanUser;
+    adminListUserNotes = usersServiceState.adminListUserNotes;
+    adminCreateUserNote = usersServiceState.adminCreateUserNote;
+    adminDeleteUserNote = usersServiceState.adminDeleteUserNote;
     constructor(_fastify: unknown) {}
   }
 
@@ -91,6 +109,37 @@ import { registerUsersRoutes } from './users.routes';
 describe('users routes', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('admin write routes have idempotencyPreHandler in preHandler chain', async () => {
+    const app = Fastify();
+    const routes: Array<{ method: string | string[]; url: string; preHandler: unknown[] | undefined }> = [];
+
+    app.addHook('onRoute', (routeOptions) => {
+      routes.push({
+        method: routeOptions.method,
+        url: routeOptions.url,
+        preHandler: routeOptions.preHandler as unknown[] | undefined
+      });
+    });
+
+    await registerUsersRoutes(app);
+
+    const writeRoutes = [
+      { url: '/api/v1/admin/users/:id/ban', method: 'PATCH' },
+      { url: '/api/v1/admin/users/:id/ban', method: 'DELETE' },
+      { url: '/api/v1/admin/users/:id/notes', method: 'POST' },
+      { url: '/api/v1/admin/users/:id/notes/:noteId', method: 'DELETE' }
+    ];
+
+    for (const { url, method } of writeRoutes) {
+      const route = routes.find((r) => r.url === url && r.method === method);
+      expect(route, `route ${method} ${url} should be registered`).toBeDefined();
+      expect(Array.isArray(route?.preHandler), `${method} ${url} should have preHandler array`).toBe(true);
+      expect((route?.preHandler as unknown[]).length, `${method} ${url} should have ≥4 preHandlers`).toBeGreaterThanOrEqual(4);
+    }
+
+    await app.close();
   });
 
   it('registers customer and admin routes with schema and guards', async () => {
@@ -126,6 +175,34 @@ describe('users routes', () => {
     expect(adminUserById).toBeDefined();
     expect(adminUserById?.preHandler).toBeDefined();
     expect((adminUserById?.schema as { response?: Record<number, unknown> }).response?.[200]).toBeDefined();
+
+    const adminUserOrders = routes.find((route) => route.url === '/api/v1/admin/users/:id/orders' && route.method === 'GET');
+    expect(adminUserOrders).toBeDefined();
+    expect(adminUserOrders?.preHandler).toBeDefined();
+
+    const banUser = routes.find((route) => route.url === '/api/v1/admin/users/:id/ban' && route.method === 'PATCH');
+    expect(banUser).toBeDefined();
+    expect(banUser?.preHandler).toBeDefined();
+    expect((banUser?.schema as { body?: unknown }).body).toBeDefined();
+    expect((banUser?.schema as { response?: Record<number, unknown> }).response?.[200]).toBeDefined();
+
+    const unbanUser = routes.find((route) => route.url === '/api/v1/admin/users/:id/ban' && route.method === 'DELETE');
+    expect(unbanUser).toBeDefined();
+    expect(unbanUser?.preHandler).toBeDefined();
+
+    const listNotes = routes.find((route) => route.url === '/api/v1/admin/users/:id/notes' && route.method === 'GET');
+    expect(listNotes).toBeDefined();
+    expect(listNotes?.preHandler).toBeDefined();
+    expect((listNotes?.schema as { response?: Record<number, unknown> }).response?.[200]).toBeDefined();
+
+    const createNote = routes.find((route) => route.url === '/api/v1/admin/users/:id/notes' && route.method === 'POST');
+    expect(createNote).toBeDefined();
+    expect(createNote?.preHandler).toBeDefined();
+    expect((createNote?.schema as { body?: unknown }).body).toBeDefined();
+
+    const deleteNote = routes.find((route) => route.url === '/api/v1/admin/users/:id/notes/:noteId' && route.method === 'DELETE');
+    expect(deleteNote).toBeDefined();
+    expect(deleteNote?.preHandler).toBeDefined();
 
     await app.close();
   });

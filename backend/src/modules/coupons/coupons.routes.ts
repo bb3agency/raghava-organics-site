@@ -6,12 +6,16 @@ import { ERROR_CODES } from '@common/errors/error-codes';
 import { adminPermissionGuard } from '@common/guards/admin-permissions.guard';
 import { jwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import { rolesGuard } from '@common/guards/roles.guard';
+import { idempotencyOnSend, idempotencyPreHandler } from '@common/idempotency/idempotency';
 import { AdminRateLimitStore } from '@common/rate-limit/admin-rate-limit.store';
 import { routeRateLimitProfiles } from '@common/rate-limit/rate-limit-policies';
+import { loadShedGuard } from '@common/reliability/load-shed.guard';
 import {
   adminCouponAnalyticsSchema,
   adminCreateCouponSchema,
+  adminCloneCouponSchema,
   adminDeleteCouponSchema,
+  adminGetCouponByIdSchema,
   adminListCouponAuditSchema,
   adminListCouponsSchema,
   adminRestoreCouponSchema,
@@ -59,6 +63,11 @@ export async function registerCouponsRoutes(fastify: FastifyInstance): Promise<v
   const service = CouponsService.getInstance(fastify);
   const adminGuard = [jwtAuthGuard, rolesGuard(Role.ADMIN)];
 
+  fastify.addHook('onSend', async (request, reply, payload) => {
+    await idempotencyOnSend(request, reply, payload);
+    return payload;
+  });
+
   fastify.get(
     '/api/v1/admin/coupons/analytics',
     {
@@ -72,6 +81,18 @@ export async function registerCouponsRoutes(fastify: FastifyInstance): Promise<v
   );
 
   fastify.get(
+    '/api/v1/admin/coupons/:id',
+    {
+      schema: adminGetCouponByIdSchema,
+      preHandler: [...adminGuard, adminPermissionGuard('coupons:read')],
+      config: {
+        rateLimit: routeRateLimitProfiles.adminRead
+      }
+    },
+    async (request) => service.adminGetCouponById((request.params as { id: string }).id)
+  );
+
+  fastify.get(
     '/api/v1/admin/coupons',
     {
       schema: adminListCouponsSchema,
@@ -80,17 +101,14 @@ export async function registerCouponsRoutes(fastify: FastifyInstance): Promise<v
         rateLimit: routeRateLimitProfiles.adminRead
       }
     },
-    async (request) => {
-      void getCurrentUser(request); // Validate auth
-      return service.adminListCoupons(request.query as never, false);
-    }
+    async (request) => service.adminListCoupons(request.query as never, false)
   );
 
   fastify.post(
     '/api/v1/admin/coupons',
     {
       schema: adminCreateCouponSchema,
-      preHandler: [...adminGuard, adminPermissionGuard('coupons:write'), async (request) => enforceAdminCouponRateLimit(request, 'create')],
+      preHandler: [...adminGuard, adminPermissionGuard('coupons:write'), loadShedGuard, idempotencyPreHandler, async (request) => enforceAdminCouponRateLimit(request, 'create')],
       config: {
         rateLimit: routeRateLimitProfiles.adminWrite
       }
@@ -105,7 +123,7 @@ export async function registerCouponsRoutes(fastify: FastifyInstance): Promise<v
     '/api/v1/admin/coupons/:id',
     {
       schema: adminUpdateCouponSchema,
-      preHandler: [...adminGuard, adminPermissionGuard('coupons:write'), async (request) => enforceAdminCouponRateLimit(request, 'update')],
+      preHandler: [...adminGuard, adminPermissionGuard('coupons:write'), loadShedGuard, idempotencyPreHandler, async (request) => enforceAdminCouponRateLimit(request, 'update')],
       config: {
         rateLimit: routeRateLimitProfiles.adminWrite
       }
@@ -125,7 +143,7 @@ export async function registerCouponsRoutes(fastify: FastifyInstance): Promise<v
     '/api/v1/admin/coupons/:id/status',
     {
       schema: adminUpdateCouponStatusSchema,
-      preHandler: [...adminGuard, adminPermissionGuard('coupons:write'), async (request) => enforceAdminCouponRateLimit(request, 'status')],
+      preHandler: [...adminGuard, adminPermissionGuard('coupons:write'), loadShedGuard, idempotencyPreHandler, async (request) => enforceAdminCouponRateLimit(request, 'status')],
       config: {
         rateLimit: routeRateLimitProfiles.adminWrite
       }
@@ -145,7 +163,7 @@ export async function registerCouponsRoutes(fastify: FastifyInstance): Promise<v
     '/api/v1/admin/coupons/:id',
     {
       schema: adminDeleteCouponSchema,
-      preHandler: [...adminGuard, adminPermissionGuard('coupons:write'), async (request) => enforceAdminCouponRateLimit(request, 'delete')],
+      preHandler: [...adminGuard, adminPermissionGuard('coupons:write'), loadShedGuard, idempotencyPreHandler, async (request) => enforceAdminCouponRateLimit(request, 'delete')],
       config: {
         rateLimit: routeRateLimitProfiles.adminWrite
       }
@@ -165,7 +183,7 @@ export async function registerCouponsRoutes(fastify: FastifyInstance): Promise<v
     '/api/v1/admin/coupons/:id/restore',
     {
       schema: adminRestoreCouponSchema,
-      preHandler: [...adminGuard, adminPermissionGuard('coupons:write'), async (request) => enforceAdminCouponRateLimit(request, 'restore')],
+      preHandler: [...adminGuard, adminPermissionGuard('coupons:write'), loadShedGuard, idempotencyPreHandler, async (request) => enforceAdminCouponRateLimit(request, 'restore')],
       config: {
         rateLimit: routeRateLimitProfiles.adminWrite
       }
@@ -180,6 +198,34 @@ export async function registerCouponsRoutes(fastify: FastifyInstance): Promise<v
     }
   );
 
+  // Clone coupon
+  fastify.post(
+    '/api/v1/admin/coupons/:id/clone',
+    {
+      schema: adminCloneCouponSchema,
+      preHandler: [...adminGuard, adminPermissionGuard('coupons:write'), loadShedGuard, idempotencyPreHandler],
+      config: {
+        rateLimit: routeRateLimitProfiles.adminWrite
+      }
+    },
+    async (request, reply) => {
+      const user = getCurrentUser(request);
+      const body = request.body as { newCode: string; validFrom?: string; validUntil?: string };
+      const overrides: { validFrom?: string; validUntil?: string } = {};
+      if (body.validFrom) overrides.validFrom = body.validFrom;
+      if (body.validUntil) overrides.validUntil = body.validUntil;
+      const result = await service.adminCloneCoupon(
+        (request.params as { id: string }).id,
+        body.newCode,
+        user.sub,
+        overrides,
+        getAuditMetadata(request)
+      );
+      reply.code(201);
+      return result;
+    }
+  );
+
   // Get coupon audit logs
   fastify.get(
     '/api/v1/admin/coupons/:id/audit',
@@ -190,12 +236,9 @@ export async function registerCouponsRoutes(fastify: FastifyInstance): Promise<v
         rateLimit: routeRateLimitProfiles.adminRead
       }
     },
-    async (request) => {
-      void getCurrentUser(request); // Validate auth
-      return service.getCouponAuditLogs(
-        (request.params as { id: string }).id,
-        request.query as never
-      );
-    }
+    async (request) => service.getCouponAuditLogs(
+      (request.params as { id: string }).id,
+      request.query as never
+    )
   );
 }

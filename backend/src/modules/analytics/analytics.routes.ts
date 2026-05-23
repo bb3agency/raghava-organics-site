@@ -3,6 +3,7 @@ import { FastifyInstance } from 'fastify';
 import { adminPermissionGuard } from '@common/guards/admin-permissions.guard';
 import { jwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import { rolesGuard } from '@common/guards/roles.guard';
+import { idempotencyOnSend, idempotencyPreHandler } from '@common/idempotency/idempotency';
 import { routeRateLimitProfiles } from '@common/rate-limit/rate-limit-policies';
 import { loadShedGuard } from '@common/reliability/load-shed.guard';
 import {
@@ -25,6 +26,10 @@ import { AnalyticsService } from './analytics.service';
 export async function registerAnalyticsRoutes(fastify: FastifyInstance): Promise<void> {
   const service = new AnalyticsService(fastify);
   const adminGuard = [jwtAuthGuard, rolesGuard(Role.ADMIN), loadShedGuard];
+  fastify.addHook('onSend', async (request, reply, payload) => {
+    await idempotencyOnSend(request, reply, payload);
+    return payload;
+  });
 
   fastify.get(
     '/api/v1/admin/analytics/revenue',
@@ -42,9 +47,9 @@ export async function registerAnalyticsRoutes(fastify: FastifyInstance): Promise
     '/api/v1/admin/analytics/outbox-dead-letter/:id/replay-preview',
     {
       schema: analyticsOutboxReplayPreviewSchema,
-      preHandler: [...adminGuard, adminPermissionGuard('analytics:replay')],
+      preHandler: [...adminGuard, adminPermissionGuard('analytics:replay'), idempotencyPreHandler],
       config: {
-        rateLimit: routeRateLimitProfiles.adminRead
+        rateLimit: routeRateLimitProfiles.adminWrite
       }
     },
     async (request) => {
@@ -61,7 +66,7 @@ export async function registerAnalyticsRoutes(fastify: FastifyInstance): Promise
     '/api/v1/admin/analytics/outbox-dead-letter/:id/replay',
     {
       schema: analyticsOutboxReplaySchema,
-      preHandler: [...adminGuard, adminPermissionGuard('analytics:replay')],
+      preHandler: [...adminGuard, adminPermissionGuard('analytics:replay'), idempotencyPreHandler],
       config: {
         rateLimit: routeRateLimitProfiles.adminWrite
       }
@@ -108,9 +113,9 @@ export async function registerAnalyticsRoutes(fastify: FastifyInstance): Promise
     '/api/v1/admin/analytics/inbox-failures/:id/replay-preview',
     {
       schema: analyticsInboxReplayPreviewSchema,
-      preHandler: [...adminGuard, adminPermissionGuard('analytics:replay')],
+      preHandler: [...adminGuard, adminPermissionGuard('analytics:replay'), idempotencyPreHandler],
       config: {
-        rateLimit: routeRateLimitProfiles.adminRead
+        rateLimit: routeRateLimitProfiles.adminWrite
       }
     },
     async (request) => {
@@ -127,7 +132,7 @@ export async function registerAnalyticsRoutes(fastify: FastifyInstance): Promise
     '/api/v1/admin/analytics/inbox-failures/:id/replay',
     {
       schema: analyticsInboxReplaySchema,
-      preHandler: [...adminGuard, adminPermissionGuard('analytics:replay')],
+      preHandler: [...adminGuard, adminPermissionGuard('analytics:replay'), idempotencyPreHandler],
       config: {
         rateLimit: routeRateLimitProfiles.adminWrite
       }

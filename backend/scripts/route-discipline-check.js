@@ -6,9 +6,11 @@ const { parseFastifyRouteConfigsFromAst } = require('./route-ast-utils.js');
 
 const ROUTE_DIR = path.join(process.cwd(), 'src', 'modules');
 const AUTH_ADMIN_EXEMPT_ROUTES = new Set([
-  'POST /api/v1/auth/admin/login',
+  // Admin login is a 2-step email OTP flow — both steps are intentionally pre-auth (no JWT exists yet).
+  'POST /api/v1/auth/admin/login/request-otp',
+  'POST /api/v1/auth/admin/login/verify-otp',
   // Guarded via scoped onRequest hook in queues.routes.ts (not inline preHandler)
-  'GET /api/v1/admin/queues/dlq/summary',
+  'GET /api/v1/ops/queues/dlq/summary',
   // Admin invite lifecycle is intentionally ops-controlled, not admin-role controlled.
   'POST /api/v1/admin/invites',
   'POST /api/v1/admin/invites/cleanup-expired',
@@ -17,7 +19,10 @@ const AUTH_ADMIN_EXEMPT_ROUTES = new Set([
   'POST /api/v1/ops/invites/consume',
   // Invite setup OTP routes are intentionally unauthenticated — the invite token IS the auth credential.
   'POST /api/v1/admin/invites/setup/send-otp',
-  'POST /api/v1/ops/invites/setup/send-otp'
+  'POST /api/v1/ops/invites/setup/send-otp',
+  // Browser login routes are intentionally pre-auth — no session exists yet when requesting/verifying the login OTP.
+  'POST /api/v1/ops/auth/login/request-otp',
+  'POST /api/v1/ops/auth/login/verify-otp'
 ]);
 
 function shouldRequireCustomerPreHandler(method, routePath) {

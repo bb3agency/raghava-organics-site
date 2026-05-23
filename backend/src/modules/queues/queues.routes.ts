@@ -2,17 +2,15 @@ import { createBullBoard } from '@bull-board/api';
 import { BullMQAdapter } from '@bull-board/api/bullMQAdapter';
 import { FastifyAdapter } from '@bull-board/fastify';
 import { Queue } from 'bullmq';
-import { Role } from '@prisma/client';
 import { FastifyInstance } from 'fastify';
-import { adminPermissionGuard } from '@common/guards/admin-permissions.guard';
-import { jwtAuthGuard } from '@common/guards/jwt-auth.guard';
-import { rolesGuard } from '@common/guards/roles.guard';
+import { opsAuthGuard } from '@common/guards/ops-auth.guard';
+import { opsPermissionGuard } from '@common/guards/ops-permissions.guard';
 import { routeRateLimitProfiles } from '@common/rate-limit/rate-limit-policies';
-import { adminQueuesUiSchema, adminQueuesDlqSummarySchema } from './queues.schemas';
+import { opsQueuesUiSchema, opsQueuesDlqSummarySchema } from './queues.schemas';
 
 export async function registerQueuesRoutes(fastify: FastifyInstance): Promise<void> {
   const serverAdapter = new FastifyAdapter();
-  serverAdapter.setBasePath('/api/v1/admin/queues');
+  serverAdapter.setBasePath('/api/v1/ops/queues');
 
   const registryQueues = Object.values(fastify.queues).map((queue) => new BullMQAdapter(queue));
 
@@ -26,22 +24,21 @@ export async function registerQueuesRoutes(fastify: FastifyInstance): Promise<vo
       if (
         routeOptions.method === 'GET' &&
         typeof routeOptions.url === 'string' &&
-        routeOptions.url === '/api/v1/admin/queues'
+        routeOptions.url === '/api/v1/ops/queues'
       ) {
-        routeOptions.schema = adminQueuesUiSchema;
+        routeOptions.schema = opsQueuesUiSchema;
       }
     });
 
     secured.addHook('onRequest', async (request, reply) => {
-      await jwtAuthGuard(request, reply);
-      await rolesGuard(Role.ADMIN)(request, reply);
-      await adminPermissionGuard('queues:inspect')(request, reply);
+      await opsAuthGuard(request, reply);
+      await opsPermissionGuard('ops:read')(request, reply);
     });
 
-    secured.get('/api/v1/admin/queues/dlq/summary', {
-      schema: adminQueuesDlqSummarySchema,
+    secured.get('/api/v1/ops/queues/dlq/summary', {
+      schema: opsQueuesDlqSummarySchema,
       config: {
-        rateLimit: routeRateLimitProfiles.adminRead
+        rateLimit: routeRateLimitProfiles.opsRead
       },
       handler: async () => {
         const dlq: Queue | undefined = fastify.queues.deadLetter;
@@ -64,7 +61,7 @@ export async function registerQueuesRoutes(fastify: FastifyInstance): Promise<vo
     });
 
     await secured.register(serverAdapter.registerPlugin(), {
-      prefix: '/api/v1/admin/queues'
+      prefix: '/api/v1/ops/queues'
     } as never);
   });
 }

@@ -8,7 +8,7 @@
 ![Node](https://img.shields.io/badge/Node-22+-339933?logo=node.js&logoColor=white)
 ![Fastify](https://img.shields.io/badge/Fastify-5-000000?logo=fastify)
 ![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)
-![Prisma](https://img.shields.io/badge/Prisma-5-2D3748?logo=prisma)
+![Prisma](https://img.shields.io/badge/Prisma-6-2D3748?logo=prisma)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white)
 ![Redis](https://img.shields.io/badge/Redis-7-DC382D?logo=redis&logoColor=white)
 ![BullMQ](https://img.shields.io/badge/BullMQ-5-FF6600)
@@ -53,6 +53,8 @@ Canonical references:
 - `docs/MASTER_DEPLOYMENT_PLAYBOOK.md`
 - `docs/FRONTEND_AI_GO_LIVE_CHECKLIST.md`
 - `docs/OPS_CONTROL_PLANE_GUIDE.md`
+- `docs/ENV_VS_DB_CONFIG_REFERENCE.md`
+- `docs/PRODUCTION_FIRST_DEPLOY_CHECKLIST.md`
 
 ---
 
@@ -94,9 +96,11 @@ Canonical references:
 **Key Patterns:**
 
 - **Modular Monolith** — Modules communicate through public service interfaces only. No internal cross-module imports.
-- **Adapter Pattern** — Swapping payment/shipping/notification providers = one `.env` change, zero code changes. Use `noop` adapters locally for E2E simulation without live credentials.
+- **Adapter Pattern** — Swapping payment/shipping/notification providers = zero code changes. In production, update provider selection and credentials via the Ops UI (`POST /api/v1/ops/config/save`), then restart containers — `applyOpsConfigRuntimeOverlay()` applies changes before provider init. Use `noop` adapters locally for E2E simulation without live credentials.
 - **Client Isolation** — Each client deployment gets its own DB, Redis, Docker stack, and `.env`. Never shared.
 - **Queue-First Side Effects** — All notifications, analytics, and background tasks run through BullMQ. Never synchronous in the request cycle.
+- **System-Wide Failure Alerting** — Every `catch`/`log.error` path across modules, plugins, and workers emits structured email alerts via `sendTechnicalFailureAlert()`, sent to active Ops identities (`opsUser.isActive`) and verified Admin users (`User.role=ADMIN`, `isVerified=true`). Eight failure stages (`QUEUE_ENQUEUE`, `OUTBOX_DISPATCH`, `WORKER_TERMINAL`, `WORKER_DELIVERY`, `CORE_LOGIC`, `ROUTE_HANDLER`, `WEBHOOK_PROCESSING`, `PROVIDER_RUNTIME`) with full contextual metadata.
+- **Per-Template Primary Notification Channel** — Each of the 13 notification templates has a configurable primary channel (`EMAIL`/`SMS`/`WHATSAPP`) stored in `StoreSettings.primaryNotificationChannels`. Merchant admin selects per-template channel via admin UI. `send-primary` job routes to the configured channel with no fallback — if primary channel fails, notification fails and triggers alert.
 
 ---
 
@@ -280,11 +284,12 @@ Canonical runbooks:
 
 Quick sequence:
 1. Clone template into client project.
-2. Fill `.env` from `.env.example`.
+2. Fill `.env` from `.env.example` with **Phase 1 bootstrap keys only** (`DATABASE_URL`, `REDIS_URL`, `JWT_SECRET`, `OPS_DB_ENCRYPTION_KEY`, `RESEND_API_KEY`, etc.). Provider credentials and ops-security keys are provisioned via Ops UI after first ops login. See `docs/PRODUCTION_FIRST_DEPLOY_CHECKLIST.md` for the full two-phase model.
 3. Start infra (`docker compose up -d postgres redis`).
 4. Install, generate, migrate.
 5. Start API + workers and validate health.
-6. Complete go-live checklists before promotion.
+6. Bootstrap ops user (`npm run ops:newuser`), then provision DB-overlay keys via Ops UI (`POST /api/v1/ops/config/save`), then restart containers.
+7. Complete go-live checklists before promotion.
 
 ---
 
@@ -397,6 +402,29 @@ Commit style: Conventional Commits (`feat|fix|refactor|docs|test|chore|perf`).
 
 ## CI/CD Pipeline
 
+### Deployment Pipeline (GitHub Actions)
+
+On every push to `main` that passes the Reliability CI workflow, `.github/workflows/deploy.yml` runs two independent jobs on the VPS via a self-hosted runner:
+
+| Job | What it does |
+|-----|-------------|
+| `deploy-backend` | Runs `vps-deploy.sh` — Docker Compose rebuild, Prisma migrations, container swap |
+| `deploy-frontend` | Runs `vps-frontend-deploy.sh` — `git pull`, change detection, `npm ci`, `npm run build`, `pm2 reload` (zero-downtime) |
+
+**Required GitHub repo configuration per client:**
+
+| Item | Type | Value |
+|------|------|-------|
+| `VPS_DEPLOY_ENABLED` | Variable | `true` |
+| `FRONTEND_DEPLOY_ENABLED` | Variable | `true` |
+| `VPS_RUNNER_LABEL` | Variable | Unique per-client label (e.g. `greengrocer-vps`) |
+| `VPS_CLIENT_PATH` | Secret | `/var/www/<client-id>/backend` |
+| `VPS_FRONTEND_PATH` | Secret | `/var/www/<client-id>/frontend` |
+
+See `docs/CLIENT_VPS_SETUP_GUIDE.md` §22 for full setup instructions.
+
+### Quality Pipeline
+
 The `npm run ci:reliability-gates` command runs the full quality pipeline:
 
 1. **TypeScript** — Strict type checking
@@ -442,6 +470,7 @@ The `npm run ci:reliability-gates` command runs the full quality pipeline:
 | [`CO_DEVELOPMENT_SYNC_GUIDE.md`](CO_DEVELOPMENT_SYNC_GUIDE.md) | Canonical backend co-development upstream SOP (Flow A/Flow B, classification, safety checks) |
 | [`docs/MASTER_DEPLOYMENT_PLAYBOOK.md`](docs/MASTER_DEPLOYMENT_PLAYBOOK.md) | Build-time engineering playbook (internal SOP) |
 | [`docs/CLIENT_VPS_SETUP_GUIDE.md`](docs/CLIENT_VPS_SETUP_GUIDE.md) | VPS provisioning step-by-step |
+| [`docs/PRODUCTION_FIRST_DEPLOY_CHECKLIST.md`](docs/PRODUCTION_FIRST_DEPLOY_CHECKLIST.md) | **Phase 1/2 setup model** — bootstrap keys vs Ops UI config, ops-newuser flow |
 | [`docs/CLIENT_GO_LIVE_VALIDATION_GUIDE.md`](docs/CLIENT_GO_LIVE_VALIDATION_GUIDE.md) | Pre-launch validation checklist |
 | [`docs/OPS_CONTROL_PLANE_GUIDE.md`](docs/OPS_CONTROL_PLANE_GUIDE.md) | Detailed ops control plane setup, API usage, and frontend integration flow |
 | [`docs/THIRD_PARTY_INTEGRATIONS_SETUP_AND_KEY_MANAGEMENT_GUIDE.md`](docs/THIRD_PARTY_INTEGRATIONS_SETUP_AND_KEY_MANAGEMENT_GUIDE.md) | Provider account setup, env mapping, and API key lifecycle runbook |
@@ -519,10 +548,10 @@ Categories (see `.env.example` for full details):
 | **Invoice Storage** | `INVOICE_STORAGE_ROOT` |
 | **Feature Flags** | `FEATURE_COUPONS_ENABLED`, `FEATURE_REVIEWS_ENABLED`, `FEATURE_RESPONSE_ENVELOPE_ENABLED`, etc. |
 | **Flash-Sale** | `HOT_SKU_VARIANT_IDS`, `HOT_SKU_SHARD_COUNT`, `HOT_SKU_ADMISSION_BUDGET_PER_MINUTE` |
-| **Security** | `ADMIN_MFA_ENCRYPTION_KEY`, webhook allowlists, rate limits |
+| **Security** | webhook allowlists, rate limits |
 | **Observability** | `OTEL_TRACING_ENABLED`, `OTEL_EXPORTER_OTLP_HEADERS`, `OPS_METRICS_TOKEN` |
 
-> **Strict Profile:** In production-like runtime (`NODE_ENV` not `development`/`test`), additional variables become mandatory (MFA key, metrics token, webhook tokens/allowlists). The application will refuse to start if they're missing.
+> **Strict Profile:** In production-like runtime (`NODE_ENV` not `development`/`test`), additional variables become mandatory (metrics token, webhook tokens/allowlists). The application will refuse to start if they're missing.
 
 Invoice access contract:
 - Customer invoice PDF download: `GET /api/v1/orders/:id/invoice.pdf` (authenticated, order-owner only)

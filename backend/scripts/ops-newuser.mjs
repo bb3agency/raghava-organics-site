@@ -4,11 +4,11 @@ import { PrismaClient } from '@prisma/client';
 import logger from './lib/logger.mjs';
 
 const prisma = new PrismaClient();
-const OPS_PERMISSIONS = new Set(['OPS_READ', 'OPS_WRITE', 'OPS_APPROVE']);
+const OPS_PERMISSIONS = new Set(['OPS_READ', 'OPS_WRITE']);
 const INVITE_TTL_MS = 10 * 60 * 1000;
 
 function printUsage() {
-  process.stdout.write(`\nUsage:\n  node scripts/ops-newuser.mjs --email=<email> --name="Ops User" --ip-allowlist="203.0.113.10/32" --setup-base-url="https://client.com" [--permissions=OPS_READ,OPS_WRITE,OPS_APPROVE] [--created-by-email=ops@example.com] --yes\n\n`);
+  process.stdout.write(`\nUsage:\n  node scripts/ops-newuser.mjs --email=<email> --name="Ops User" --setup-base-url="https://client.com" [--permissions=OPS_READ,OPS_WRITE] [--created-by-email=ops@example.com] --yes\n\n`);
 }
 
 function parseArgs(argv) {
@@ -40,7 +40,7 @@ function requireValue(value, field) {
 }
 
 function normalizePermissions(raw) {
-  const input = String(raw || 'OPS_READ,OPS_WRITE,OPS_APPROVE')
+  const input = String(raw || 'OPS_READ,OPS_WRITE')
     .split(',')
     .map((entry) => entry.trim().toUpperCase())
     .filter(Boolean);
@@ -53,13 +53,6 @@ function normalizePermissions(raw) {
   return unique;
 }
 
-function normalizeIpAllowlist(raw) {
-  return String(raw)
-    .split(',')
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-}
-
 function hashOpaqueToken(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
 }
@@ -68,7 +61,10 @@ async function sendInviteEmail({ to, name, setupUrl, expiresAt }) {
   const apiKey = process.env.RESEND_API_KEY?.trim();
   const from = process.env.RESEND_FROM?.trim();
   if (!apiKey || !from) {
-    throw new Error('RESEND_API_KEY and RESEND_FROM are required for ops-newuser invite email');
+    throw new Error(
+      'RESEND_API_KEY and RESEND_FROM must be set in .env before running ops-newuser (Phase 1 bootstrap).\n' +
+      'See docs/PRODUCTION_FIRST_DEPLOY_CHECKLIST.md — Step 1.'
+    );
   }
 
   const html = `<h2>Ops account setup</h2><p>Hello ${name},</p><p>Open this setup link to activate your ops account:</p><p><a href="${setupUrl}">${setupUrl}</a></p><p>This link expires at ${expiresAt}.</p>`;
@@ -102,7 +98,6 @@ async function main() {
 
   requireValue(args.email, 'email');
   requireValue(args.name, 'name');
-  requireValue(args['ip-allowlist'], 'ip-allowlist');
   requireValue(args['setup-base-url'], 'setup-base-url');
   if (String(args.yes).toLowerCase() !== 'true') {
     throw new Error('Refusing to run without explicit --yes');
@@ -110,15 +105,11 @@ async function main() {
 
   const inviteEmail = String(args.email).trim().toLowerCase();
   const inviteName = String(args.name).trim();
-  const ipAllowlist = normalizeIpAllowlist(args['ip-allowlist']);
   const permissions = normalizePermissions(args.permissions);
   const setupBaseUrl = String(args['setup-base-url']).trim().replace(/\/$/, '');
 
   if (!inviteEmail.includes('@')) {
     throw new Error('Invalid email format');
-  }
-  if (ipAllowlist.length === 0) {
-    throw new Error('ip-allowlist must contain at least one CIDR/IP');
   }
 
   const token = crypto.randomBytes(32).toString('base64url');
@@ -143,7 +134,6 @@ async function main() {
       setupBaseUrl,
       status: 'CREATED',
       permissions,
-      ipAllowlist,
       expiresAt,
       ...(createdByOpsUserId ? { createdByOpsUserId } : {})
     }
