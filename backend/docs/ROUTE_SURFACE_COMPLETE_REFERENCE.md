@@ -253,7 +253,16 @@ Create a return request for a delivered order. Body: `{ items: [{ orderItemId, q
 Razorpay payment event webhook. Verifies `x-razorpay-signature` HMAC header. Processes `payment.captured`, `payment.failed`, and refund events. Writes to the inbox with idempotency key.
 
 ### `POST /api/v1/shipping/webhook`
-Shipping provider (Delhivery/Shiprocket) webhook. Verifies auth header. Processes tracking update events. Updates order shipping status.
+Shipping provider (Delhivery/Shiprocket) webhook. Verifies auth token and processes tracking update events. Updates order shipping status via queue.
+
+**Auth header resolution (provider-specific):**
+- **Delhivery:** `Authorization: Token <DELHIVERY_WEBHOOK_TOKEN>`
+- **Shiprocket:** token read from (priority order):
+  1. `x-api-key: <SHIPROCKET_WEBHOOK_TOKEN>` — primary (official Shiprocket dashboard format)
+  2. `x-shiprocket-token: <SHIPROCKET_WEBHOOK_TOKEN>` — alternate
+  3. `Authorization: Bearer <SHIPROCKET_WEBHOOK_TOKEN>` — backward compat
+
+**Security:** IP allowlist via `SHIPPING_WEBHOOK_ALLOWLIST_CIDR`. Timestamp skew check (configurable via `DELHIVERY_WEBHOOK_MAX_SKEW_SECONDS` / `SHIPROCKET_WEBHOOK_MAX_SKEW_SECONDS`). Idempotent — duplicate AWB+status events are discarded via `WebhookInboxEvent`.
 
 ### `GET /api/v1/notifications/webhook/meta-whatsapp`
 Meta WhatsApp webhook verification challenge. Responds to Meta's `hub.challenge` verification request. Called once during webhook registration.

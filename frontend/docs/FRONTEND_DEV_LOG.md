@@ -37,7 +37,7 @@
 - [ ] Postman E2E baseline passed (Phase 2 gate)
 
 **Current tier:** Sprint G — Go-live sign-off  
-**Next incomplete slice:** Manual provider credentials + Postman baseline confirmation
+**Next incomplete slice:** Execute VPS scripts on server ([docs/clients/raghava-organics/README.md](../../docs/clients/raghava-organics/README.md)) + Postman 0→3
 
 ---
 
@@ -105,11 +105,15 @@ NEXT_PUBLIC_RAZORPAY_KEY_ID=(pending)
 
 | Slice | Status | Notes |
 |---|---|---|
-| Session bootstrap (`/ops/session`) | [x] | `app/(ops)/ops/page.tsx` |
-| Load-shed two-step request/confirm/reject | [x] | `app/(ops)/ops/load-shed/page.tsx`, `actions/ops.actions.ts` |
-| Approvals queue read surface | [x] | `app/(ops)/ops/approvals/page.tsx` |
-| Config overview + validate/save + OTP surfaces | [x] | `app/(ops)/ops/config/page.tsx`, `components/ops/OpsConfigForms.tsx`, `actions/ops.actions.ts` |
-| Audit timeline + invites + setup + metrics routes | [x] | `app/(ops)/ops/audit/page.tsx`, `app/(ops)/ops/invites/page.tsx`, `app/(ops)/ops/setup/page.tsx`, `app/(ops)/ops/metrics/page.tsx` |
+| Ops login + cookie session (`/ops/login`, `lib/ops-client-api.ts`) | [x] | Browser `ops_session` cookie; no API-key headers |
+| Session bootstrap (`GET /ops/session`) | [x] | `OpsSessionPanel`, `OpsSessionGate` |
+| Load-shed single-step OTP (`POST /ops/load-shed`) | [x] | `OpsLoadShedPanel`, `OpsCriticalOtpForm` |
+| Config overview/stored/save + OTP (`config-save`) | [x] | `OpsConfigPagePanel`, `OpsConfigForms` |
+| Invites create/revoke + users deactivate + system restart | [x] | `OpsInvitesPanel`, `OpsUsersPanel`, `OpsSystemPanel` |
+| Audit timeline + queue visibility under `/ops/queues` | [x] | `OpsAuditPanel`, `OpsQueuesPanel` |
+| Metrics (server token) | [x] | `lib/ops-api.ts` + `app/(ops)/ops/metrics/page.tsx` |
+| Setup consume flow | [x] | `app/(ops)/ops/setup/page.tsx` |
+| ~~Approvals queue~~ | — | Removed — backend has no approvals routes |
 
 ### Tier 3 — Admin Read
 
@@ -120,7 +124,11 @@ NEXT_PUBLIC_RAZORPAY_KEY_ID=(pending)
 | Order detail + invoice download | [x] | `app/(storefront)/admin/orders/[id]/page.tsx` |
 | Products + categories read | [x] | `app/(storefront)/admin/products/page.tsx` |
 | Inventory + low-stock read | [x] | `app/(storefront)/admin/inventory/page.tsx` |
-| Customers read | [x] | `app/(storefront)/admin/customers/page.tsx` |
+| Customers read + CRM (orders/notes/ban) | [x] | `admin/customers/[id]`, `AdminCustomerDetailPanel` |
+| Shipments + payments global read | [x] | `admin/shipments`, `admin/payments` |
+| Returns list + detail | [x] | `admin/returns`, `admin/returns/[id]` |
+| Reviews moderation queue | [x] | `admin/reviews` |
+| Inventory history per variant | [x] | `AdminInventoryHistoryPanel` on inventory page |
 | Order board + returns read | [x] | `app/(storefront)/admin/orders/board/page.tsx`, `app/(storefront)/admin/returns/page.tsx` |
 
 ### Tier 4 — Admin Mutations
@@ -128,7 +136,10 @@ NEXT_PUBLIC_RAZORPAY_KEY_ID=(pending)
 | Slice | Status | Notes |
 |---|---|---|
 | Mutation panels with idempotency keys | [x] | `components/admin/AdminMutationPanel.tsx` |
-| Ship/cancel/refund fulfillment (Shiprocket; COD via webhook) | [x] | `AdminOrderFulfillmentPanel.tsx`, `admin/mutations`, `admin/orders/[id]` |
+| Ship/cancel/refund fulfillment (Shiprocket; COD via webhook) | [x] | `AdminOrderFulfillmentPanel.tsx` — refund via `PATCH .../status` REFUNDED |
+| Customer ban/unban + notes CRUD | [x] | `AdminCustomerDetailPanel.tsx` |
+| Inventory bulk + variant delete + review delete | [x] | `AdminMutationPanel` presets on inventory/reviews pages |
+| Coupons lifecycle (feature-flagged) | [x] | `admin/coupons` + mutation presets |
 | PREPAID initiate/verify dry-run surface | [x] | Executed via storefront checkout flow (`components/checkout/CheckoutForm.tsx`) |
 | Admin COD settings surface | [x] | `app/(storefront)/admin/settings/cod/page.tsx`, `components/admin/CodSettingsPanel.tsx` |
 | Additional settings mutation surfaces | [x] | `app/(storefront)/admin/settings/{shipping,store,notifications,inventory}/page.tsx` |
@@ -215,18 +226,20 @@ NEXT_PUBLIC_RAZORPAY_KEY_ID=(pending)
   - Error hints for `409` / `ops_audit_chain_lock_timeout` via `getApiErrorMessageWithHint`.
   - Backend/docs/rules synced: COD webhook capture (no `cod-collected`), metrics header `x-ops-token`.
   - Validation: `npm run typecheck`, `npm run lint`, `npm run build` green.
-- Admin MFA + shipping runtime overlay (2026-05-17):
-  - `/admin/login` uses `POST /auth/admin/login` with MFA code step-up; invite setup redirects with `mfaEnrollment=1`.
-  - `/admin/security/mfa` enrolls/confirms/disables admin MFA (`users:read`); session expiry warning in admin layout.
-  - Backend `adminSchedulePickup` / `adminPrintLabel` resolve Shiprocket/Delhivery keys via `resolveRuntimeConfig` (Ops DB overlay).
+- Full ops/admin contract rebaseline (2026-05-23):
+  - Removed stale ops approvals surface and admin MFA/TOTP UI; admin login is email OTP (`request-otp` → `verify-otp`).
+  - Ops browser integration via `lib/ops-client-api.ts` (`credentials: 'include'`); server metrics remain in `lib/ops-api.ts`.
+  - Added `/ops/login`, users, queues, system; load-shed is single-step OTP; five critical ops writes share `OpsCriticalOtpForm`.
+  - Admin read: shipments, payments, reviews, returns detail, CRM tabs; admin queues page points operators to `/ops/queues`.
+  - `OpsSessionGate` uses `ReactNode` children (no render-prop from RSC pages).
 
 **Blockers / decisions made:**
 - Backend startup gate now passes (`health` endpoint returns OK with DB and Redis connected).
-- Backend `.env` now uses `CLIENT_ID=raghava-organics` and `POSTGRES_DB=raghava_organics`; `REDIS_PASSWORD` remains blank and should be aligned with `REDIS_URL` before reliability/gate testing.
+- Backend local bootstrap complete (2026-05-23): see [docs/clients/raghava-organics/LOCAL_SETUP_EVIDENCE.md](../../docs/clients/raghava-organics/LOCAL_SETUP_EVIDENCE.md). VPS pack + phase scripts: [docs/clients/raghava-organics/README.md](../../docs/clients/raghava-organics/README.md).
 
 **What to do first in the next session (read this at session start):**
-1. Run Postman folders 0→3 and attach evidence to go-live packet.
-2. Fill provider confirmations (Razorpay/Delhivery/Resend/MSG91) with real dry-run timestamps.
-3. Complete backend and frontend formal go-live checklist sign-off.
+1. Fill [docs/clients/raghava-organics/VPS_INPUTS.md](../../docs/clients/raghava-organics/VPS_INPUTS.md) and run Phase 6–8 scripts on VPS.
+2. Run Postman folders 0→3 — [PHASE5_EVIDENCE_CHECKLIST.md](../../docs/clients/raghava-organics/PHASE5_EVIDENCE_CHECKLIST.md).
+3. Complete go-live checklists on production domain.
 
 ---

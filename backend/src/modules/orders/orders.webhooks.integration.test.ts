@@ -305,5 +305,34 @@ describe('OrdersService webhook idempotency integration', () => {
       }
     });
   });
+
+  it('accepts Shiprocket x-api-key header format (raw token, no Bearer prefix)', async () => {
+    process.env.SHIPPING_PROVIDER = 'shiprocket';
+    process.env.SHIPROCKET_WEBHOOK_TOKEN = 'shiprocket-xapikey-secret';
+    const { service, shippingJobs, shippingAdd } = createServiceHarness();
+    const occurredAt = new Date().toISOString();
+    const payload = Buffer.from(
+      JSON.stringify({
+        awb: 'awb_sr_xapikey',
+        status: 'DELIVERED',
+        description: 'Delivered to customer',
+        location: 'Delhi Hub',
+        occurredAt
+      })
+    );
+
+    await service.processShippingWebhook('shiprocket-xapikey-secret', payload);
+
+    expect(shippingAdd).toHaveBeenCalledTimes(1);
+    expect(shippingJobs).toHaveLength(1);
+    expect(shippingJobs[0]).toMatchObject({
+      name: 'update-shipment-status',
+      payload: {
+        awb: 'awb_sr_xapikey',
+        status: 'DELIVERED',
+        description: 'Delivered to customer'
+      }
+    });
+  });
 });
 

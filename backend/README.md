@@ -520,7 +520,7 @@ npm run dev:e2e:workers
 **Key notes:**
 - Shipment dispatch is manual-only: payment confirmation does not auto-create shipment jobs.
 - Admin must trigger `POST /api/v1/admin/orders/:id/ship` (or click Ship Order in admin UI) to create shipment/AWB.
-- Shipping webhook token validation is relaxed only in noop/placeholder shipping mode (`SHIPPING_PROVIDER=noop` or placeholder/empty `DELHIVERY_API_KEY`), where any non-empty `Authorization` header is accepted for simulation.
+- Shipping webhook token validation is relaxed only in noop/placeholder shipping mode (`SHIPPING_PROVIDER=noop` or placeholder/empty `DELHIVERY_API_KEY`), where any non-empty auth header is accepted for simulation. In production, Shiprocket sends the token via `x-api-key` header (per official docs); the backend also accepts `Authorization: Bearer` as a fallback. Delhivery uses `Authorization: Token`.
 - Order idempotency keys are timestamp-based — each run creates fresh orders; re-running the full sequence is safe.
 - Without workers: all tests PASS with warnings; Raj's order stays at `PENDING_PAYMENT` so ship step (3.4) returns `409` warning instead of `200`.
 - With workers + restarted server: all steps return `200`; final board shows both orders `DELIVERED`.

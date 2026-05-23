@@ -14,6 +14,8 @@ export function AdminNav() {
       {canViewAdminRoute(user, "orders") ? (
         <Link href="/admin/orders/board">Order Board</Link>
       ) : null}
+      {canViewAdminRoute(user, "shipments") ? <Link href="/admin/shipments">Shipments</Link> : null}
+      {canViewAdminRoute(user, "payments") ? <Link href="/admin/payments">Payments</Link> : null}
       {canViewAdminRoute(user, "products") ? <Link href="/admin/products">Products</Link> : null}
       {canViewAdminRoute(user, "products") ? (
         <Link href="/admin/catalog-write">Catalog Write</Link>
@@ -25,15 +27,13 @@ export function AdminNav() {
         <Link href="/admin/customers">Customers</Link>
       ) : null}
       {canViewAdminRoute(user, "returns") ? <Link href="/admin/returns">Returns</Link> : null}
+      {canViewAdminRoute(user, "reviews") ? <Link href="/admin/reviews">Reviews</Link> : null}
+      {canViewAdminRoute(user, "coupons") ? <Link href="/admin/coupons">Coupons</Link> : null}
       {canViewAdminRoute(user, "mutations") ? (
         <Link href="/admin/mutations">Mutations</Link>
       ) : null}
       {canViewAdminRoute(user, "reliability") ? (
         <Link href="/admin/reliability">Reliability</Link>
-      ) : null}
-      {canViewAdminRoute(user, "queues") ? <Link href="/admin/queues">Queues</Link> : null}
-      {canViewAdminRoute(user, "security") ? (
-        <Link href="/admin/security/mfa">Security MFA</Link>
       ) : null}
       {canViewAdminRoute(user, "settings") ? (
         <>

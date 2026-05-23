@@ -1,18 +1,9 @@
-import { AdminDataPanel } from "@/components/admin/AdminDataPanel";
+"use client";
 
-interface AdminCustomerDetailPageProps {
-  params: Promise<{ id: string }>;
-}
+import { useParams } from "next/navigation";
+import { AdminCustomerDetailPanel } from "@/components/admin/AdminCustomerDetailPanel";
 
-export default async function AdminCustomerDetailPage({ params }: AdminCustomerDetailPageProps) {
-  const { id } = await params;
-  return (
-    <div className="grid gap-6">
-      <AdminDataPanel
-        title="Customer detail"
-        endpoint={`/admin/users/${id}`}
-        emptyMessage="Customer record unavailable."
-      />
-    </div>
-  );
+export default function AdminCustomerDetailPage() {
+  const params = useParams<{ id: string }>();
+  return <AdminCustomerDetailPanel customerId={params.id} />;
 }

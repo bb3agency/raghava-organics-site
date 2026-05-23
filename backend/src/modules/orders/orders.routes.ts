@@ -261,7 +261,9 @@ export async function registerOrdersRoutes(fastify: FastifyInstance): Promise<vo
     async (request) => {
       assertWebhookAllowlist(request, trustedProxyRules, shippingWebhookAllowlistRules, 'Shipping');
       const rawAuthHeader =
-        request.headers['x-shiprocket-token'] ?? request.headers.authorization;
+        request.headers['x-api-key'] ??
+        request.headers['x-shiprocket-token'] ??
+        request.headers.authorization;
       const authHeader = Array.isArray(rawAuthHeader) ? rawAuthHeader[0] : rawAuthHeader;
       const payload = requireWebhookRawPayload(request.body);
       const traceContext = request as { correlationId?: string; traceId?: string };

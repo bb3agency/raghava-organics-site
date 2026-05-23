@@ -40,7 +40,9 @@ npm run dev:e2e:workers
 
 > ⚠️ `PAYMENT_PROVIDER=noop` and `SHIPPING_PROVIDER=noop` are **required** for the E2E simulation to pass without live credentials.
 
-> ⚠️ Shipping webhook token relaxation applies in noop/placeholder mode (`SHIPPING_PROVIDER=noop` or placeholder/empty `DELHIVERY_API_KEY`). In that mode, any non-empty `Authorization` header is accepted for simulation. Real provider configurations remain strictly token-validated.
+> ⚠️ Shipping webhook token relaxation applies in noop/placeholder mode (`SHIPPING_PROVIDER=noop` or placeholder/empty `DELHIVERY_API_KEY`). In that mode, any non-empty auth header is accepted for simulation. Real provider configurations remain strictly token-validated.
+
+> ℹ️ Shiprocket webhook token header priority: `x-api-key` (primary, per official Shiprocket docs) → `x-shiprocket-token` → `Authorization: Bearer`. In E2E noop mode the Postman collection sends `Authorization: Bearer` — all three formats work in production.
 
 > ⚠️ Refund status is asynchronous: admin/API requests that trigger refund processing may return success before order status becomes `REFUNDED`. Validate final state only after worker/provider confirmation events are processed.
 
@@ -401,7 +403,7 @@ const sig = CryptoJS.HmacSHA256(body, razorpayWebhookSecret).toString(CryptoJS.e
 | Field | Value |
 |---|---|
 | **Method** | `POST /api/v1/shipping/webhook` |
-| **Headers** | `Authorization: Bearer {{shiprocketWebhookToken}}` |
+| **Headers** | `x-api-key: {{shiprocketWebhookToken}}` (primary per Shiprocket docs) or `Authorization: Bearer {{shiprocketWebhookToken}}` |
 | **Body** | `{ awb: {{rajAwb}}, status: "IN_TRANSIT", description, location: "Mumbai Hub", occurredAt }` |
 | **Expected status** | `200` (server restarted with fix) or `401` (server running old code — still passes with warning) |
 | **Assertions** | `200`: `j.received === true`; `401`: passes with console warning to restart server |
@@ -412,7 +414,7 @@ const sig = CryptoJS.HmacSHA256(body, razorpayWebhookSecret).toString(CryptoJS.e
 ### 3.9 Shipping Webhook — IN_TRANSIT Ramu
 | Field | Value |
 |---|---|
-| **Headers** | `Authorization: Bearer {{shiprocketWebhookToken}}` |
+| **Headers** | `x-api-key: {{shiprocketWebhookToken}}` (primary per Shiprocket docs) or `Authorization: Bearer {{shiprocketWebhookToken}}` |
 | **Body** | `{ awb: {{ramuAwb}}, status: "IN_TRANSIT", location: "Hyderabad Hub" }` |
 | **Expected status** | `200` or `401` (same caveat as 3.8) |
 | **Assertions** | `200`: `j.received === true`; `401`: passes with warning |

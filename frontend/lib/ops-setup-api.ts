@@ -3,7 +3,7 @@ import { apiClient } from "@/lib/api";
 export interface SendOpsSetupOtpInput {
   token: string;
   name: string;
-  phone: string;
+  phone?: string;
 }
 
 export interface SendOpsSetupOtpResponse {
@@ -20,10 +20,7 @@ export interface ConsumeOpsInviteResponse {
   opsUserId: string;
   email: string;
   name: string;
-  keyId: string;
-  apiKey: string;
   permissions: string[];
-  ipAllowlist: string[];
 }
 
 export async function sendOpsSetupOtp(input: SendOpsSetupOtpInput) {

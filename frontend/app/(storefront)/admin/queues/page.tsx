@@ -1,23 +1,16 @@
 import Link from "next/link";
-import { AdminDataPanel } from "@/components/admin/AdminDataPanel";
 
-export default function AdminQueuesPage() {
+export default function AdminQueuesDeprecatedPage() {
   return (
-    <div className="grid gap-6">
-      <AdminDataPanel
-        title="Queues summary"
-        endpoint="/admin/queues/dlq/summary"
-        emptyMessage="No queue summary available."
-      />
-      <section className="rounded-lg border border-border p-4">
-        <h2 className="font-heading text-lg font-semibold">Bull Board</h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Open the full queue inspection UI exposed by the backend.
-        </p>
-        <Link className="mt-3 inline-block text-sm underline" href="/api/v1/admin/queues">
-          Open /api/v1/admin/queues
-        </Link>
-      </section>
-    </div>
+    <section className="rounded-lg border border-border p-6 text-sm">
+      <h2 className="font-heading text-xl font-semibold">Queue monitor moved</h2>
+      <p className="mt-2 text-muted-foreground">
+        Bull Board and DLQ summary now live under the ops control plane (`ops:read`). Merchant
+        admin no longer exposes `queues:inspect`.
+      </p>
+      <Link href="/ops/queues" className="mt-4 inline-block font-medium text-primary underline-offset-4 hover:underline">
+        Open /ops/queues
+      </Link>
+    </section>
   );
 }

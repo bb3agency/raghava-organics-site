@@ -1207,7 +1207,8 @@ export class OrdersService {
     // Frontend integration contract:
     // - Browser clients MUST NOT call this webhook route directly.
     // - Delhivery expects `Authorization: Token <DELHIVERY_WEBHOOK_TOKEN>`.
-    // - Shiprocket expects `Authorization: Bearer <SHIPROCKET_WEBHOOK_TOKEN>`.
+    // - Shiprocket expects `x-api-key: <SHIPROCKET_WEBHOOK_TOKEN>` (per official Shiprocket docs).
+    //   Also accepts `Authorization: Bearer <SHIPROCKET_WEBHOOK_TOKEN>` for backward compatibility.
     // - `noop` fallback acceptance is for local/dev simulation only.
     const startedAt = Date.now();
     const env = (runtimeConfig.NODE_ENV ?? process.env.NODE_ENV ?? 'development').toLowerCase();

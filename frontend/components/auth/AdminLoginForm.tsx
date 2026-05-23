@@ -4,15 +4,26 @@ import { useState } from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
-import { ApiError } from "@/lib/api";
-import { loginAdmin } from "@/lib/admin-auth-api";
-import { getAdminLoginErrorMessage } from "@/lib/error-messages";
-import { adminLoginInputSchema } from "@/lib/validators";
+import {
+  requestAdminLoginOtp,
+  verifyAdminLoginOtp,
+} from "@/lib/admin-auth-api";
+import { getApiErrorMessage } from "@/lib/error-messages";
+import { emailSchema, otpSchema, passwordSchema } from "@/lib/validators";
 import { AuthErrorBanner } from "@/components/auth/AuthErrorBanner";
 import type { AuthSession } from "@/types/user";
 
-const formSchema = adminLoginInputSchema;
-type FormValues = z.infer<typeof formSchema>;
+const credentialsSchema = z.object({
+  email: emailSchema,
+  password: passwordSchema,
+});
+
+const verifySchema = z.object({
+  email: emailSchema,
+  otp: otpSchema,
+});
+
+type CredentialsValues = z.infer<typeof credentialsSchema>;
 
 interface AdminLoginFormProps {
   onSuccess: (session: AuthSession) => Promise<void> | void;
@@ -20,104 +31,122 @@ interface AdminLoginFormProps {
 }
 
 export function AdminLoginForm({ onSuccess, enrollmentHint }: AdminLoginFormProps) {
+  const [step, setStep] = useState<"credentials" | "otp">("credentials");
   const [error, setError] = useState<string | null>(null);
-  const [mfaRequired, setMfaRequired] = useState(false);
-  const form = useForm<FormValues>({
-    resolver: zodResolver(formSchema),
-    defaultValues: {
-      email: "",
-      password: "",
-      mfaCode: "",
-    },
+  const [expiresAt, setExpiresAt] = useState<string | null>(null);
+  const credentialsForm = useForm<CredentialsValues>({
+    resolver: zodResolver(credentialsSchema),
+    defaultValues: { email: "", password: "" },
   });
+  const [otp, setOtp] = useState("");
 
-  const handleSubmit = form.handleSubmit(async (values) => {
+  const handleRequestOtp = credentialsForm.handleSubmit(async (values) => {
     try {
       setError(null);
-      const session = await loginAdmin({
-        email: values.email,
-        password: values.password,
-        ...(values.mfaCode?.trim() ? { mfaCode: values.mfaCode.trim() } : {}),
-      });
-      await onSuccess(session);
+      const response = await requestAdminLoginOtp(values);
+      setExpiresAt(response.expiresAt);
+      setStep("otp");
     } catch (err) {
-      if (
-        err instanceof ApiError &&
-        err.status === 401 &&
-        err.message.toLowerCase().includes("mfa code is required")
-      ) {
-        setMfaRequired(true);
-      }
-      setError(getAdminLoginErrorMessage(err));
+      setError(getApiErrorMessage(err));
     }
   });
 
+  async function handleVerifyOtp(event: React.FormEvent) {
+    event.preventDefault();
+    const email = credentialsForm.getValues("email");
+    const parsed = verifySchema.safeParse({ email, otp });
+    if (!parsed.success) {
+      setError(parsed.error.issues[0]?.message ?? "Invalid OTP.");
+      return;
+    }
+
+    try {
+      setError(null);
+      const session = await verifyAdminLoginOtp(parsed.data);
+      await onSuccess(session);
+    } catch (err) {
+      setError(getApiErrorMessage(err));
+    }
+  }
+
   return (
-    <form onSubmit={handleSubmit} className="grid gap-4">
+    <div className="grid gap-4">
       {enrollmentHint ? (
         <p className="rounded-md border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
-          After invite setup, sign in here. If MFA enforcement is enabled but you have not
-          enrolled yet, complete enrollment at{" "}
-          <span className="font-medium text-foreground">Admin → Security → MFA</span> while
-          enforcement is off, or ask your operator for a bootstrap window.
+          After invite setup, sign in with your admin email. A one-time code will be sent to your
+          email.
         </p>
       ) : null}
 
-      <div className="grid gap-1">
-        <label htmlFor="admin-email" className="text-sm font-medium">
-          Admin email
-        </label>
-        <input
-          id="admin-email"
-          type="email"
-          autoComplete="username"
-          className="h-11 rounded-md border border-border bg-background px-3 text-sm"
-          {...form.register("email")}
-        />
-        <p className="text-xs text-destructive">{form.formState.errors.email?.message}</p>
-      </div>
-
-      <div className="grid gap-1">
-        <label htmlFor="admin-password" className="text-sm font-medium">
-          Password
-        </label>
-        <input
-          id="admin-password"
-          type="password"
-          autoComplete="current-password"
-          className="h-11 rounded-md border border-border bg-background px-3 text-sm"
-          {...form.register("password")}
-        />
-        <p className="text-xs text-destructive">{form.formState.errors.password?.message}</p>
-      </div>
-
-      {mfaRequired ? (
-        <div className="grid gap-1">
-          <label htmlFor="admin-mfa-code" className="text-sm font-medium">
-            Authenticator code
+      {step === "credentials" ? (
+        <form onSubmit={handleRequestOtp} className="grid gap-4">
+          <div className="grid gap-1">
+            <label htmlFor="admin-email" className="text-sm font-medium">
+              Admin email
+            </label>
+            <input
+              id="admin-email"
+              type="email"
+              autoComplete="username"
+              className="h-11 rounded-md border border-border bg-background px-3 text-sm"
+              {...credentialsForm.register("email")}
+            />
+          </div>
+          <div className="grid gap-1">
+            <label htmlFor="admin-password" className="text-sm font-medium">
+              Password
+            </label>
+            <input
+              id="admin-password"
+              type="password"
+              autoComplete="current-password"
+              className="h-11 rounded-md border border-border bg-background px-3 text-sm"
+              {...credentialsForm.register("password")}
+            />
+          </div>
+          <button
+            type="submit"
+            className="h-11 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground disabled:opacity-60"
+            disabled={credentialsForm.formState.isSubmitting}
+          >
+            {credentialsForm.formState.isSubmitting ? "Sending code..." : "Send login code"}
+          </button>
+        </form>
+      ) : (
+        <form onSubmit={handleVerifyOtp} className="grid gap-4">
+          <p className="text-sm text-muted-foreground">
+            Enter the 6-digit code sent to {credentialsForm.getValues("email")}
+            {expiresAt ? ` (expires ${new Date(expiresAt).toLocaleTimeString()})` : ""}.
+          </p>
+          <label className="grid gap-1 text-sm" htmlFor="admin-otp">
+            Login code
+            <input
+              id="admin-otp"
+              value={otp}
+              onChange={(event) => setOtp(event.target.value)}
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              maxLength={6}
+              className="h-11 rounded-md border border-border bg-background px-3 text-sm tracking-widest"
+            />
           </label>
-          <input
-            id="admin-mfa-code"
-            type="text"
-            inputMode="numeric"
-            autoComplete="one-time-code"
-            maxLength={8}
-            className="h-11 rounded-md border border-border bg-background px-3 text-sm tracking-widest"
-            {...form.register("mfaCode")}
-          />
-          <p className="text-xs text-destructive">{form.formState.errors.mfaCode?.message}</p>
-        </div>
-      ) : null}
+          <button
+            type="button"
+            className="text-left text-sm text-muted-foreground underline-offset-4 hover:underline"
+            onClick={() => setStep("credentials")}
+          >
+            Use different email
+          </button>
+          <button
+            type="submit"
+            className="h-11 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground"
+          >
+            Verify and sign in
+          </button>
+        </form>
+      )}
 
       <AuthErrorBanner message={error} />
-
-      <button
-        type="submit"
-        className="h-11 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground disabled:opacity-60"
-        disabled={form.formState.isSubmitting}
-      >
-        {form.formState.isSubmitting ? "Signing in..." : "Sign in to admin"}
-      </button>
-    </form>
+    </div>
   );
 }

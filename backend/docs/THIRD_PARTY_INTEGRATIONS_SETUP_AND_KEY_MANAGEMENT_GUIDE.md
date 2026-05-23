@@ -316,7 +316,10 @@ Receive real-time shipment status updates without polling.
 3. **Security:**
    - Set a webhook secret/token in Shiprocket dashboard
    - Store it as `SHIPROCKET_WEBHOOK_TOKEN` in your environment
-   - Backend validates `Authorization: Bearer <token>` on every webhook request
+   - Backend validates the token from (in priority order):
+     1. `x-api-key: <token>` — **primary** (official Shiprocket docs format)
+     2. `x-shiprocket-token: <token>` — alternate header
+     3. `Authorization: Bearer <token>` — backward compatibility
    - Optional: Configure `SHIPROCKET_WEBHOOK_ALLOWLIST_CIDR` for IP-level defense
 
 ### Environment Mapping

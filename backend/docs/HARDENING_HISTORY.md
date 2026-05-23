@@ -514,6 +514,21 @@ All core documentation synchronized with final security model:
 
 ---
 
+**Shiprocket webhook header compliance fix — May 2026:**
+
+- **Root cause:** Official Shiprocket API docs specify the webhook security token is sent as `x-api-key` header. The backend was only reading `x-shiprocket-token` and `Authorization: Bearer`, so any production Shiprocket webhook with a security token configured in the dashboard would be rejected with 401.
+- **Fix:** `orders.routes.ts` — `x-api-key` added as the first priority in the header resolution chain (before `x-shiprocket-token` → `Authorization`). `orders.schemas.ts` — schema updated to declare all three headers; `required: ['authorization']` constraint removed (would reject valid Shiprocket calls).
+- **Service layer:** `orders.service.ts` — Shiprocket token comparison already strips `Bearer ` prefix via `replace(/^Bearer\s+/i, '')`, which is a no-op for raw `x-api-key` values. No service change needed.
+- **Backward compatibility:** All three formats still accepted: `x-api-key` (primary), `x-shiprocket-token` (alternate), `Authorization: Bearer` (backward compat).
+- **Regression test added:** `orders.webhooks.integration.test.ts` — `accepts Shiprocket x-api-key header format (raw token, no Bearer prefix)`.
+- **Docs updated:** `ROUTE_SURFACE_COMPLETE_REFERENCE.md` §8, `THIRD_PARTY_INTEGRATIONS_SETUP_AND_KEY_MANAGEMENT_GUIDE.md` §Shiprocket Security, `docs/postman/E2E-FLOW-TEST-LOG.md` steps 3.8/3.9, `README.md` shipping webhook note.
+
+*Invariant:* Shiprocket webhook token read priority is always: `x-api-key` → `x-shiprocket-token` → `Authorization: Bearer`. All three are timing-safe compared via `secureTokenMatch()`.
+
+*Validation:* `npm run typecheck` → exit 0. 628 tests pass (vitest).
+
+---
+
 **Earlier hardening:**
 - Notification provider bootstrap now flag-aware: validates credentials only for enabled channels. Email (`NOTIFY_EMAIL_ENABLED`) and SMS (`NOTIFY_SMS_ENABLED`) default to enabled; WhatsApp (`NOTIFY_WHATSAPP_ENABLED`) defaults to disabled. Meta WhatsApp credentials required only when WhatsApp channel is enabled.
 - MSG91 adapter now normalizes accepted Indian phone inputs into `91XXXXXXXXXX` and rejects invalid formats before provider calls.

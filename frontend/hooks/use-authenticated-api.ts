@@ -17,7 +17,12 @@ export function useAuthenticatedApi() {
         setAccessToken,
         onAuthFailure: () => {
           clearSession();
-          router.push("/login");
+          const path = window.location.pathname;
+          if (path.startsWith("/admin")) {
+            router.push("/admin/login");
+          } else {
+            router.push("/login");
+          }
         },
       }),
     [setAccessToken, clearSession, router],

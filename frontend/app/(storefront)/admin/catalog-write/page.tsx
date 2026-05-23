@@ -47,6 +47,14 @@ export default function AdminCatalogWritePage() {
         payloadTemplate='{"quantity":25,"lowStockThreshold":5}'
         method="PATCH"
       />
+
+      <AdminMutationPanel
+        title="Delete product variant"
+        endpoint="/admin/products/PRODUCT_ID/variants/VARIANT_ID"
+        method="DELETE"
+        payloadLabel="No body required (disabled in UI if last variant)"
+        payloadTemplate=""
+      />
     </div>
   );
 }

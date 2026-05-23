@@ -6,6 +6,7 @@ import { useAuthenticatedApi } from "@/hooks/use-authenticated-api";
 import { API_BASE_URL } from "@/lib/constants";
 import { createIdempotencyKey } from "@/lib/idempotency";
 import { getApiErrorMessageWithHint } from "@/lib/error-messages";
+import { ADMIN_PERMISSIONS, hasAdminPermission } from "@/lib/permissions";
 import { useAuthStore } from "@/stores/auth";
 import type {
   AdminOrderDetail,
@@ -49,6 +50,8 @@ export function AdminOrderFulfillmentPanel({
 }: AdminOrderFulfillmentPanelProps) {
   const api = useAuthenticatedApi();
   const accessToken = useAuthStore((s) => s.accessToken);
+  const user = useAuthStore((s) => s.user);
+  const canRefund = hasAdminPermission(user, ADMIN_PERMISSIONS.ordersRefund);
 
   const [orders, setOrders] = useState<AdminOrdersListResponse["items"]>([]);
   const [selectedOrderId, setSelectedOrderId] = useState(initialOrderId ?? "");
@@ -395,6 +398,14 @@ export function AdminOrderFulfillmentPanel({
       <SecondaryActionsSection
         busyAction={busyAction}
         hasInvoice={detail?.invoice?.hasPdf === true}
+        canRefund={canRefund}
+        refundPending={detail?.status === "REFUND_PENDING" || detail?.status === "REFUNDED"}
+        onRefund={() =>
+          runAction("refund", "/admin/orders/:id/status", {
+            method: "PATCH",
+            body: { status: "REFUNDED", note: "Refund initiated from admin fulfillment panel" },
+          })
+        }
         onCancel={() =>
           runAction("cancel", "/admin/orders/:id/cancel", {
             body: { reason: "Cancelled by admin fulfillment panel" },
@@ -417,6 +428,9 @@ export function AdminOrderFulfillmentPanel({
 interface SecondarySectionProps {
   busyAction: string | null;
   hasInvoice: boolean;
+  canRefund: boolean;
+  refundPending: boolean;
+  onRefund: () => void;
   onCancel: () => void;
   onRetriggerEmail: () => void;
   onDownloadInvoice: () => void;
@@ -425,6 +439,9 @@ interface SecondarySectionProps {
 function SecondaryActionsSection({
   busyAction,
   hasInvoice,
+  canRefund,
+  refundPending,
+  onRefund,
   onCancel,
   onRetriggerEmail,
   onDownloadInvoice,
@@ -435,6 +452,16 @@ function SecondaryActionsSection({
         Other actions
       </p>
       <div className="flex flex-wrap gap-2">
+        {canRefund ? (
+          <button
+            type="button"
+            disabled={busyAction !== null || refundPending}
+            className="h-9 rounded-md bg-destructive px-3 text-sm font-medium text-destructive-foreground disabled:opacity-50"
+            onClick={onRefund}
+          >
+            {refundPending ? "Refund pending…" : "Request refund"}
+          </button>
+        ) : null}
         <button
           type="button"
           disabled={busyAction !== null}

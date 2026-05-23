@@ -957,9 +957,10 @@ export const shippingWebhookSchema = {
   headers: {
     type: 'object',
     additionalProperties: true,
-    required: ['authorization'],
     properties: {
-      authorization: { type: 'string', maxLength: 512 }
+      authorization: { type: 'string', maxLength: 512 },
+      'x-api-key': { type: 'string', maxLength: 512 },
+      'x-shiprocket-token': { type: 'string', maxLength: 512 }
     }
   },
   body: {
