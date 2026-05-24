@@ -79,6 +79,51 @@ git push origin main
 
 After setup, every deploy is: **commit → push to `main` → automatic**.
 
+> **PM2 does not watch git.** Push-to-deploy is **not** PM2 — it is the **GitHub Actions self-hosted runner** on the VPS running `vps-deploy.sh` / `vps-frontend-deploy.sh` (git pull + docker/pm2 reload).
+
+---
+
+## Verify CD is working (VPS)
+
+SSH as `d_user` and run:
+
+```bash
+bash /var/www/raghava-organics/docs/clients/raghava-organics/scripts/verify-cd-status.sh
+```
+
+| Check | What PASS means |
+|-------|-----------------|
+| Git `local HEAD` = `origin/main` | VPS has latest code from GitHub |
+| Runner service running | Deploy jobs can execute on VPS |
+| PM2 `raghava-organics-frontend` | Frontend process exists |
+| Docker `raghava-organics-backend` | API container running |
+
+**GitHub (browser):** [Actions](https://github.com/bb3agency/raghava-organics-site/actions)
+
+1. **Reliability CI** — must be green on your commit (deploy does **not** run if CI fails).
+2. **Deploy to VPS** — two jobs: `Deploy Backend` + `Deploy Frontend`, both on runner `raghava-organics-vps`.
+
+**Quick test after a push:**
+
+```bash
+# On VPS — should match your latest commit on GitHub
+git -C /var/www/raghava-organics rev-parse --short HEAD
+git -C /var/www/raghava-organics rev-parse --short origin/main
+cat /var/www/raghava-organics/frontend/.last-frontend-deploy-sha 2>/dev/null || echo "no frontend CD yet"
+```
+
+**Manual deploy (no new commit):** GitHub → Actions → **Deploy to VPS** → **Run workflow**.
+
+**Manual frontend only on VPS:**
+
+```bash
+SHA=$(git -C /var/www/raghava-organics rev-parse HEAD)
+bash /var/www/raghava-organics/backend/scripts/vps-frontend-deploy.sh \
+  /var/www/raghava-organics/frontend "$SHA"
+# Force rebuild even if change-detection skips:
+# FORCE_FRONTEND_BUILD=true bash ... (same command)
+```
+
 ---
 
 ## Cleared

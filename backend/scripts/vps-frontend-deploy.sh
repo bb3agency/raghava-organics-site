@@ -65,19 +65,28 @@ if [ ! -f "$FRONTEND_PATH/package.json" ]; then
 fi
 
 SHA_RECORD="$FRONTEND_PATH/.last-frontend-deploy-sha"
+FORCE_BUILD="${FORCE_FRONTEND_BUILD:-false}"
+
+GIT_ROOT=$(git -C "$FRONTEND_PATH" rev-parse --show-toplevel 2>/dev/null || echo "$FRONTEND_PATH")
+MONOREPO=false
+if [ "$GIT_ROOT" != "$FRONTEND_PATH" ]; then
+  MONOREPO=true
+fi
 
 echo "===== Frontend deploy started ====="
 echo "Path:   $FRONTEND_PATH"
+echo "Git:    $GIT_ROOT"
 echo "SHA:    $COMMIT_SHA"
 echo "Time:   $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 
 # ---------------------------------------------------------------------------
-# 1. Pull latest code and verify SHA
+# 1. Pull latest code and verify SHA (always at git root for monorepos)
 # ---------------------------------------------------------------------------
 echo ""
 echo "----- Step 1: git pull -----"
-cd "$FRONTEND_PATH"
+cd "$GIT_ROOT"
 git fetch --quiet origin main
+git checkout main 2>/dev/null || git checkout -B main origin/main
 git reset --hard "origin/main"
 
 ACTUAL_SHA=$(git rev-parse HEAD)
@@ -95,15 +104,24 @@ echo ""
 echo "----- Step 2: change detection -----"
 SKIP_BUILD=false
 
-if [ -f "$SHA_RECORD" ]; then
+if [ "$FORCE_BUILD" = "true" ]; then
+  echo "FORCE_FRONTEND_BUILD=true — full build required."
+elif [ -f "$SHA_RECORD" ]; then
   LAST_SHA=$(cat "$SHA_RECORD")
   echo "Last deployed SHA: $LAST_SHA"
 
-  CHANGED=$(git diff --name-only "$LAST_SHA" "$COMMIT_SHA" 2>/dev/null || echo "UNKNOWN")
+  CHANGED=$(git -C "$GIT_ROOT" diff --name-only "$LAST_SHA" "$COMMIT_SHA" 2>/dev/null || echo "UNKNOWN")
   if [ "$CHANGED" = "UNKNOWN" ]; then
     echo "Could not diff against last SHA (force-push or first deploy). Proceeding with full build."
-  elif echo "$CHANGED" | grep -qE '^(frontend/)?(app/|pages/|components/|lib/|hooks/|styles/|public/|next\.config|package\.json|package-lock\.json|tsconfig|tailwind\.config|postcss\.config)'; then
-    echo "Frontend-relevant files changed - full build required."
+  elif [ "$MONOREPO" = "true" ]; then
+    if echo "$CHANGED" | grep -qE '^frontend/'; then
+      echo "Monorepo: frontend/ files changed — full build required."
+    else
+      echo "Monorepo: no frontend/ changes. Skipping build (PM2 reload only)."
+      SKIP_BUILD=true
+    fi
+  elif echo "$CHANGED" | grep -qE '^(app/|pages/|components/|lib/|hooks/|styles/|public/|next\.config|package\.json|package-lock\.json|tsconfig|tailwind\.config|postcss\.config)'; then
+    echo "Frontend-relevant files changed — full build required."
   else
     echo "No frontend-relevant files changed. Skipping build."
     SKIP_BUILD=true
@@ -118,6 +136,7 @@ fi
 if [ "$SKIP_BUILD" = "false" ]; then
   echo ""
   echo "----- Step 3: npm ci -----"
+  cd "$FRONTEND_PATH"
   npm ci --prefer-offline 2>&1
 
   echo ""
@@ -128,6 +147,8 @@ else
   echo ""
   echo "----- Steps 3-4: skipped (no relevant changes) -----"
 fi
+
+cd "$FRONTEND_PATH"
 
 # ---------------------------------------------------------------------------
 # 5. Derive PM2 process name from CLIENT_ID in env

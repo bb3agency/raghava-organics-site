@@ -43,6 +43,7 @@ log "Starting deploy to $CLIENT_PATH (expected SHA: $EXPECTED_SHA)"
 [ -f "$CLIENT_PATH/docker-compose.yml" ] || fail "docker-compose.yml not found at $CLIENT_PATH"
 
 cd "$CLIENT_PATH"
+GIT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || echo "$CLIENT_PATH")
 
 COMPOSE_FILES=(-f docker-compose.yml -f docker-compose.prod.yml)
 [ -f docker-compose.prod.yml ] || fail "docker-compose.prod.yml not found — required for VPS (host Postgres)"
@@ -52,13 +53,15 @@ COMPOSE_PROJECT="${CLIENT_ID:-$(grep -E '^CLIENT_ID=' .env | cut -d= -f2 | tr -d
 # ---------------------------------------------------------------------------
 # 1. Pull latest code from main
 # ---------------------------------------------------------------------------
-log "Pulling latest code..."
+log "Pulling latest code from git root: $GIT_ROOT"
+cd "$GIT_ROOT"
 git fetch origin main
-git checkout main
+git checkout main 2>/dev/null || git checkout -B main origin/main
 git pull origin main --ff-only
 
 # Verify the pulled commit matches what CI validated
 CURRENT_SHA=$(git rev-parse HEAD)
+cd "$CLIENT_PATH"
 if [ "$CURRENT_SHA" != "$EXPECTED_SHA" ]; then
   fail "SHA mismatch after pull. Expected $EXPECTED_SHA, got $CURRENT_SHA. Aborting deploy."
 fi
