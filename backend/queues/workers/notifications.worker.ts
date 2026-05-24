@@ -127,6 +127,13 @@ export function createNotificationsWorker(
 
   async function resolveRuntimeConfig(): Promise<NodeJS.ProcessEnv> {
     const runtimeConfig: NodeJS.ProcessEnv = {};
+    for (const key of OPS_RUNTIME_NOTIFICATION_KEYS) {
+      const envValue = process.env[key];
+      if (envValue) {
+        runtimeConfig[key] = envValue;
+      }
+    }
+
     const rows = await prisma.opsConfigSecret.findMany({
       where: {
         isActive: true,
@@ -142,30 +149,6 @@ export function createNotificationsWorker(
 
     for (const row of rows) {
       runtimeConfig[row.secretKey] = decryptOpsConfigValue(row.encryptedValue);
-    }
-
-    // Test-only: fill from process.env for missing keys so unit tests don't need DB overlay
-    if ((process.env.NODE_ENV ?? '').trim().toLowerCase() === 'test') {
-      const possibleKeys = [
-        'NOTIFY_EMAIL_ENABLED',
-        'NOTIFY_SMS_ENABLED',
-        'NOTIFY_WHATSAPP_ENABLED',
-        'RESEND_API_KEY',
-        'RESEND_FROM',
-        'SMS_PROVIDER',
-        'MSG91_AUTH_KEY',
-        'MSG91_SENDER_ID',
-        'MSG91_ROUTE',
-        'FAST2SMS_API_KEY',
-        'META_WHATSAPP_ACCESS_TOKEN',
-        'META_WHATSAPP_PHONE_NUMBER_ID',
-        'META_WHATSAPP_API_VERSION'
-      ];
-      for (const key of possibleKeys) {
-        if (!runtimeConfig[key] && process.env[key]) {
-          runtimeConfig[key] = process.env[key] as string;
-        }
-      }
     }
 
     return runtimeConfig;
