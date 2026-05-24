@@ -17,10 +17,13 @@ describe('webhook-allowlist', () => {
     expect(isIpAllowlisted('192.168.1.1', [])).toBe(true);
   });
 
-  it('treats missing allowlist as invalid in production-like runtime', () => {
+  it('treats missing allowlist as invalid only when enforce is requested', () => {
     vi.stubEnv('NODE_ENV', 'production');
     expect(isProductionWithoutAllowlist([])).toBe(true);
-    expect(() => assertWebhookAllowlistConfigured('Razorpay', [])).toThrow(/allowlist is EMPTY/i);
+    expect(() => assertWebhookAllowlistConfigured('Razorpay', [])).not.toThrow();
+    expect(() => assertWebhookAllowlistConfigured('Razorpay', [], { enforce: true })).toThrow(
+      /allowlist is EMPTY/i
+    );
   });
 
   it('does not require allowlist in development and test runtime', () => {

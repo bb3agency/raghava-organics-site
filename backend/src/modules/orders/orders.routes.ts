@@ -46,7 +46,13 @@ import {
 import { CheckoutRiskService } from './checkout-risk.service';
 import { OrdersService } from './orders.service';
 import { CancelOrderInput, ReturnRequestStatus } from './orders.types';
-import { assertWebhookAllowlistConfigured, isIpAllowlisted, parseWebhookIpAllowlist, resolveSecurityClientIp } from '@common/security/webhook-allowlist';
+import {
+  isIpAllowlisted,
+  isProductionWithoutAllowlist,
+  parseWebhookIpAllowlist,
+  resolveSecurityClientIp,
+  webhookAllowlistEnvKeyForProvider
+} from '@common/security/webhook-allowlist';
 
 function requireRefundPermission(request: FastifyRequest): void {
   const body = request.body as { status?: string };
@@ -109,8 +115,24 @@ export async function registerOrdersRoutes(fastify: FastifyInstance): Promise<vo
     );
   }
 
-  assertWebhookAllowlistConfigured('Razorpay', razorpayAllowlistRules);
-  assertWebhookAllowlistConfigured('Shipping', shippingWebhookAllowlistRules);
+  if (isProductionWithoutAllowlist(razorpayAllowlistRules)) {
+    fastify.log.warn(
+      {
+        envKey: webhookAllowlistEnvKeyForProvider('Razorpay'),
+        remediation: 'Set via Ops UI before go-live; /health/ready will stay not_ready until configured'
+      },
+      'Razorpay webhook IP allowlist is empty — signature verification still required on every webhook'
+    );
+  }
+  if (isProductionWithoutAllowlist(shippingWebhookAllowlistRules)) {
+    fastify.log.warn(
+      {
+        envKey: webhookAllowlistEnvKeyForProvider('Shipping'),
+        remediation: 'Set SHIPPING_WEBHOOK_ALLOWLIST_CIDR (or DELHIVERY_WEBHOOK_ALLOWLIST_CIDR) via Ops UI before go-live'
+      },
+      'Shipping webhook IP allowlist is empty — provider token/signature checks still apply'
+    );
+  }
 
   if (!fastify.hasDecorator('checkoutRisk')) {
     fastify.decorate('checkoutRisk', new CheckoutRiskService(fastify));

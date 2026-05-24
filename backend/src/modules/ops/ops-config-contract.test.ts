@@ -121,7 +121,21 @@ describe('ops config contract', () => {
     expect(required).toContain('OPS_METRICS_TOKEN');
     expect(required).toContain('REPLAY_APPROVAL_TOKEN');
     expect(required).toContain('DELHIVERY_WEBHOOK_TOKEN');
+    expect(required).toContain('SHIPPING_WEBHOOK_ALLOWLIST_CIDR');
     expect(required).toContain('SMS_PROVIDER');
+  });
+
+  it('requires Razorpay webhook allowlist in strict profile when payment provider is razorpay', () => {
+    const required = computeRequiredOpsConfigKeys(
+      {
+        PAYMENT_PROVIDER: 'razorpay',
+        SHIPPING_PROVIDER: 'noop',
+        SMS_PROVIDER: 'noop'
+      },
+      true
+    );
+
+    expect(required).toContain('RAZORPAY_WEBHOOK_ALLOWLIST_CIDR');
   });
 
   it('detects missing strict keys', () => {

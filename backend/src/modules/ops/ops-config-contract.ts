@@ -142,9 +142,12 @@ const OPS_CONFIG_REQUIRED_BY_PROVIDER: Record<string, Record<string, string[]>> 
 };
 
 const OPS_CONFIG_STRICT_ADDITIONAL_REQUIRED_BY_PROVIDER: Record<string, Record<string, string[]>> = {
+  PAYMENT_PROVIDER: {
+    razorpay: ['RAZORPAY_WEBHOOK_ALLOWLIST_CIDR']
+  },
   SHIPPING_PROVIDER: {
-    delhivery: ['DELHIVERY_WEBHOOK_TOKEN'],
-    shiprocket: ['SHIPROCKET_WEBHOOK_TOKEN']
+    delhivery: ['DELHIVERY_WEBHOOK_TOKEN', 'SHIPPING_WEBHOOK_ALLOWLIST_CIDR'],
+    shiprocket: ['SHIPROCKET_WEBHOOK_TOKEN', 'SHIPPING_WEBHOOK_ALLOWLIST_CIDR']
   }
 };
 

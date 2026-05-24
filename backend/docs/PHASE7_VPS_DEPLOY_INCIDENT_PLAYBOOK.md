@@ -133,7 +133,15 @@ Fix:
 - Pull backend with fix in `admin-policy-registry.validation.ts` (resolves `dist/src/modules` and `.routes.js`).
 - Rebuild and restart: `docker compose -p <client> -f docker-compose.yml -f docker-compose.prod.yml up -d --build backend workers`.
 
-### I) Backend crash loop: `Registry entry POST /api/v1/admin/invites is not backed by a guarded ... route`
+### I) Backend crash loop: `Razorpay webhook IP allowlist is EMPTY in production-like profile`
+Cause:
+- Startup used to hard-fail when `RAZORPAY_WEBHOOK_ALLOWLIST_CIDR` was unset, before Ops UI bootstrap.
+
+Fix:
+- API boot logs a warning only; empty allowlist still allows boot (webhook HMAC remains mandatory).
+- Configure allowlists in Ops UI before go-live; `/api/v1/health/ready` lists missing keys including `RAZORPAY_WEBHOOK_ALLOWLIST_CIDR` when `PAYMENT_PROVIDER=razorpay`.
+
+### J) Backend crash loop: `Registry entry POST /api/v1/admin/invites is not backed by a guarded ... route`
 Cause:
 - Startup policy scan read compiled `.routes.js` but only matched TypeScript-style `opsPermissionGuard('ops:write')`, not compiled `(0, ops_permissions_guard_1.opsPermissionGuard)('ops:write')`.
 

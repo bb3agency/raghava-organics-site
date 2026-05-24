@@ -42,19 +42,31 @@ export function isProductionWithoutAllowlist(rules: ParsedAllowRule[]): boolean 
 }
 
 /**
- * Throws a startup error when webhook allowlists are not configured in production-like runtime.
- * Call during server bootstrap for both Razorpay and Delhivery allowlists.
+ * Optional strict check (tests / explicit tooling). Production API boot must NOT call with
+ * enforce:true — allowlists are Ops-managed and validated via /health/ready instead.
  */
 export function assertWebhookAllowlistConfigured(
   providerName: string,
-  rules: ParsedAllowRule[]
+  rules: ParsedAllowRule[],
+  options?: { enforce?: boolean }
 ): void {
+  if (options?.enforce !== true) {
+    return;
+  }
   if (isProductionWithoutAllowlist(rules)) {
+    const envKey = `${providerName.toUpperCase().replace(/\s+/g, '_')}_WEBHOOK_ALLOWLIST_CIDR`;
     throw new Error(
       `${providerName} webhook IP allowlist is EMPTY in production-like profile. ` +
-      `Configure ${providerName.toUpperCase().replace(/\s+/g, '_')}_WEBHOOK_ALLOWLIST_CIDR before go-live.`
+        `Configure ${envKey} before go-live.`
     );
   }
+}
+
+export function webhookAllowlistEnvKeyForProvider(providerName: string): string {
+  if (providerName.toLowerCase() === 'shipping') {
+    return 'SHIPPING_WEBHOOK_ALLOWLIST_CIDR';
+  }
+  return `${providerName.toUpperCase().replace(/\s+/g, '_')}_WEBHOOK_ALLOWLIST_CIDR`;
 }
 
 export function isIpAllowlisted(clientIp: string, rules: ParsedAllowRule[]): boolean {
