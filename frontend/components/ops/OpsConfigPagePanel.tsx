@@ -2,7 +2,10 @@
 
 import { useEffect, useState } from "react";
 import { OpsConfigForms } from "@/components/ops/OpsConfigForms";
+import { OpsConfigOverviewGrid } from "@/components/ops/OpsConfigOverviewGrid";
 import { OpsRuntimeReadinessCard } from "@/components/ops/OpsRuntimeReadinessCard";
+import { OpsStoredConfigTable } from "@/components/ops/OpsStoredConfigTable";
+import { OpsAlert, OpsLoadingBlock } from "@/components/ops/ui/ops-ui";
 import { getApiErrorMessageWithHint } from "@/lib/error-messages";
 import {
   getOpsConfigOverviewClient,
@@ -10,49 +13,48 @@ import {
   type OpsConfigOverview,
   type OpsStoredConfig,
 } from "@/lib/ops-client-api";
-export function OpsConfigPagePanel() {
-  return <OpsConfigContent />;
-}
 
-function OpsConfigContent() {
+export function OpsConfigPagePanel() {
   const [overview, setOverview] = useState<OpsConfigOverview | null>(null);
   const [stored, setStored] = useState<OpsStoredConfig | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refreshSignal, setRefreshSignal] = useState(0);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     void Promise.all([getOpsConfigOverviewClient(), getOpsStoredConfigClient()])
       .then(([nextOverview, nextStored]) => {
         setOverview(nextOverview);
         setStored(nextStored);
+        setError(null);
       })
-      .catch((err) => setError(getApiErrorMessageWithHint(err)));
-  }, []);
+      .catch((err) => setError(getApiErrorMessageWithHint(err)))
+      .finally(() => setLoading(false));
+  }, [refreshSignal]);
+
+  if (loading) {
+    return <OpsLoadingBlock label="Loading configuration contract…" />;
+  }
 
   if (error) {
-    return <p className="text-sm text-destructive">{error}</p>;
+    return <OpsAlert tone="error">{error}</OpsAlert>;
   }
 
   if (!overview || !stored) {
-    return <p className="text-sm text-muted-foreground">Loading config metadata...</p>;
+    return null;
   }
 
   return (
-    <section className="grid gap-6">
-      <header>
-        <h2 className="font-heading text-xl font-semibold">Ops config</h2>
-        <p className="text-sm text-muted-foreground">
-          Runtime profile: {overview.runtimeProfile} · generated {overview.generatedAt}
-        </p>
-        <p className="text-sm text-muted-foreground">
-          Bootstrap keys are read-only in ops UI — change via deployment env.
-        </p>
-      </header>
+    <div className="grid gap-8">
+      <OpsAlert tone="info">
+        Bootstrap keys (<code className="text-xs">DATABASE_URL</code>,{" "}
+        <code className="text-xs">OPS_DB_ENCRYPTION_KEY</code>) are read-only here — change via
+        deployment environment. DB-overlay keys require OTP save and may need API/worker restart.
+      </OpsAlert>
       <OpsRuntimeReadinessCard refreshSignal={refreshSignal} />
+      <OpsConfigOverviewGrid overview={overview} />
+      <OpsStoredConfigTable stored={stored} />
       <OpsConfigForms onConfigSaved={() => setRefreshSignal((prev) => prev + 1)} />
-      <pre className="max-h-96 overflow-auto rounded-md border bg-muted/30 p-3 text-xs">
-        {JSON.stringify({ overview, stored }, null, 2)}
-      </pre>
-    </section>
+    </div>
   );
 }

@@ -2,6 +2,16 @@
 
 import { useState } from "react";
 import { OpsCriticalOtpForm } from "@/components/ops/OpsCriticalOtpForm";
+import { useOpsCanWrite } from "@/components/ops/OpsSessionProvider";
+import {
+  OpsAlert,
+  OpsCard,
+  OpsCardHeader,
+  OpsField,
+  OpsSelect,
+  OpsTextarea,
+} from "@/components/ops/ui/ops-ui";
+import { Button } from "@/components/ui/button";
 import { getApiErrorMessageWithHint } from "@/lib/error-messages";
 import {
   saveOpsConfigClient,
@@ -16,6 +26,7 @@ interface OpsConfigFormsProps {
 }
 
 export function OpsConfigForms({ onConfigSaved }: OpsConfigFormsProps) {
+  const canWrite = useOpsCanWrite();
   const [validateMessage, setValidateMessage] = useState<string | null>(null);
   const [validateError, setValidateError] = useState<string | null>(null);
 
@@ -38,7 +49,7 @@ export function OpsConfigForms({ onConfigSaved }: OpsConfigFormsProps) {
       });
       setValidateMessage(
         result.valid
-          ? `Valid. Checked ${result.checkedKeys.length} keys. Restart required: ${result.requiresRestart ? "yes" : "no"}`
+          ? `Valid — checked ${result.checkedKeys.length} keys. Restart required: ${result.requiresRestart ? "yes" : "no"}`
           : `Invalid: ${result.errors.map((item) => item.message).join("; ")}`,
       );
     } catch (err) {
@@ -46,50 +57,46 @@ export function OpsConfigForms({ onConfigSaved }: OpsConfigFormsProps) {
     }
   }
 
+  if (!canWrite) {
+    return (
+      <OpsAlert tone="warning">Read-only session — config validate/save requires ops:write.</OpsAlert>
+    );
+  }
+
   return (
-    <section className="grid gap-4">
-      <div className="grid gap-3 rounded-lg border border-border p-4">
-        <h3 className="font-medium">Validate config draft</h3>
-        <form onSubmit={handleValidate} className="grid gap-3">
-          <label className="grid gap-1 text-sm">
-            Domain (optional)
-            <select
-              name="domain"
-              className="h-10 rounded-md border border-border bg-background px-3 text-sm"
-              defaultValue=""
-            >
-              <option value="">all domains</option>
+    <div className="grid gap-6">
+      <OpsCard>
+        <OpsCardHeader
+          title="Validate draft"
+          description="Dry-run against the ops config contract before OTP save."
+        />
+        <form onSubmit={handleValidate} className="grid gap-4">
+          <OpsField label="Domain (optional)" htmlFor="validate-domain">
+            <OpsSelect id="validate-domain" name="domain" defaultValue="">
+              <option value="">All domains</option>
               <option value="core">core</option>
               <option value="payments">payments</option>
               <option value="shipping">shipping</option>
               <option value="notifications">notifications</option>
               <option value="opsSecurity">opsSecurity</option>
-            </select>
-          </label>
-          <label className="grid gap-1 text-sm">
-            Values JSON
-            <textarea
-              name="values"
-              minLength={2}
-              className="min-h-28 rounded-md border border-border bg-background px-3 py-2 text-sm"
-              defaultValue={SAMPLE_VALUES}
-              required
-            />
-          </label>
-          <button
-            type="submit"
-            className="h-10 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground"
-          >
+            </OpsSelect>
+          </OpsField>
+          <OpsField label="Values (JSON)" htmlFor="validate-values" hint="Keys must match contract for selected domain">
+            <OpsTextarea id="validate-values" name="values" defaultValue={SAMPLE_VALUES} required className="min-h-32 font-mono text-xs" />
+          </OpsField>
+          <Button type="submit" className="w-fit">
             Validate draft
-          </button>
+          </Button>
         </form>
-        {validateMessage ? <p className="text-sm text-muted-foreground">{validateMessage}</p> : null}
-        {validateError ? <p className="text-sm text-destructive">{validateError}</p> : null}
-      </div>
+        {validateMessage ? <OpsAlert tone="success" className="mt-4">{validateMessage}</OpsAlert> : null}
+        {validateError ? <OpsAlert tone="error" className="mt-4">{validateError}</OpsAlert> : null}
+      </OpsCard>
 
       <OpsCriticalOtpForm
         actionType="config-save"
-        buttonLabel="Save config (OTP required)"
+        title="Save configuration"
+        description="Persists encrypted values to OpsConfigSecret. Restart API and workers when requiresRestart is true."
+        buttonLabel="Save with OTP"
         onExecute={async ({ challengeId, otpCode }) => {
           const form = document.getElementById("ops-config-save-form") as HTMLFormElement;
           const formData = new FormData(form);
@@ -102,33 +109,21 @@ export function OpsConfigForms({ onConfigSaved }: OpsConfigFormsProps) {
           onConfigSaved?.();
         }}
       >
-        <div id="ops-config-save-form" className="grid gap-3">
-          <label className="grid gap-1 text-sm">
-            Domain
-            <select
-              name="domain"
-              className="h-10 rounded-md border border-border bg-background px-3 text-sm"
-              defaultValue="payments"
-            >
+        <div id="ops-config-save-form" className="grid gap-4">
+          <OpsField label="Domain" htmlFor="save-domain">
+            <OpsSelect id="save-domain" name="domain" defaultValue="payments">
               <option value="core">core</option>
               <option value="payments">payments</option>
               <option value="shipping">shipping</option>
               <option value="notifications">notifications</option>
               <option value="opsSecurity">opsSecurity</option>
-            </select>
-          </label>
-          <label className="grid gap-1 text-sm">
-            Values JSON
-            <textarea
-              name="values"
-              minLength={2}
-              className="min-h-28 rounded-md border border-border bg-background px-3 py-2 text-sm"
-              defaultValue={SAMPLE_VALUES}
-              required
-            />
-          </label>
+            </OpsSelect>
+          </OpsField>
+          <OpsField label="Values (JSON)" htmlFor="save-values">
+            <OpsTextarea id="save-values" name="values" defaultValue={SAMPLE_VALUES} required className="min-h-32 font-mono text-xs" />
+          </OpsField>
         </div>
       </OpsCriticalOtpForm>
-    </section>
+    </div>
   );
 }

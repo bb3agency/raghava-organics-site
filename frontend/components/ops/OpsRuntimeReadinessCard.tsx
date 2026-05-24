@@ -1,6 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { RefreshCw } from "lucide-react";
+import { OpsAlert, OpsBadge, OpsCard, OpsCardHeader } from "@/components/ops/ui/ops-ui";
+import { Button } from "@/components/ui/button";
 import { apiClient } from "@/lib/api";
 import { getApiErrorMessageWithHint } from "@/lib/error-messages";
 import type { ReadinessStatus } from "@/types/api";
@@ -17,8 +20,10 @@ export function OpsRuntimeReadinessCard({
   const [isLoading, setIsLoading] = useState(false);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null);
 
-  const loadReadiness = useCallback(async () => {
-    setIsLoading(true);
+  const loadReadiness = useCallback(async (quiet = false) => {
+    if (!quiet) {
+      setIsLoading(true);
+    }
     try {
       const next = await apiClient<ReadinessStatus>("/health/ready", {
         cache: "no-store",
@@ -36,12 +41,13 @@ export function OpsRuntimeReadinessCard({
   }, []);
 
   useEffect(() => {
-    void loadReadiness();
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- async health poll bootstrap
+    void loadReadiness(false);
   }, [loadReadiness, refreshSignal]);
 
   useEffect(() => {
     const interval = window.setInterval(() => {
-      void loadReadiness();
+      void loadReadiness(true);
     }, 10000);
     return () => window.clearInterval(interval);
   }, [loadReadiness]);
@@ -50,52 +56,71 @@ export function OpsRuntimeReadinessCard({
   const missingKeys = readiness?.runtimeConfigMissingKeys ?? [];
 
   return (
-    <section className="rounded-lg border border-border p-4" aria-live="polite">
-      <div className="flex items-center justify-between gap-3">
-        <h3 className="font-medium">Runtime readiness</h3>
-        <button
-          type="button"
-          onClick={() => void loadReadiness()}
-          className="h-8 rounded-md border border-border px-3 text-xs"
-          disabled={isLoading}
-        >
-          {isLoading ? "Refreshing..." : "Refresh"}
-        </button>
-      </div>
-
-      {error ? (
-        <p className="mt-2 text-sm text-destructive">{error}</p>
-      ) : readiness ? (
-        <div className="mt-2 grid gap-2 text-sm">
-          <p
-            className={
-              isReady
-                ? "text-emerald-700 dark:text-emerald-400"
-                : "text-amber-700 dark:text-amber-400"
-            }
+    <OpsCard aria-live="polite">
+      <OpsCardHeader
+        title="Runtime readiness"
+        description="GET /health/ready — polls every 10s"
+        actions={
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => void loadReadiness()}
+            disabled={isLoading}
+            className="gap-2"
           >
-            Status: {readiness.status} · DB: {readiness.database} · Redis:{" "}
-            {readiness.redis} · Queue: {readiness.queues.workerFreshness}
-          </p>
-          {!isReady && missingKeys.length > 0 ? (
-            <p className="text-destructive">
-              Missing runtime keys: {missingKeys.join(", ")}
-            </p>
-          ) : null}
-          {isReady ? (
-            <p className="text-emerald-700 dark:text-emerald-400">
-              All required runtime keys are configured and backend is healthy.
-            </p>
-          ) : null}
-        </div>
-      ) : (
-        <p className="mt-2 text-sm text-muted-foreground">Checking readiness...</p>
-      )}
+            <RefreshCw className={isLoading ? "size-4 animate-spin" : "size-4"} />
+            Refresh
+          </Button>
+        }
+      />
 
-      <p className="mt-2 text-xs text-muted-foreground">
-        Last updated:{" "}
-        {lastUpdatedAt ? new Date(lastUpdatedAt).toLocaleTimeString() : "—"}
+      {error ? <OpsAlert tone="error">{error}</OpsAlert> : null}
+
+      {readiness ? (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="rounded-lg border border-border/60 bg-muted/20 p-4">
+            <p className="text-xs text-muted-foreground">Status</p>
+            <OpsBadge tone={isReady ? "success" : "warning"} className="mt-2">
+              {readiness.status}
+            </OpsBadge>
+          </div>
+          <div className="rounded-lg border border-border/60 bg-muted/20 p-4">
+            <p className="text-xs text-muted-foreground">Database</p>
+            <OpsBadge tone={readiness.database === "connected" ? "success" : "danger"} className="mt-2">
+              {readiness.database}
+            </OpsBadge>
+          </div>
+          <div className="rounded-lg border border-border/60 bg-muted/20 p-4">
+            <p className="text-xs text-muted-foreground">Redis</p>
+            <OpsBadge tone={readiness.redis === "connected" ? "success" : "danger"} className="mt-2">
+              {readiness.redis}
+            </OpsBadge>
+          </div>
+          <div className="rounded-lg border border-border/60 bg-muted/20 p-4">
+            <p className="text-xs text-muted-foreground">Workers</p>
+            <p className="mt-2 text-sm font-medium">{readiness.queues.workerFreshness}</p>
+          </div>
+        </div>
+      ) : !error ? (
+        <p className="text-sm text-muted-foreground">Checking readiness…</p>
+      ) : null}
+
+      {!isReady && missingKeys.length > 0 ? (
+        <OpsAlert tone="warning" className="mt-4" title="Missing runtime keys">
+          {missingKeys.join(", ")}
+        </OpsAlert>
+      ) : null}
+
+      {isReady ? (
+        <OpsAlert tone="success" className="mt-4">
+          All required runtime keys are configured and dependencies are healthy.
+        </OpsAlert>
+      ) : null}
+
+      <p className="mt-4 text-xs text-muted-foreground">
+        Last updated: {lastUpdatedAt ? new Date(lastUpdatedAt).toLocaleTimeString() : "—"}
       </p>
-    </section>
+    </OpsCard>
   );
 }

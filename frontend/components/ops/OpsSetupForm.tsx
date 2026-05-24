@@ -2,7 +2,19 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { CheckCircle2 } from "lucide-react";
+import {
+  OpsAlert,
+  OpsCard,
+  OpsCardHeader,
+  OpsField,
+  OpsInput,
+} from "@/components/ops/ui/ops-ui";
+import { Button } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import { ApiError } from "@/lib/api";
+import { formatOpsDateTime } from "@/lib/ops-format";
 import { consumeOpsInvite, sendOpsSetupOtp } from "@/lib/ops-setup-api";
 
 interface OpsSetupFormProps {
@@ -52,76 +64,83 @@ export function OpsSetupForm({ token }: OpsSetupFormProps) {
 
   if (completed) {
     return (
-      <div className="grid gap-3 rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">
-        <h2 className="font-heading text-lg font-semibold">Ops setup complete</h2>
-        <p>Sign in at the ops login page with your email and the OTP sent to your inbox.</p>
-        <Link href="/ops/login" className="font-medium text-primary underline-offset-4 hover:underline">
-          Continue to ops login
-        </Link>
-      </div>
+      <OpsCard className="border-emerald-500/30 bg-emerald-500/5">
+        <div className="flex flex-col items-center gap-4 py-4 text-center">
+          <CheckCircle2 className="size-12 text-emerald-500" aria-hidden />
+          <OpsCardHeader
+            title="Setup complete"
+            description="Sign in with your email and the OTP sent to your inbox."
+          />
+          <Link href="/ops/login" className={cn(buttonVariants(), "h-11 px-6")}>
+            Continue to ops login
+          </Link>
+        </div>
+      </OpsCard>
     );
   }
 
   return (
-    <section className="grid gap-4 rounded-lg border border-border p-4">
-      <h2 className="font-heading text-lg font-semibold">Ops invite setup</h2>
-      <p className="text-sm text-muted-foreground">
-        Complete onboarding in two steps: send OTP, then consume invite token.
-      </p>
-      <label className="grid gap-1 text-sm">
-        Name
-        <input
-          value={name}
-          onChange={(event) => setName(event.target.value)}
-          className="h-10 rounded-md border border-border bg-background px-3 text-sm"
-          required
-        />
-      </label>
-      <label className="grid gap-1 text-sm">
-        Phone (optional)
-        <input
-          value={phone}
-          onChange={(event) => setPhone(event.target.value)}
-          className="h-10 rounded-md border border-border bg-background px-3 text-sm"
-        />
-      </label>
-      <button
-        type="button"
-        onClick={onSendOtp}
-        disabled={isSubmitting || !name.trim()}
-        className="h-10 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground disabled:opacity-60"
-      >
-        Send OTP
-      </button>
-      {otpSent ? (
-        <>
-          {expiresAt ? (
-            <p className="text-xs text-muted-foreground">
-              OTP expires at {new Date(expiresAt).toLocaleString()}
-            </p>
-          ) : null}
-          <label className="grid gap-1 text-sm">
-            OTP code
-            <input
-              value={otp}
-              onChange={(event) => setOtp(event.target.value)}
-              className="h-10 rounded-md border border-border bg-background px-3 text-sm"
-              minLength={6}
-              maxLength={6}
-              required
-            />
-          </label>
-          <button
+    <OpsCard>
+      <OpsCardHeader
+        title="Operator onboarding"
+        description="Step 1: confirm your profile and request an email OTP. Step 2: verify and activate your account."
+      />
+      <div className="grid gap-5">
+        <OpsField label="Full name" htmlFor="setup-name">
+          <OpsInput
+            id="setup-name"
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            required
+            autoComplete="name"
+          />
+        </OpsField>
+        <OpsField label="Phone (optional)" htmlFor="setup-phone" hint="Used for audit trail only">
+          <OpsInput
+            id="setup-phone"
+            value={phone}
+            onChange={(event) => setPhone(event.target.value)}
+            autoComplete="tel"
+          />
+        </OpsField>
+        {!otpSent ? (
+          <Button
             type="button"
-            onClick={onCompleteSetup}
-            disabled={isSubmitting || otp.trim().length !== 6}
-            className="h-10 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground disabled:opacity-60"
+            className="h-11 w-full"
+            onClick={() => void onSendOtp()}
+            disabled={isSubmitting || !name.trim()}
           >
-            Complete setup
-          </button>
-        </>
-      ) : null}
-      {error ? <p className="text-sm text-destructive">{error}</p> : null}
-    </section>
+            {isSubmitting ? "Sending…" : "Send OTP to invite email"}
+          </Button>
+        ) : (
+          <>
+            {expiresAt ? (
+              <OpsAlert tone="info">OTP expires at {formatOpsDateTime(expiresAt)}</OpsAlert>
+            ) : null}
+            <OpsField label="6-digit code" htmlFor="setup-otp">
+              <OpsInput
+                id="setup-otp"
+                value={otp}
+                onChange={(event) => setOtp(event.target.value)}
+                minLength={6}
+                maxLength={6}
+                inputMode="numeric"
+                required
+                className="tracking-[0.3em]"
+              />
+            </OpsField>
+            <Button
+              type="button"
+              className="h-11 w-full"
+              onClick={() => void onCompleteSetup()}
+              disabled={isSubmitting || otp.trim().length !== 6}
+            >
+              {isSubmitting ? "Activating…" : "Complete setup"}
+            </Button>
+          </>
+        )}
+        {error ? <OpsAlert tone="error">{error}</OpsAlert> : null}
+      </div>
+    </OpsCard>
   );
 }

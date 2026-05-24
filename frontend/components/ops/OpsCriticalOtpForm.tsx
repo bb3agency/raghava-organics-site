@@ -1,6 +1,15 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { KeyRound } from "lucide-react";
+import {
+  OpsAlert,
+  OpsCard,
+  OpsCardHeader,
+  OpsField,
+  OpsInput,
+} from "@/components/ops/ui/ops-ui";
+import { Button } from "@/components/ui/button";
 import { ApiError } from "@/lib/api";
 import { getApiErrorMessageWithHint } from "@/lib/error-messages";
 import {
@@ -10,16 +19,22 @@ import {
 
 interface OpsCriticalOtpFormProps {
   actionType: OpsOtpActionType;
+  title: string;
+  description: string;
   buttonLabel: string;
   onExecute: (payload: { challengeId: string; otpCode: string }) => Promise<void>;
   children?: React.ReactNode;
+  variant?: "default" | "danger";
 }
 
 export function OpsCriticalOtpForm({
   actionType,
+  title,
+  description,
   buttonLabel,
   onExecute,
   children,
+  variant = "default",
 }: OpsCriticalOtpFormProps) {
   const [challengeId, setChallengeId] = useState("");
   const [expiresAt, setExpiresAt] = useState<string | null>(null);
@@ -53,7 +68,7 @@ export function OpsCriticalOtpForm({
       const challenge = await requestOpsOtpChallenge(actionType);
       setChallengeId(challenge.challengeId);
       setExpiresAt(challenge.expiresAt);
-      setMessage("OTP sent to your ops email. Enter it below to continue.");
+      setMessage("A 6-digit code was sent to your ops email.");
     } catch (err) {
       setError(getApiErrorMessageWithHint(err));
     } finally {
@@ -94,50 +109,58 @@ export function OpsCriticalOtpForm({
   }
 
   return (
-    <form onSubmit={handleSubmit} className="grid gap-4 rounded-lg border border-border p-4">
-      {children}
-      <button
-        type="button"
-        onClick={handleRequestOtp}
-        disabled={isLoading}
-        className="h-10 w-fit rounded-md border border-border px-4 text-sm font-medium"
-      >
-        {isLoading ? "Sending OTP..." : "Send OTP to email"}
-      </button>
-      {challengeId ? (
-        <p className="text-xs text-muted-foreground">
-          Challenge: <code>{challengeId}</code>
-          {secondsLeft > 0 ? ` · expires in ${secondsLeft}s` : " · expired"}
-        </p>
-      ) : null}
-      <label className="grid gap-1 text-sm">
-        OTP code
-        <input
-          value={otpCode}
-          onChange={(event) => setOtpCode(event.target.value)}
-          inputMode="numeric"
-          autoComplete="one-time-code"
-          maxLength={6}
-          className="h-10 rounded-md border border-border bg-background px-3 text-sm tracking-widest"
-        />
-      </label>
-      <button
-        type="submit"
-        disabled={isLoading || secondsLeft <= 0}
-        className="h-10 w-fit rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground disabled:opacity-60"
-      >
-        {isLoading ? "Working..." : buttonLabel}
-      </button>
-      {message ? (
-        <p className="text-sm text-muted-foreground" role="status">
-          {message}
-        </p>
-      ) : null}
-      {error ? (
-        <p className="text-sm text-destructive" role="alert">
-          {error}
-        </p>
-      ) : null}
-    </form>
+    <OpsCard
+      className={
+        variant === "danger" ? "border-destructive/30 bg-destructive/5" : undefined
+      }
+    >
+      <OpsCardHeader
+        title={title}
+        description={description}
+        actions={
+          <div className="flex size-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
+            <KeyRound className="size-5" aria-hidden />
+          </div>
+        }
+      />
+      <form onSubmit={handleSubmit} className="grid gap-5">
+        {children}
+        <div className="flex flex-wrap gap-2">
+          <Button type="button" variant="outline" onClick={() => void handleRequestOtp()} disabled={isLoading}>
+            {isLoading ? "Sending…" : "Send OTP to email"}
+          </Button>
+          {challengeId && secondsLeft > 0 ? (
+            <span className="self-center text-xs text-muted-foreground" role="status">
+              Expires in {secondsLeft}s
+            </span>
+          ) : null}
+          {challengeId && secondsLeft <= 0 ? (
+            <span className="self-center text-xs text-destructive">OTP expired</span>
+          ) : null}
+        </div>
+        <OpsField label="Verification code" htmlFor="ops-otp-code">
+          <OpsInput
+            id="ops-otp-code"
+            value={otpCode}
+            onChange={(event) => setOtpCode(event.target.value)}
+            inputMode="numeric"
+            autoComplete="one-time-code"
+            maxLength={6}
+            placeholder="000000"
+            className="tracking-[0.3em]"
+          />
+        </OpsField>
+        <Button
+          type="submit"
+          variant={variant === "danger" ? "destructive" : "default"}
+          disabled={isLoading || secondsLeft <= 0 || !challengeId}
+          className="w-fit"
+        >
+          {isLoading ? "Working…" : buttonLabel}
+        </Button>
+        {message ? <OpsAlert tone="success">{message}</OpsAlert> : null}
+        {error ? <OpsAlert tone="error">{error}</OpsAlert> : null}
+      </form>
+    </OpsCard>
   );
 }

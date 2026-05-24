@@ -128,3 +128,5 @@
     @apply font-sans;
   }
 }
+
+/* Ops control plane — scoped via .dark.ops-console on the shell root (see OpsConsoleShell) */
