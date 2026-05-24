@@ -39,6 +39,20 @@
 
 ---
 
+## `CLIENT_ID` format (important)
+
+- Preferred format is a slug: lowercase letters, numbers, and hyphens only (example: `raghava-organics`).
+- Spaces are not used directly in runner names/paths.
+- Installer scripts now normalize automatically:
+  - `Raghava Organics` -> `raghava-organics`
+  - `Raghava_Organics` -> `raghava-organics`
+  - `RAGHAVA   ORGANICS` -> `raghava-organics`
+- Resulting runner defaults:
+  - directory: `~/actions-runner-raghava-organics`
+  - name/label: `raghava-organics-vps`
+
+---
+
 ## VPS runner (one-time) — **required for push-to-deploy**
 
 If `verify-cd-status.sh` shows **`[FAIL] No runner`**, auto-deploy will **never** run until this step is done.
@@ -111,6 +125,22 @@ git push origin main
 After setup, every deploy is: **commit → push to `main` → automatic**.
 
 > **PM2 does not watch git.** Push-to-deploy is **not** PM2 — it is the **GitHub Actions self-hosted runner** on the VPS running `vps-deploy.sh` / `vps-frontend-deploy.sh` (git pull + docker/pm2 reload).
+
+### If push did not redeploy frontend
+
+Check these in order:
+
+1. **Reliability CI must be green** on the same commit (`Deploy to VPS` is gated by CI success).
+2. **Deploy workflow must run on `main`** (push to other branches will not auto-deploy).
+3. In GitHub Actions, confirm `Deploy Frontend to Hetzner VPS` is not skipped:
+   - `VPS_DEPLOY_ENABLED=true`
+   - `FRONTEND_DEPLOY_ENABLED=true`
+   - secrets `VPS_CLIENT_PATH` + `VPS_FRONTEND_PATH` exist
+4. On VPS, check whether frontend deploy ever succeeded:
+   - `cat /var/www/raghava-organics/frontend/.last-frontend-deploy-sha`
+5. If missing or stale, trigger once manually:
+   - GitHub -> Actions -> `Deploy to VPS` -> `Run workflow`
+   - or run manual command from this doc.
 
 ---
 

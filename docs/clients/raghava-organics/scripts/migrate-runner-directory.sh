@@ -6,7 +6,21 @@
 #   bash /var/www/raghava-organics/docs/clients/raghava-organics/scripts/migrate-runner-directory.sh
 set -euo pipefail
 
-CLIENT_ID="${CLIENT_ID:-raghava-organics}"
+slugify_client_id() {
+  printf '%s' "$1" \
+    | tr '[:upper:]' '[:lower:]' \
+    | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//; s/-{2,}/-/g'
+}
+
+CLIENT_ID_INPUT="${CLIENT_ID:-raghava-organics}"
+CLIENT_ID="$(slugify_client_id "$CLIENT_ID_INPUT")"
+if [ -z "$CLIENT_ID" ]; then
+  die "CLIENT_ID '$CLIENT_ID_INPUT' is invalid after normalization."
+fi
+if [ "$CLIENT_ID" != "$CLIENT_ID_INPUT" ]; then
+  log "Normalized CLIENT_ID: '$CLIENT_ID_INPUT' -> '$CLIENT_ID'"
+fi
+
 LEGACY="${LEGACY_RUNNER_DIR:-$HOME/actions-runner}"
 TARGET="${RUNNER_DIR:-$HOME/actions-runner-${CLIENT_ID}}"
 

@@ -3,7 +3,14 @@
 # Does NOT fix issues — prints PASS/FAIL and next steps.
 set -uo pipefail
 
-CLIENT_ID="${CLIENT_ID:-raghava-organics}"
+slugify_client_id() {
+  printf '%s' "$1" \
+    | tr '[:upper:]' '[:lower:]' \
+    | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//; s/-{2,}/-/g'
+}
+
+CLIENT_ID_INPUT="${CLIENT_ID:-raghava-organics}"
+CLIENT_ID="$(slugify_client_id "$CLIENT_ID_INPUT")"
 WWW_ROOT="${WWW_ROOT:-/var/www/${CLIENT_ID}}"
 BACKEND_PATH="${BACKEND_PATH:-${WWW_ROOT}/backend}"
 FRONTEND_PATH="${FRONTEND_PATH:-${WWW_ROOT}/frontend}"
@@ -24,6 +31,9 @@ echo "=============================================="
 echo " Raghava Organics — CD / PM2 / Docker verify"
 echo " $(date -u '+%Y-%m-%dT%H:%M:%SZ') UTC"
 echo "=============================================="
+if [ "$CLIENT_ID" != "$CLIENT_ID_INPUT" ]; then
+  echo " [INFO] CLIENT_ID normalized: '$CLIENT_ID_INPUT' -> '$CLIENT_ID'"
+fi
 echo ""
 
 # --- Git monorepo ---

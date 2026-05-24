@@ -15,7 +15,21 @@
 #   bash install-github-runner.sh
 set -euo pipefail
 
-CLIENT_ID="${CLIENT_ID:-raghava-organics}"
+slugify_client_id() {
+  printf '%s' "$1" \
+    | tr '[:upper:]' '[:lower:]' \
+    | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//; s/-{2,}/-/g'
+}
+
+CLIENT_ID_INPUT="${CLIENT_ID:-raghava-organics}"
+CLIENT_ID="$(slugify_client_id "$CLIENT_ID_INPUT")"
+if [ -z "$CLIENT_ID" ]; then
+  die "CLIENT_ID '$CLIENT_ID_INPUT' is invalid after normalization. Use letters/numbers/spaces/hyphens only."
+fi
+if [ "$CLIENT_ID" != "$CLIENT_ID_INPUT" ]; then
+  log "Normalized CLIENT_ID: '$CLIENT_ID_INPUT' -> '$CLIENT_ID'"
+fi
+
 GITHUB_REPO_URL="${GITHUB_REPO_URL:-https://github.com/bb3agency/raghava-organics-site}"
 RUNNER_NAME="${RUNNER_NAME:-${CLIENT_ID}-vps}"
 RUNNER_LABEL="${RUNNER_LABEL:-${CLIENT_ID}-vps}"
