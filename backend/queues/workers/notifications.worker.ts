@@ -3,6 +3,7 @@ import { NotificationChannel, NotificationStatus, PrismaClient as RealPrismaClie
 import { type SmsProviderAdapter } from '@common/interfaces/notification-provider.interface';
 import { decryptOpsConfigValue } from '@common/security/ops-config-crypto';
 import { Fast2smsAdapter } from '@modules/notifications/adapters/fast2sms.adapter';
+import { ResendAdapter } from '@modules/notifications/adapters/resend.adapter';
 import { sendNotificationFailureAlert, sendTechnicalFailureAlert } from '@modules/notifications/notification-failure-alert';
 import { createNotificationProviders } from '@modules/notifications/notification-provider';
 import { SmsTemplateRegistry } from '@modules/notifications/sms-template-registry';
@@ -232,8 +233,11 @@ export function createNotificationsWorker(
         }
 
         try {
-          const providers = createProviders(runtimeConfig);
-          const sent = await providers.email.sendEmail(data);
+          const emailAdapter = new ResendAdapter({
+            apiKey: runtimeConfig.RESEND_API_KEY ?? '',
+            fromEmail: runtimeConfig.RESEND_FROM ?? 'noreply@example.com'
+          });
+          const sent = await emailAdapter.sendEmail(data);
           await prisma.notificationLog.create({
             data: {
               channel: NotificationChannel.EMAIL,
@@ -487,8 +491,11 @@ export function createNotificationsWorker(
           }
 
           try {
-            const providers = createProviders(runtimeConfig);
-            const sent = await providers.email.sendEmail({
+            const emailAdapter = new ResendAdapter({
+              apiKey: runtimeConfig.RESEND_API_KEY ?? '',
+              fromEmail: runtimeConfig.RESEND_FROM ?? 'noreply@example.com'
+            });
+            const sent = await emailAdapter.sendEmail({
               to: recipient,
               template: data.template,
               data: data.data
