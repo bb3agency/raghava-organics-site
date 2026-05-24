@@ -318,6 +318,46 @@ describe('OpsService failcase coverage', () => {
     ]));
   });
 
+  it('validateConfigDraft allows partial batch without unrelated required keys', async () => {
+    const { service } = createOpsServiceHarness();
+
+    const result = await service.validateConfigDraft({
+      opsUserId: 'ops_1',
+      requestIp: '127.0.0.1',
+      requestPath: '/api/v1/ops/config/validate',
+      method: 'POST',
+      domain: 'notifications',
+      values: {
+        NOTIFY_EMAIL_ENABLED: 'true'
+      },
+      skipAuditLog: true
+    });
+
+    expect(result.valid).toBe(true);
+    expect(result.errors).toEqual([]);
+  });
+
+  it('validateConfigDraft allows saving a provider selector without full dependency set', async () => {
+    const { service } = createOpsServiceHarness();
+
+    const result = await service.validateConfigDraft({
+      opsUserId: 'ops_1',
+      requestIp: '127.0.0.1',
+      requestPath: '/api/v1/ops/config/validate',
+      method: 'POST',
+      domain: 'payments',
+      values: {
+        PAYMENT_PROVIDER: 'razorpay'
+      },
+      skipAuditLog: true
+    });
+
+    expect(result.valid).toBe(true);
+    expect(result.errors).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: 'MISSING_REQUIRED_KEY' })])
+    );
+  });
+
   it('createOpsInvite fails fast when notification queue send fails', async () => {
     const { service, mocks } = createOpsServiceHarness();
 

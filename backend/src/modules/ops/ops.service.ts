@@ -6,7 +6,6 @@ import { setLoadShedMode, setLoadShedModeViaRedis } from '@common/reliability/lo
 import { decryptOpsConfigValue, encryptOpsConfigValue, maskSecretValue, resolveOpsEncryptionKeyVersion } from '@common/security/ops-config-crypto';
 import { sendNotificationFailureAlert, sendTechnicalFailureAlert } from '@modules/notifications/notification-failure-alert';
 import {
-  computeRequiredOpsConfigKeys,
   findMissingStrictOpsConfigKeys,
   isOpsConfigBootstrapKey,
   isOpsConfigMutableKey,
@@ -1320,51 +1319,60 @@ export class OpsService {
       }
     }
 
-    const paymentProviderRaw = (draftEnv.PAYMENT_PROVIDER ?? '').trim().toLowerCase();
-    const paymentProvider = paymentProviderRaw || 'razorpay';
-    if (paymentProviderRaw && !['razorpay', 'cod', 'noop'].includes(paymentProvider)) {
-      errors.push({
-        key: 'PAYMENT_PROVIDER',
-        code: 'UNSUPPORTED_PROVIDER',
-        message: `Unsupported PAYMENT_PROVIDER: ${paymentProvider}`
-      });
-    }
-
-    const shippingProviderRaw = (draftEnv.SHIPPING_PROVIDER ?? '').trim().toLowerCase();
-    const shippingProvider = shippingProviderRaw || 'delhivery';
-    if (shippingProviderRaw && !['delhivery', 'shiprocket', 'noop'].includes(shippingProvider)) {
-      errors.push({
-        key: 'SHIPPING_PROVIDER',
-        code: 'UNSUPPORTED_PROVIDER',
-        message: `Unsupported SHIPPING_PROVIDER: ${shippingProvider}`
-      });
-    }
-
     const strictProfile = isProductionLikeProfile();
-    if (strictProfile && paymentProvider === 'noop') {
-      errors.push({
-        key: 'PAYMENT_PROVIDER',
-        code: 'NOOP_BLOCKED_IN_STRICT_PROFILE',
-        message: 'PAYMENT_PROVIDER=noop is not allowed in production-like profiles.'
-      });
-    }
-    if (strictProfile && shippingProvider === 'noop') {
-      errors.push({
-        key: 'SHIPPING_PROVIDER',
-        code: 'NOOP_BLOCKED_IN_STRICT_PROFILE',
-        message: 'SHIPPING_PROVIDER=noop is not allowed in production-like profiles.'
-      });
+
+    // Validate only keys in this save batch — full go-live requirements stay on /health/ready.
+    if (checkedKeys.includes('PAYMENT_PROVIDER')) {
+      const paymentProvider = (draftEnv.PAYMENT_PROVIDER ?? '').trim().toLowerCase();
+      if (paymentProvider && !['razorpay', 'cod', 'noop'].includes(paymentProvider)) {
+        errors.push({
+          key: 'PAYMENT_PROVIDER',
+          code: 'UNSUPPORTED_PROVIDER',
+          message: `Unsupported PAYMENT_PROVIDER: ${paymentProvider}`
+        });
+      } else if (strictProfile && paymentProvider === 'noop') {
+        errors.push({
+          key: 'PAYMENT_PROVIDER',
+          code: 'NOOP_BLOCKED_IN_STRICT_PROFILE',
+          message: 'PAYMENT_PROVIDER=noop is not allowed in production-like profiles.'
+        });
+      }
     }
 
-    const requiredKeys = computeRequiredOpsConfigKeys(draftEnv, strictProfile);
-    for (const key of requiredKeys) {
+    if (checkedKeys.includes('SHIPPING_PROVIDER')) {
+      const shippingProvider = (draftEnv.SHIPPING_PROVIDER ?? '').trim().toLowerCase();
+      if (shippingProvider && !['delhivery', 'shiprocket', 'noop'].includes(shippingProvider)) {
+        errors.push({
+          key: 'SHIPPING_PROVIDER',
+          code: 'UNSUPPORTED_PROVIDER',
+          message: `Unsupported SHIPPING_PROVIDER: ${shippingProvider}`
+        });
+      } else if (strictProfile && shippingProvider === 'noop') {
+        errors.push({
+          key: 'SHIPPING_PROVIDER',
+          code: 'NOOP_BLOCKED_IN_STRICT_PROFILE',
+          message: 'SHIPPING_PROVIDER=noop is not allowed in production-like profiles.'
+        });
+      }
+    }
+
+    if (checkedKeys.includes('SMS_PROVIDER')) {
+      const smsProvider = (draftEnv.SMS_PROVIDER ?? '').trim().toLowerCase();
+      if (smsProvider && !['msg91', 'fast2sms', 'noop'].includes(smsProvider)) {
+        errors.push({
+          key: 'SMS_PROVIDER',
+          code: 'UNSUPPORTED_PROVIDER',
+          message: `Unsupported SMS_PROVIDER: ${smsProvider}`
+        });
+      }
+    }
+
+    for (const key of checkedKeys) {
+      if (isOpsConfigBootstrapKey(key) || !isOpsConfigMutableKey(key)) {
+        continue;
+      }
       const value = (draftEnv[key] ?? '').trim();
       if (!value) {
-        errors.push({
-          key,
-          code: 'MISSING_REQUIRED_KEY',
-          message: `${key} is required for the current draft context.`
-        });
         continue;
       }
       if (strictProfile && isPlaceholderValue(value)) {
