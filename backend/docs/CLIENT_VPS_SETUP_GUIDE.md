@@ -595,6 +595,14 @@ Pre-checks:
 - `OPS_DB_ENCRYPTION_KEY` is configured.
 - Command is executed from a trusted operator shell (not CI logs, not shared terminal sessions).
 - Invite email must not already exist in `User` (customer/admin) domain; cross-domain email reuse fails closed with `409 CONFLICT`.
+- Frontend `/ops/setup` is reachable with configured Basic Auth before issuing invite (use real values from `frontend/.env.production.local`):
+  ```bash
+  curl -sS -o /dev/null -w "%{http_code}\n" \
+    -u "<OPS_UI_BASIC_AUTH_USERNAME>:<OPS_UI_BASIC_AUTH_PASSWORD>" \
+    "http://127.0.0.1:<STOREFRONT_PORT>/ops/setup"
+  ```
+  Expect `200` (or redirect). If `401`, fix credentials and redeploy frontend before running `ops:newuser`.
+- `scripts/ops-newuser.mjs` now auto-normalizes `DATABASE_URL` from `host.docker.internal` to `127.0.0.1` when run on the VPS host shell (outside containers), so invite bootstrap does not fail with Prisma `P1001`.
 
 Post-checks:
 - Invite email is received and setup is completed from `https://<client-domain>/ops/setup?...` within 10 minutes.
@@ -704,6 +712,7 @@ Safety note: run `contract:admin` only against a controlled non-production targe
 | Webhook **401** spikes | Wrong `RAZORPAY_WEBHOOK_SECRET` / shipping provider token; clock skew; allowlist mismatch |
 | Payments stuck **PENDING_PAYMENT** | Workers down; Redis down; queue failure — check workers logs and Bull Board |
 | **502** from Nginx | Backend container not listening on `BACKEND_PORT` |
+| `/ops/setup` returns **401** even with `curl -u` | Basic-auth creds mismatched vs frontend runtime, or stale frontend build not reading latest env |
 | Duplicate charges / emails | Idempotency — verify Redis and worker idempotency keys (`BRD.md` AC-05) |
 | Wrong client data | Isolation breach — wrong `DATABASE_URL` or shared Redis between clients |
 
@@ -975,6 +984,16 @@ Then fill at minimum:
 On shared/staging/production VPS also set:
 - `OPS_UI_BASIC_AUTH_USERNAME`
 - `OPS_UI_BASIC_AUTH_PASSWORD`
+
+After first deploy/reload, verify using the values from `.env.production.local`:
+
+```bash
+OPS_USER="$(grep -E '^OPS_UI_BASIC_AUTH_USERNAME=' .env.production.local | cut -d= -f2- | tr -d '\r\"')"
+OPS_PASS="$(grep -E '^OPS_UI_BASIC_AUTH_PASSWORD=' .env.production.local | cut -d= -f2- | tr -d '\r\"')"
+curl -sS -o /dev/null -w "%{http_code}\n" -u "${OPS_USER}:${OPS_PASS}" "http://127.0.0.1:${STOREFRONT_PORT}/ops/setup"
+```
+
+Expected: `200` (or redirect). If you get `401`, rebuild/reload frontend after confirming env values and ensure latest `frontend/proxy.ts` is deployed (runtime env read).
 
 Runtime env files are **never written by deploy scripts** — they must be placed on the VPS manually before first deploy, like backend `.env`.
 

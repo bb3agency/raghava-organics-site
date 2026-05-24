@@ -639,6 +639,13 @@ git push origin main
 **Mandatory frontend dependency before starting Phase 8:**
 - Client frontend already includes working `/ops/setup` page that consumes invite token and completes setup against backend invite API.
 - If `/ops/setup` is not deployed, do not run `ops:newuser` yet (invites expire in 10 minutes).
+- Verify `/ops/setup` with the actual `OPS_UI_BASIC_AUTH_USERNAME` / `OPS_UI_BASIC_AUTH_PASSWORD` from `frontend/.env.production.local` before issuing an invite:
+  ```bash
+  curl -sS -o /dev/null -w "%{http_code}\n" \
+    -u "<OPS_UI_BASIC_AUTH_USERNAME>:<OPS_UI_BASIC_AUTH_PASSWORD>" \
+    "http://127.0.0.1:<STOREFRONT_PORT>/ops/setup"
+  ```
+  Expected: `200` (or redirect). `401` means bad/mismatched basic-auth credentials or stale frontend build; fix Phase 10 first.
 
 **Full runbook:** `docs/OPS_CONTROL_PLANE_GUIDE.md`
 
@@ -653,6 +660,7 @@ git push origin main
      --setup-base-url "https://<client-domain>" \
      --yes
    ```
+   `ops-newuser` auto-normalizes `DATABASE_URL` from `host.docker.internal` to `127.0.0.1` when executed on the VPS host shell (outside containers), so invite bootstrap can run safely with production `.env`.
    Reference: `docs/OPS_CONTROL_PLANE_GUIDE.md` §4 (Invite bootstrap).
 
 2. **Complete setup from invite email** at `https://<client-domain>/ops/setup?...` within 10 minutes.
@@ -790,16 +798,15 @@ git push origin main
    cp .env.production.example .env.production.local
    # Required keys: CLIENT_ID, STOREFRONT_PORT, NEXT_PUBLIC_API_BASE_URL,
    #                NEXT_PUBLIC_STOREFRONT_URL, NEXT_PUBLIC_RAZORPAY_KEY_ID
-   # Optional but recommended on shared VPS: OPS_UI_BASIC_AUTH_USERNAME / OPS_UI_BASIC_AUTH_PASSWORD
+   # Required on shared/staging/production VPS: OPS_UI_BASIC_AUTH_USERNAME / OPS_UI_BASIC_AUTH_PASSWORD
    nano .env.production.local
 
-   # First production build (bootstraps the .next/ output on the VPS)
-   npm ci && npm run build
+   # Canonical one-time bootstrap script (env checks + build + PM2 + /ops/setup basic-auth check)
+   bash /var/www/<client-id>/docs/clients/<client-id>/scripts/phase10-frontend-deploy.sh
 
-   # Start PM2 process (one-time — subsequent deploys use pm2 reload, not pm2 start)
-   pm2 start npm --name "<client-id>-frontend" -- start -- -p <STOREFRONT_PORT>
-   pm2 save          # persist process list (survives pm2 restarts)
-   pm2 startup       # install boot hook — run the printed sudo command to survive reboots
+   # Optional (first time only): persist across reboots
+   pm2 startup       # install boot hook — run the printed sudo command
+   pm2 save
    ```
 
    > **After this, all future deploys are fully automated.** Every `git push` to `main` triggers:
@@ -823,6 +830,7 @@ git push origin main
 **Evidence gate:**
 - Storefront homepage loads over HTTPS.
 - Admin UI loads at `/admin` (or subdomain).
+- `/ops/setup` responds from both localhost and HTTPS with the configured basic-auth credentials (`200`/redirect; not `401`/`502`).
 - `NEXT_PUBLIC_RAZORPAY_KEY_ID` is the **live** key (not test key).
 - No `NEXT_PUBLIC_API_BASE_URL` pointing to `localhost`.
 

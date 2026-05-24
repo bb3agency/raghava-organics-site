@@ -198,6 +198,7 @@ The config system uses a **two-tier model**:
 The backend now uses an invite CLI for first ops identity onboarding:
 
 - `npm run ops:newuser -- --email=<ops@email> --name="Primary Ops" --setup-base-url="https://client.com" --yes`
+- Host-shell safety: when `.env` uses `DATABASE_URL=...host.docker.internal...`, `ops-newuser` auto-normalizes to `127.0.0.1` outside containers so Prisma can reach host PostgreSQL on VPS.
 
 `--setup-base-url` must be the frontend base origin only (for example, `https://client.com`). Backend appends `/ops/setup?token=...` automatically.
 
@@ -206,6 +207,13 @@ The backend now uses an invite CLI for first ops identity onboarding:
 - The client frontend must already include an ops setup page at `/ops/setup`.
 - The page must read the `token` query param and call backend invite-consume API.
 - Without this page, invite links cannot be completed and onboarding will fail by expiry.
+- On shared/staging/production VPS with ops Basic Auth enabled, verify `/ops/setup` with real credentials from `frontend/.env.production.local` before issuing invite:
+  ```bash
+  curl -sS -o /dev/null -w "%{http_code}\n" \
+    -u "<OPS_UI_BASIC_AUTH_USERNAME>:<OPS_UI_BASIC_AUTH_PASSWORD>" \
+    "http://127.0.0.1:<STOREFRONT_PORT>/ops/setup"
+  ```
+  Expected `200`/redirect. `401` means credentials mismatch or stale frontend build; resolve before `ops:newuser`.
 
 What the command does:
 

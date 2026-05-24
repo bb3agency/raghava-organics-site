@@ -154,11 +154,12 @@ sudo ./svc.sh status
 
 ```bash
 cd /var/www/<client-id>/frontend
-# .env.production.local must exist (CLIENT_ID, STOREFRONT_PORT, NEXT_PUBLIC_*)
-npm ci && npm run build
-pm2 start npm --name "<client-id>-frontend" -- start -- -p <STOREFRONT_PORT>
-pm2 save
+# .env.production.local must exist with:
+# CLIENT_ID, STOREFRONT_PORT, NEXT_PUBLIC_API_BASE_URL, NEXT_PUBLIC_STOREFRONT_URL,
+# OPS_UI_BASIC_AUTH_USERNAME, OPS_UI_BASIC_AUTH_PASSWORD
+bash /var/www/<client-id>/docs/clients/<client-id>/scripts/phase10-frontend-deploy.sh
 pm2 startup   # run the printed sudo command
+pm2 save
 ```
 
 Subsequent deploys use `pm2 reload` via `vps-frontend-deploy.sh`.
@@ -204,6 +205,7 @@ git push origin main
 3. `npm ci` + `npm run build`  
 4. `pm2 reload <client-id>-frontend`  
 5. HTTP check on `http://127.0.0.1:<STOREFRONT_PORT>/`
+6. `/ops/setup` basic-auth check using `OPS_UI_BASIC_AUTH_USERNAME/PASSWORD` from `.env.production.local`
 
 **Downtime:** zero (graceful PM2 reload).
 
@@ -237,6 +239,7 @@ Use when you need a redeploy without a new commit. Prefer `git revert` + `git pu
 | Backend deploy fails at readiness | Phase 8 incomplete | Ops config save + restart; verify `/health/ready` |
 | `SHA mismatch` | Another push during deploy | Re-run workflow |
 | Frontend `script not found` | Workflow calls `frontend/scripts/...` | Use `$VPS_CLIENT_PATH/scripts/vps-frontend-deploy.sh` |
+| `/ops/setup` returns 401 with `curl -u` | Wrong `OPS_UI_BASIC_AUTH_*` values, PM2 not reloaded, or stale frontend build | Verify `.env.production.local`, run `phase10-frontend-deploy.sh`, and retest localhost `/ops/setup` with real creds |
 | `npm ci` / Prisma errors on VPS | Ran bare `npx prisma` | Scripts run `npm ci` first (pins Prisma 6) |
 | Port 5432 in use on compose up | Started compose `postgres` on host-Postgres VPS | Use `docker-compose.prod.yml` overlay |
 

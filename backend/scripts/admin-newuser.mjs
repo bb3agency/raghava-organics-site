@@ -1,7 +1,25 @@
 import 'dotenv/config';
 import crypto from 'crypto';
+import { existsSync } from 'node:fs';
 import { PrismaClient } from '@prisma/client';
 import logger from './lib/logger.mjs';
+
+function normalizeHostShellDatabaseUrl() {
+  const databaseUrl = process.env.DATABASE_URL;
+  if (!databaseUrl || !databaseUrl.includes('host.docker.internal')) {
+    return;
+  }
+
+  const runningInsideContainer = existsSync('/.dockerenv');
+  if (runningInsideContainer) {
+    return;
+  }
+
+  process.env.DATABASE_URL = databaseUrl.replace('host.docker.internal', '127.0.0.1');
+  logger.info('DATABASE_URL host override applied for host-shell execution (host.docker.internal -> 127.0.0.1)');
+}
+
+normalizeHostShellDatabaseUrl();
 
 const prisma = new PrismaClient();
 const INVITE_TTL_MS = 10 * 60 * 1000;
