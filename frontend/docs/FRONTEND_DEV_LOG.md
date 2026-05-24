@@ -267,6 +267,5 @@ NEXT_PUBLIC_RAZORPAY_KEY_ID=(pending)
 - Ops permissions model update:
   - Backend now enforces both `OPS_READ` + `OPS_WRITE` for every ops user during invite creation, invite consumption, and login session normalization.
   - Frontend ops invite form removed manual permissions input; UI now treats ops users as mandatory read+write.
-  - **Existing ops users:** DB rows with only `OPS_READ` are upgraded automatically on next login, `GET /ops/session`, or any authenticated request (session resolver patches Redis + DB). For immediate bulk fix on VPS without waiting for logins: `cd backend && node scripts/normalize-ops-user-permissions.mjs --yes` (use `127.0.0.1` in `DATABASE_URL` when running on host, not `host.docker.internal`).
 
 ---

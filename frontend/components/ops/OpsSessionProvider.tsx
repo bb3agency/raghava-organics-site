@@ -30,5 +30,5 @@ export function useOpsSession(): OpsSession {
 
 export function useOpsCanWrite(): boolean {
   const session = useOpsSession();
-  return session.permissions.includes("ops:write");
+  return session.permissions.some((permission) => permission === "ops:write");
 }

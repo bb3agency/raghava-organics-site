@@ -4,6 +4,13 @@ import { ERROR_CODES } from '@common/errors/error-codes';
 import { OpsPermissionValue } from '@common/auth/ops-permissions';
 import { OpsService, OPS_BROWSER_SESSION_COOKIE_NAME } from '@modules/ops/ops.service';
 
+function normalizeMandatoryOpsPermissions(permissions: string[] | undefined): OpsPermissionValue[] {
+  const normalized = new Set((permissions ?? []).map((permission) => permission.trim().toUpperCase()));
+  normalized.add('OPS_READ');
+  normalized.add('OPS_WRITE');
+  return ['OPS_READ', 'OPS_WRITE'].filter((permission): permission is OpsPermissionValue => normalized.has(permission));
+}
+
 
 export async function opsAuthGuard(request: FastifyRequest, _reply: FastifyReply): Promise<void> {
   // Browser httpOnly cookie session — the only supported auth mechanism.
@@ -46,7 +53,7 @@ export async function opsAuthGuard(request: FastifyRequest, _reply: FastifyReply
       id: session.opsUserId,
       email: session.email,
       name: session.name,
-      permissions: session.permissions as OpsPermissionValue[]
+      permissions: normalizeMandatoryOpsPermissions(session.permissions)
     };
     return;
   }

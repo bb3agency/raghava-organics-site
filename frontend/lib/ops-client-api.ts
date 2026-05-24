@@ -169,6 +169,28 @@ async function opsFetch<T>(
   });
 }
 
+function normalizeOpsPermission(value: string): OpsPermission | null {
+  const normalized = value.trim().toLowerCase().replace("_", ":");
+  if (normalized === "ops:read") {
+    return "ops:read";
+  }
+  if (normalized === "ops:write") {
+    return "ops:write";
+  }
+  return null;
+}
+
+function normalizeOpsPermissions(values: string[] | undefined): OpsPermission[] {
+  const resolved = new Set<OpsPermission>();
+  for (const value of values ?? []) {
+    const permission = normalizeOpsPermission(value);
+    if (permission) {
+      resolved.add(permission);
+    }
+  }
+  return [...resolved];
+}
+
 export async function requestOpsLoginOtp(input: {
   email: string;
 }): Promise<{ expiresAt: string; message?: string }> {
@@ -188,10 +210,20 @@ export async function verifyOpsLoginOtp(input: {
   permissions: OpsPermission[];
   expiresAt: string;
 }> {
-  return opsFetch("/ops/auth/login/verify-otp", {
+  const result = await opsFetch<{
+    opsUserId: string;
+    name: string;
+    email: string;
+    permissions: string[];
+    expiresAt: string;
+  }>("/ops/auth/login/verify-otp", {
     method: "POST",
     body: JSON.stringify(input),
   });
+  return {
+    ...result,
+    permissions: normalizeOpsPermissions(result.permissions),
+  };
 }
 
 export async function logoutOpsSession(): Promise<{ message: string }> {
@@ -202,7 +234,19 @@ export async function logoutOpsSession(): Promise<{ message: string }> {
 }
 
 export async function getOpsSessionClient(): Promise<OpsSession> {
-  return opsFetch<OpsSession>("/ops/session");
+  const result = await opsFetch<{
+    id: string;
+    email: string;
+    name: string;
+    permissions: string[];
+    mfaEnabled: boolean;
+    ipAllowlist: string[];
+    lastLoginAt: string | null;
+  }>("/ops/session");
+  return {
+    ...result,
+    permissions: normalizeOpsPermissions(result.permissions),
+  };
 }
 
 export async function getOpsLoadShedStatusClient(): Promise<OpsLoadShedStatus> {
@@ -321,7 +365,26 @@ export async function listOpsUsersClient(query?: {
   page?: number;
   limit?: number;
 }): Promise<OpsUserList> {
-  return opsFetch<OpsUserList>(buildPath("/ops/users", query));
+  const result = await opsFetch<{
+    items: Array<{
+      id: string;
+      email: string;
+      name: string;
+      permissions: string[];
+      isActive: boolean;
+      lastLoginAt: string | null;
+    }>;
+    page: number;
+    limit: number;
+    total: number;
+  }>(buildPath("/ops/users", query));
+  return {
+    ...result,
+    items: result.items.map((item) => ({
+      ...item,
+      permissions: normalizeOpsPermissions(item.permissions),
+    })),
+  };
 }
 
 export async function deactivateOpsUserClient(input: {

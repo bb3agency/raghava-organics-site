@@ -1,4 +1,4 @@
-import { Inter, Plus_Jakarta_Sans } from "next/font/google";
+import { Inter, Manrope } from "next/font/google";
 
 export const bodyFont = Inter({
   subsets: ["latin"],
@@ -6,8 +6,8 @@ export const bodyFont = Inter({
   display: "swap",
 });
 
-export const headingFont = Plus_Jakarta_Sans({
+export const headingFont = Manrope({
   subsets: ["latin"],
-  variable: "--font-heading",
+  variable: "--font-display",
   display: "swap",
 });
