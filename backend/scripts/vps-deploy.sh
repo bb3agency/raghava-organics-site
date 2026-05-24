@@ -114,10 +114,9 @@ MIGRATE_DATABASE_URL="$(grep -E '^DATABASE_URL=' .env | cut -d= -f2- | sed 's/ho
 log "Prisma migrate on host Postgres (127.0.0.1)..."
 DATABASE_URL="$MIGRATE_DATABASE_URL" run_host_prisma migrate deploy --schema prisma/schema.prisma
 
-# Production image strips npx/npm (see Dockerfile) — use local binary inside container.
-log "Prisma generate in backend image (node_modules/.bin/prisma)..."
-docker compose -p "$COMPOSE_PROJECT" "${COMPOSE_FILES[@]}" run --rm --no-deps --entrypoint "" backend \
-  sh -c "./node_modules/.bin/prisma generate --schema prisma/schema.prisma"
+# Prisma client is generated during `docker compose build` (Dockerfile builder stage).
+# Do not run `prisma generate` in the production container: npm/npx are removed and
+# node_modules/.prisma is root-owned, so generate fails with EACCES as USER app.
 
 # ---------------------------------------------------------------------------
 # 4. Swap containers (minimal-downtime restart)

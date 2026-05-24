@@ -126,9 +126,12 @@ After setup, every deploy is: **commit → push to `main` → automatic**.
 
 > **PM2 does not watch git.** Push-to-deploy is **not** PM2 — it is the **GitHub Actions self-hosted runner** on the VPS running `vps-deploy.sh` / `vps-frontend-deploy.sh` (git pull + docker/pm2 reload).
 
-### If backend deploy fails with `sh: npx: not found`
+### If backend deploy fails on Prisma (`npx: not found` or `EACCES` on `.prisma/client`)
 
-The production Docker image intentionally removes `npm`/`npx`. `vps-deploy.sh` uses `./node_modules/.bin/prisma` inside the container. Pull latest `main` on VPS (or wait for next deploy) if you still see this on an older script copy.
+- Production images remove `npm`/`npx` — do not run `prisma generate` inside the running container.
+- Prisma client is generated during `docker compose build` (Dockerfile builder stage).
+- Migrations run on the **host** via `node_modules/.bin/prisma` after `npm ci`.
+- Pull latest `main` so `vps-deploy.sh` matches this flow, then re-run **Deploy to VPS**.
 
 ### If push did not redeploy frontend
 
