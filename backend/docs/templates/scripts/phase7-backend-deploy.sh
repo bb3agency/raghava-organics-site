@@ -15,6 +15,20 @@ log() { echo "[phase7] $*"; }
 
 cd "$BACKEND_PATH"
 
+log "Checking Redis is not published on host :6379 (required on multi-client VPS)..."
+if grep -A14 '^  redis:' docker-compose.yml | grep -qE '^[[:space:]]+ports:' \
+  && ! grep -A14 '^  redis:' docker-compose.yml | grep -qE '^[[:space:]]+#.*ports:'; then
+  log "ERROR: Comment out the redis service 'ports:' block in docker-compose.yml before continuing"
+  exit 1
+fi
+if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "${CLIENT_ID}-redis"; then
+  if docker port "${CLIENT_ID}-redis" 6379/tcp 2>/dev/null | grep -q .; then
+    log "ERROR: ${CLIENT_ID}-redis publishes 6379 on the host — recreate after commenting ports:"
+    log "  docker compose -p ${CLIENT_ID} ${COMPOSE_FILES[*]} up -d --force-recreate redis"
+    exit 1
+  fi
+fi
+
 log "Installing backend deps (required — bare 'npx prisma' pulls Prisma 7 and breaks migrate)..."
 npm ci
 

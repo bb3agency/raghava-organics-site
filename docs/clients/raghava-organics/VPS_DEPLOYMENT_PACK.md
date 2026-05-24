@@ -47,14 +47,36 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 - **Full guide:** [backend/docs/GITHUB_CD_SELF_HOSTED_RUNNER_GUIDE.md](../../../backend/docs/GITHUB_CD_SELF_HOSTED_RUNNER_GUIDE.md)
 - **Raghava values:** [GITHUB_CD_SETUP.md](./GITHUB_CD_SETUP.md)
 
-## Nginx
+## Nginx + TLS (multi-client VPS)
 
-Templates in [backend/nginx/](../../../backend/nginx/):
+This VPS hosts **multiple clients**. Raghava is **slot 1**: ports **3001** / **3101**, domain **`raghavaorganics.com`**. Canonical rules: [CLIENT_VPS_SETUP_GUIDE.md](../../../backend/docs/CLIENT_VPS_SETUP_GUIDE.md) §11.0.
 
-1. `rate-zones.conf.template` → `/etc/nginx/snippets/rate-zones.conf` (in `http {}`)
-2. `client.conf.template` → `/etc/nginx/sites-available/raghava-organics.conf`
-3. `proxy_pass` → `127.0.0.1:3001` (API), storefront → `127.0.0.1:3101`
-4. `certbot --nginx -d <PRODUCTION_DOMAIN>`
+**Preflight (run before editing Nginx):**
+
+```bash
+cd /var/www/raghava-organics
+bash docs/clients/raghava-organics/scripts/phase7.5-nginx-tls-preflight.sh
+```
+
+| Check | Raghava action |
+| --- | --- |
+| Other sites | `ls /etc/nginx/sites-enabled/` — **do not remove** other clients' symlinks |
+| `default` site | **Do not** `rm sites-enabled/default` unless you verified it is unused |
+| Rate zones | Once per VPS: `rate-zones.conf.template` → `/etc/nginx/snippets/rate-zones.conf` + `include` in `nginx.conf` `http {}` |
+| Redis host port | Comment out `redis:` **`ports:`** in `backend/docker-compose.yml`; only one client can bind `0.0.0.0:6379` |
+| Port conflict | `ss -tlnp \| grep -E '3001\|3101'` — must be free or owned by `raghava-organics-*` / PM2 |
+
+**Install (additive — this domain only):**
+
+1. `client.conf.template` → `/etc/nginx/sites-available/raghavaorganics.com` (domain-based filename)
+2. `sudo sed -i 's/client1\.com/raghavaorganics.com/g' /etc/nginx/sites-available/raghavaorganics.com`
+3. `proxy_pass` → `127.0.0.1:3001` (API), `/` → `127.0.0.1:3101` (storefront — after Phase 10)
+4. `sudo ln -sf /etc/nginx/sites-available/raghavaorganics.com /etc/nginx/sites-enabled/`
+5. `sudo nginx -t && sudo systemctl reload nginx`
+6. `sudo certbot --nginx -d raghavaorganics.com -d www.raghavaorganics.com`
+7. After certs: redeploy full HTTPS template from repo (same paths), reload nginx
+
+Templates: [backend/nginx/](../../../backend/nginx/)
 
 ## Webhook URLs (after TLS)
 

@@ -448,6 +448,30 @@ Evidence to archive before go-live:
 
 ## 11. Nginx and TLS
 
+### 11.0 Multi-client VPS rules (mandatory when several clients share one host)
+
+| Rule | Do | Do not |
+| --- | --- | --- |
+| **Site config file** | Add `/etc/nginx/sites-available/<domain.com>` (domain-based name) | Replace or delete other clients' files in `sites-enabled/` |
+| **Enable site** | `sudo ln -sf sites-available/<domain.com> sites-enabled/<domain.com>` | `sudo rm sites-enabled/default` unless you confirmed no other site uses it (`ls sites-enabled/`) |
+| **Rate-limit zones** | Install `snippets/rate-zones.conf` **once**; `include` it in `nginx.conf` `http {}` | Duplicate `limit_req_zone` lines in `nginx.conf` and the snippet (nginx reload will fail) |
+| **Ports** | Assign unique `BACKEND_PORT` / storefront port per client (§3); run `ss -tlnp` before deploy | Reuse another client's `3001`/`3101` (or their slot) |
+| **Redis** | Keep Redis on the Docker network only — **comment out** `ports:` on the `redis:` service in each client's `docker-compose.yml` | Publish `6379` on `0.0.0.0` (only one client can bind host `6379`) |
+| **TLS** | `certbot --nginx -d <this-domain> -d www.<this-domain>` per client | Assume one certificate covers all clients |
+| **Routing** | `server_name` matches **this** client's domain; `proxy_pass` to **this** client's loopback ports | Single catch-all `server {}` for all domains on one port |
+
+**Preflight script (per client, before Nginx/Certbot):** `docs/templates/scripts/phase7.5-nginx-tls-preflight.sh` (copy to `docs/clients/<client-id>/scripts/`).
+
+```bash
+export CLIENT_ID=<client-id>
+export PRODUCTION_DOMAIN=<domain.com>
+export BACKEND_PORT=<host-api-port>
+export STOREFRONT_PORT=<host-storefront-port>
+bash docs/clients/<client-id>/scripts/phase7.5-nginx-tls-preflight.sh
+```
+
+### 11.1 Per-client Nginx + TLS steps
+
 1. Start from repo **`nginx/client.conf.template`** — it encodes **`TRD.md` §3.5** edge limits:
    - HTTP → HTTPS **301**
    - **TLSv1.2** and **TLSv1.3** only, `ssl_prefer_server_ciphers on`

@@ -178,7 +178,21 @@ If this fails with `no pg_hba.conf entry`, use the source host shown in error to
 
 ---
 
-## 6) Phase 7 readiness gate (must pass before continuing)
+## 6) Multi-client VPS pitfalls (Nginx / Redis / ports)
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| `nginx -t` fails with duplicate `limit_req_zone` | Rate zones in both `nginx.conf` and `snippets/rate-zones.conf` | Zones **only** in `snippets/rate-zones.conf`; one `include` in `http {}` |
+| Second client cannot start Redis | First client published `6379` on `0.0.0.0` | Comment `ports:` under `redis:` for **every** client stack |
+| Wrong site on a domain | Removed/edited another client's `sites-enabled` entry | Additive symlink: `sites-available/<domain.com>` only |
+| `address already in use` on backend port | Port slot collision | Next slot per `CLIENT_VPS_SETUP_GUIDE.md` §3 |
+| Broke legacy site after `rm sites-enabled/default` | Another client still used default | List `sites-enabled/` before removing default |
+
+Preflight: `backend/docs/templates/scripts/phase7.5-nginx-tls-preflight.sh` (per-client copy under `docs/clients/<id>/scripts/`).
+
+---
+
+## 7) Phase 7 readiness gate (must pass before continuing)
 
 - `docker compose ... ps` shows backend and workers stable (no restarts).
 - Backend health endpoint responds consistently:
@@ -195,7 +209,7 @@ Do not proceed to Nginx/TLS, Ops bootstrap, or frontend deploy until this gate i
 
 ---
 
-## 7) Operational reminders
+## 8) Operational reminders
 
 - Never paste live secrets into chat logs or committed docs.
 - If a secret was exposed during troubleshooting, rotate it after stabilization.

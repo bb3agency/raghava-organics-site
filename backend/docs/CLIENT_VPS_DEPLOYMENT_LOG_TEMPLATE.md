@@ -83,12 +83,21 @@
 - [ ] `npm ci --omit=dev` — passes
 - [ ] `npm run prisma:migrate:deploy` — passes (all migrations applied)
 - [ ] `docker compose -f docker-compose.yml -f docker-compose.prod.yml -p <client-id> up -d --build backend workers` — all containers start without launching compose postgres
+- [ ] Redis **`ports:`** commented out in `docker-compose.yml` (no `0.0.0.0:6379` for this stack on multi-client VPS)
 - [ ] `docker ps` shows all containers `Up`
-- [ ] `curl -fsS http://127.0.0.1:<BACKEND_PORT>/api/v1/health/ready` shows `runtimeConfigMissingKeys: []` before go-live
+- [ ] `curl -fsS http://127.0.0.1:<BACKEND_PORT>/api/v1/health` — DB + Redis connected
+- [ ] `curl -sS http://127.0.0.1:<BACKEND_PORT>/api/v1/health/ready` — `runtimeConfigMissingKeys: []` only required **before go-live** (after Phase 8 Ops config)
 
-### 7.3 Nginx configuration
+### 7.3 Multi-client preflight (shared VPS only)
 
-- [ ] Nginx config file created at `/etc/nginx/sites-available/<client-id>.conf`
+- [ ] `bash docs/clients/<client-id>/scripts/phase7.5-nginx-tls-preflight.sh` passes (or template from `backend/docs/templates/scripts/`)
+- [ ] `ls /etc/nginx/sites-enabled/` reviewed — other clients' configs left intact
+- [ ] `ss -tlnp` confirms `<BACKEND_PORT>` and `<STOREFRONT_PORT>` not used by another client
+- [ ] Did **not** remove `sites-enabled/default` unless verified unused
+
+### 7.4 Nginx configuration
+
+- [ ] Nginx config file created at `/etc/nginx/sites-available/<domain.com>` (domain-based; not `<client-id>.conf` unless they match)
 - [ ] All template variables replaced: `<domain>`, `<BACKEND_PORT>`, `<STOREFRONT_PORT>`, `<client-id>`
 - [ ] Security headers present in HTTPS server block:
   - [ ] `Strict-Transport-Security` (2-year max-age, `includeSubDomains`, `preload`)
@@ -99,18 +108,18 @@
   - [ ] `Permissions-Policy: camera=(), microphone=(), geolocation=(), interest-cohort=()`
 - [ ] TLS hardening: ECDHE-only ciphers, `ssl_session_tickets off`, `ssl_stapling on`
 - [ ] `limit_req_zone` directives in top-level `nginx.conf` `http {}` block (not in `server {}`)
-- [ ] Site symlinked: `/etc/nginx/sites-enabled/<client-id>.conf`
+- [ ] Site symlinked: `/etc/nginx/sites-enabled/<domain.com>` (additive symlink only)
 - [ ] `sudo nginx -t` — passes
 - [ ] `sudo systemctl reload nginx` — succeeds
 
-### 7.4 TLS certificate
+### 7.5 TLS certificate
 
 - [ ] Certificate obtained via Certbot for `<domain>` and `www.<domain>`
 - [ ] `certbot.timer` active (auto-renewal confirmed)
 - [ ] HTTPS loads in browser without warnings
 - [ ] HTTP → HTTPS redirect confirmed
 
-### 7.5 Post-deploy smoke test
+### 7.6 Post-deploy smoke test
 
 - [ ] `curl https://<domain>/api/v1/health` — returns 200
 - [ ] `curl -H "Authorization: Bearer <OPS_METRICS_TOKEN>" https://<domain>/api/v1/ops/metrics` — returns 200 with Prometheus text

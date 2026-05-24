@@ -35,12 +35,13 @@
 
 ## Phase 7 — Backend deploy
 
-**Status:** `[~]` scripts ready — requires production `.env` in vault
+**Status:** `[x]` backend health OK on loopback (2026-05-24)
 
-- [ ] `production.backend.env` on VPS at `backend/.env`
-- [ ] Run `phase7-backend-deploy.sh`
-- [ ] `curl http://127.0.0.1:3001/api/v1/health` OK
-- [ ] Nginx + Certbot per [VPS_DEPLOYMENT_PACK.md](./VPS_DEPLOYMENT_PACK.md)
+- [x] `production.backend.env` on VPS at `backend/.env`
+- [x] Run `phase7-backend-deploy.sh`
+- [x] `curl http://127.0.0.1:3001/api/v1/health` OK
+- [ ] Redis `ports:` commented out (multi-client — no host `6379` publish)
+- [ ] `phase7.5-nginx-tls-preflight.sh` then Nginx + Certbot per [VPS_DEPLOYMENT_PACK.md](./VPS_DEPLOYMENT_PACK.md) § multi-client
 
 ---
 
