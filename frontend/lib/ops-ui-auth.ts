@@ -33,28 +33,37 @@ export function parseBasicAuthHeader(
   }
 }
 
+function getOpsUiBasicAuthCredentials(): { username: string; password: string } | null {
+  const username = process.env.OPS_UI_BASIC_AUTH_USERNAME?.trim();
+  const password = process.env.OPS_UI_BASIC_AUTH_PASSWORD?.trim();
+  if (!username || !password) {
+    return null;
+  }
+  return { username, password };
+}
+
 export function isOpsUiBasicAuthConfigured(): boolean {
-  return Boolean(
-    process.env.OPS_UI_BASIC_AUTH_USERNAME && process.env.OPS_UI_BASIC_AUTH_PASSWORD,
-  );
+  return getOpsUiBasicAuthCredentials() !== null;
 }
 
 export function verifyOpsUiBasicAuth(
   authorizationHeader: string | null,
 ): boolean {
-  const username = process.env.OPS_UI_BASIC_AUTH_USERNAME;
-  const password = process.env.OPS_UI_BASIC_AUTH_PASSWORD;
-
-  if (!username || !password) {
+  const expected = getOpsUiBasicAuthCredentials();
+  if (!expected) {
     return false;
   }
+  const { username, password } = expected;
 
   const credentials = parseBasicAuthHeader(authorizationHeader);
   if (!credentials) {
     return false;
   }
 
-  return credentials.username === username && credentials.password === password;
+  return (
+    credentials.username === username &&
+    credentials.password === password
+  );
 }
 
 export function assertOpsUiAccessFromRequest(request: NextRequest): void {

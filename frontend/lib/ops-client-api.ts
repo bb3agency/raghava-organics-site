@@ -171,11 +171,10 @@ async function opsFetch<T>(
 
 export async function requestOpsLoginOtp(input: {
   email: string;
-  password: string;
 }): Promise<{ expiresAt: string; message?: string }> {
   return opsFetch("/ops/auth/login/request-otp", {
     method: "POST",
-    body: JSON.stringify(input),
+    body: JSON.stringify({ email: input.email }),
   });
 }
 

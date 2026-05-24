@@ -1,3 +1,4 @@
+import { connection } from "next/server";
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import {
@@ -15,7 +16,10 @@ function unauthorizedResponse() {
   });
 }
 
-export function proxy(request: NextRequest) {
+/** Read OPS_UI_BASIC_AUTH_* at request time (not only from the production build bundle). */
+export async function proxy(request: NextRequest) {
+  await connection();
+
   if (isProductionLikeRuntime() && !isOpsUiBasicAuthConfigured()) {
     return new NextResponse(
       "Ops routes are disabled until OPS_UI_BASIC_AUTH_USERNAME and OPS_UI_BASIC_AUTH_PASSWORD are configured.",

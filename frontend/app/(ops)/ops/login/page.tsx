@@ -12,21 +12,20 @@ import {
   requestOpsLoginOtp,
   verifyOpsLoginOtp,
 } from "@/lib/ops-client-api";
-import { emailSchema, otpSchema, passwordSchema } from "@/lib/validators";
+import { emailSchema, otpSchema } from "@/lib/validators";
 
-const credentialsSchema = z.object({
+const emailStepSchema = z.object({
   email: emailSchema,
-  password: passwordSchema,
 });
 
 export default function OpsLoginPage() {
   const router = useRouter();
-  const [step, setStep] = useState<"credentials" | "otp">("credentials");
+  const [step, setStep] = useState<"email" | "otp">("email");
   const [error, setError] = useState<string | null>(null);
   const [otp, setOtp] = useState("");
-  const form = useForm<z.infer<typeof credentialsSchema>>({
-    resolver: zodResolver(credentialsSchema),
-    defaultValues: { email: "", password: "" },
+  const form = useForm<z.infer<typeof emailStepSchema>>({
+    resolver: zodResolver(emailStepSchema),
+    defaultValues: { email: "" },
   });
 
   const handleRequestOtp = form.handleSubmit(async (values) => {
@@ -66,7 +65,7 @@ export default function OpsLoginPage() {
         </p>
       </div>
 
-      {step === "credentials" ? (
+      {step === "email" ? (
         <form onSubmit={handleRequestOtp} className="grid gap-4 rounded-lg border border-border p-6">
           <label className="grid gap-1 text-sm">
             Email
@@ -74,14 +73,6 @@ export default function OpsLoginPage() {
               type="email"
               className="h-11 rounded-md border border-border bg-background px-3 text-sm"
               {...form.register("email")}
-            />
-          </label>
-          <label className="grid gap-1 text-sm">
-            Password
-            <input
-              type="password"
-              className="h-11 rounded-md border border-border bg-background px-3 text-sm"
-              {...form.register("password")}
             />
           </label>
           <button

@@ -54,7 +54,7 @@ export function OpsSetupForm({ token }: OpsSetupFormProps) {
     return (
       <div className="grid gap-3 rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">
         <h2 className="font-heading text-lg font-semibold">Ops setup complete</h2>
-        <p>Sign in at the ops login page with your email and password to start a browser session.</p>
+        <p>Sign in at the ops login page with your email and the OTP sent to your inbox.</p>
         <Link href="/ops/login" className="font-medium text-primary underline-offset-4 hover:underline">
           Continue to ops login
         </Link>
