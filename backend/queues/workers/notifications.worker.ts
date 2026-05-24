@@ -3,9 +3,11 @@ import { NotificationChannel, NotificationStatus, PrismaClient as RealPrismaClie
 import { type SmsProviderAdapter } from '@common/interfaces/notification-provider.interface';
 import { decryptOpsConfigValue } from '@common/security/ops-config-crypto';
 import { Fast2smsAdapter } from '@modules/notifications/adapters/fast2sms.adapter';
+import { MetaWhatsAppAdapter } from '@modules/notifications/adapters/meta-whatsapp.adapter';
+import { Msg91Adapter } from '@modules/notifications/adapters/msg91.adapter';
 import { ResendAdapter } from '@modules/notifications/adapters/resend.adapter';
 import { sendNotificationFailureAlert, sendTechnicalFailureAlert } from '@modules/notifications/notification-failure-alert';
-import { createNotificationProviders } from '@modules/notifications/notification-provider';
+import type { createNotificationProviders } from '@modules/notifications/notification-provider';
 import { SmsTemplateRegistry } from '@modules/notifications/sms-template-registry';
 import { supportedEmailTemplates } from '@modules/notifications/templates/email-templates';
 
@@ -99,6 +101,7 @@ function resolvePrimaryChannel(template: string, primaryChannels: Record<string,
 type NotificationsWorkerDeps = {
   PrismaClient?: typeof RealPrismaClient;
   Worker?: typeof Worker;
+  // Backward-compatible test seam. Kept to avoid breaking existing worker tests.
   createNotificationProviders?: typeof createNotificationProviders;
 };
 
@@ -108,7 +111,6 @@ export function createNotificationsWorker(
 ): Worker {
   const PrismaClientCtor = deps?.PrismaClient ?? RealPrismaClient;
   const WorkerCtor = deps?.Worker ?? Worker;
-  const createProviders = deps?.createNotificationProviders ?? createNotificationProviders;
   const prisma = new PrismaClientCtor();
   const OPS_RUNTIME_NOTIFICATION_KEYS = [
     'NOTIFY_EMAIL_ENABLED',
@@ -157,16 +159,20 @@ export function createNotificationsWorker(
 
   function resolveSmsAdapter(
     runtimeConfig: NodeJS.ProcessEnv,
-    providers: ReturnType<typeof createNotificationProviders>,
     smsTemplateOverrides: Record<string, string>
   ): SmsProviderAdapter {
-    if (resolveSmsProviderName(runtimeConfig) !== 'fast2sms') {
-      return providers.sms;
+    const provider = resolveSmsProviderName(runtimeConfig);
+    if (provider === 'fast2sms') {
+      return new Fast2smsAdapter({
+        apiKey: runtimeConfig.FAST2SMS_API_KEY ?? '',
+        templateRegistry: new SmsTemplateRegistry(smsTemplateOverrides)
+      });
     }
 
-    return new Fast2smsAdapter({
-      apiKey: runtimeConfig.FAST2SMS_API_KEY ?? '',
-      templateRegistry: new SmsTemplateRegistry(smsTemplateOverrides)
+    return new Msg91Adapter({
+      authKey: runtimeConfig.MSG91_AUTH_KEY ?? '',
+      senderId: runtimeConfig.MSG91_SENDER_ID ?? 'ECOMTM',
+      route: runtimeConfig.MSG91_ROUTE ?? '4'
     });
   }
 
@@ -308,8 +314,7 @@ export function createNotificationsWorker(
         }
 
         try {
-          const providers = createProviders(runtimeConfig);
-          const smsAdapter = resolveSmsAdapter(runtimeConfig, providers, flags.smsTemplates);
+          const smsAdapter = resolveSmsAdapter(runtimeConfig, flags.smsTemplates);
           const smsData: SendSmsJobData = {
             ...data,
             data: SmsTemplateRegistry.composeTemplateData(data.data, flags.storeName)
@@ -384,8 +389,12 @@ export function createNotificationsWorker(
         }
 
         try {
-          const providers = createProviders(runtimeConfig);
-          const sent = await providers.whatsapp.sendWhatsapp(data);
+          const whatsappAdapter = new MetaWhatsAppAdapter({
+            accessToken: runtimeConfig.META_WHATSAPP_ACCESS_TOKEN ?? '',
+            phoneNumberId: runtimeConfig.META_WHATSAPP_PHONE_NUMBER_ID ?? '',
+            apiVersion: runtimeConfig.META_WHATSAPP_API_VERSION ?? 'v21.0'
+          });
+          const sent = await whatsappAdapter.sendWhatsapp(data);
           await prisma.notificationLog.create({
             data: {
               channel: NotificationChannel.WHATSAPP,
@@ -574,8 +583,7 @@ export function createNotificationsWorker(
           }
 
           try {
-            const providers = createProviders(runtimeConfig);
-            const smsAdapter = resolveSmsAdapter(runtimeConfig, providers, flags.smsTemplates);
+            const smsAdapter = resolveSmsAdapter(runtimeConfig, flags.smsTemplates);
             const sent = await smsAdapter.sendSms({
               phone: recipient,
               template: data.template,
@@ -653,8 +661,12 @@ export function createNotificationsWorker(
         }
 
         try {
-          const providers = createProviders(runtimeConfig);
-          const sent = await providers.whatsapp.sendWhatsapp({
+          const whatsappAdapter = new MetaWhatsAppAdapter({
+            accessToken: runtimeConfig.META_WHATSAPP_ACCESS_TOKEN ?? '',
+            phoneNumberId: runtimeConfig.META_WHATSAPP_PHONE_NUMBER_ID ?? '',
+            apiVersion: runtimeConfig.META_WHATSAPP_API_VERSION ?? 'v21.0'
+          });
+          const sent = await whatsappAdapter.sendWhatsapp({
             phone: recipient,
             template: data.template,
             data: data.data
