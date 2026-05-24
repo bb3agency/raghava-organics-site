@@ -150,17 +150,20 @@ for i in $(seq 1 $HEALTH_RETRIES); do
 done
 
 # ---------------------------------------------------------------------------
-# 5.5 Runtime readiness check — must include no missing runtime keys
+# 5.5 Runtime readiness check (informational — do not block deploy)
+#     Ops config is filled incrementally; /health/ready may stay not_ready until
+#     all keys are saved. CD must still ship code fixes (e.g. partial config save).
 # ---------------------------------------------------------------------------
-log "Validating readiness payload at $READY_URL..."
+log "Checking readiness payload at $READY_URL (non-blocking)..."
 READY_RESPONSE="$(curl -sS "$READY_URL" || true)"
 if ! echo "$READY_RESPONSE" | grep -q '"status":"ready"'; then
-  log "Readiness endpoint response: $READY_RESPONSE"
-  fail "Readiness status is not 'ready'. Fix dependencies/runtime config before serving traffic."
-fi
-if ! echo "$READY_RESPONSE" | grep -q '"runtimeConfigMissingKeys":\[\]'; then
-  log "Readiness endpoint response: $READY_RESPONSE"
-  fail "runtimeConfigMissingKeys is not empty. Complete Ops config and restart backend/workers."
+  log "WARNING: Readiness status is not 'ready' yet. Response: $READY_RESPONSE"
+  log "WARNING: Finish Ops config and restart API/workers when convenient."
+elif ! echo "$READY_RESPONSE" | grep -q '"runtimeConfigMissingKeys":\[\]'; then
+  log "WARNING: runtimeConfigMissingKeys is not empty. Response: $READY_RESPONSE"
+  log "WARNING: CD succeeded; complete missing keys via Ops UI before go-live."
+else
+  log "Readiness check passed (status=ready, no missing runtime keys)."
 fi
 
 # ---------------------------------------------------------------------------
