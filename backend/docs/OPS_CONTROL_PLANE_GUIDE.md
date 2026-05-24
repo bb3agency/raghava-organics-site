@@ -106,8 +106,8 @@ await api.post('/api/v1/ops/system/restart', {
 
 **Permission Inheritance:**
 - `ops:write` implicitly includes `ops:read`
-- New ops users start with no permissions (fail-closed)
-- Must explicitly grant `ops:read` or `ops:write` via `ops:newuser` CLI
+- Ops invite/setup now enforces both permissions on every ops account (`OPS_READ` + `OPS_WRITE`)
+- Invite payload `permissions[]` is optional and ignored for downgrades; backend always persists both
 
 ### 2.4 Dual Approval System Removal (June 2026)
 
@@ -389,7 +389,8 @@ Phase 2 boundary note: backend implements secure APIs only; interactive UI is im
 `POST /api/v1/ops/invites` (`ops:write`)
 
 - Creates and emails invite links for new ops users.
-- Required body: `{ email, name, permissions[], setupBaseUrl }`. Optional: `ipAllowlist[]` (defaults to `[]`; stored in DB for audit trail but **not enforced**).
+- Required body: `{ email, name, setupBaseUrl }`. Optional: `permissions[]` (backward-compatible input), `ipAllowlist[]` (defaults to `[]`; stored in DB for audit trail but **not enforced**).
+- Effective permission set is always both `OPS_READ` + `OPS_WRITE`.
 - `setupBaseUrl` input must be base origin only; backend composes `${setupBaseUrl}/ops/setup?token=...`.
 
 `POST /api/v1/ops/invites/:inviteId/revoke` (`ops:write`)

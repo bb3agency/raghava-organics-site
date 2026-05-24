@@ -639,7 +639,7 @@ Required before any `config/save` call. The flow is:
 **`ops:read`** — Paginated list of all ops user invites. Query: `status` (CREATED/EMAIL_SENT/CONSUMED/EXPIRED_CLEANED), `page`, `limit`. Returns invite metadata (id, email, name, status, permissions, ipAllowlist, expiresAt, createdAt, createdByOpsUserId). **Does not return invite tokens.**
 
 #### `POST /api/v1/ops/invites`
-**`ops:write`** — Create an invite for a new ops user. Body: `{ email, name, permissions[], setupBaseUrl, ipAllowlist[]? }`. `ipAllowlist` is optional (defaults to `[]`); stored for audit trail but not enforced. Returns `{ inviteId, expiresAt, setupUrl }`. Backend composes setup URL as `${setupBaseUrl}/ops/setup?token=...`. Invite expires in 10 minutes.
+**`ops:write`** — Create an invite for a new ops user. Body: `{ email, name, setupBaseUrl, ipAllowlist[]?, permissions[]? }`. `permissions[]` is optional/backward-compatible; backend enforces mandatory ops permissions and persists both `OPS_READ` + `OPS_WRITE`. `ipAllowlist` is optional (defaults to `[]`); stored for audit trail but not enforced. Returns `{ inviteId, expiresAt, setupUrl }`. Backend composes setup URL as `${setupBaseUrl}/ops/setup?token=...`. Invite expires in 10 minutes.
 
 #### `POST /api/v1/ops/invites/:inviteId/revoke`
 **`ops:write`** — Revoke a pending (CREATED/EMAIL_SENT) invite before it is consumed. **OTP required:** Body must include `{ challengeId, otpCode }` from verified `invite-revoke` OTP challenge. Uses concurrency-safe `updateMany` guard — if the invite was concurrently consumed, returns `409 CONFLICT`. Audit logged with `INVITE_REVOKED` action type. Returns `{ inviteId, revoked: true }`.
@@ -897,9 +897,9 @@ Reviews are only visible on the storefront after admin approval.
 - **Layer C:** analytics replay, queue inspection (developer operations)
 
 **Fail-Closed Design:**
-- New users start with no permissions
-- Empty permission set = 403 FORBIDDEN
-- Must be explicitly granted permissions
+- Merchant admin permissions are fail-closed (empty set = 403 FORBIDDEN).
+- Ops permissions are fixed to both `ops:read` and `ops:write` for every ops account.
+- `OPS_APPROVE` remains removed and unsupported.
 
 ### 26.4 Security Headers (All Responses)
 

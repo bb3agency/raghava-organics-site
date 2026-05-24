@@ -18,7 +18,7 @@
 | Backend repo path | `../backend` |
 | Frontend repo path | `.` |
 | Phase 4 start date | 2026-05-16 |
-| Last updated | 2026-05-16 (Contract hardening pass) |
+| Last updated | 2026-05-24 (VPS CD hardening + incident closure) |
 
 ---
 
@@ -245,5 +245,28 @@ NEXT_PUBLIC_RAZORPAY_KEY_ID=(pending)
 1. Fill [docs/clients/raghava-organics/VPS_INPUTS.md](../../docs/clients/raghava-organics/VPS_INPUTS.md) and run Phase 6–8 scripts on VPS.
 2. Run Postman folders 0→3 — [PHASE5_EVIDENCE_CHECKLIST.md](../../docs/clients/raghava-organics/PHASE5_EVIDENCE_CHECKLIST.md).
 3. Complete go-live checklists on production domain.
+
+### 2026-05-24
+
+- VPS GitHub Actions CD pipeline validated end-to-end for client repo `bb3agency/raghava-organics-site`.
+- Runner naming/placement hardened for multi-client VPS:
+  - per-client directory convention `~/actions-runner-<client-id>`
+  - `CLIENT_ID` normalization in scripts (`Raghava Organics` -> `raghava-organics`).
+- Root cause found for skipped deploys: repo had no Variables/Secrets set initially; additionally, path values were mistakenly entered as Variables instead of Secrets.
+  - Correct shape: Variables -> `VPS_DEPLOY_ENABLED`, `FRONTEND_DEPLOY_ENABLED`, `VPS_RUNNER_LABEL`
+  - Secrets -> `VPS_CLIENT_PATH`, `VPS_FRONTEND_PATH`
+- Frontend CD verified:
+  - `vps-frontend-deploy.sh` writes `.last-frontend-deploy-sha` after successful build + PM2 reload.
+  - Product grid test change deployed successfully through workflow.
+- Backend CD issues and fixes:
+  - `npx: not found` in deploy path traced to production image intentionally removing npm/npx.
+  - `EACCES` on `.prisma/client` traced to runtime container generate step under non-root user.
+  - `backend/scripts/vps-deploy.sh` updated: run migrations on host via local Prisma CLI and skip runtime-container Prisma generate.
+- Final backend deploy blocker was expected readiness gate (`/health/ready`) due to missing Ops DB-overlay runtime keys (`PAYMENT_PROVIDER`, `SHIPPING_PROVIDER`, `SMS_PROVIDER`).
+  - Resolution path documented in client CD setup doc: complete Ops Config (Phase 8), restart API/workers, verify `runtimeConfigMissingKeys: []`.
+- Ops permissions model update:
+  - Backend now enforces both `OPS_READ` + `OPS_WRITE` for every ops user during invite creation, invite consumption, and login session normalization.
+  - Frontend ops invite form removed manual permissions input; UI now treats ops users as mandatory read+write.
+  - **Existing ops users:** DB rows with only `OPS_READ` are upgraded automatically on next login, `GET /ops/session`, or any authenticated request (session resolver patches Redis + DB). For immediate bulk fix on VPS without waiting for logins: `cd backend && node scripts/normalize-ops-user-permissions.mjs --yes` (use `127.0.0.1` in `DATABASE_URL` when running on host, not `host.docker.internal`).
 
 ---

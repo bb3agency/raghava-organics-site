@@ -237,13 +237,15 @@ Use when you need a redeploy without a new commit. Prefer `git revert` + `git pu
 |---------|--------------|-----|
 | No workflows on push | Workflows not at **repo root** `.github/workflows/` | Add root workflows for monorepo; push to `main` |
 | CI runs, deploy never starts | `VPS_DEPLOY_ENABLED` not `true` or not a **Variable** | Fix repo Variables |
+| Deploy fails with `Missing required secrets: VPS_CLIENT_PATH ...` | Paths were added as **Variables** instead of **Secrets** | Move `VPS_CLIENT_PATH`/`VPS_FRONTEND_PATH` to repo **Secrets**; keep only booleans/labels in Variables |
 | Deploy job queued forever | Runner offline or wrong label | `sudo ~/actions-runner-<client-id>/svc.sh status`; fix `VPS_RUNNER_LABEL` |
 | Deploy hit wrong VPS client | Missing/wrong `VPS_RUNNER_LABEL` | Unique label per client repo |
 | Backend deploy fails at readiness | Phase 8 incomplete | Ops config save + restart; verify `/health/ready` |
 | `SHA mismatch` | Another push during deploy | Re-run workflow |
 | Frontend `script not found` | Workflow calls `frontend/scripts/...` | Use `$VPS_CLIENT_PATH/scripts/vps-frontend-deploy.sh` |
 | `/ops/setup` returns 401 with `curl -u` | Wrong `OPS_UI_BASIC_AUTH_*` values, PM2 not reloaded, or stale frontend build | Verify `.env.production.local`, run `phase10-frontend-deploy.sh`, and retest localhost `/ops/setup` with real creds |
-| `npm ci` / Prisma errors on VPS | Ran bare `npx prisma` | Scripts run `npm ci` first (pins Prisma 6) |
+| Backend deploy fails with `sh: npx: not found` | Production image strips npm/npx binaries | Use host Prisma CLI for migrations and avoid container `npx` |
+| Backend deploy fails with `EACCES ... /app/node_modules/.prisma/client/index.js` | `prisma generate` executed inside runtime container as non-root user | Do not run container-side generate in deploy; Prisma client is generated during image build |
 | Port 5432 in use on compose up | Started compose `postgres` on host-Postgres VPS | Use `docker-compose.prod.yml` overlay |
 
 **Phase 7 incidents:** `docs/PHASE7_VPS_DEPLOY_INCIDENT_PLAYBOOK.md`
@@ -296,10 +298,13 @@ sudo ./svc.sh install && sudo ./svc.sh start
 | `backend/.github/workflows/deploy.yml` | Backend-only repo CD |
 | `backend/scripts/vps-deploy.sh` | Backend deploy |
 | `backend/scripts/vps-frontend-deploy.sh` | Frontend deploy |
+| `backend/docs/templates/scripts/install-github-runner.sh` | Reusable runner install helper for new clients |
+| `backend/docs/templates/scripts/verify-cd-status.sh` | Reusable CD/PM2/Docker verification helper |
+| `backend/docs/templates/scripts/migrate-runner-directory.sh` | One-time rename helper (`~/actions-runner` -> `~/actions-runner-<client-id>`) |
+| `backend/docs/templates/scripts/phase9-github-cd-setup.sh` | VPS preflight before enabling CD |
 | `backend/scripts/verify-vps-deploy-preflight.mjs` | Local artifact check (no VPS) |
 | `backend/docs/templates/scripts/phase7-backend-deploy.sh` | First manual backend bootstrap |
 | `backend/docs/templates/scripts/phase8-ops-bootstrap.sh` | Ops bootstrap helper |
-| `backend/docs/templates/scripts/phase9-github-cd-setup.sh` | VPS preflight before enabling CD |
 
 ---
 

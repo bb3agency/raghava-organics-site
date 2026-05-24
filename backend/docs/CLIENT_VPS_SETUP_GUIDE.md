@@ -957,6 +957,8 @@ Add to **Settings → Secrets and variables → Actions** in the client repo:
 | Secret | `VPS_FRONTEND_PATH` | `/var/www/<client-id>/frontend` |
 
 > **API-only clients:** Do not set `FRONTEND_DEPLOY_ENABLED`. The `deploy-frontend` job will remain dormant — only the backend job runs.
+>
+> **Critical type boundary:** `VPS_CLIENT_PATH` and `VPS_FRONTEND_PATH` must be configured as **Secrets** (workflow reads `secrets.*`), not Variables. If stored under Variables, deploy jobs fail at "Missing required secrets".
 
 #### Frontend `.env.local` requirements
 
@@ -1010,8 +1012,21 @@ Runtime env files are **never written by deploy scripts** — they must be place
 | `.github/workflows/deploy.yml` | Deploy workflow at **repo root** for monorepos, or `backend/.github/workflows/deploy.yml` for backend-only repos. `runs-on: ${{ vars.VPS_RUNNER_LABEL \|\| 'self-hosted' }}` — jobs `deploy-backend` and `deploy-frontend` |
 | `scripts/vps-deploy.sh` | Backend deploy script — Docker Compose build + migration + container swap |
 | `scripts/vps-frontend-deploy.sh` | Frontend deploy script — Next.js build + PM2 zero-downtime reload |
+| `backend/docs/templates/scripts/install-github-runner.sh` | Reusable runner installer for client docs/scripts |
+| `backend/docs/templates/scripts/verify-cd-status.sh` | Reusable VPS verification helper (runner/CD/PM2/Docker) |
+| `backend/docs/templates/scripts/migrate-runner-directory.sh` | One-time legacy runner dir migration helper |
+| `backend/docs/templates/scripts/phase9-github-cd-setup.sh` | Reusable preflight gate before enabling CD |
 | `nginx/client.conf.template` | Nginx config with `error_page 502 503 /maintenance.html` |
 | `nginx/maintenance.html` | Maintenance page served during the backend restart window |
+
+---
+
+### CD incident learnings (May 24, 2026)
+
+- `deploy.yml` uses `vars.VPS_DEPLOY_ENABLED` / `vars.FRONTEND_DEPLOY_ENABLED` and `secrets.VPS_CLIENT_PATH` / `secrets.VPS_FRONTEND_PATH`; wrong placement silently skips or fails jobs.
+- Self-hosted runner under systemd can have minimal PATH; VPS scripts must prefer project-local CLIs (`node_modules/.bin/*`) over global `npx`.
+- Production backend image intentionally strips `npm`/`npx`; do not run `npx prisma generate` inside runtime containers.
+- Runtime readiness (`/api/v1/health/ready`) is a hard gate. Missing Ops DB-overlay keys (`PAYMENT_PROVIDER`, `SHIPPING_PROVIDER`, `SMS_PROVIDER`, strict tokens/allowlists) correctly fail deploy until Phase 8 config is complete.
 
 ---
 

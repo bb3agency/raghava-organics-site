@@ -287,7 +287,6 @@ export async function listOpsInvitesClient(query?: {
 export async function createOpsInviteClient(input: {
   email: string;
   name: string;
-  permissions: Array<"OPS_READ" | "OPS_WRITE">;
   setupBaseUrl: string;
   ipAllowlist?: string[];
 }): Promise<{ inviteId: string; expiresAt: string; setupUrl: string }> {

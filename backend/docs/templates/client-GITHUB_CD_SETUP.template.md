@@ -40,20 +40,26 @@
 
 ## VPS runner install (one-time)
 
+Copy reusable scripts from backend templates into the client docs/scripts folder:
+
+```bash
+mkdir -p docs/clients/<client-id>/scripts
+cp backend/docs/templates/scripts/install-github-runner.sh docs/clients/<client-id>/scripts/
+cp backend/docs/templates/scripts/verify-cd-status.sh docs/clients/<client-id>/scripts/
+cp backend/docs/templates/scripts/migrate-runner-directory.sh docs/clients/<client-id>/scripts/
+cp backend/docs/templates/scripts/phase9-github-cd-setup.sh docs/clients/<client-id>/scripts/
+```
+
+Then install:
+
 ```bash
 ssh <deploy-user>@<vps-ip>
-mkdir -p ~/actions-runner-<client-id> && cd ~/actions-runner-<client-id>
-# GitHub → repo → Settings → Actions → Runners → New self-hosted runner
-# Copy curl URL + registration token from that page
-curl -o actions-runner-linux-x64.tar.gz -L <URL_FROM_GITHUB>
-tar xzf ./actions-runner-linux-x64.tar.gz
-./config.sh \
-  --url https://github.com/<org>/<repo> \
-  --token <TOKEN> \
-  --name "<client-id>-vps" \
-  --labels "self-hosted,<client-id>-vps" \
-  --unattended
-sudo ./svc.sh install && sudo ./svc.sh start
+cd /var/www/<client-id>
+export CLIENT_ID=<client-id>
+export GITHUB_REPO_URL=https://github.com/<org>/<repo>
+export RUNNER_TOKEN=<TOKEN>
+export RUNNER_DOWNLOAD_URL=<URL_FROM_GITHUB>
+bash docs/clients/<client-id>/scripts/install-github-runner.sh
 ```
 
 Preflight: `bash /var/www/<client-id>/docs/clients/<client-id>/scripts/phase9-github-cd-setup.sh`

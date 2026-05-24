@@ -411,13 +411,13 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
         body: {
           type: 'object',
           additionalProperties: false,
-          required: ['email', 'name', 'permissions', 'setupBaseUrl'],
+          required: ['email', 'name', 'setupBaseUrl'],
           properties: {
             email: { type: 'string', format: 'email', minLength: 3, maxLength: 160 },
             name: { type: 'string', minLength: 1, maxLength: 160 },
             permissions: {
               type: 'array',
-              minItems: 1,
+              minItems: 0,
               items: { type: 'string', enum: ['OPS_READ', 'OPS_WRITE'], maxLength: 20 }
             },
             ipAllowlist: {
@@ -452,7 +452,7 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
       const body = request.body as {
         email: string;
         name: string;
-        permissions: Array<'OPS_READ' | 'OPS_WRITE'>;
+        permissions?: Array<'OPS_READ' | 'OPS_WRITE'>;
         ipAllowlist?: string[];
         setupBaseUrl: string;
       };
@@ -460,7 +460,7 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
         createdByOpsUserId: opsUser.id,
         inviteEmail: body.email,
         inviteName: body.name,
-        permissions: body.permissions,
+        ...(body.permissions ? { permissions: body.permissions } : {}),
         ipAllowlist: body.ipAllowlist ?? [],
         setupBaseUrl: body.setupBaseUrl,
         requestIp: request.ip,

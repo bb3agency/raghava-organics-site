@@ -126,6 +126,30 @@ After setup, every deploy is: **commit → push to `main` → automatic**.
 
 > **PM2 does not watch git.** Push-to-deploy is **not** PM2 — it is the **GitHub Actions self-hosted runner** on the VPS running `vps-deploy.sh` / `vps-frontend-deploy.sh` (git pull + docker/pm2 reload).
 
+### If backend deploy fails on `/health/ready` (`PAYMENT_PROVIDER`, `SHIPPING_PROVIDER`, `SMS_PROVIDER`)
+
+This is **expected** until Phase 8 Ops config is complete. CD is working; the deploy script refuses to finish while go-live keys are missing.
+
+1. Log in: `https://raghavaorganics.com/ops/login` → **Config**
+2. Set provider modes (and their API keys) in the Ops DB overlay — not in `backend/.env`:
+   - `PAYMENT_PROVIDER` = `razorpay` (plus Razorpay keys) or `cod`
+   - `SHIPPING_PROVIDER` = `delhivery` or `shiprocket` (plus provider keys)
+   - `SMS_PROVIDER` = `msg91` or `fast2sms` (plus SMS keys), or `noop` only for non-production testing
+3. Also fill strict go-live keys when prompted: `OPS_METRICS_TOKEN`, `REPLAY_APPROVAL_TOKEN`, webhook allowlists, etc.
+4. **Save** config (OTP if required) → **restart API + workers** when UI shows restart required:
+   ```bash
+   cd /var/www/raghava-organics/backend
+   docker compose -p raghava-organics -f docker-compose.yml -f docker-compose.prod.yml restart backend workers
+   ```
+5. Verify on VPS:
+   ```bash
+   curl -s http://127.0.0.1:3001/api/v1/health/ready
+   ```
+   Must show `"status":"ready"` and `"runtimeConfigMissingKeys":[]`.
+6. Re-run **Deploy to VPS** (or push again).
+
+See [PRODUCTION_FIRST_DEPLOY_CHECKLIST.md](../../../backend/docs/PRODUCTION_FIRST_DEPLOY_CHECKLIST.md) Phase 2.
+
 ### If backend deploy fails on Prisma (`npx: not found` or `EACCES` on `.prisma/client`)
 
 - Production images remove `npm`/`npx` — do not run `prisma generate` inside the running container.
@@ -148,6 +172,13 @@ Check these in order:
 5. If missing or stale, trigger once manually:
    - GitHub -> Actions -> `Deploy to VPS` -> `Run workflow`
    - or run manual command from this doc.
+
+### Incident closure summary (2026-05-24)
+
+- **Deploy skipped/no-op after push:** repo Variables/Secrets were not configured.
+- **Deploy failed with missing secrets:** `VPS_CLIENT_PATH` / `VPS_FRONTEND_PATH` were set as Variables (fixed: moved to Secrets).
+- **Backend failed with `npx: not found` then Prisma `EACCES`:** deploy script no longer runs Prisma generate inside runtime container; migrations run on host and Prisma client is generated during image build.
+- **Backend failed at readiness:** not a CD failure; Ops runtime config incomplete. Complete Phase 8 Ops Config until `/api/v1/health/ready` returns `status=ready` and `runtimeConfigMissingKeys: []`.
 
 ---
 

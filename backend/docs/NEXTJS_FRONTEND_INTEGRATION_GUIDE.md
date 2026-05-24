@@ -629,7 +629,7 @@ Analytics/chart implementation should match TRD expectations (Recharts primitive
 | **Error message security** | ✅ Enforced | No stack traces in production; sensitive data redaction |
 | **Rate limiting** | ✅ Enforced | Tiered limits: auth-sensitive, ops-critical, admin-write, admin-read |
 | **Idempotency** | ✅ Enforced | `Idempotency-Key` header for all critical mutations |
-| **Permission fail-closed** | ✅ Enforced | Empty permission set = 403; must be explicitly granted |
+| **Permission model enforcement** | ✅ Enforced | Admin stays fail-closed (`403` on missing scopes). Ops accounts are normalized to both `ops:read` + `ops:write`; no read-only ops role. |
 
 ### 10.2 Token storage architecture
 

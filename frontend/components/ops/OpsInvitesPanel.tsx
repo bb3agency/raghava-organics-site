@@ -63,17 +63,11 @@ export function OpsInvitesPanel() {
   async function handleCreate(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const formData = new FormData(event.currentTarget);
-    const permissions = String(formData.get("permissions") ?? "")
-      .split(",")
-      .map((value) => value.trim())
-      .map((value) => value.toUpperCase().replace("OPS:", "OPS_"))
-      .filter((value): value is "OPS_READ" | "OPS_WRITE" => value === "OPS_READ" || value === "OPS_WRITE");
     try {
       const result = await createOpsInviteClient({
         email: String(formData.get("email") ?? ""),
         name: String(formData.get("name") ?? ""),
         setupBaseUrl: String(formData.get("setupBaseUrl") ?? ""),
-        permissions,
         ipAllowlist: String(formData.get("ipAllowlist") ?? "")
           .split(",")
           .map((value) => value.trim())
@@ -99,7 +93,7 @@ export function OpsInvitesPanel() {
         <OpsCard>
           <OpsCardHeader
             title="Create invite"
-            description="setupBaseUrl must be the storefront origin only (no /ops/setup path)."
+            description="setupBaseUrl must be the storefront origin only (no /ops/setup path). New ops users always receive OPS_READ + OPS_WRITE."
           />
           <form onSubmit={handleCreate} className="grid gap-4 sm:grid-cols-2">
             <OpsField label="Email" htmlFor="invite-email">
@@ -115,9 +109,6 @@ export function OpsInvitesPanel() {
                 placeholder="https://raghavaorganics.com"
                 required
               />
-            </OpsField>
-            <OpsField label="Permissions" htmlFor="invite-perms" hint="Comma-separated OPS_READ, OPS_WRITE">
-              <OpsInput id="invite-perms" name="permissions" defaultValue="OPS_READ,OPS_WRITE" required />
             </OpsField>
             <OpsField label="IP allowlist" htmlFor="invite-ip" hint="Optional, comma-separated CIDRs">
               <OpsInput id="invite-ip" name="ipAllowlist" placeholder="203.0.113.10/32" />

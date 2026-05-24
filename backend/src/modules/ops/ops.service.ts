@@ -58,6 +58,24 @@ const OPS_OTP_TTL_MS = 10 * 60 * 1000;
 const OPS_OTP_MAX_ATTEMPTS = 3;
 const OPS_INVITE_SETUP_OTP_TTL_SECONDS = 5 * 60;
 const OPS_INVITE_SETUP_OTP_MAX_ATTEMPTS = 3;
+const MANDATORY_OPS_PERMISSIONS: Array<'OPS_READ' | 'OPS_WRITE'> = ['OPS_READ', 'OPS_WRITE'];
+
+function enforceMandatoryOpsPermissions(current: string[] | undefined): Array<'OPS_READ' | 'OPS_WRITE'> {
+  const normalized = new Set((current ?? []).map((permission) => permission.trim().toUpperCase()));
+  for (const required of MANDATORY_OPS_PERMISSIONS) {
+    normalized.add(required);
+  }
+  return [...MANDATORY_OPS_PERMISSIONS].filter((permission) => normalized.has(permission));
+}
+
+function opsPermissionsNeedUpgrade(current: string[] | undefined): boolean {
+  const enforced = enforceMandatoryOpsPermissions(current);
+  const existing = current ?? [];
+  return (
+    enforced.length !== existing.length ||
+    enforced.some((permission) => !existing.includes(permission))
+  );
+}
 
 function getLoginOtpTtlSeconds(): number {
   const raw = Number(process.env.OPS_LOGIN_OTP_TTL_SECONDS ?? 300);
@@ -375,7 +393,7 @@ export class OpsService {
           name: 'Ops System',
           mfaEnabled: false,
           mfaSecretEncrypted: null,
-          permissions: ['OPS_WRITE']
+          permissions: enforceMandatoryOpsPermissions(['OPS_WRITE'])
         }
       });
 
@@ -454,11 +472,19 @@ export class OpsService {
       throw new AppError(ERROR_CODES.NOT_FOUND, 'Ops user not found', 404);
     }
 
+    const permissions = enforceMandatoryOpsPermissions(opsUser.permissions);
+    if (opsPermissionsNeedUpgrade(opsUser.permissions)) {
+      await this.prisma().opsUser.update({
+        where: { id: opsUser.id },
+        data: { permissions }
+      });
+    }
+
     return {
       id: opsUser.id,
       email: opsUser.email,
       name: opsUser.name,
-      permissions: opsUser.permissions,
+      permissions,
       mfaEnabled: opsUser.mfaEnabled,
       ipAllowlist: opsUser.ipAllowlist,
       lastLoginAt: opsUser.lastLoginAt ? opsUser.lastLoginAt.toISOString() : null
@@ -511,7 +537,7 @@ export class OpsService {
     createdByOpsUserId?: string;
     inviteEmail: string;
     inviteName: string;
-    permissions: Array<'OPS_READ' | 'OPS_WRITE'>;
+    permissions?: Array<'OPS_READ' | 'OPS_WRITE'>;
     ipAllowlist?: string[];
     setupBaseUrl: string;
     requestIp: string;
@@ -545,6 +571,7 @@ export class OpsService {
     const token = crypto.randomBytes(32).toString('base64url');
     const inviteTokenHash = hashOpaqueToken(token);
     const expiresAt = new Date(Date.now() + OPS_INVITE_TTL_MS);
+    const permissions = enforceMandatoryOpsPermissions(input.permissions);
 
     const invite = await prisma.opsUserInvite.create({
       data: {
@@ -553,7 +580,7 @@ export class OpsService {
         inviteTokenHash,
         setupBaseUrl: input.setupBaseUrl,
         status: 'CREATED',
-        permissions: input.permissions,
+        permissions,
         ipAllowlist: input.ipAllowlist ?? [],
         expiresAt,
         ...(input.createdByOpsUserId ? { createdByOpsUserId: input.createdByOpsUserId } : {})
@@ -760,6 +787,7 @@ export class OpsService {
     };
 
     const opsUser = await transactablePrisma.$transaction(async (tx) => {
+      const permissions = enforceMandatoryOpsPermissions(invite.permissions);
       const createdUser = await (tx as typeof prisma).opsUser.create({
         data: {
           email: invite.inviteEmail,
@@ -768,7 +796,7 @@ export class OpsService {
           mfaEnabled: false,
           mfaSecretEncrypted: null,
           ipAllowlist: invite.ipAllowlist,
-          permissions: invite.permissions
+          permissions
         }
       });
 
@@ -1914,6 +1942,13 @@ export class OpsService {
     if (!opsUser || !opsUser.isActive) {
       throw new AppError(ERROR_CODES.UNAUTHORISED, 'Ops account is inactive or not found', 401);
     }
+    const permissions = enforceMandatoryOpsPermissions(opsUser.permissions);
+    if (opsPermissionsNeedUpgrade(opsUser.permissions)) {
+      await prisma.opsUser.update({
+        where: { id: opsUser.id },
+        data: { permissions }
+      });
+    }
 
     const sessionToken = `opssess_${crypto.randomBytes(32).toString('base64url')}`;
     const sessionTokenHash = hashOpaqueToken(sessionToken);
@@ -1924,7 +1959,7 @@ export class OpsService {
       opsUserId: opsUser.id,
       email: opsUser.email,
       name: opsUser.name,
-      permissions: opsUser.permissions
+      permissions
     }), 'EX', sessionTtl);
 
     await prisma.opsUser.updateMany({
@@ -1948,7 +1983,7 @@ export class OpsService {
       opsUserId: opsUser.id,
       name: opsUser.name,
       email: opsUser.email,
-      permissions: opsUser.permissions,
+      permissions,
       expiresAt: new Date(Date.now() + sessionTtl * 1000).toISOString()
     };
   }
@@ -1968,8 +2003,14 @@ export class OpsService {
     const raw = await this.fastify.redis.get(sessionKey);
     if (!raw) return null;
 
+    let session: {
+      opsUserId: string;
+      email: string;
+      name: string;
+      permissions: string[];
+    };
     try {
-      return JSON.parse(raw) as {
+      session = JSON.parse(raw) as {
         opsUserId: string;
         email: string;
         name: string;
@@ -1978,6 +2019,91 @@ export class OpsService {
     } catch {
       return null;
     }
+
+    const prisma = this.prisma();
+    const opsUser = await prisma.opsUser.findUnique({
+      where: { id: session.opsUserId },
+      select: { id: true, email: true, name: true, permissions: true, isActive: true }
+    });
+    if (!opsUser?.isActive) {
+      return null;
+    }
+
+    const permissions = enforceMandatoryOpsPermissions(opsUser.permissions);
+    if (opsPermissionsNeedUpgrade(opsUser.permissions)) {
+      await prisma.opsUser.update({
+        where: { id: opsUser.id },
+        data: { permissions }
+      });
+    }
+
+    const sessionNeedsUpgrade =
+      permissions.length !== session.permissions.length ||
+      permissions.some((permission) => !session.permissions.includes(permission));
+
+    if (sessionNeedsUpgrade) {
+      const ttlSeconds = await this.fastify.redis.ttl(sessionKey);
+      const payload = JSON.stringify({
+        opsUserId: opsUser.id,
+        email: opsUser.email,
+        name: session.name,
+        permissions
+      });
+      if (ttlSeconds > 0) {
+        await this.fastify.redis.set(sessionKey, payload, 'EX', ttlSeconds);
+      } else {
+        await this.fastify.redis.set(sessionKey, payload);
+      }
+    }
+
+    return {
+      opsUserId: opsUser.id,
+      email: opsUser.email,
+      name: session.name,
+      permissions
+    };
+  }
+
+  /**
+   * One-time/backfill helper: ensure every active ops user row has OPS_READ + OPS_WRITE.
+   */
+  async normalizeAllOpsUserPermissions(): Promise<{ updatedUsers: number; updatedInvites: number }> {
+    const prisma = this.prisma();
+    const users = await prisma.opsUser.findMany({
+      select: { id: true, permissions: true }
+    });
+
+    let updatedUsers = 0;
+    for (const user of users) {
+      const permissions = enforceMandatoryOpsPermissions(user.permissions);
+      if (!opsPermissionsNeedUpgrade(user.permissions)) {
+        continue;
+      }
+      await prisma.opsUser.update({
+        where: { id: user.id },
+        data: { permissions }
+      });
+      updatedUsers += 1;
+    }
+
+    const invites = await prisma.opsUserInvite.findMany({
+      where: { status: { in: ['CREATED', 'EMAIL_SENT'] } }
+    });
+
+    let updatedInvites = 0;
+    for (const invite of invites) {
+      const permissions = enforceMandatoryOpsPermissions(invite.permissions);
+      if (!opsPermissionsNeedUpgrade(invite.permissions)) {
+        continue;
+      }
+      await prisma.opsUserInvite.update({
+        where: { id: invite.id },
+        data: { permissions }
+      });
+      updatedInvites += 1;
+    }
+
+    return { updatedUsers, updatedInvites };
   }
 
   /**
