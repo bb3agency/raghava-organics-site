@@ -81,11 +81,22 @@ Fix:
 
 ### C) `P1001 Can't reach database at host.docker.internal` during host-side migrate
 Cause:
-- Host shell migration attempted with container-only hostname.
+- Bare `npx prisma migrate deploy` on the VPS host reads `.env` unchanged. Production `.env` uses `host.docker.internal` for **containers**; that hostname does not resolve in the shell.
+- **This is expected**, not a Postgres outage, if `psql -h 127.0.0.1` and the override migrate command succeed.
 
 Fix:
-- For host-side migrate, override to loopback (`127.0.0.1`) for the migration command.
-- Keep container runtime `DATABASE_URL` pointed to host gateway/bridge-compatible address.
+- **Do not** run bare `npx prisma migrate deploy` on the VPS host again.
+- For host-side migrate, override to loopback (`127.0.0.1`) for the migration command only:
+  ```bash
+  cd /var/www/<client-id>/backend
+  npm ci
+  npx prisma generate --schema prisma/schema.prisma
+  MIGRATE_DATABASE_URL="$(grep -E '^DATABASE_URL=' .env | cut -d= -f2- | sed 's/host\.docker\.internal/127.0.0.1/')"
+  DATABASE_URL="$MIGRATE_DATABASE_URL" npx prisma migrate deploy --schema prisma/schema.prisma
+  ```
+- Prefer `scripts/vps-deploy.sh` or client `phase7-backend-deploy.sh` — they apply the override automatically.
+- Keep container runtime `DATABASE_URL` on `host.docker.internal` in `.env` (do not permanently rewrite `.env` to `127.0.0.1` for the stack).
+- Success: `No pending migrations to apply.` — safe to proceed to `docker compose ... up -d backend workers`.
 
 ### D) Docker startup `Cannot find module './scripts/lib/logger'`
 Cause:

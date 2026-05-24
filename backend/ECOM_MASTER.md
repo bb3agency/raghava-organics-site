@@ -451,8 +451,12 @@ cp .env.example .env
 nano .env   # Fill CLIENT_ID, BACKEND_PORT, DATABASE_URL, JWT_SECRET, OPS_DB_ENCRYPTION_KEY, RESEND_API_KEY, etc.
 # See docs/ENV_VS_DB_CONFIG_REFERENCE.md for bootstrap vs DB-overlay classification
 
-# Step 5: Run Prisma migrations (creates all tables)
-docker run --rm -v $(pwd):/app -w /app node:22-alpine npx prisma migrate deploy
+# Step 5: Run Prisma migrations (creates all tables) — on VPS host shell only
+npm ci
+npx prisma generate --schema prisma/schema.prisma
+# Do NOT run bare `npx prisma migrate deploy` when .env uses host.docker.internal (P1001 on host).
+MIGRATE_DATABASE_URL="$(grep -E '^DATABASE_URL=' .env | cut -d= -f2- | sed 's/host\.docker\.internal/127.0.0.1/')"
+DATABASE_URL="$MIGRATE_DATABASE_URL" npx prisma migrate deploy --schema prisma/schema.prisma
 
 # Step 6: Build and start containers (VPS host-Postgres prod overlay)
 docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml up -d --build backend workers

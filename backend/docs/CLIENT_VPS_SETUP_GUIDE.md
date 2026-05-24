@@ -158,6 +158,16 @@ sudo -u postgres psql -c "ALTER USER annapoorna_app WITH PASSWORD 'NewPasswordFr
 - `docker-compose.yml` includes `extra_hosts: host.docker.internal:host-gateway`
 - Verify: `docker compose exec backend nslookup host.docker.internal`
 
+**Issue: `P1001 Can't reach database at host.docker.internal` during host-side migrate (expected if you ran bare migrate)**
+- `host.docker.internal` resolves **inside containers only**, not in the VPS shell.
+- **Do not** run bare `npx prisma migrate deploy` on the host — Prisma reads `.env` unchanged and fails with P1001. This is not a broken database if `psql -h 127.0.0.1` works.
+- **Fix:** override `DATABASE_URL` to `127.0.0.1` for the migrate command only (keep container `.env` on `host.docker.internal`):
+  ```bash
+  MIGRATE_DATABASE_URL="$(grep -E '^DATABASE_URL=' .env | cut -d= -f2- | sed 's/host\.docker\.internal/127.0.0.1/')"
+  DATABASE_URL="$MIGRATE_DATABASE_URL" npx prisma migrate deploy --schema prisma/schema.prisma
+  ```
+- Prefer `scripts/vps-deploy.sh`, client `phase7-backend-deploy.sh`, or GitHub CD — they apply this override automatically. See `docs/PHASE7_VPS_DEPLOY_INCIDENT_PLAYBOOK.md` §C.
+
 **Issue: Permission denied for schema**
 ```bash
 # Re-grant schema privileges after DB creation
@@ -308,14 +318,19 @@ If using the local Docker-based PostgreSQL, start the database and cache service
 docker compose up -d postgres redis
 ```
 
-Wait a few seconds for PostgreSQL to initialize, then apply migrations on the deployment host:
+Wait a few seconds for PostgreSQL to initialize, then apply migrations on the deployment host.
+
+> **VPS with host PostgreSQL:** Production `.env` keeps `DATABASE_URL` on `host.docker.internal` so **containers** reach the host DB. That hostname does **not** work in the VPS shell. **Never** run bare `npx prisma migrate deploy` on the host — you will get `P1001` at `host.docker.internal:5432` even when Postgres is healthy on `127.0.0.1`. Use the override below or `scripts/vps-deploy.sh` / `phase7-backend-deploy.sh`.
 
 ```bash
-npx prisma generate
-npx prisma migrate deploy
+npm ci   # required before npx prisma — bare npx can pull wrong Prisma major
+npx prisma generate --schema prisma/schema.prisma
+
+MIGRATE_DATABASE_URL="$(grep -E '^DATABASE_URL=' .env | cut -d= -f2- | sed 's/host\.docker\.internal/127.0.0.1/')"
+DATABASE_URL="$MIGRATE_DATABASE_URL" npx prisma migrate deploy --schema prisma/schema.prisma
 ```
 
-Use **`migrate deploy`** in production (not `migrate dev`). Migration SQL lives under **`prisma/migrations/`** as a single squashed baseline (`0_init`). After deploy, spot-check tables and `_prisma_migrations` history.
+Use **`migrate deploy`** in production (not `migrate dev`). Migration SQL lives under **`prisma/migrations/`** as a single squashed baseline (`0_init`). After deploy, spot-check tables and `_prisma_migrations` history. Success looks like `No pending migrations to apply.` — re-running the override command is safe.
 
 > **If you are applying to a database that was already built from the old incremental migrations** (pre-squash), run this once to mark the baseline as applied without re-executing the SQL:
 > ```bash
@@ -766,7 +781,7 @@ git push origin main
       → self-hosted runner on VPS picks up job via outbound HTTPS (port 443)
       → git pull + SHA verification
       → docker compose build   (new image built; old containers still serve)
-      → npx prisma migrate deploy   (migrations run before container swap)
+      → prisma migrate deploy on host with 127.0.0.1 DATABASE_URL override (see scripts/vps-deploy.sh — not bare npx on .env)
       → docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml up -d backend workers   (container swap — ~3–5s window)
       → nginx maintenance page auto-serves during the window
       → health check: /api/v1/health (30 retries × 2s)

@@ -210,9 +210,17 @@ If this happens, wait for verification to complete, then retry the script — no
 ### Step 3: Run database migrations
 
 ```bash
-npx prisma migrate deploy
-npx prisma generate
+npm ci
+npx prisma generate --schema prisma/schema.prisma
+npx prisma migrate deploy --schema prisma/schema.prisma
 ```
+
+> **VPS (host PostgreSQL + `host.docker.internal` in `.env`):** Do **not** run bare `npx prisma migrate deploy` on the host shell — Prisma uses `.env` unchanged and fails with `P1001` at `host.docker.internal`. Override for migrate only:
+> ```bash
+> MIGRATE_DATABASE_URL="$(grep -E '^DATABASE_URL=' .env | cut -d= -f2- | sed 's/host\.docker\.internal/127.0.0.1/')"
+> DATABASE_URL="$MIGRATE_DATABASE_URL" npx prisma migrate deploy --schema prisma/schema.prisma
+> ```
+> Or use `scripts/vps-deploy.sh` / client `phase7-backend-deploy.sh`. See `docs/PHASE7_VPS_DEPLOY_INCIDENT_PLAYBOOK.md` §C.
 
 ---
 

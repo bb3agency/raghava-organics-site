@@ -30,6 +30,21 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml -p raghava-organ
 
 Do **not** run plain `docker compose up -d` on VPS — it starts a second Postgres container and fails with `address already in use` on `:5432`.
 
+## Host-side Prisma migrations
+
+Production `.env` keeps `DATABASE_URL` on `host.docker.internal` for **containers**. On the VPS **host shell**, that hostname does not resolve.
+
+- **Do not** run bare `npx prisma migrate deploy` on the host (expected `P1001` at `host.docker.internal:5432`).
+- **Do** use [scripts/phase7-backend-deploy.sh](./scripts/phase7-backend-deploy.sh) (applies `127.0.0.1` override), or manually:
+
+```bash
+cd /var/www/raghava-organics/backend
+MIGRATE_DATABASE_URL="$(grep -E '^DATABASE_URL=' .env | cut -d= -f2- | sed 's/host\.docker\.internal/127.0.0.1/')"
+DATABASE_URL="$MIGRATE_DATABASE_URL" npx prisma migrate deploy --schema prisma/schema.prisma
+```
+
+`No pending migrations to apply.` means the DB is current — proceed to compose up. See [PHASE7_VPS_DEPLOY_INCIDENT_PLAYBOOK.md](../../../backend/docs/PHASE7_VPS_DEPLOY_INCIDENT_PLAYBOOK.md) §C.
+
 ## Phase 1 production `.env` (bootstrap-only)
 
 Copy to VPS `/var/www/raghava-organics/backend/.env` from vault. Template: [production.backend.env.example](./production.backend.env.example)

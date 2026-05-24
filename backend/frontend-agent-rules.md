@@ -1234,7 +1234,7 @@ Before writing ANY frontend code that calls the backend:
 | Backend running | `curl http://localhost:3000/api/v1/health` | Start `npm run dev:e2e` + workers |
 | DB connected | Health response shows `"db":"connected"` | Fix per `docs/MASTER_DEPLOYMENT_PLAYBOOK.md` Appendix H.4 |
 | Redis connected | Health response shows `"redis":"connected"` | Check `REDIS_PASSWORD` not blank, wipe container if needed |
-| Migrations current | `npx prisma migrate status` | Run `npx prisma migrate deploy` (or `npx prisma migrate resolve --applied 0_init` if DB was built from pre-squash history) |
+| Migrations current | `npx prisma migrate status` (local) | Local: `npm run dev:e2e` or `npx prisma migrate deploy`. **VPS host:** never bare migrate when `.env` uses `host.docker.internal` — use `DATABASE_URL` with `127.0.0.1` override or `scripts/vps-deploy.sh` (`CLIENT_VPS_SETUP_GUIDE.md` §9) |
 | Feature flags known | Ask user which are enabled | Backend `.env` must have `FEATURE_*` values |
 | Postman E2E passed | Run folders 0→1→2→3 | Debug failures before frontend integration |
 

@@ -872,10 +872,13 @@ nano .env
 
 # 6. Run migrations (applies single squashed 0_init baseline)
 npm ci
-npx prisma generate
-npx prisma migrate deploy
+npx prisma generate --schema prisma/schema.prisma
+# VPS host shell: NEVER bare `npx prisma migrate deploy` when .env uses host.docker.internal (P1001).
+# Override to 127.0.0.1 for migrate only; containers keep host.docker.internal in .env.
+MIGRATE_DATABASE_URL="$(grep -E '^DATABASE_URL=' .env | cut -d= -f2- | sed 's/host\.docker\.internal/127.0.0.1/')"
+DATABASE_URL="$MIGRATE_DATABASE_URL" npx prisma migrate deploy --schema prisma/schema.prisma
 # If this DB was previously built from the old incremental migrations (pre-squash):
-# npx prisma migrate resolve --applied 0_init
+# DATABASE_URL="$MIGRATE_DATABASE_URL" npx prisma migrate resolve --applied 0_init --schema prisma/schema.prisma
 
 # 7. Start backend Docker stack (VPS host-Postgres mode)
 docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml up -d --build backend workers
@@ -953,6 +956,7 @@ Perform these steps on staging before switching traffic:
 | `NODE_ENV` | `production` | Activates strict-profile validation |
 | `CLIENT_ID` | Client-unique slug | Container names and OTEL service names |
 | `DATABASE_URL` | Uses `host.docker.internal` | Container can't reach `localhost` PostgreSQL |
+| Host-side `prisma migrate deploy` | Must use `127.0.0.1` override | Bare migrate on VPS shell reads `.env` → P1001 at `host.docker.internal` (see `CLIENT_VPS_SETUP_GUIDE.md` §9, `PHASE7_VPS_DEPLOY_INCIDENT_PLAYBOOK.md` §C) |
 | `REDIS_URL` | Uses `redis` (service name) | Points to the docker-compose Redis container |
 | `REDIS_PASSWORD` | Unique per client, 32+ chars | Must match the password in `REDIS_URL` |
 | `STOREFRONT_URL` / `ADMIN_URL` | `https://clientdomain.com` | CORS + cookie domain — must be HTTPS in production |
