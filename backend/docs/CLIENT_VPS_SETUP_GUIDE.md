@@ -943,7 +943,25 @@ CLIENT_ID=foodstore
 STOREFRONT_PORT=3101
 ```
 
-`.env.local` is **never written by the deploy script** — it must be placed on the VPS manually before the first deploy, just like the backend `.env`.
+Recommended bootstrap flow:
+
+```bash
+cd /var/www/<client-id>/frontend
+cp .env.production.example .env.production.local
+```
+
+Then fill at minimum:
+- `CLIENT_ID`
+- `STOREFRONT_PORT`
+- `NEXT_PUBLIC_API_BASE_URL` (`https://<domain>/api/v1`)
+- `NEXT_PUBLIC_STOREFRONT_URL` (`https://<domain>`)
+- `NEXT_PUBLIC_RAZORPAY_KEY_ID`
+
+On shared/staging/production VPS also set:
+- `OPS_UI_BASIC_AUTH_USERNAME`
+- `OPS_UI_BASIC_AUTH_PASSWORD`
+
+Runtime env files are **never written by deploy scripts** — they must be placed on the VPS manually before first deploy, like backend `.env`.
 
 #### Frontend downtime expectation
 

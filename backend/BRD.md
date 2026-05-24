@@ -645,6 +645,7 @@ These requirements govern how the system behaves — quality attributes every de
 ### 9.3 Security
 
 - No client's data is ever accessible by another client. Separate database, Redis, environment, and API keys per client.
+- On shared VPS deployments, Redis remains private to each client Docker network; publishing host `:6379` for each stack is forbidden.
 - Payment card data never passes through or is stored on the backend. Razorpay handles all card processing.
 - Bootstrap secrets exist only in per-client `.env` / deployment secret stores and are never committed to any Git repository. Ops-editable non-bootstrap secrets are encrypted in DB and applied after restart. Production merchant admin provisioning is invite-only; legacy local seed scripts are not go-live provisioning paths.
 - All traffic is HTTPS. Nginx redirects HTTP to HTTPS. TLSv1.0 and TLSv1.1 are disabled. Nginx HTTPS server blocks include mandatory security headers: HSTS (2yr + preload), X-Frame-Options DENY, X-Content-Type-Options nosniff, Referrer-Policy strict-origin-when-cross-origin, X-XSS-Protection.
@@ -664,12 +665,14 @@ These requirements govern how the system behaves — quality attributes every de
 - Any module can be extracted into a separate service if a client outgrows the VPS. The interfaces are already defined — no architectural rework is needed.
 - Adding a new client to the VPS is a scripted, repeatable operation. The template codebase is never modified per client.
 - New payment gateways and delivery partners can be added without touching existing business logic.
+- Multi-client Nginx onboarding is additive: each domain gets its own site file/symlink; existing site entries are never removed blindly during new-client rollout.
 
 ### 9.5 Maintainability
 
 - The template is versioned independently from client deployments. Improvements are applied to active client repos as deliberate, reviewed changes — never automatically.
 - Each client deployment can be restarted, rolled back, or migrated independently of all others.
 - The admin panel requires no developer involvement for day-to-day operations: products, orders, inventory, coupons, and settings are all self-serve.
+- Frontend production bootstrap remains template-driven: `frontend/.env.production.example` must exist in source control and be copied to VPS runtime `.env.production.local` before first PM2 deploy.
 
 ---
 

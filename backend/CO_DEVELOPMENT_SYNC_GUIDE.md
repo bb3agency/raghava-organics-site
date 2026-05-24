@@ -20,6 +20,7 @@ Before syncing, classify backend changes:
 - **Client-specific**: one-off business rules, branding, custom integrations for one client only.
 
 Only template-worthy changes should be upstreamed to template repo.
+Documentation-only reliability fixes are also template-worthy when they change baseline deployment behavior.
 
 ---
 
@@ -163,7 +164,21 @@ Never copy or commit:
 
 ---
 
-## 7) Practical Recommendation
+## 7) Documentation Sync Set (deployment behavior changes)
+
+When an incident reveals a reusable deployment fix, update these documents together in one PR to avoid drift:
+
+- `ECOM_MASTER.md`
+- `TRD.md`
+- `BRD.md` (business impact wording)
+- `starter-prompt.md`
+- `frontend-agent-rules.md`
+- `docs/CLIENT_ONBOARDING_EXECUTION_ORDER.md`
+- `docs/CLIENT_VPS_SETUP_GUIDE.md` and linked playbook/template docs
+
+---
+
+## 8) Practical Recommendation
 
 For your current setup (`frontend/` + `backend/` in one client repo), default to **Flow A**.
 Use **Flow B** when you prefer strict repository separation and explicit manual control.

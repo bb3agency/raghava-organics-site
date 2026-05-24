@@ -379,6 +379,7 @@ volumes:
 > **Development vs Production usage:**
 > - **Dev laptop:** `docker compose up -d postgres redis` — only infrastructure. Run Node on the host with `npm run dev`.
 > - **VPS production:** `docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml up -d --build backend workers` — host Postgres + Redis; no compose postgres. Go-live requires `/api/v1/health/ready` with `runtimeConfigMissingKeys=[]`.
+> - **Shared VPS Redis safety:** in production, Redis must stay internal to the client Docker network. Comment out `redis.ports` in client `docker-compose.yml` to avoid publishing host `:6379` and cross-client port conflicts.
 > - **No inline env var warnings:** All application config is injected via `env_file: .env`. Docker Compose never sees `${DELHIVERY_API_KEY}` etc., so there are zero "variable is not set" warnings when starting only infrastructure services.
 
 ### 5.3 Nginx Config (Per Client)
@@ -456,7 +457,8 @@ docker run --rm -v $(pwd):/app -w /app node:22-alpine npx prisma migrate deploy
 # Step 6: Build and start containers (VPS host-Postgres prod overlay)
 docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml up -d --build backend workers
 curl -fsS http://127.0.0.1:<BACKEND_PORT>/api/v1/health
-curl -fsS http://127.0.0.1:<BACKEND_PORT>/api/v1/health/ready
+# Do NOT use -f here during Phase 7 bootstrap; readiness may be 503 until Phase 8 runtime keys are saved.
+curl -sS http://127.0.0.1:<BACKEND_PORT>/api/v1/health/ready
 
 # Step 7: Configure Nginx
 sudo cp nginx/client.conf.template /etc/nginx/sites-available/foodstore.com
@@ -471,8 +473,9 @@ sudo certbot --nginx -d foodstore.com -d www.foodstore.com -d admin.foodstore.co
 # After this, all subsequent deploys are handled automatically by the GitHub Actions
 # deploy-frontend job (see .github/workflows/deploy.yml) via vps-frontend-deploy.sh
 cd /var/www/client-foodstore-frontend
-# Ensure .env.local (or .env.production.local) exists with CLIENT_ID and STOREFRONT_PORT
-# e.g. CLIENT_ID=foodstore  STOREFRONT_PORT=3101
+# Ensure .env.production.local exists. Recommended:
+# cp .env.production.example .env.production.local
+# Fill: CLIENT_ID, STOREFRONT_PORT, NEXT_PUBLIC_API_BASE_URL, NEXT_PUBLIC_STOREFRONT_URL, NEXT_PUBLIC_RAZORPAY_KEY_ID
 npm ci && npm run build
 pm2 start npm --name "foodstore-frontend" -- start -- -p 3101
 pm2 save && pm2 startup   # persist across VPS reboots
@@ -489,6 +492,16 @@ npm run ops:newuser -- --email ops@foodstore.internal --name "Primary Ops" --set
 
 echo "✅  foodstore.com is live"
 ```
+
+### 5.5 Shared VPS hard constraints (operational)
+
+These constraints are mandatory for multi-client VPS operation and are now treated as normative, not advisory:
+
+- Nginx site provisioning is **additive** per domain (`/etc/nginx/sites-available/<domain>` + matching symlink). Never delete `sites-enabled/default` blindly; remove only after explicit audit of enabled sites.
+- Install rate-limit zones exactly once per VPS via `snippets/rate-zones.conf` and include it from top-level `nginx.conf` `http {}`. Do not duplicate `limit_req_zone` definitions.
+- Redis host port `6379` must not be published by each client stack on shared VPS. Only one host bind is possible and exposing Redis publicly breaks isolation expectations.
+- Treat `GET /api/v1/health/ready` as a diagnostic contract: before Phase 8 it may correctly return `503` with `runtimeConfigMissingKeys`. Inspect response body first; do not gate bootstrap steps with `curl -f` against readiness.
+- Frontend deploy automation depends on a tracked `frontend/.env.production.example` and runtime `frontend/.env.production.local` on VPS. Missing template files are deployment blockers and must be fixed in source control before next client rollout.
 
 | Step | Time |
 |---|---|

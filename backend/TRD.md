@@ -230,6 +230,27 @@ server {
 }
 ```
 
+**`[MUST]`** On multi-client VPS, Nginx onboarding is additive:
+- Use `/etc/nginx/sites-available/<domain>` with matching symlink in `sites-enabled/`.
+- Do not remove `sites-enabled/default` blindly; remove only after explicit host-level audit confirms it is unused.
+- Install `snippets/rate-zones.conf` once per VPS and include it in top-level `nginx.conf` `http {}`. Do not duplicate `limit_req_zone` declarations in multiple files.
+
+### 3.7 Shared VPS Redis exposure rule
+
+**`[MUST]`** On production shared VPS, each client Redis instance `[MUST NOT]` publish host `:6379`.
+
+- `redis.ports` mapping is allowed for local/dev convenience only.
+- Production stacks must keep Redis internal to Docker network (`redis://:<password>@redis:6379`).
+- Any deployment script `[MUST]` fail fast if client Redis is bound on host `0.0.0.0:6379` to prevent cross-client collision and accidental exposure.
+
+### 3.8 Readiness gate semantics
+
+**`[MUST]`** `GET /api/v1/health/ready` is a diagnostic contract, not a blanket "boot failed" signal during early VPS bootstrap.
+
+- During Phase 7 (before Ops runtime keys are saved), readiness may legitimately return `503` with populated `runtimeConfigMissingKeys`.
+- Operators must inspect readiness response body (`curl -sS`) and complete Phase 8 runtime config before enforcing strict `ready` gating.
+- Do not use `curl -f` for early bootstrap readiness checks where body diagnostics are required.
+
 ---
 
 ## 4. Backend Technical Requirements
@@ -1566,7 +1587,9 @@ All security gates passing:
 - Custom Refine data provider mapping CRUD methods to `/api/v1/admin/*`
 - Auth provider: 2-step email OTP (`POST /api/v1/auth/admin/login/request-otp` → `POST /api/v1/auth/admin/login/verify-otp`), auto refresh token handling
 - All charts: **Recharts** (LineChart for sales, FunnelChart for conversion, PieChart for categories)
-- Admin `[MUST]` build to static output served by Nginx — no Next.js server process
+- Admin `[MUST]` run inside the same Next.js runtime as storefront under PM2 (`<client-id>-frontend`), with Nginx reverse proxying to the assigned `STOREFRONT_PORT`.
+- Frontend VPS bootstrap `[MUST]` provide `.env.production.local` (or `.env.local`) with at least: `CLIENT_ID`, `STOREFRONT_PORT`, `NEXT_PUBLIC_API_BASE_URL`, `NEXT_PUBLIC_STOREFRONT_URL`, `NEXT_PUBLIC_RAZORPAY_KEY_ID`.
+- `frontend/.env.production.example` should be versioned as the canonical production template and copied on VPS to `.env.production.local` before first build.
 
 **`[MUST]`** Admin pages and their key features:
 

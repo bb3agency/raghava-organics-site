@@ -1,6 +1,7 @@
 ---
-alwaysApply: true
+trigger: always_on
 ---
+
 # E-Commerce Frontend — Antigravity Development Rules
 
 > **Activation:** Always On
@@ -100,6 +101,7 @@ This is a **high-conversion e-commerce storefront** built as a headless frontend
       - `CLIENT_ID` — the client slug used for PM2 process naming (e.g. `greengrocer`). Must match backend `CLIENT_ID`.
       - `STOREFRONT_PORT` — the port PM2 starts Next.js on (e.g. `3101`). Must match Nginx `proxy_pass`.
       These go in `.env.local` (or `.env.production.local`) on the VPS. They are read by `vps-frontend-deploy.sh` for `pm2 reload <client-id>-frontend` and the health check. Not needed in local `.env.local` for development.
+      - On VPS first deploy, create runtime env from the tracked template: `cp .env.production.example .env.production.local`. Replace all `PRODUCTION_DOMAIN` placeholders before build.
   Then automatically generate the `.env.local` file with all collected values.
 - **Path Prefix:** `NEXT_PUBLIC_API_BASE_URL` MUST include `/api/v1`.
 - **Canonical Names:** Use only `NEXT_PUBLIC_API_BASE_URL` and `NEXT_PUBLIC_STOREFRONT_URL` (do not invent alternate names like `NEXT_PUBLIC_API_URL`).
@@ -1187,7 +1189,14 @@ NEXT_PUBLIC_IMAGE_CDN_URL=
 - Server-only secrets (API keys, webhook secrets) MUST NOT start with `NEXT_PUBLIC_`.
 - Create `.env.example` with all variables documented.
 - **NEVER** commit `.env.local` to git.
+- Keep `frontend/.env.production.example` committed as the canonical VPS production template (required by Phase 10 scripts).
 - Frontend secret handling must follow `docs/THIRD_PARTY_INTEGRATIONS_SETUP_AND_KEY_MANAGEMENT_GUIDE.md`.
+
+### Production VPS (`.env.production.local`)
+- Copy from template: `cp .env.production.example .env.production.local`
+- Must include: `CLIENT_ID`, `STOREFRONT_PORT`, `NEXT_PUBLIC_API_BASE_URL`, `NEXT_PUBLIC_STOREFRONT_URL`, `NEXT_PUBLIC_RAZORPAY_KEY_ID`, `INTERNAL_API_BASE_URL`
+- `NEXT_PUBLIC_API_BASE_URL` must use production HTTPS domain and include `/api/v1` (never localhost)
+- On shared VPS, set `OPS_UI_BASIC_AUTH_USERNAME` and `OPS_UI_BASIC_AUTH_PASSWORD` so `/ops/*` does not fail closed with 503 in production-like runtime
 
 ---
 

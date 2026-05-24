@@ -785,10 +785,12 @@ git push origin main
    # (git clone should already be done as part of Phase 7 backend setup)
    cd /var/www/<client-id>/frontend
 
-   # Create frontend .env.local with production values
+   # Create runtime env from tracked template
+   cp .env.production.example .env.production.local
    # Required keys: CLIENT_ID, STOREFRONT_PORT, NEXT_PUBLIC_API_BASE_URL,
    #                NEXT_PUBLIC_STOREFRONT_URL, NEXT_PUBLIC_RAZORPAY_KEY_ID
-   nano .env.local
+   # Optional but recommended on shared VPS: OPS_UI_BASIC_AUTH_USERNAME / OPS_UI_BASIC_AUTH_PASSWORD
+   nano .env.production.local
 
    # First production build (bootstraps the .next/ output on the VPS)
    npm ci && npm run build

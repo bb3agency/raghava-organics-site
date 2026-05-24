@@ -389,14 +389,25 @@ All provider API keys are configured through the Ops UI, not environment variabl
 
 **Frontend Production Variables:**
 ```env
+# Source template in repo: frontend/.env.production.example
+# VPS bootstrap: cp .env.production.example .env.production.local
 # .env.production.local (VPS deployment)
 NEXT_PUBLIC_API_BASE_URL=https://your-domain.com/api/v1
 NEXT_PUBLIC_STORE_NAME="Your Brand Name"
 NEXT_PUBLIC_STOREFRONT_URL=https://your-domain.com
 NEXT_PUBLIC_RAZORPAY_KEY_ID=rzp_live_xxx    # Production key
+INTERNAL_API_BASE_URL=http://127.0.0.1:3001/api/v1
 CLIENT_ID=your-client-id                     # PM2 process naming
 STOREFRONT_PORT=3101                         # Nginx proxy port
+OPS_UI_BASIC_AUTH_USERNAME=<set-on-shared-vps>
+OPS_UI_BASIC_AUTH_PASSWORD=<set-on-shared-vps>
 ```
+
+**Shared VPS hard constraints (must enforce):**
+- Nginx onboarding is additive (`sites-available/<domain>` + symlink); do not remove `sites-enabled/default` blindly.
+- Install `snippets/rate-zones.conf` once per VPS and include from `nginx.conf` `http {}`.
+- Redis stays internal to Docker network in production; comment out `redis.ports` to avoid host `:6379` conflicts/exposure.
+- During Phase 7 bootstrap, inspect readiness with `curl -sS /api/v1/health/ready` (not `-f`) because expected `503` may carry required `runtimeConfigMissingKeys` diagnostics until Phase 8.
 
 **Production Deployment Order:**
 1. Backend healthy with all providers configured
