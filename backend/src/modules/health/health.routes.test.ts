@@ -67,9 +67,12 @@ describe('health routes', () => {
 
     expect(response.statusCode).toBe(503);
     const payload = response.json() as {
-      error: { message: string; details: { fields?: Array<{ field: string }> } };
+      data?: { status: string; runtimeConfigMissingKeys?: string[] };
+      error: { code: string; message: string; details: { fields?: Array<{ field: string }> } };
     };
+    expect(payload.error.code).toBe('CONFIG_NOT_READY');
     expect(payload.error.message).toContain('Readiness check failed');
+    expect(payload.data?.status).toBe('not_ready');
     expect(Array.isArray(payload.error.details.fields)).toBe(true);
 
     await app.close();

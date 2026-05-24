@@ -434,9 +434,14 @@ Guardrail scripts (both wired into `npm run ci:reliability-gates`):
 
 - `GET /api/v1/ops/config/overview` — per-domain items with `mutableViaOps`, `requiresRestart`, `runtimeSource`, present/placeholder flags.
 - `GET /api/v1/ops/config/stored` — masked stored entries (values shown as `ab****cd`).
-- `POST /api/v1/ops/config/validate` — dry-run: required/placeholder/unknown key checks, restart requirement.
-- `POST /api/v1/ops/config/save` — OTP required — persists encrypted overlay changes.
+- `POST /api/v1/ops/config/validate` — dry-run: required/placeholder/unknown key checks, restart requirement. Body: `{ domain?, values }`.
+- `POST /api/v1/ops/config/save` — OTP required (`action: config-save` on `otp/request`). Body: `{ values, challengeId, otpCode, domain? }`.
+  - **`domain` optional:** omit to save keys across multiple contract domains in one request (domain resolved per key via `resolveOpsConfigDomainForKey`).
+  - **`null` / empty value:** deactivates the DB overlay row (`isActive: false`) without erasing audit history.
+  - **Restart:** all saved overlay keys set `requiresRestart: true`; restart API + workers after save.
 - Bootstrap keys rejected with `BOOTSTRAP_KEY_NOT_DB_APPLICABLE`.
+
+**Readiness gate:** `GET /api/v1/health/ready` lists missing strict-profile keys in `runtimeConfigMissingKeys` (also returned in `data` on HTTP 503 with `CONFIG_NOT_READY`).
 
 ---
 
@@ -456,7 +461,7 @@ Guardrail scripts (both wired into `npm run ci:reliability-gates`):
 | `scripts/config-runtime-parity-check.js` | Validates `.env.example` live/stub layout |
 | `scripts/ops-config-contract-drift-check.js` | Validates ops contract against `env-runtime-contract.js` |
 | `src/modules/ops/ops-config-runtime.ts` | `applyOpsConfigRuntimeOverlay()` |
-| `src/modules/ops/ops-config-contract.ts` | Per-key domain/mutability/restart metadata |
+| `src/modules/ops/ops-config-contract.ts` | Per-key domain/mutability/restart metadata; `resolveOpsConfigDomainForKey()` for batch saves |
 | `src/common/security/ops-config-crypto.ts` | AES-256-GCM encrypt/decrypt (reads `OPS_DB_ENCRYPTION_KEY` — bootstrap only) |
 | `src/common/plugins/cookie.plugin.ts` | Registers `@fastify/cookie` with `OPS_COOKIE_SECRET` |
 | `src/common/guards/ops-auth.guard.ts` | Dual auth: cookie session (Path A) or API key headers (Path B) |

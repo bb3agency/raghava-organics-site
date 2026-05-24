@@ -64,7 +64,26 @@ Full health check — checks DB, Redis, queue connectivity. Returns structured s
 Liveness probe only. Returns `{ status: 'ok' }` as long as the process is alive.
 
 ### `GET /api/v1/health/ready`
-Readiness probe — checks dependencies, worker freshness, and runtime config completeness. Response includes `runtimeConfigMissingKeys`; go-live requires this array to be empty.
+Readiness probe — checks dependencies, worker freshness, and runtime config completeness.
+
+**200 (ready):** Raw payload (non-enveloped when `FEATURE_RESPONSE_ENVELOPE` is off) or success envelope with `data`:
+
+```json
+{
+  "status": "ready",
+  "database": "connected",
+  "redis": "connected",
+  "degradationMode": "none",
+  "queues": { "waiting": 0, "active": 0, "oldestWaitingAgeSeconds": 0, "workerFreshness": "fresh" },
+  "runtimeConfigMissingKeys": [],
+  "timestamp": "...",
+  "version": "..."
+}
+```
+
+**503 (not ready):** Envelope with `success: false`, `error.code: CONFIG_NOT_READY`, **`data`** (same shape as above, `status: "not_ready"`), and `error.details.fields` listing each missing key. CD deploy scripts and ops UI must read `data.runtimeConfigMissingKeys` from the 503 body — not only the error message.
+
+Go-live and `vps-deploy.sh` require `status === "ready"` and `runtimeConfigMissingKeys: []`.
 
 ### `GET /api/v1/products`
 Public product listing with filters. Query params: `page`, `limit`, `search`, `category`, `minPrice`, `maxPrice`, `sort`. Returns paginated product list.
@@ -596,11 +615,18 @@ Config is grouped into **domains**: `core`, `payments`, `shipping`, `notificatio
 
 #### `POST /api/v1/ops/config/save`
 **`ops:write` + OTP challenge required.**  
-Saves one or more config keys to the DB-overlay. Body: `{ domain, values: { KEY: value }, challengeId, otpCode }`.
+Saves one or more config keys to the DB-overlay.
 
-The OTP challenge must be obtained first (see `otp/request` + `otp/verify` below). The save is rejected if the OTP challenge is invalid or expired.
+**Body:** `{ values: Record<string, string | number | boolean | null>, challengeId, otpCode, domain? }`
 
-**Only keys with `mutableViaOps: true`** in `ops-config-contract.ts` are accepted. Others are silently skipped.
+- `domain` optional — when omitted, domain per key is inferred via `resolveOpsConfigDomainForKey()` in `ops-config-contract.ts` (supports cross-domain batch save in one OTP flow).
+- When `domain` is set, all keys must belong to that domain.
+- `null` or `""` deactivates an existing `OpsConfigSecret` row (`isActive: false`).
+- OTP must be requested with `action: 'config-save'`; `verifyEmailOtp` enforces `expectedAction: 'config-save'`.
+
+Recommended flow: `POST /ops/config/validate` → `POST /ops/otp/request` `{ action: 'config-save' }` → `POST /ops/config/save`.
+
+**Only runtime-overlay keys** (`isOpsConfigRuntimeOverlayKey`) are persisted. Bootstrap keys return `BOOTSTRAP_KEY_NOT_DB_APPLICABLE` on validate; non-overlay mutable keys are skipped on save.
 
 Keys by domain that can be saved via this route:
 
@@ -616,14 +642,18 @@ All values are encrypted with `AES-256-GCM` before storage using `OPS_DB_ENCRYPT
 
 ### Ops OTP challenge flow
 
-Required before any `config/save` call. The flow is:
-1. Call `otp/request` → get `challengeId`
+Required before any critical ops mutation. The flow is:
+1. Call `otp/request` with `{ action }` → get `challengeId`
 2. Check email for OTP code
-3. Call `otp/verify` with the code (optional standalone use — `config/save` also verifies inline)
-4. Pass `challengeId` + `otpCode` in the `config/save` body
+3. Call `otp/verify` with the code (optional standalone — critical endpoints also verify inline on commit)
+4. Pass `challengeId` + `otpCode` in the mutation body
 
 #### `POST /api/v1/ops/otp/request`
-**`ops:write`** — Sends an OTP to the ops user's registered email. Body: `{ action }` (a human-readable label for what the OTP is for). Returns `{ challengeId, expiresAt }`.
+**`ops:write`** — Sends an OTP to the ops user's registered email.
+
+**Body:** `{ action }` — must be one of: `config-save`, `load-shed-change`, `user-deactivate`, `system-restart`, `invite-revoke`. Any other value → `400 VALIDATION_ERROR`.
+
+Returns `{ challengeId, expiresAt }`. Challenge TTL: 10 minutes; max 3 verify attempts.
 
 #### `POST /api/v1/ops/otp/verify`
 **`ops:write`** — Verifies an OTP code against a challenge ID. Body: `{ challengeId, code }`. Returns `{ verified: true/false }`. Can be used standalone to pre-verify before building a save payload.

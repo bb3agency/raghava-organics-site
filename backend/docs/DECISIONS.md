@@ -4,6 +4,21 @@
 
 ---
 
+## [2026-05-24] Ops OTP action binding, batch config save, readiness 503 payload
+
+**Decision 1 — OTP challenges are bound to a single critical `action`.**  
+`POST /api/v1/ops/otp/request` accepts only `config-save`, `load-shed-change`, `user-deactivate`, `system-restart`, `invite-revoke`. Each critical mutation passes `expectedAction` into `verifyEmailOtp()`; reusing a challenge across operations returns `403 FORBIDDEN`.  
+*Rationale:* Prevents a challenge issued for a low-risk action from authorising a higher-risk mutation.
+
+**Decision 2 — `POST /api/v1/ops/config/save` supports optional `domain` and overlay deactivation.**  
+When `domain` is omitted, each key's domain is resolved from `ops-config-contract.ts`. Empty/null values set `OpsConfigSecret.isActive = false` instead of storing blank ciphertext.  
+*Rationale:* One OTP flow can persist cross-domain go-live keys; operators can clear rotated secrets without DB deletes.
+
+**Decision 3 — `/health/ready` returns diagnostic payload on 503.**  
+Not-ready responses use `error.code: CONFIG_NOT_READY` and include the full readiness object in envelope `data` so CD scripts and ops UI can read `runtimeConfigMissingKeys` without custom error parsing.
+
+---
+
 ## [2026-05-21] Admin permissions required at invite creation; queue routes moved to ops plane
 
 **Decision 1 — `permissions` is now required at admin invite creation.**  

@@ -243,7 +243,7 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
         body: {
           type: 'object',
           additionalProperties: false,
-          required: ['domain', 'values', 'challengeId', 'otpCode'],
+          required: ['values', 'challengeId', 'otpCode'],
           properties: {
             domain: { type: 'string', enum: ['core', 'payments', 'shipping', 'notifications', 'opsSecurity'], maxLength: 24 },
             values: { type: 'object', additionalProperties: true, maxProperties: 50 },
@@ -285,14 +285,14 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
         throw new AppError(ERROR_CODES.UNAUTHORISED, 'Ops authentication required', 401);
       }
       const body = request.body as {
-        domain: 'core' | 'payments' | 'shipping' | 'notifications' | 'opsSecurity';
+        domain?: 'core' | 'payments' | 'shipping' | 'notifications' | 'opsSecurity';
         values: Record<string, string | number | boolean | null | undefined>;
         challengeId: string;
         otpCode: string;
       };
       return opsService.saveConfigDraft({
         opsUserId: opsUser.id,
-        domain: body.domain,
+        ...(body.domain ? { domain: body.domain } : {}),
         values: body.values,
         challengeId: body.challengeId,
         otpCode: body.otpCode,
@@ -318,7 +318,13 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
           properties: {
             action: {
               type: 'string',
-              enum: ['config-save', 'load-shed-change', 'user-deactivate', 'system-restart'],
+              enum: [
+                'config-save',
+                'load-shed-change',
+                'user-deactivate',
+                'system-restart',
+                'invite-revoke'
+              ],
               maxLength: 40
             }
           }

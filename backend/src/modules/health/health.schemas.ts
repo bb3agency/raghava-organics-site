@@ -1,4 +1,37 @@
-import { standardErrorResponseSchema } from '@common/errors/error-response.schema';
+import {
+  errorDetailsSchema,
+  standardErrorResponseSchema
+} from '@common/errors/error-response.schema';
+
+const readinessPayloadSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['status', 'timestamp', 'version', 'database', 'redis', 'degradationMode', 'queues', 'runtimeConfigMissingKeys'],
+  properties: {
+    status: { type: 'string', maxLength: 20 },
+    timestamp: { type: 'string', maxLength: 64 },
+    version: { type: 'string', maxLength: 20 },
+    database: { type: 'string', maxLength: 20 },
+    redis: { type: 'string', maxLength: 20 },
+    degradationMode: { type: 'string', maxLength: 32 },
+    queues: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['waiting', 'active', 'oldestWaitingAgeSeconds', 'workerFreshness'],
+      properties: {
+        waiting: { type: 'number', minimum: 0, maximum: 10000000 },
+        active: { type: 'number', minimum: 0, maximum: 10000000 },
+        oldestWaitingAgeSeconds: { type: 'number', minimum: 0, maximum: 10000000 },
+        workerFreshness: { type: 'string', maxLength: 20 }
+      }
+    },
+    runtimeConfigMissingKeys: {
+      type: 'array',
+      maxItems: 200,
+      items: { type: 'string', maxLength: 128 }
+    }
+  }
+} as const;
 
 export const healthRouteSchema = {
   tags: ['Health'],
@@ -48,36 +81,26 @@ export const healthLivenessSchema = {
 export const healthReadinessSchema = {
   tags: ['Health'],
   response: {
-    200: {
+    200: readinessPayloadSchema,
+    503: {
       type: 'object',
       additionalProperties: false,
-      required: ['status', 'timestamp', 'version', 'database', 'redis', 'degradationMode', 'queues', 'runtimeConfigMissingKeys'],
+      required: ['success', 'data', 'error'],
       properties: {
-        status: { type: 'string', maxLength: 20 },
-        timestamp: { type: 'string', maxLength: 64 },
-        version: { type: 'string', maxLength: 20 },
-        database: { type: 'string', maxLength: 20 },
-        redis: { type: 'string', maxLength: 20 },
-        degradationMode: { type: 'string', maxLength: 32 },
-        queues: {
+        success: { type: 'boolean' },
+        data: readinessPayloadSchema,
+        error: {
           type: 'object',
           additionalProperties: false,
-          required: ['waiting', 'active', 'oldestWaitingAgeSeconds', 'workerFreshness'],
+          required: ['code', 'message', 'statusCode', 'details'],
           properties: {
-            waiting: { type: 'number', minimum: 0, maximum: 10000000 },
-            active: { type: 'number', minimum: 0, maximum: 10000000 },
-            oldestWaitingAgeSeconds: { type: 'number', minimum: 0, maximum: 10000000 },
-            workerFreshness: { type: 'string', maxLength: 20 }
+            code: { type: 'string', maxLength: 64 },
+            message: { type: 'string', maxLength: 300 },
+            statusCode: { type: 'integer', minimum: 400, maximum: 599 },
+            details: errorDetailsSchema
           }
-        },
-        runtimeConfigMissingKeys: {
-          type: 'array',
-          maxItems: 200,
-          items: { type: 'string', maxLength: 128 }
         }
       }
-    },
-    503: healthRouteSchema.response[503]
+    }
   }
 } as const;
-

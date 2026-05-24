@@ -108,7 +108,7 @@ NEXT_PUBLIC_RAZORPAY_KEY_ID=(pending)
 | Ops login + cookie session (`/ops/login`, `lib/ops-client-api.ts`) | [x] | Browser `ops_session` cookie; no API-key headers |
 | Session bootstrap (`GET /ops/session`) | [x] | `OpsSessionPanel`; route shell `OpsRootLayout` + `OpsConsoleShell` (console nav post-login only) |
 | Load-shed single-step OTP (`POST /ops/load-shed`) | [x] | `OpsLoadShedPanel`, `OpsCriticalOtpForm` |
-| Config overview/stored/save + OTP (`config-save`) | [x] | `OpsConfigPagePanel`, `OpsConfigForms` |
+| Config overview/stored/save + OTP (`config-save`) | [x] | `OpsConfigPagePanel`, `OpsConfigEditor` |
 | Invites create/revoke + users deactivate + system restart | [x] | `OpsInvitesPanel`, `OpsUsersPanel`, `OpsSystemPanel` |
 | Audit timeline + queue visibility under `/ops/queues` | [x] | `OpsAuditPanel`, `OpsQueuesPanel` |
 | Metrics (server token) | [x] | `lib/ops-api.ts` + `app/(ops)/ops/metrics/page.tsx` |

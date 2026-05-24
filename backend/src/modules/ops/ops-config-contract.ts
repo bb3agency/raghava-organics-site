@@ -206,6 +206,15 @@ export function listOpsConfigRuntimeOverlayKeys(): string[] {
   return listOpsConfigMutableKeys().filter((key) => !isOpsConfigBootstrapKey(key));
 }
 
+export function resolveOpsConfigDomainForKey(key: string): OpsConfigDomain | null {
+  for (const group of OPS_CONFIG_OVERVIEW_GROUPS) {
+    if (group.items.some((item) => item.key === key)) {
+      return group.domain;
+    }
+  }
+  return null;
+}
+
 export function computeRequiredOpsConfigKeys(draftEnv: NodeJS.ProcessEnv, strictProfile: boolean): string[] {
   const required = new Set<string>(['PAYMENT_PROVIDER', 'SHIPPING_PROVIDER', 'SMS_PROVIDER']);
 

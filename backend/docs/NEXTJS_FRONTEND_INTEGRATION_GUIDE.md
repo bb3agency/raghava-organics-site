@@ -303,9 +303,9 @@ All privileged ops mutations require a second-factor OTP challenge:
 
 **OTP Challenge Pattern for Critical Operations:**
 ```typescript
-// 1. Request OTP challenge for specific action
-const { data: { challengeId } } = await api.post('/ops/otp/request', {
-  actionType: 'system-restart'  // or 'load-shed-change', 'user-deactivate', etc.
+// 1. Request OTP challenge for specific action (body field is `action`, not actionType)
+const { challengeId } = await api.post('/ops/otp/request', {
+  action: 'system-restart'  // config-save | load-shed-change | user-deactivate | invite-revoke
 });
 // OTP is sent to ops user's email
 
@@ -313,12 +313,26 @@ const { data: { challengeId } } = await api.post('/ops/otp/request', {
 const otpCode = await showOtpInputDialog(); // UI collects 6-digit code
 
 // 3. Submit critical operation with challenge + OTP
-const { data } = await api.post('/ops/system/restart', {
+await api.post('/ops/system/restart', {
   delayMinutes: 5,
   challengeId,    // From step 1
   otpCode         // User input from email
 });
 ```
+
+**Config save (batch, optional domain):**
+```typescript
+await api.post('/ops/config/validate', { values: { PAYMENT_PROVIDER: 'razorpay', ... } });
+const { challengeId } = await api.post('/ops/otp/request', { action: 'config-save' });
+await api.post('/ops/config/save', {
+  values: { PAYMENT_PROVIDER: 'razorpay', RAZORPAY_KEY_SECRET: '...' },
+  challengeId,
+  otpCode
+  // domain optional — omit to save keys across multiple contract domains in one request
+});
+```
+
+**Readiness for ops dashboard (`GET /health/ready`):** When `status !== 'ready'`, backend returns HTTP `503` with `error.code: CONFIG_NOT_READY` but includes full readiness payload in envelope `data`. Parse `data.runtimeConfigMissingKeys` for the config UI — do not use `apiClient` throw-only handling without extracting `data`.
 
 **Frontend Implementation Requirements:**
 - Store `ops_session` cookie is automatic (httpOnly) — no manual handling needed
@@ -344,8 +358,11 @@ Use the following backend routes when building a dedicated ops frontend (or ops 
 - Console chrome (nav links + sign out) appears only when `GET /ops/session` succeeds. Reference implementation: `OpsRootLayout` + `OpsConsoleShell` in the client frontend.
 
 - `GET /ops/session` — bootstrap operator profile + permissions + MFA/IP posture
+- `GET /ops/config/overview` — per-key metadata (present, placeholder, mutableViaOps, runtimeSource)
 - `GET /ops/config/stored` — masked DB-backed config metadata
-- `POST /ops/config/save` — validated + OTP-authorized config save
+- `POST /ops/config/validate` — dry-run draft values before save
+- `POST /ops/config/save` — validated + OTP-authorized config save (`domain` optional; `null` value removes overlay key)
+- `GET /health/ready` — runtime readiness (parse `data` on 503 for missing keys list)
 - `POST /ops/otp/request` — email OTP challenge for privileged writes
 - `POST /ops/otp/verify` — verify OTP challenge
 - `POST /ops/invites` — issue invite link to new ops user
@@ -671,10 +688,10 @@ Analytics/chart implementation should match TRD expectations (Recharts primitive
 ```typescript
 // Step 1: Request challenge
 const { challengeId } = await api.post('/ops/otp/request', {
-  actionType: 'system-restart' // Must match the operation
+  action: 'system-restart' // Must match the operation (config-save | load-shed-change | user-deactivate | invite-revoke)
 });
 
-// Step 2: User receives OTP via email (5 min expiry, 5 max attempts)
+// Step 2: User receives OTP via email (10 min expiry, 3 max attempts per challenge)
 // Show modal/dialog for OTP input
 
 // Step 3: Submit with challengeId + otpCode
@@ -687,7 +704,7 @@ await api.post('/ops/system/restart', {
 
 **Error Handling:**
 - `401 UNAUTHORISED` → Invalid OTP, show remaining attempts
-- After 5 failures → Challenge locked, request new OTP
+- After 3 failures → Challenge locked, request new OTP
 - `429 RATE_LIMIT_EXCEEDED` → Backoff and retry
 - `503 ops_audit_chain_lock_timeout` → Retry after 1-2 seconds
 

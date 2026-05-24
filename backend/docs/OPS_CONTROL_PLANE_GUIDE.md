@@ -70,16 +70,16 @@ All critical mutations require a **secondary OTP challenge** (email-based 2FA):
 
 **OTP Challenge Pattern:**
 ```typescript
-// 1. Request challenge for specific action
+// 1. Request challenge for specific action (body field is `action`, not actionType)
 const { challengeId } = await api.post('/api/v1/ops/otp/request', {
-  actionType: 'system-restart'  // Must match the operation
+  action: 'system-restart'  // Must match the operation being executed
 });
 // → OTP sent to ops user's email
 
 // 2. User enters 6-digit OTP from email
 const otpCode = '123456';  // From user's email
 
-// 3. Submit with challenge + OTP
+// 3. Submit with challenge + OTP (verifyEmailOtp binds challenge.action to this operation)
 await api.post('/api/v1/ops/system/restart', {
   delayMinutes: 5,
   challengeId,  // From step 1
@@ -87,12 +87,25 @@ await api.post('/api/v1/ops/system/restart', {
 });
 ```
 
+**Allowed `action` values (`POST /api/v1/ops/otp/request` body):**
+
+| `action` | Used by |
+|----------|---------|
+| `config-save` | `POST /api/v1/ops/config/save` |
+| `load-shed-change` | `POST /api/v1/ops/load-shed` |
+| `system-restart` | `POST /api/v1/ops/system/restart` |
+| `user-deactivate` | `POST /api/v1/ops/users/:opsUserId/deactivate` |
+| `invite-revoke` | `POST /api/v1/ops/invites/:inviteId/revoke` |
+
+Requests with any other `action` string return `400 VALIDATION_ERROR`. On commit, each critical endpoint passes `expectedAction` into `verifyEmailOtp()` — a challenge issued for `config-save` cannot be used to restart the system (`403 FORBIDDEN` action mismatch).
+
 **OTP Challenge Properties:**
-- **TTL:** 300 seconds (5 minutes)
-- **Max Attempts:** 5 per challenge
+- **TTL:** 600 seconds (10 minutes) — `OPS_OTP_TTL_MS` in `ops.service.ts`
+- **Max Attempts:** 3 per challenge (`OPS_OTP_MAX_ATTEMPTS`)
 - **Delivery:** Email via Resend (async, best-effort)
 - **Storage:** SHA256 hash in `OpsOtpChallenge.codeHash`
-- **Lockout:** After 5 failures, challenge status becomes `FAILED`, must request new
+- **Lockout:** After max failures, challenge status becomes `FAILED`, must request new
+- **Single use:** Challenge moves to `VERIFIED` on successful verify; each mutation needs a fresh `otp/request`
 
 ### 2.3 Permission Model (2 Permissions Only)
 
@@ -370,12 +383,18 @@ Response fields:
 `POST /api/v1/ops/config/save` (`ops:write`)
 
 - Saves validated config draft into encrypted DB store (`OpsConfigSecret`).
-- Requires email OTP challenge (`challengeId`, `otpCode`) before commit.
+- **Body:** `{ values: { KEY: value | null }, challengeId, otpCode, domain? }`
+  - `domain` is **optional**. When omitted, each key's domain is resolved from `ops-config-contract.ts` (`resolveOpsConfigDomainForKey`), so one OTP save can persist keys across `core`, `payments`, `shipping`, `notifications`, and `opsSecurity` in a single request.
+  - When `domain` is provided, every key in `values` must belong to that domain or save returns `400 VALIDATION_ERROR`.
+  - `null` or empty string for a key **deactivates** the stored overlay row (`isActive: false`) without deleting audit history.
+- Requires email OTP challenge with `action: 'config-save'` (`challengeId`, `otpCode`) before commit.
+- Call `POST /api/v1/ops/config/validate` first (recommended; client UI does this before save).
 - Requires `OPS_DB_ENCRYPTION_KEY` to be configured from real environment; save route and boot overlay fail closed if encryption key is missing.
 - Rejects bootstrap-only keys with `BOOTSTRAP_KEY_NOT_DB_APPLICABLE`; edit them in deployment environment instead.
 - Saved non-bootstrap keys apply after API/worker restart.
+- Response: `{ valid, savedKeys, domain, requiresRestart, masked: [{ key, maskedValue }] }` — `domain` is the primary domain touched (first saved key's domain when batching).
 
-Phase 2 boundary note: backend implements secure APIs only; interactive UI is implemented later in each client site's `frontend` folder.
+**Client frontend reference (Raghava Organics):** `OpsConfigEditor` on `/ops/config` — sectioned fields (fixed key name + editable value), validate-then-save, OTP at bottom. Poll readiness via `GET /api/v1/health/ready` (see below).
 
 ### 6.3 Invite and setup lifecycle
 
@@ -417,6 +436,7 @@ Phase 2 boundary note: backend implements secure APIs only; interactive UI is im
 `POST /api/v1/ops/otp/request` (`ops:write`)
 
 - Sends email OTP for privileged write action authorization.
+- Body: `{ action }` where `action` is one of: `config-save`, `load-shed-change`, `user-deactivate`, `system-restart`, `invite-revoke`.
 
 `POST /api/v1/ops/otp/verify` (`ops:write`)
 
@@ -610,11 +630,17 @@ Response: `{ jobId, scheduledFor }` — ISO-8601 timestamp of when the restart w
 
 Build ops UI in **vertical slices** and integrate each slice with real ops APIs before moving to the next.
 
+**Readiness polling (`GET /api/v1/health/ready`):**
+
+- Returns `200` with readiness payload when `status === 'ready'`.
+- Returns `503` with `error.code: CONFIG_NOT_READY` when not ready, but the response **still includes** `data` with the full payload (`status`, `database`, `redis`, `queues`, `runtimeConfigMissingKeys`, etc.).
+- Ops UI must parse `data` from the 503 envelope (do not treat HTTP 503 as an opaque failure). Use `runtimeConfigMissingKeys` to highlight required DB-overlay keys on `/ops/config`.
+
 Recommended ops slice order:
 
 1. Session bootstrap (`GET /ops/session`)
-2. Config metadata and draft validator (`GET /ops/config/overview`, `POST /ops/config/validate`)
-3. Read-only dashboard (`GET /ops/load-shed`)
+2. Config metadata, stored secrets, draft validator, and editor (`GET /ops/config/overview`, `GET /ops/config/stored`, `POST /ops/config/validate`, `POST /ops/config/save`)
+3. Read-only dashboard (`GET /ops/load-shed`, `GET /api/v1/health/ready` on overview)
 4. Load-shed change (`POST /ops/load-shed` — OTP-confirmed, immediate)
 5. Audit timeline (`GET /ops/audit/logs` with `opsUserId` filter)
 6. Operator roster (`GET /ops/users`, deactivate)
@@ -722,6 +748,7 @@ All security verification gates passing:
 | **CSP Hardening** | June 2026 | Removed `'unsafe-inline'` from styleSrc |
 | **API Key Path Removal** | May 2026 | Browser session is the only auth mechanism |
 | **OTP Test Fixes** | June 2026 | SHA256 hash computation verified in all tests |
+| **Ops config + readiness hardening** | May 2026 | `invite-revoke` in OTP enum; OTP action binding; optional `domain` on config save; empty value deactivates overlay; `/health/ready` 503 returns `data` + `CONFIG_NOT_READY` |
 
 ### 10.3 Verified Security Invariants
 

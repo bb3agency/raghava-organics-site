@@ -240,7 +240,8 @@ Use when you need a redeploy without a new commit. Prefer `git revert` + `git pu
 | Deploy fails with `Missing required secrets: VPS_CLIENT_PATH ...` | Paths were added as **Variables** instead of **Secrets** | Move `VPS_CLIENT_PATH`/`VPS_FRONTEND_PATH` to repo **Secrets**; keep only booleans/labels in Variables |
 | Deploy job queued forever | Runner offline or wrong label | `sudo ~/actions-runner-<client-id>/svc.sh status`; fix `VPS_RUNNER_LABEL` |
 | Deploy hit wrong VPS client | Missing/wrong `VPS_RUNNER_LABEL` | Unique label per client repo |
-| Backend deploy fails at readiness | Phase 8 incomplete | Ops config save + restart; verify `/health/ready` |
+| Backend deploy fails at readiness | Phase 8 incomplete | Ops config save + restart; `curl /health/ready` — on 503, read `data.runtimeConfigMissingKeys` (not only error message) |
+| Invite revoke OTP fails (400 on otp/request) | Backend before May 2026 | Ensure `invite-revoke` is in OTP action enum; redeploy backend |
 | `SHA mismatch` | Another push during deploy | Re-run workflow |
 | Frontend `script not found` | Workflow calls `frontend/scripts/...` | Use `$VPS_CLIENT_PATH/scripts/vps-frontend-deploy.sh` |
 | `/ops/setup` returns 401 with `curl -u` | Wrong `OPS_UI_BASIC_AUTH_*` values, PM2 not reloaded, or stale frontend build | Verify `.env.production.local`, run `phase10-frontend-deploy.sh`, and retest localhost `/ops/setup` with real creds |

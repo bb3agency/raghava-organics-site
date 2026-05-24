@@ -17,6 +17,7 @@ import { cn } from "@/lib/utils";
 import { formatOpsDateTime } from "@/lib/ops-format";
 import { getApiErrorMessageWithHint } from "@/lib/error-messages";
 import { loadShedBadgeTone } from "@/lib/ops-status-maps";
+import { OpsRuntimeReadinessCard } from "@/components/ops/OpsRuntimeReadinessCard";
 import {
   getOpsAuditLogsClient,
   getOpsDlqSummaryClient,
@@ -75,6 +76,8 @@ export function OpsDashboard() {
   return (
     <div className="grid gap-8">
       {error ? <OpsAlert tone="error">{error}</OpsAlert> : null}
+
+      <OpsRuntimeReadinessCard />
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <OpsStatCard

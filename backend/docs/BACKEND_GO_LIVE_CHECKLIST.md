@@ -58,7 +58,7 @@ This checklist validates both:
 - [ ] All external provider adapters have fetch timeouts configured (10s for Delhivery/Razorpay/Resend/MSG91).
 - [ ] Razorpay env vars are only required when `PAYMENT_PROVIDER=razorpay` (COD-only stores skip them).
 - [ ] Provider credentials are real, non-placeholder, and validated with live/sandbox handshake tests.
-- [ ] `GET /api/v1/health/ready` reports `runtimeConfigMissingKeys: []` before opening production traffic.
+- [ ] `GET /api/v1/health/ready` reports `runtimeConfigMissingKeys: []` before opening production traffic (on HTTP 503, read `data.runtimeConfigMissingKeys` from envelope — `error.code` is `CONFIG_NOT_READY`).
 - [ ] Client credential register exists and is filled with owner, vault path, created on, rotated on, expiry/next rotation, and last-tested values (`docs/CLIENT_INTEGRATION_CREDENTIAL_REGISTER_TEMPLATE.md`).
 - [ ] Circuit breaker behavior is understood in multi-replica deployments: payment/shipping circuit breaker state is process-local and not shared across replicas unless explicitly redesigned with shared Redis state.
 

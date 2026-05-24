@@ -25,12 +25,15 @@ import {
   type OpsInviteListItem,
 } from "@/lib/ops-client-api";
 
+const REVOKABLE_STATUSES = new Set<OpsInviteListItem["status"]>(["CREATED", "EMAIL_SENT"]);
+
 export function OpsInvitesPanel() {
   const canWrite = useOpsCanWrite();
   const [items, setItems] = useState<OpsInviteListItem[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [revokeInviteId, setRevokeInviteId] = useState<string | null>(null);
 
   async function reload() {
     const list = await listOpsInvitesClient({ limit: 50 });
@@ -73,7 +76,9 @@ export function OpsInvitesPanel() {
           .map((value) => value.trim())
           .filter(Boolean),
       });
-      setMessage(`Invite created — expires ${formatOpsDateTime(result.expiresAt)}`);
+      setMessage(
+        `Invite created — expires ${formatOpsDateTime(result.expiresAt)}. Setup URL was emailed to the invitee.`,
+      );
       await reload();
     } catch (err) {
       setError(getApiErrorMessageWithHint(err));
@@ -135,7 +140,8 @@ export function OpsInvitesPanel() {
                 onClick={() => {
                   void cleanupExpiredOpsInvitesClient()
                     .then((result) => setMessage(`Cleaned ${result.cleaned} expired invites.`))
-                    .catch((err) => setError(getApiErrorMessageWithHint(err)));
+                    .catch((err) => setError(getApiErrorMessageWithHint(err)))
+                    .then(() => reload());
                 }}
               >
                 Cleanup expired
@@ -165,28 +171,65 @@ export function OpsInvitesPanel() {
                 </span>
               ),
             },
+            {
+              key: "id",
+              header: "Invite ID",
+              cell: (row) => <code className="text-xs text-muted-foreground">{row.id}</code>,
+            },
+            ...(canWrite
+              ? [
+                  {
+                    key: "actions",
+                    header: "Actions",
+                    cell: (row: OpsInviteListItem) =>
+                      REVOKABLE_STATUSES.has(row.status) ? (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            setRevokeInviteId(row.id);
+                            setMessage(null);
+                            setError(null);
+                          }}
+                        >
+                          Revoke…
+                        </Button>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">—</span>
+                      ),
+                  },
+                ]
+              : []),
           ]}
         />
       </OpsCard>
 
-      {canWrite ? (
+      {canWrite && revokeInviteId ? (
         <OpsCriticalOtpForm
           actionType="invite-revoke"
           title="Revoke invite"
-          description="Cancels a pending invite before it is consumed."
-          buttonLabel="Revoke invite"
+          description={`Cancels invite ${revokeInviteId} before it is consumed.`}
+          buttonLabel="Confirm revoke"
           variant="danger"
           onExecute={async ({ challengeId, otpCode }) => {
-            const inviteId = String(
-              (document.getElementById("revoke-invite-id") as HTMLInputElement | null)?.value ?? "",
-            ).trim();
-            await revokeOpsInviteClient({ inviteId, challengeId, otpCode });
+            await revokeOpsInviteClient({ inviteId: revokeInviteId, challengeId, otpCode });
+            setRevokeInviteId(null);
+            setMessage("Invite revoked.");
             await reload();
           }}
         >
-          <OpsField label="Invite ID" htmlFor="revoke-invite-id" hint="Copy from invite email metadata or list above">
-            <OpsInput id="revoke-invite-id" required className="font-mono text-xs" />
+          <OpsField label="Invite ID" htmlFor="revoke-invite-id">
+            <OpsInput
+              id="revoke-invite-id"
+              value={revokeInviteId}
+              readOnly
+              className="font-mono text-xs"
+            />
           </OpsField>
+          <Button type="button" variant="ghost" size="sm" onClick={() => setRevokeInviteId(null)}>
+            Cancel revoke
+          </Button>
         </OpsCriticalOtpForm>
       ) : null}
     </div>

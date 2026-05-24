@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { OpsCriticalOtpForm } from "@/components/ops/OpsCriticalOtpForm";
-import { useOpsCanWrite } from "@/components/ops/OpsSessionProvider";
+import { useOpsCanWrite, useOpsSession } from "@/components/ops/OpsSessionProvider";
 import {
   OpsAlert,
   OpsBadge,
@@ -14,6 +14,7 @@ import {
   OpsLoadingBlock,
   OpsTextarea,
 } from "@/components/ops/ui/ops-ui";
+import { Button } from "@/components/ui/button";
 import { formatOpsDateTime } from "@/lib/ops-format";
 import { getApiErrorMessageWithHint } from "@/lib/error-messages";
 import {
@@ -23,14 +24,21 @@ import {
 } from "@/lib/ops-client-api";
 
 export function OpsUsersPanel() {
+  const session = useOpsSession();
   const canWrite = useOpsCanWrite();
   const [users, setUsers] = useState<OpsUserListItem[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [deactivateUser, setDeactivateUser] = useState<OpsUserListItem | null>(null);
+
+  async function reload() {
+    const result = await listOpsUsersClient({ limit: 50 });
+    setUsers(result.items);
+  }
 
   useEffect(() => {
-    void listOpsUsersClient({ limit: 50 })
-      .then((result) => setUsers(result.items))
+    void reload()
       .catch((err) => setError(getApiErrorMessageWithHint(err)))
       .finally(() => setLoading(false));
   }, []);
@@ -41,6 +49,7 @@ export function OpsUsersPanel() {
 
   return (
     <div className="grid gap-6">
+      {message ? <OpsAlert tone="success">{message}</OpsAlert> : null}
       {error ? <OpsAlert tone="error">{error}</OpsAlert> : null}
 
       <OpsCard>
@@ -84,35 +93,76 @@ export function OpsUsersPanel() {
               header: "ID",
               cell: (row) => <code className="text-xs text-muted-foreground">{row.id}</code>,
             },
+            ...(canWrite
+              ? [
+                  {
+                    key: "actions",
+                    header: "Actions",
+                    cell: (row: OpsUserListItem) => {
+                      if (!row.isActive || row.id === session.id) {
+                        return <span className="text-xs text-muted-foreground">—</span>;
+                      }
+                      return (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            setDeactivateUser(row);
+                            setMessage(null);
+                            setError(null);
+                          }}
+                        >
+                          Deactivate…
+                        </Button>
+                      );
+                    },
+                  },
+                ]
+              : []),
           ]}
         />
       </OpsCard>
 
-      {canWrite ? (
+      {canWrite && deactivateUser ? (
         <OpsCriticalOtpForm
           actionType="user-deactivate"
           title="Deactivate operator"
-          description="Irreversible for active sessions — user must be re-invited to return."
-          buttonLabel="Deactivate account"
+          description={`Deactivates ${deactivateUser.name} (${deactivateUser.email}). They must be re-invited to return.`}
+          buttonLabel="Confirm deactivation"
           variant="danger"
           onExecute={async ({ challengeId, otpCode }) => {
-            const opsUserId = String(
-              (document.getElementById("deactivate-user-id") as HTMLInputElement | null)?.value ?? "",
-            ).trim();
             const reason = String(
-              (document.getElementById("deactivate-reason") as HTMLTextAreaElement | null)?.value ?? "",
+              (document.getElementById("deactivate-reason") as HTMLTextAreaElement | null)?.value ??
+                "",
             ).trim();
-            await deactivateOpsUserClient({ opsUserId, reason, challengeId, otpCode });
+            await deactivateOpsUserClient({
+              opsUserId: deactivateUser.id,
+              reason,
+              challengeId,
+              otpCode,
+            });
+            setDeactivateUser(null);
+            setMessage(`${deactivateUser.email} was deactivated.`);
+            await reload();
           }}
         >
           <OpsField label="Ops user ID" htmlFor="deactivate-user-id">
-            <OpsInput id="deactivate-user-id" required className="font-mono text-xs" />
+            <OpsInput
+              id="deactivate-user-id"
+              value={deactivateUser.id}
+              readOnly
+              className="font-mono text-xs"
+            />
           </OpsField>
           <OpsField label="Reason" htmlFor="deactivate-reason" hint="Minimum 10 characters">
             <OpsTextarea id="deactivate-reason" minLength={10} required />
           </OpsField>
+          <Button type="button" variant="ghost" size="sm" onClick={() => setDeactivateUser(null)}>
+            Cancel
+          </Button>
         </OpsCriticalOtpForm>
-      ) : (
+      ) : canWrite ? null : (
         <OpsAlert tone="warning">Read-only — deactivation requires ops:write.</OpsAlert>
       )}
     </div>

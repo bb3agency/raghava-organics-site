@@ -67,10 +67,12 @@ Pair this with `docs/BACKEND_GO_LIVE_CHECKLIST.md` for final go-live sign-off. T
 - [ ] `POST /ops/invites/:id/revoke` implements OTP modal flow
 
 **OTP Challenge Implementation:**
-- [ ] Step 1: Call `POST /ops/otp/request` with `actionType` → get `challengeId`
-- [ ] Step 2: Show OTP input modal with 5-minute countdown timer
+- [ ] Step 1: Call `POST /ops/otp/request` with `{ action }` (not `actionType`) → get `challengeId`
+- [ ] Step 2: Show OTP input modal with 10-minute countdown timer
 - [ ] Step 3: Submit mutation with `challengeId` + `otpCode`
-- [ ] Handle 401 (invalid OTP) showing remaining attempts (max 5)
+- [ ] Handle 401 (invalid OTP) showing remaining attempts (max 3)
+- [ ] `POST /ops/config/save`: validate first; `domain` optional; `null` value removes overlay key
+- [ ] `GET /health/ready`: parse envelope `data` on HTTP 503 (`CONFIG_NOT_READY`) for `runtimeConfigMissingKeys`
 - [ ] Handle 429 (rate limit) with backoff
 - [ ] Handle 503 `ops_audit_chain_lock_timeout` with 1-2s retry
 - [ ] After 5 failed attempts, challenge locked — must request new OTP

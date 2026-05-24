@@ -12,7 +12,8 @@ import {
   isOpsConfigMutableKey,
   isOpsConfigRuntimeOverlayKey,
   OPS_CONFIG_OVERVIEW_GROUPS,
-  OpsConfigDomain
+  OpsConfigDomain,
+  resolveOpsConfigDomainForKey
 } from './ops-config-contract';
 
 type LoadShedMode = 'normal' | 'reduced' | 'emergency';
@@ -56,6 +57,18 @@ const OPS_AUDIT_CHAIN_LOCK_RETRY_DELAY_MS = 50;
 const OPS_INVITE_TTL_MS = 10 * 60 * 1000;
 const OPS_OTP_TTL_MS = 10 * 60 * 1000;
 const OPS_OTP_MAX_ATTEMPTS = 3;
+
+export const OPS_CRITICAL_OTP_ACTIONS = [
+  'config-save',
+  'load-shed-change',
+  'user-deactivate',
+  'system-restart',
+  'invite-revoke'
+] as const;
+
+export type OpsCriticalOtpAction = (typeof OPS_CRITICAL_OTP_ACTIONS)[number];
+
+const OPS_CRITICAL_OTP_ACTION_SET = new Set<string>(OPS_CRITICAL_OTP_ACTIONS);
 const OPS_INVITE_SETUP_OTP_TTL_SECONDS = 5 * 60;
 const OPS_INVITE_SETUP_OTP_MAX_ATTEMPTS = 3;
 const MANDATORY_OPS_PERMISSIONS: Array<'OPS_READ' | 'OPS_WRITE'> = ['OPS_READ', 'OPS_WRITE'];
@@ -212,6 +225,10 @@ type OpsPrismaLike = {
       create: Record<string, unknown>;
       update: Record<string, unknown>;
     }): Promise<unknown>;
+    updateMany(args: {
+      where: Record<string, unknown>;
+      data: Record<string, unknown>;
+    }): Promise<{ count: number }>;
   };
   opsAuditLog: {
     findFirst(args: { orderBy: { createdAt: 'desc' }; select: { chainHash: true } }): Promise<OpsAuditLogRecord | null>;
@@ -836,6 +853,10 @@ export class OpsService {
     requestPath: string;
     method: string;
   }): Promise<{ challengeId: string; expiresAt: string }> {
+    if (!OPS_CRITICAL_OTP_ACTION_SET.has(input.action)) {
+      throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Unsupported OTP action', 400);
+    }
+
     const prisma = this.prisma();
     const opsUser = await prisma.opsUser.findUnique({ where: { id: input.opsUserId } });
     if (!opsUser || !opsUser.isActive) {
@@ -906,6 +927,7 @@ export class OpsService {
     opsUserId: string;
     challengeId: string;
     code: string;
+    expectedAction?: OpsCriticalOtpAction;
     requestIp: string;
     requestPath: string;
     method: string;
@@ -914,6 +936,9 @@ export class OpsService {
     const challenge = await prisma.opsOtpChallenge.findUnique({ where: { id: input.challengeId } });
     if (!challenge || challenge.opsUserId !== input.opsUserId) {
       throw new AppError(ERROR_CODES.NOT_FOUND, 'OTP challenge not found', 404);
+    }
+    if (input.expectedAction && challenge.action !== input.expectedAction) {
+      throw new AppError(ERROR_CODES.FORBIDDEN, 'OTP challenge action mismatch', 403);
     }
     if (challenge.status !== 'PENDING') {
       throw new AppError(ERROR_CODES.CONFLICT, 'OTP challenge is not pending', 409);
@@ -983,7 +1008,7 @@ export class OpsService {
 
   async saveConfigDraft(input: {
     opsUserId: string;
-    domain: OpsConfigDomain;
+    domain?: OpsConfigDomain;
     values: Record<string, OpsConfigValidationInputValue>;
     challengeId: string;
     otpCode: string;
@@ -1002,6 +1027,7 @@ export class OpsService {
       opsUserId: input.opsUserId,
       challengeId: input.challengeId,
       code: input.otpCode,
+      expectedAction: 'config-save',
       requestIp: input.requestIp,
       requestPath: input.requestPath,
       method: input.method
@@ -1012,7 +1038,7 @@ export class OpsService {
       requestIp: input.requestIp,
       requestPath: input.requestPath,
       method: input.method,
-      domain: input.domain,
+      ...(input.domain ? { domain: input.domain } : {}),
       values: input.values,
       skipAuditLog: true
     });
@@ -1024,25 +1050,54 @@ export class OpsService {
     }
 
     const keyVersion = resolveOpsEncryptionKeyVersion();
-    const domain = toPrismaOpsConfigDomain(input.domain);
     const savedKeys: string[] = [];
     const masked: Array<{ key: string; maskedValue: string }> = [];
+    let primaryDomain: OpsConfigDomain | null = input.domain ?? null;
 
     for (const [key, value] of Object.entries(input.values)) {
-      const normalized = normalizeConfigValue(value);
       if (!isOpsConfigRuntimeOverlayKey(key)) {
         continue;
       }
+
+      const resolvedDomain = input.domain ?? resolveOpsConfigDomainForKey(key);
+      if (!resolvedDomain) {
+        continue;
+      }
+      if (input.domain && resolvedDomain !== input.domain) {
+        throw new AppError(ERROR_CODES.VALIDATION_ERROR, `Key ${key} does not belong to domain ${input.domain}`, 400);
+      }
+
+      primaryDomain = primaryDomain ?? resolvedDomain;
+      const prismaDomain = toPrismaOpsConfigDomain(resolvedDomain);
+      const normalized = normalizeConfigValue(value);
+
+      if (!normalized) {
+        await prisma.opsConfigSecret.updateMany({
+          where: {
+            domain: prismaDomain,
+            secretKey: key,
+            isActive: true
+          },
+          data: {
+            isActive: false,
+            opsUserId: input.opsUserId
+          }
+        });
+        savedKeys.push(key);
+        masked.push({ key, maskedValue: '••••••••' });
+        continue;
+      }
+
       await prisma.opsConfigSecret.upsert({
         where: {
           domain_secretKey: {
-            domain,
+            domain: prismaDomain,
             secretKey: key
           }
         },
         create: {
           opsUserId: input.opsUserId,
-          domain,
+          domain: prismaDomain,
           secretKey: key,
           encryptedValue: encryptOpsConfigValue(normalized),
           keyVersion,
@@ -1061,6 +1116,8 @@ export class OpsService {
       masked.push({ key, maskedValue: maskSecretValue(normalized) });
     }
 
+    const responseDomain = primaryDomain ?? input.domain ?? 'core';
+
     await this.appendAuditLog({
       opsUserId: input.opsUserId,
       actionType: 'ENV_UPDATE',
@@ -1070,7 +1127,7 @@ export class OpsService {
       requestPath: input.requestPath,
       method: input.method,
       summary: {
-        domain: input.domain,
+        domain: responseDomain,
         savedKeys,
         requiresRestart: true,
         dbBacked: true
@@ -1080,7 +1137,7 @@ export class OpsService {
     return {
       valid: true,
       savedKeys,
-      domain: input.domain,
+      domain: responseDomain,
       requiresRestart: true,
       masked
     };
@@ -1426,6 +1483,7 @@ export class OpsService {
       opsUserId: input.revokerOpsUserId,
       challengeId: input.challengeId,
       code: input.otpCode,
+      expectedAction: 'invite-revoke',
       requestIp: input.requestIp,
       requestPath: input.requestPath,
       method: input.method
@@ -1606,6 +1664,7 @@ export class OpsService {
       opsUserId: input.requestorOpsUserId,
       challengeId: input.challengeId,
       code: input.otpCode,
+      expectedAction: 'user-deactivate',
       requestIp: input.requestIp,
       requestPath: input.requestPath,
       method: input.method
@@ -1700,6 +1759,7 @@ export class OpsService {
       opsUserId: input.requesterId,
       challengeId: input.challengeId,
       code: input.otpCode,
+      expectedAction: 'load-shed-change',
       requestIp: input.requestIp,
       requestPath: input.requestPath,
       method: input.method
@@ -2031,6 +2091,7 @@ export class OpsService {
       opsUserId: input.opsUserId,
       challengeId: input.challengeId,
       code: input.otpCode,
+      expectedAction: 'system-restart',
       requestIp: input.requestIp,
       requestPath: input.requestPath,
       method: input.method

@@ -23,7 +23,7 @@ const ERROR_MESSAGES: Record<string, string> = {
   RATE_LIMIT_EXCEEDED: "Too many attempts. Please wait a moment and try again.",
   ORDER_NOT_FOUND: "Order not found.",
   CONFIG_NOT_READY:
-    "Required runtime configuration is missing. Complete Ops Config and restart backend/workers.",
+    "Runtime configuration is incomplete. Save the missing keys below, then restart API and workers.",
   INTERNAL_ERROR: "Something went wrong. Please try again.",
   UNKNOWN_ERROR: "Something went wrong. Please try again.",
 };

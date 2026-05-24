@@ -228,13 +228,13 @@ The following 5 operations require a 2-step OTP flow:
 **OTP Challenge Pattern:**
 ```typescript
 // Component: CriticalOpsAction.tsx
-function CriticalOpsAction({ actionType, onExecute, buttonText }) {
+function CriticalOpsAction({ action, onExecute, buttonText }) {
   const [showOtpModal, setShowOtpModal] = useState(false);
   const [challengeId, setChallengeId] = useState<string | null>(null);
 
   const handleInitiate = async () => {
-    // Step 1: Request OTP challenge
-    const { challengeId, expiresAt } = await api.post('/ops/otp/request', { actionType });
+    // Step 1: Request OTP challenge (body field is `action`, not actionType)
+    const { challengeId, expiresAt } = await api.post('/ops/otp/request', { action });
     setChallengeId(challengeId);
     setShowOtpModal(true);
   };

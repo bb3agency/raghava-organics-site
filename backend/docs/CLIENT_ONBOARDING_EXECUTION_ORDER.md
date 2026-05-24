@@ -679,8 +679,9 @@ git push origin main
 
 8. **Provision DB-overlay config via Ops UI** — after invite bootstrap and first login, use the Ops UI (or API directly) to set all DB-overlay keys:
 
-   a. Request OTP: `POST /api/v1/ops/otp/request` → verify: `POST /api/v1/ops/otp/verify`
-   b. Save config: `POST /api/v1/ops/config/save` with `{ challengeId, otpCode, values: { ... } }`
+   a. Request OTP: `POST /api/v1/ops/otp/request` with `{ action: 'config-save' }` (optional standalone verify: `POST /api/v1/ops/otp/verify`)
+   b. Validate draft: `POST /api/v1/ops/config/validate` with `{ values: { ... } }`
+   c. Save config: `POST /api/v1/ops/config/save` with `{ challengeId, otpCode, values: { ... } }` — `domain` is optional (omit to save keys across multiple domains in one request); `null` deactivates a stored overlay key
 
    Provider credentials, webhook tokens, and ops-security parameters are all DB-overlay keys. They are stored encrypted in `OpsConfigSecret` — see `docs/ENV_VS_DB_CONFIG_REFERENCE.md` §3 for the full list.
 
@@ -710,6 +711,7 @@ git push origin main
 11. **Readiness gate before Phase 9/10 handoff:**
     ```bash
     curl -fsS https://<domain>/api/v1/health/ready
+    # On 503, jq '.data.runtimeConfigMissingKeys' — payload is in envelope `data` with error.code CONFIG_NOT_READY
     # Expected: status=ready and runtimeConfigMissingKeys=[]
     ```
 

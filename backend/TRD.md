@@ -248,7 +248,7 @@ server {
 
 **`[MUST]`** `GET /api/v1/health/ready` is a diagnostic contract, not a blanket "boot failed" signal during early VPS bootstrap.
 
-- During Phase 7 (before Ops runtime keys are saved), readiness may legitimately return `503` with populated `runtimeConfigMissingKeys`.
+- During Phase 7 (before Ops runtime keys are saved), readiness may legitimately return HTTP `503` with envelope `{ success: false, data: <readiness payload>, error: { code: 'CONFIG_NOT_READY', message } }` and populated `data.runtimeConfigMissingKeys`.
 - Operators must inspect readiness response body (`curl -sS`) and complete Phase 8 runtime config before enforcing strict `ready` gating.
 - Do not use `curl -f` for early bootstrap readiness checks where body diagnostics are required.
 
@@ -1099,7 +1099,7 @@ fastify.addContentTypeParser(
 |--------|------|------|------|----------|-------|
 | GET | `/config/overview` | Ops auth (`ops:read`) | — | `{ domains: { core, notifications, payment, shipping, security, featureFlags }, requiredMissing, warnings }` | Computed from `ops-config-contract.ts`; reveals only contract-defined keys. |
 | GET | `/config/stored` | Ops auth (`ops:read`) | — | `{ secrets: [{ key, domain, updatedAt }], maskedValues }` | Returns key list with metadata; secret values masked (`****`). |
-| POST | `/config/save` | Ops auth (`ops:write`) + verified OTP | `{ domain, values, challengeId, otpCode }` | `{ valid, savedKeys, domain, requiresRestart, masked }` | Only non-bootstrap keys with `mutableViaOps: true` in contract are persisted as DB runtime overlays. Values are encrypted AES-256-GCM before storage. |
+| POST | `/config/save` | Ops auth (`ops:write`) + verified OTP | `{ domain?, values, challengeId, otpCode }` | `{ valid, savedKeys, domain, requiresRestart, masked }` | `domain` optional — when omitted, each key's domain is resolved via `resolveOpsConfigDomainForKey()`. Only non-bootstrap keys with `mutableViaOps: true` are persisted as DB overlays (AES-256-GCM). Empty/null values deactivate the overlay (`isActive: false`) instead of storing blank ciphertext. |
 
 **`[MUST]`** Config contract (`ops-config-contract.ts`) is the single source of truth:
 - `OPS_CONFIG_OVERVIEW_GROUPS`: groups keys by domain and mutability.
@@ -1505,24 +1505,26 @@ All subsequent requests:
 **OTP Challenge Flow:**
 ```
 1. POST /api/v1/ops/otp/request
-   Body: { actionType: "system-restart" }
+   Body: { action: "system-restart" }   // field is `action`, not actionType
    → Returns: { challengeId, expiresAt }
    → Email: 6-digit OTP sent to ops user's email
 
-2. User enters OTP from email (within 300s)
+2. User enters OTP from email (within 600s)
 
 3. POST /api/v1/ops/system/restart
    Body: { delayMinutes, challengeId, otpCode }
-   → Verifies OTP challenge inline
+   → Verifies OTP challenge inline (challenge must match the same `action`)
    → Executes operation if valid
 ```
 
 **OTP Challenge Properties:**
-- **TTL:** 300 seconds (5 minutes)
-- **Max Attempts:** 5 per challenge
+- **Allowlisted actions:** `config-save`, `load-shed-change`, `user-deactivate`, `system-restart`, `invite-revoke`
+- **TTL:** 600 seconds (10 minutes)
+- **Max Attempts:** 3 per challenge
 - **Delivery:** Email via Resend (async, best-effort)
 - **Storage:** SHA256 hash in `OpsOtpChallenge.codeHash`
-- **Lockout:** After 5 failures, challenge status becomes `FAILED`
+- **Lockout:** After 3 failures, challenge status becomes `FAILED`
+- **Action binding:** Reusing a challenge for a different critical action returns `403 FORBIDDEN`
 
 **Permission Model (2 Permissions Only):**
 

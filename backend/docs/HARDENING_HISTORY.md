@@ -416,6 +416,20 @@ Complete removal of the legacy ops API key authentication path. Ops users now au
 
 ---
 
+**Ops control plane contract alignment — May 2026:**
+
+*Backend fixes:*
+- **`POST /api/v1/ops/otp/request`:** Added missing `invite-revoke` to route schema enum (revoke was broken at validation layer). Allowlist enforced in `requestEmailOtp()` via `OPS_CRITICAL_OTP_ACTIONS`.
+- **`verifyEmailOtp()`:** Added `expectedAction` parameter; critical mutations pass matching action — prevents cross-use of OTP challenges (`403 FORBIDDEN` on mismatch).
+- **`POST /api/v1/ops/config/save`:** `domain` body field now optional; per-key domain resolution via `resolveOpsConfigDomainForKey()`; empty/null values deactivate overlay secrets (`isActive: false`).
+- **`GET /api/v1/health/ready`:** HTTP 503 responses now include readiness payload in envelope `data` with `error.code: CONFIG_NOT_READY` (ops UI and CD gates can read `runtimeConfigMissingKeys` without treating 503 as opaque failure). Schema updated in `health.schemas.ts`.
+
+*Documentation:* `OPS_CONTROL_PLANE_GUIDE.md`, `ROUTE_SURFACE_COMPLETE_REFERENCE.md`, `NEXTJS_FRONTEND_INTEGRATION_GUIDE.md`, `API_ENDPOINT_INDEX.md`, `ENV_VS_DB_CONFIG_REFERENCE.md`, `GITHUB_CD_SELF_HOSTED_RUNNER_GUIDE.md`.
+
+*Validation:* `npm run typecheck` → exit 0. Ops route/service tests pass.
+
+---
+
 **CSP hardening — remove 'unsafe-inline' from styleSrc — June 2026:**
 
 *Security improvement:*

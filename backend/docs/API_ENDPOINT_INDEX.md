@@ -23,7 +23,7 @@ Canonical low-noise index of backend HTTP endpoints. Route files and schemas rem
 |---|---|---|---|
 | GET | `/api/v1/health` | Full health check | `health.routes.ts` |
 | GET | `/api/v1/health/live` | Liveness check | `health.routes.ts` |
-| GET | `/api/v1/health/ready` | Readiness check — DB/Redis connected plus runtime config complete (`runtimeConfigMissingKeys` empty when ready) | `health.routes.ts` |
+| GET | `/api/v1/health/ready` | Readiness — DB/Redis/workers + runtime config; `200` when ready; `503 CONFIG_NOT_READY` includes `data` payload + `runtimeConfigMissingKeys` when not ready | `health.routes.ts` |
 | GET | `/api/v1/products` | Public product listing | `products.routes.ts` |
 | GET | `/api/v1/products/categories` | Public category list | `products.routes.ts` |
 | GET | `/api/v1/products/categories/:slug/products` | Products by category | `products.routes.ts` |
@@ -267,8 +267,8 @@ Ops endpoints are platform/developer controls. Do not expose write controls in n
 | GET | `/api/v1/ops/config/overview` | Runtime config overview |
 | POST | `/api/v1/ops/config/validate` | Validate config draft (ops:read) |
 | GET | `/api/v1/ops/config/stored` | Masked stored DB config |
-| POST | `/api/v1/ops/config/save` | Save encrypted DB config |
-| POST | `/api/v1/ops/otp/request` | Request privileged-write OTP |
+| POST | `/api/v1/ops/config/save` | Save encrypted DB config (OTP `config-save`; `domain?` optional; `null` deactivates key) |
+| POST | `/api/v1/ops/otp/request` | Request privileged-write OTP — body `{ action }` ∈ `config-save`, `load-shed-change`, `user-deactivate`, `system-restart`, `invite-revoke` |
 | POST | `/api/v1/ops/otp/verify` | Verify privileged-write OTP |
 | GET | `/api/v1/ops/otp/pending` | List caller's pending OTP challenges |
 | GET | `/api/v1/ops/invites` | List all invites (filterable by status) |
@@ -356,9 +356,9 @@ All 5 critical mutation endpoints require secondary OTP verification:
 5. `POST /api/v1/ops/invites/:inviteId/revoke` — Invite revocation
 
 **OTP Challenge Pattern:**
-1. Call `POST /api/v1/ops/otp/request` with `actionType` → receive `challengeId`
-2. User receives 6-digit OTP via email (300s TTL, 5 max attempts)
-3. Submit mutation with `challengeId` and `otpCode` in body
+1. Call `POST /api/v1/ops/otp/request` with `{ action }` (not `actionType`) → receive `challengeId`
+2. User receives 6-digit OTP via email (600s TTL, 3 max attempts per challenge)
+3. Submit mutation with `challengeId` and `otpCode` in body — backend verifies `challenge.action` matches the operation (`403` on mismatch)
 
 ### Permission Model
 

@@ -1,11 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { OpsConfigForms } from "@/components/ops/OpsConfigForms";
-import { OpsConfigOverviewGrid } from "@/components/ops/OpsConfigOverviewGrid";
+import { OpsConfigEditor } from "@/components/ops/OpsConfigEditor";
 import { OpsRuntimeReadinessCard } from "@/components/ops/OpsRuntimeReadinessCard";
-import { OpsStoredConfigTable } from "@/components/ops/OpsStoredConfigTable";
-import { OpsAlert, OpsLoadingBlock } from "@/components/ops/ui/ops-ui";
+import { OpsAlert, OpsBadge, OpsCard, OpsLoadingBlock } from "@/components/ops/ui/ops-ui";
 import { getApiErrorMessageWithHint } from "@/lib/error-messages";
 import {
   getOpsConfigOverviewClient,
@@ -52,9 +50,28 @@ export function OpsConfigPagePanel() {
         deployment environment. DB-overlay keys require OTP save and may need API/worker restart.
       </OpsAlert>
       <OpsRuntimeReadinessCard refreshSignal={refreshSignal} />
-      <OpsConfigOverviewGrid overview={overview} />
-      <OpsStoredConfigTable stored={stored} />
-      <OpsConfigForms onConfigSaved={() => setRefreshSignal((prev) => prev + 1)} />
+      <OpsCard padding="md">
+        <div className="flex flex-wrap items-center gap-3">
+          <OpsBadge tone={overview.runtimeProfile === "production-like" ? "info" : "warning"}>
+            {overview.runtimeProfile}
+          </OpsBadge>
+          {!overview.strictProfileHealth.noPlaceholdersInStrict ? (
+            <OpsBadge tone="warning">Placeholders in strict profile</OpsBadge>
+          ) : (
+            <OpsBadge tone="success">No placeholders</OpsBadge>
+          )}
+          {overview.strictProfileHealth.missingRequiredKeysInStrict.length > 0 ? (
+            <OpsBadge tone="danger">
+              {overview.strictProfileHealth.missingRequiredKeysInStrict.length} missing keys
+            </OpsBadge>
+          ) : null}
+        </div>
+      </OpsCard>
+      <OpsConfigEditor
+        overview={overview}
+        stored={stored}
+        onConfigSaved={() => setRefreshSignal((prev) => prev + 1)}
+      />
     </div>
   );
 }

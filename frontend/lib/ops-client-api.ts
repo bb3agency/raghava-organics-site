@@ -1,6 +1,7 @@
 "use client";
 
 import { apiClient, ApiError } from "@/lib/api";
+import type { ReadinessStatus } from "@/types/api";
 
 export type OpsPermission = "ops:read" | "ops:write";
 
@@ -309,7 +310,7 @@ export async function validateOpsConfigClient(input: {
 }
 
 export async function saveOpsConfigClient(input: {
-  domain: OpsStoredConfig["items"][number]["domain"];
+  domain?: OpsStoredConfig["items"][number]["domain"];
   values: Record<string, string | number | boolean | null>;
   challengeId: string;
   otpCode: string;
@@ -318,6 +319,49 @@ export async function saveOpsConfigClient(input: {
     method: "POST",
     body: JSON.stringify(input),
   });
+}
+
+function getOpsApiBase(): string {
+  const base =
+    process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3000/api/v1";
+  return base.replace(/\/$/, "");
+}
+
+/** Readiness may return HTTP 503 with payload in envelope `data` when not ready. */
+export async function fetchOpsReadinessStatus(): Promise<ReadinessStatus> {
+  const url = `${getOpsApiBase()}/health/ready`;
+  const response = await fetch(url, { cache: "no-store", credentials: "include" });
+  const body: unknown = await response.json().catch(() => ({}));
+
+  if (
+    typeof body === "object" &&
+    body !== null &&
+    "data" in body &&
+    typeof (body as { data: unknown }).data === "object" &&
+    (body as { data: { status?: string } }).data?.status
+  ) {
+    return (body as { data: ReadinessStatus }).data;
+  }
+
+  if (
+    typeof body === "object" &&
+    body !== null &&
+    "status" in body &&
+    !("success" in body)
+  ) {
+    return body as ReadinessStatus;
+  }
+
+  if (typeof body === "object" && body !== null && "error" in body) {
+    const err = (body as { error?: { code?: string; message?: string } }).error;
+    throw new ApiError(
+      err?.code ?? "UNKNOWN_ERROR",
+      err?.message ?? "Readiness check failed",
+      response.status,
+    );
+  }
+
+  throw new ApiError("UNKNOWN_ERROR", "Readiness check failed", response.status);
 }
 
 export async function listOpsInvitesClient(query?: {

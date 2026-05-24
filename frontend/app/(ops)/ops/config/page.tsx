@@ -5,7 +5,7 @@ export default function OpsConfigPage() {
   return (
     <OpsPageFrame
       title="Configuration"
-      description="Contract overview, masked DB-overlay secrets, validate/save with OTP, and runtime readiness."
+      description="DB-overlay secrets by section, OTP-protected save, and runtime readiness."
     >
       <OpsConfigPagePanel />
     </OpsPageFrame>

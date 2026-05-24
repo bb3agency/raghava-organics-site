@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { OpsAlert, OpsBadge, OpsCard, OpsCardHeader } from "@/components/ops/ui/ops-ui";
 import { Button } from "@/components/ui/button";
-import { apiClient } from "@/lib/api";
+import { fetchOpsReadinessStatus } from "@/lib/ops-client-api";
 import { getApiErrorMessageWithHint } from "@/lib/error-messages";
 import type { ReadinessStatus } from "@/types/api";
 
@@ -25,9 +25,7 @@ export function OpsRuntimeReadinessCard({
       setIsLoading(true);
     }
     try {
-      const next = await apiClient<ReadinessStatus>("/health/ready", {
-        cache: "no-store",
-      });
+      const next = await fetchOpsReadinessStatus();
       setReadiness(next);
       setError(null);
       setLastUpdatedAt(new Date().toISOString());
@@ -75,7 +73,7 @@ export function OpsRuntimeReadinessCard({
         }
       />
 
-      {error ? <OpsAlert tone="error">{error}</OpsAlert> : null}
+      {error && !readiness ? <OpsAlert tone="error">{error}</OpsAlert> : null}
 
       {readiness ? (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">

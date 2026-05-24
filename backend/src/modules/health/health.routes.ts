@@ -60,8 +60,9 @@ export async function registerHealthRoutes(fastify: FastifyInstance): Promise<vo
         }));
         return reply.code(503).send({
           success: false,
+          data: payload,
           error: {
-            code: ERROR_CODES.INTERNAL_ERROR,
+            code: ERROR_CODES.CONFIG_NOT_READY,
             message: 'Readiness check failed: dependencies, queue freshness, or runtime config are not ready',
             statusCode: 503,
             details: {
