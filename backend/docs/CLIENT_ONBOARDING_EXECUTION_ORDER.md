@@ -663,9 +663,9 @@ git push origin main
    `ops-newuser` auto-normalizes `DATABASE_URL` from `host.docker.internal` to `127.0.0.1` when executed on the VPS host shell (outside containers), so invite bootstrap can run safely with production `.env`.
    Reference: `docs/OPS_CONTROL_PLANE_GUIDE.md` §4 (Invite bootstrap).
 
-2. **Complete setup from invite email** at `https://<client-domain>/ops/setup?...` within 10 minutes.
+2. **Complete setup from invite email** at `https://<client-domain>/ops/setup?...` within 10 minutes (public page — no console navigation).
 
-3. **Log in via email-OTP** at `/ops` — enter email, receive OTP, enter OTP. Session cookie (`ops_session`) is set.
+3. **Log in via email-OTP** at `/ops/login` — enter email, receive OTP, enter OTP. Session cookie (`ops_session`) is set. Console routes (`/ops`, `/ops/config`, etc.) show navigation only after this step.
 
 4. **Test ops access:**
    ```bash

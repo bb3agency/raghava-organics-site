@@ -207,6 +207,7 @@ The backend now uses an invite CLI for first ops identity onboarding:
 - The client frontend must already include an ops setup page at `/ops/setup`.
 - The page must read the `token` query param and call backend invite-consume API.
 - Without this page, invite links cannot be completed and onboarding will fail by expiry.
+- **Ops UI route discipline (May 2026):** Only `/ops/login` and `/ops/setup` are public frontend routes (no console navigation). All other `/ops/*` surfaces (session, config, load-shed, audit, invites, users, queues, system, metrics) render only after a successful ops login establishes the `ops_session` httpOnly cookie — the layout calls `GET /api/v1/ops/session` and redirects unauthenticated visitors to `/ops/login`. `/ops/setup` is invite-token onboarding only; it is not a substitute for login.
 - On shared/staging/production VPS with ops Basic Auth enabled, verify `/ops/setup` with real credentials from `frontend/.env.production.local` before issuing invite:
   ```bash
   curl -sS -o /dev/null -w "%{http_code}\n" \
@@ -768,11 +769,12 @@ All security verification gates passing:
 Before deploying ops UI:
 
 **Authentication Flow:**
-- [ ] `/ops/login` page with email + password form
-- [ ] OTP input modal (6 digits, 5-min countdown)
+- [ ] `/ops/login` page with email → OTP (no password field; browser-session-only)
+- [ ] OTP input step (6 digits, 5-min countdown)
 - [ ] Error handling for invalid OTP (show remaining attempts)
-- [ ] Cookie handling is automatic (httpOnly)
-- [ ] `/ops/logout` clears session
+- [ ] Cookie handling is automatic (httpOnly `ops_session`)
+- [ ] Sign out calls `POST /api/v1/ops/auth/logout` and returns to `/ops/login`
+- [ ] Console navigation (Session, Load shed, Config, Audit, Invites, Users, Queues, System, Metrics) is hidden on `/ops/login` and `/ops/setup`; shown only after successful login
 
 **Critical Operations (All Require OTP Modal):**
 - [ ] Config save → OTP challenge → Submit

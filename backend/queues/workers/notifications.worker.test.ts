@@ -1,4 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
+import { ResendAdapter } from '@modules/notifications/adapters/resend.adapter';
+import { Msg91Adapter } from '@modules/notifications/adapters/msg91.adapter';
+import { MetaWhatsAppAdapter } from '@modules/notifications/adapters/meta-whatsapp.adapter';
 
 import { createNotificationsWorker } from './notifications.worker';
 
@@ -13,9 +16,10 @@ describe('notifications worker', () => {
   const findOpsConfigSecrets = vi.fn();
   const findOpsUsers = vi.fn();
   const findAdminUsers = vi.fn();
-  const sendEmail = vi.fn();
-  const sendSms = vi.fn();
-  const sendWhatsapp = vi.fn();
+
+  let sendEmailSpy: ReturnType<typeof vi.spyOn>;
+  let sendSmsSpy: ReturnType<typeof vi.spyOn>;
+  let sendWhatsappSpy: ReturnType<typeof vi.spyOn>;
 
   class MockWorker {
     on(): void { /* no-op for tests */ }
@@ -44,14 +48,6 @@ describe('notifications worker', () => {
     };
   }
 
-  function mockCreateNotificationProviders() {
-    return {
-      email: { sendEmail },
-      sms: { sendSms },
-      whatsapp: { sendWhatsapp }
-    };
-  }
-
   beforeEach(() => {
     processor = undefined;
     createLog.mockReset();
@@ -59,9 +55,11 @@ describe('notifications worker', () => {
     findOpsConfigSecrets.mockReset();
     findOpsUsers.mockReset();
     findAdminUsers.mockReset();
-    sendEmail.mockReset();
-    sendSms.mockReset();
-    sendWhatsapp.mockReset();
+
+    sendEmailSpy = vi.spyOn(ResendAdapter.prototype, 'sendEmail');
+    sendSmsSpy = vi.spyOn(Msg91Adapter.prototype, 'sendSms');
+    sendWhatsappSpy = vi.spyOn(MetaWhatsAppAdapter.prototype, 'sendWhatsapp');
+
     process.env.NOTIFY_EMAIL_ENABLED = 'true';
     process.env.NOTIFY_SMS_ENABLED = 'true';
     process.env.NOTIFY_WHATSAPP_ENABLED = 'true';
@@ -77,14 +75,17 @@ describe('notifications worker', () => {
     findAdminUsers.mockResolvedValue([]);
   });
 
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it('routes send-primary using configured global channel', async () => {
     process.env.NOTIFY_PRIMARY_CHANNEL = 'EMAIL';
     createNotificationsWorker({}, {
       Worker: MockWorker as unknown as NotificationsWorkerType,
-      PrismaClient: MockPrismaClient as unknown as NotificationsPrismaType,
-      createNotificationProviders: mockCreateNotificationProviders
+      PrismaClient: MockPrismaClient as unknown as NotificationsPrismaType
     });
-    sendEmail.mockResolvedValue({ messageId: 'email_primary_1', providerPayload: {} });
+    sendEmailSpy.mockResolvedValue({ messageId: 'email_primary_1', providerPayload: {} });
 
     await processor?.({
       name: 'send-primary',
@@ -96,9 +97,9 @@ describe('notifications worker', () => {
       }
     });
 
-    expect(sendEmail).toHaveBeenCalledTimes(1);
-    expect(sendSms).not.toHaveBeenCalled();
-    expect(sendWhatsapp).not.toHaveBeenCalled();
+    expect(sendEmailSpy).toHaveBeenCalledTimes(1);
+    expect(sendSmsSpy).not.toHaveBeenCalled();
+    expect(sendWhatsappSpy).not.toHaveBeenCalled();
     expect(createLog).toHaveBeenCalledWith({
       data: expect.objectContaining({
         channel: 'EMAIL',
@@ -112,17 +113,16 @@ describe('notifications worker', () => {
   it('logs sent email notification on provider success', async () => {
     createNotificationsWorker({}, {
       Worker: MockWorker as unknown as NotificationsWorkerType,
-      PrismaClient: MockPrismaClient as unknown as NotificationsPrismaType,
-      createNotificationProviders: mockCreateNotificationProviders
+      PrismaClient: MockPrismaClient as unknown as NotificationsPrismaType
     });
-    sendEmail.mockResolvedValue({ messageId: 'email_1', providerPayload: {} });
+    sendEmailSpy.mockResolvedValue({ messageId: 'email_1', providerPayload: {} });
 
     await processor?.({
       name: 'send-email',
       data: { to: 'test@example.com', template: 'OrderConfirmed', data: { orderId: '1' } }
     });
 
-    expect(sendEmail).toHaveBeenCalledTimes(1);
+    expect(sendEmailSpy).toHaveBeenCalledTimes(1);
     expect(createLog).toHaveBeenCalledWith({
       data: expect.objectContaining({
         channel: 'EMAIL',
@@ -138,10 +138,9 @@ describe('notifications worker', () => {
   it('logs failed sms notification and throws so BullMQ can retry', async () => {
     createNotificationsWorker({}, {
       Worker: MockWorker as unknown as NotificationsWorkerType,
-      PrismaClient: MockPrismaClient as unknown as NotificationsPrismaType,
-      createNotificationProviders: mockCreateNotificationProviders
+      PrismaClient: MockPrismaClient as unknown as NotificationsPrismaType
     });
-    sendSms.mockRejectedValue(new Error('provider timeout'));
+    sendSmsSpy.mockRejectedValue(new Error('provider timeout'));
 
     await expect(
       processor?.({
@@ -150,7 +149,7 @@ describe('notifications worker', () => {
       })
     ).rejects.toThrow('provider timeout');
 
-    expect(sendSms).toHaveBeenCalledWith({
+    expect(sendSmsSpy).toHaveBeenCalledWith({
       phone: '9876543210',
       template: 'OutForDelivery',
       data: {
@@ -174,8 +173,7 @@ describe('notifications worker', () => {
     process.env.FAST2SMS_API_KEY = '';
     createNotificationsWorker({}, {
       Worker: MockWorker as unknown as NotificationsWorkerType,
-      PrismaClient: MockPrismaClient as unknown as NotificationsPrismaType,
-      createNotificationProviders: mockCreateNotificationProviders
+      PrismaClient: MockPrismaClient as unknown as NotificationsPrismaType
     });
 
     await processor?.({
@@ -183,7 +181,7 @@ describe('notifications worker', () => {
       data: { phone: '9876543210', template: 'OutForDelivery', data: {} }
     });
 
-    expect(sendSms).not.toHaveBeenCalled();
+    expect(sendSmsSpy).not.toHaveBeenCalled();
     expect(createLog).toHaveBeenCalledWith({
       data: expect.objectContaining({
         channel: 'SMS',
@@ -199,17 +197,16 @@ describe('notifications worker', () => {
   it('logs sent whatsapp notification on provider success', async () => {
     createNotificationsWorker({}, {
       Worker: MockWorker as unknown as NotificationsWorkerType,
-      PrismaClient: MockPrismaClient as unknown as NotificationsPrismaType,
-      createNotificationProviders: mockCreateNotificationProviders
+      PrismaClient: MockPrismaClient as unknown as NotificationsPrismaType
     });
-    sendWhatsapp.mockResolvedValue({ messageId: 'wa_1', providerPayload: {} });
+    sendWhatsappSpy.mockResolvedValue({ messageId: 'wa_1', providerPayload: {} });
 
     await processor?.({
       name: 'send-whatsapp',
       data: { phone: '9876543210', template: 'OutForDelivery', data: { orderNumber: 'ORD-1' } }
     });
 
-    expect(sendWhatsapp).toHaveBeenCalledTimes(1);
+    expect(sendWhatsappSpy).toHaveBeenCalledTimes(1);
     expect(createLog).toHaveBeenCalledWith({
       data: expect.objectContaining({
         channel: 'WHATSAPP',
@@ -226,8 +223,7 @@ describe('notifications worker', () => {
     process.env.NOTIFY_WHATSAPP_ENABLED = 'false';
     createNotificationsWorker({}, {
       Worker: MockWorker as unknown as NotificationsWorkerType,
-      PrismaClient: MockPrismaClient as unknown as NotificationsPrismaType,
-      createNotificationProviders: mockCreateNotificationProviders
+      PrismaClient: MockPrismaClient as unknown as NotificationsPrismaType
     });
 
     await processor?.({
@@ -235,7 +231,7 @@ describe('notifications worker', () => {
       data: { phone: '9876543210', template: 'OutForDelivery', data: {} }
     });
 
-    expect(sendWhatsapp).not.toHaveBeenCalled();
+    expect(sendWhatsappSpy).not.toHaveBeenCalled();
     expect(createLog).toHaveBeenCalledWith({
       data: expect.objectContaining({
         channel: 'WHATSAPP',

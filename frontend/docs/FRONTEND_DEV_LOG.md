@@ -106,7 +106,7 @@ NEXT_PUBLIC_RAZORPAY_KEY_ID=(pending)
 | Slice | Status | Notes |
 |---|---|---|
 | Ops login + cookie session (`/ops/login`, `lib/ops-client-api.ts`) | [x] | Browser `ops_session` cookie; no API-key headers |
-| Session bootstrap (`GET /ops/session`) | [x] | `OpsSessionPanel`, `OpsSessionGate` |
+| Session bootstrap (`GET /ops/session`) | [x] | `OpsSessionPanel`; route shell `OpsRootLayout` + `OpsConsoleShell` (console nav post-login only) |
 | Load-shed single-step OTP (`POST /ops/load-shed`) | [x] | `OpsLoadShedPanel`, `OpsCriticalOtpForm` |
 | Config overview/stored/save + OTP (`config-save`) | [x] | `OpsConfigPagePanel`, `OpsConfigForms` |
 | Invites create/revoke + users deactivate + system restart | [x] | `OpsInvitesPanel`, `OpsUsersPanel`, `OpsSystemPanel` |
@@ -231,7 +231,10 @@ NEXT_PUBLIC_RAZORPAY_KEY_ID=(pending)
   - Ops browser integration via `lib/ops-client-api.ts` (`credentials: 'include'`); server metrics remain in `lib/ops-api.ts`.
   - Added `/ops/login`, users, queues, system; load-shed is single-step OTP; five critical ops writes share `OpsCriticalOtpForm`.
   - Admin read: shipments, payments, reviews, returns detail, CRM tabs; admin queues page points operators to `/ops/queues`.
-  - `OpsSessionGate` uses `ReactNode` children (no render-prop from RSC pages).
+  - `OpsSessionGate` retained for optional panel use; route-level auth via `OpsConsoleShell` (public: `/ops/login`, `/ops/setup` only).
+
+- Ops UI auth shell (2026-05-24): `OpsRootLayout` hides console nav on `/ops/login` and `/ops/setup`; `OpsConsoleShell` gates all other `/ops/*` routes via `GET /ops/session` + redirect to login.
+- Ops queues DLQ summary (2026-05-24): frontend uses `bySourceQueue` to match `GET /ops/queues/dlq/summary` response (fixes `Object.entries` crash on `/ops/queues`).
 
 **Blockers / decisions made:**
 - Backend startup gate now passes (`health` endpoint returns OK with DB and Redis connected).

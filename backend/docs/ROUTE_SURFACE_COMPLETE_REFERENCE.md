@@ -551,7 +551,7 @@ There are two ops permission levels: `ops:read` < `ops:write`.
 | Route | Permission | What it does |
 |---|---|---|
 | `GET /api/v1/ops/queues` | `ops:read` | BullMQ Bull Board UI (embedded in the API server). Shows all queues, job counts, failure details. |
-| `GET /api/v1/ops/queues/dlq/summary` | `ops:read` | Summary card: total DLQ jobs, breakdown by source queue. |
+| `GET /api/v1/ops/queues/dlq/summary` | `ops:read` | Summary card: `{ total: number, bySourceQueue: Record<string, number> }` — breakdown keys are source queue names (not `byQueue`). |
 
 ---
 

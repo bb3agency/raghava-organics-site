@@ -1,5 +1,9 @@
 "use client";
 
+/**
+ * Per-panel session guard. Prefer `OpsConsoleShell` in `app/(ops)/ops/layout.tsx`
+ * for route-level protection; keep this for isolated client panels if needed.
+ */
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 import Link from "next/link";

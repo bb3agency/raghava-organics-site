@@ -201,6 +201,8 @@ Minimum non-negotiable implementation rules:
 
 **Ops is the administrative control plane** - separate from customer and admin authentication:
 
+**Ops frontend route shell:** Only `/ops/login` and `/ops/setup` are public (no console nav). All other `/ops/*` pages require `GET /ops/session` success; redirect to `/ops/login` on `401`.
+
 **Ops Login Flow (Browser Session Cookie):**
 ```typescript
 // Step 1: Request OTP

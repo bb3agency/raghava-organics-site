@@ -70,6 +70,7 @@ The following controls are normative and must be treated as part of technical ac
 - `REFUNDED` transition from admin APIs is deferred/async through the refunds queue, not guaranteed as immediate synchronous status mutation.
 - Frontend delivery is mandatory contract-first simultaneous build + integration via vertical slices (contract -> typed API client -> UI -> real backend integration -> tests), not page-only UI-first delivery.
 - Frontend delivery sequence is mandatory: Foundation -> Ops control plane -> Admin read -> Admin mutation -> Reliability -> Storefront customer journey (see `docs/NEXTJS_FRONTEND_INTEGRATION_GUIDE.md` §1.2).
+- Ops frontend: `/ops/login` and `/ops/setup` are public; all other `/ops/*` routes require `ops_session` (layout `GET /ops/session`, redirect to login on `401`).
 
 ### 1.2 What This Document Does Not Cover
 

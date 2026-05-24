@@ -61,6 +61,7 @@ Business-level expectations:
 
 - Delivery proceeds in vertical slices (contract + UI + real backend integration + validation evidence).
 - Frontend slice execution order is ops/admin-first then storefront: Foundation -> Ops control plane -> Admin read -> Admin mutation -> Reliability -> Storefront.
+- Ops console UI is post-login only: public `/ops/login` and `/ops/setup`; all other `/ops/*` routes require `ops_session` (layout redirects to login on `401`).
 - Admin and ops critical actions are demonstrated on real endpoints before sign-off.
 - Release readiness requires both frontend and backend checklist evidence, not page-complete screenshots alone.
 

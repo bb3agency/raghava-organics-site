@@ -162,6 +162,7 @@ Pair this with `docs/BACKEND_GO_LIVE_CHECKLIST.md` for final go-live sign-off. T
 - [ ] Merchant actions are never routed through ops endpoints to simplify UI logic.
 - [ ] Ops load-shed change applies immediately via `POST /ops/load-shed` (single-step, OTP-confirmed) — no separate approval step or confirm/reject UX.
 - [ ] Ops control plane surfaces handle `503 ops_audit_chain_lock_timeout` as retryable after 1–2 second backoff (audit chain lock contention under concurrent ops activity — not a failure).
+- [ ] Ops console navigation is hidden on `/ops/login` and `/ops/setup`; protected `/ops/*` routes redirect to login when `GET /ops/session` returns `401`.
 - [ ] Ops config UI surfaces (`/ops/config/overview`, `/ops/config/stored`, `/ops/config/save`) follow contract metadata (`mutableViaOps`, `requiresRestart`, `runtimeSource`) and never reveal plaintext secret values.
 - [ ] Bootstrap-only Ops config keys (`DATABASE_URL`, initial `REDIS_URL`, `OPS_DB_ENCRYPTION_KEY`) render as read-only with operator copy that changes must happen in deployment env/secret manager, not via DB-backed save.
 - [ ] DB-overlay eligible Ops config keys show restart-required semantics clearly: saved values are encrypted at rest, override env only for contract-allowed non-bootstrap keys, and apply only after API/worker restart.

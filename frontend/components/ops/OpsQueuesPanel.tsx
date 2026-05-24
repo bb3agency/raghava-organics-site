@@ -31,13 +31,17 @@ export function OpsQueuesPanel() {
       {summary ? (
         <div className="rounded-lg border p-4 text-sm">
           <p className="font-medium">DLQ total: {summary.total}</p>
-          <ul className="mt-2 grid gap-1">
-            {Object.entries(summary.byQueue).map(([queue, count]) => (
-              <li key={queue}>
-                {queue}: {count}
-              </li>
-            ))}
-          </ul>
+          {summary.total > 0 ? (
+            <ul className="mt-2 grid gap-1">
+              {Object.entries(summary.bySourceQueue ?? {}).map(([queue, count]) => (
+                <li key={queue}>
+                  {queue}: {count}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mt-2 text-muted-foreground">No dead-letter jobs in the current window.</p>
+          )}
         </div>
       ) : null}
       {error ? <p className="text-sm text-destructive">{error}</p> : null}

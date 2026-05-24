@@ -10,14 +10,8 @@ import {
   type OpsConfigOverview,
   type OpsStoredConfig,
 } from "@/lib/ops-client-api";
-import { OpsSessionGate } from "@/components/ops/OpsSessionGate";
-
 export function OpsConfigPagePanel() {
-  return (
-    <OpsSessionGate>
-      <OpsConfigContent />
-    </OpsSessionGate>
-  );
+  return <OpsConfigContent />;
 }
 
 function OpsConfigContent() {

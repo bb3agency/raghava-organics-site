@@ -1,16 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { OpsSessionGate } from "@/components/ops/OpsSessionGate";
 import { getApiErrorMessageWithHint } from "@/lib/error-messages";
 import { getOpsSessionClient, type OpsSession } from "@/lib/ops-client-api";
 
 export function OpsSessionPanel() {
-  return (
-    <OpsSessionGate>
-      <OpsSessionDetails />
-    </OpsSessionGate>
-  );
+  return <OpsSessionDetails />;
 }
 
 function OpsSessionDetails() {

@@ -338,6 +338,11 @@ Use the following backend routes when building a dedicated ops frontend (or ops 
 - Backend invite CLI (`ops:newuser`) should be run only after `/ops/setup` is live on client domain.
 - For ops/admin invite creation routes, pass `setupBaseUrl` as frontend base origin only (for example, `https://example.com`), not `/ops/setup` or `/admin/setup` path URLs. Backend appends setup paths.
 
+**Ops UI auth shell (mandatory):**
+- Public routes: `/ops/login` (email OTP sign-in) and `/ops/setup` (one-time invite token). No console nav on these pages.
+- Protected routes: all other `/ops/*` pages. Layout must call `GET /ops/session` with `credentials: 'include'`; on `401`, redirect to `/ops/login`.
+- Console chrome (nav links + sign out) appears only when `GET /ops/session` succeeds. Reference implementation: `OpsRootLayout` + `OpsConsoleShell` in the client frontend.
+
 - `GET /ops/session` — bootstrap operator profile + permissions + MFA/IP posture
 - `GET /ops/config/stored` — masked DB-backed config metadata
 - `POST /ops/config/save` — validated + OTP-authorized config save
@@ -351,6 +356,8 @@ Use the following backend routes when building a dedicated ops frontend (or ops 
 - `POST /ops/invites/:inviteId/revoke` — revoke pending invite (requires OTP `challengeId` + `otpCode`)
 - `POST /ops/users/:opsUserId/deactivate` — deactivate ops user account (requires OTP `challengeId` + `otpCode`)
 - `GET /ops/audit/logs` — paginated operational audit timeline for UI history views
+- `GET /ops/queues` — Bull Board UI (new tab; requires `ops_session` cookie on API host)
+- `GET /ops/queues/dlq/summary` — DLQ card data: `{ total, bySourceQueue }` where `bySourceQueue` maps source queue name → job count (do not use `byQueue`)
 - `POST /ops/system/restart` — schedule a process restart (`ops:write`); body: `{ delayMinutes, challengeId, otpCode }` (requires OTP; `delayMinutes: 0` = now, up to 1440); returns `{ jobId, scheduledFor }`. Use after `POST /ops/config/save` when `requiresRestart: true` is returned.
 
 For full operational setup and security requirements, follow `docs/OPS_CONTROL_PLANE_GUIDE.md`.

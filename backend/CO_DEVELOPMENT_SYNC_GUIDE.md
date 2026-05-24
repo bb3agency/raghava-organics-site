@@ -22,6 +22,8 @@ Before syncing, classify backend changes:
 Only template-worthy changes should be upstreamed to template repo.
 Documentation-only reliability fixes are also template-worthy when they change baseline deployment behavior.
 
+**Frontend agent rules sync:** When ops/admin auth UX conventions change (for example ops console routes gated post-login), update `backend/frontend-agent-rules.md` in the template/backend repo and re-sync into each client frontend via `cp ../backend/frontend-agent-rules.md .agents/rules/dev-rules.md` (see workspace dev-rules sync verification).
+
 ---
 
 ## 3) Flow A — Single Repo with `frontend/` + `backend/`

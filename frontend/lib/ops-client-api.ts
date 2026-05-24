@@ -138,7 +138,7 @@ export interface OpsPendingOtpItem {
 
 export interface OpsDlqSummary {
   total: number;
-  byQueue: Record<string, number>;
+  bySourceQueue: Record<string, number>;
 }
 
 function buildPath(

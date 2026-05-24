@@ -259,9 +259,9 @@ This sends a setup invite email via Resend. The ops user clicks the link, sets t
 ### Step 6: Ops user activates account
 
 The invited ops user:
-1. Opens the setup link from their email
-2. Sets a password via the ops setup page
-3. Logs in at `/ops/login` using email → OTP → session cookie
+1. Opens the setup link from their email (`/ops/setup?token=...` — public page, no console nav)
+2. Completes invite setup via email OTP on the ops setup page
+3. Logs in at `/ops/login` using email → OTP → `ops_session` cookie; only then do console routes (`/ops`, `/ops/config`, etc.) show navigation
 
 ---
 
