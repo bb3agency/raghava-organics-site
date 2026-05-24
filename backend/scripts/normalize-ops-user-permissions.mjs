@@ -93,12 +93,12 @@ async function main() {
       data: { permissions }
     });
     updatedUsers += 1;
-    logger.info({ email: user.email, permissions }, 'Updated ops user permissions');
+    logger.info(`Updated ops user permissions: ${user.email}`, { permissions });
   }
 
   const invites = await prisma.opsUserInvite.findMany({
     where: { status: { in: ['CREATED', 'EMAIL_SENT'] } },
-    select: { id: true, email: true, permissions: true }
+    select: { id: true, inviteEmail: true, permissions: true }
   });
 
   let updatedInvites = 0;
@@ -112,15 +112,20 @@ async function main() {
       data: { permissions }
     });
     updatedInvites += 1;
-    logger.info({ email: invite.email, permissions }, 'Updated pending ops invite permissions');
+    logger.info(`Updated pending ops invite permissions: ${invite.inviteEmail}`, { permissions });
   }
 
-  logger.info({ updatedUsers, updatedInvites, totalUsers: users.length }, 'Ops permission normalization complete');
+  logger.info('Ops permission normalization complete', {
+    updatedUsers,
+    updatedInvites,
+    totalUsers: users.length
+  });
 }
 
 main()
   .catch((error) => {
-    logger.error({ err: error }, 'Ops permission normalization failed');
+    const message = error instanceof Error ? error.message : String(error);
+    logger.error(`Ops permission normalization failed: ${message}`);
     process.exitCode = 1;
   })
   .finally(async () => {
