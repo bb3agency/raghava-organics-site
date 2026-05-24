@@ -33,6 +33,25 @@ HEALTH_INTERVAL=2
 log() { echo "[deploy] $(date -u '+%Y-%m-%dT%H:%M:%SZ') $*"; }
 fail() { echo "[deploy] ERROR: $*" >&2; exit 1; }
 
+# Self-hosted runner systemd jobs often have a minimal PATH (no global npx).
+# After npm ci, always prefer the project-local Prisma CLI.
+run_host_prisma() {
+  local cli="$CLIENT_PATH/node_modules/.bin/prisma"
+  if [ -x "$cli" ]; then
+    "$cli" "$@"
+    return 0
+  fi
+  if command -v npx >/dev/null 2>&1; then
+    npx prisma "$@"
+    return 0
+  fi
+  if command -v npm >/dev/null 2>&1; then
+    npm exec -- prisma "$@"
+    return 0
+  fi
+  fail "Prisma CLI not found. Run npm ci in $CLIENT_PATH first."
+}
+
 # ---------------------------------------------------------------------------
 # 0. Validate environment
 # ---------------------------------------------------------------------------
@@ -91,13 +110,14 @@ docker compose -p "$COMPOSE_PROJECT" "${COMPOSE_FILES[@]}" build
 #    during the migration window.
 # ---------------------------------------------------------------------------
 log "Running Prisma migrations..."
-# Generate client inside a temporary builder container to pick up any new models
 MIGRATE_DATABASE_URL="$(grep -E '^DATABASE_URL=' .env | cut -d= -f2- | sed 's/host\.docker\.internal/127.0.0.1/')"
 log "Prisma migrate on host Postgres (127.0.0.1)..."
-DATABASE_URL="$MIGRATE_DATABASE_URL" npx prisma migrate deploy --schema prisma/schema.prisma
+DATABASE_URL="$MIGRATE_DATABASE_URL" run_host_prisma migrate deploy --schema prisma/schema.prisma
 
+# Production image strips npx/npm (see Dockerfile) — use local binary inside container.
+log "Prisma generate in backend image (node_modules/.bin/prisma)..."
 docker compose -p "$COMPOSE_PROJECT" "${COMPOSE_FILES[@]}" run --rm --no-deps --entrypoint "" backend \
-  sh -c "npx prisma generate"
+  sh -c "./node_modules/.bin/prisma generate --schema prisma/schema.prisma"
 
 # ---------------------------------------------------------------------------
 # 4. Swap containers (minimal-downtime restart)
