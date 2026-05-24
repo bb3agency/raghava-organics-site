@@ -10,7 +10,7 @@ export function ProductGrid({ products }: ProductGridProps) {
   if (products.length === 0) {
     return (
       <EmptyState
-        title="No products found"
+        title="No products found yet"
         description="Try changing filters or search terms."
       />
     );

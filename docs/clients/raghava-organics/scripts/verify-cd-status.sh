@@ -9,6 +9,8 @@ BACKEND_PATH="${BACKEND_PATH:-${WWW_ROOT}/backend}"
 FRONTEND_PATH="${FRONTEND_PATH:-${WWW_ROOT}/frontend}"
 GITHUB_REPO="${GITHUB_REPO:-bb3agency/raghava-organics-site}"
 RUNNER_LABEL="${RUNNER_LABEL:-${CLIENT_ID}-vps}"
+RUNNER_DIR="${RUNNER_DIR:-$HOME/actions-runner-${CLIENT_ID}}"
+LEGACY_RUNNER_DIR="$HOME/actions-runner"
 PM2_NAME="${CLIENT_ID}-frontend"
 
 pass() { echo "  [PASS] $*"; }
@@ -56,19 +58,27 @@ echo ""
 
 # --- GitHub Actions runner ---
 echo "2) Self-hosted runner (required for auto-deploy on push)"
-if [ -d "$HOME/actions-runner" ]; then
-  pass "Runner directory exists: $HOME/actions-runner"
-  if [ -f "$HOME/actions-runner/svc.sh" ]; then
-    if (cd "$HOME/actions-runner" && sudo ./svc.sh status 2>/dev/null | grep -qi running); then
+ACTIVE_RUNNER_DIR=""
+if [ -d "$RUNNER_DIR" ] && [ -f "$RUNNER_DIR/.runner" ]; then
+  ACTIVE_RUNNER_DIR="$RUNNER_DIR"
+elif [ -d "$LEGACY_RUNNER_DIR" ] && [ -f "$LEGACY_RUNNER_DIR/.runner" ]; then
+  ACTIVE_RUNNER_DIR="$LEGACY_RUNNER_DIR"
+  warn "Using legacy $LEGACY_RUNNER_DIR — migrate: bash docs/clients/${CLIENT_ID}/scripts/migrate-runner-directory.sh"
+fi
+
+if [ -n "$ACTIVE_RUNNER_DIR" ]; then
+  pass "Runner directory exists: $ACTIVE_RUNNER_DIR"
+  if [ -f "$ACTIVE_RUNNER_DIR/svc.sh" ]; then
+    if (cd "$ACTIVE_RUNNER_DIR" && sudo ./svc.sh status 2>/dev/null | grep -qi running); then
       pass "Runner service is running"
     else
-      fail "Runner service not running — sudo ~/actions-runner/svc.sh start"
+      fail "Runner service not running — sudo $ACTIVE_RUNNER_DIR/svc.sh start"
     fi
   else
     fail "svc.sh missing — re-register runner (see GITHUB_CD_SETUP.md)"
   fi
 else
-  fail "No ~/actions-runner — CD cannot run. Install per GITHUB_CD_SETUP.md"
+  fail "No runner at $RUNNER_DIR (or legacy $LEGACY_RUNNER_DIR) — install per GITHUB_CD_SETUP.md"
 fi
 info "Runner must be Online in GitHub → $GITHUB_REPO → Settings → Actions → Runners"
 info "Label must match repo Variable VPS_RUNNER_LABEL (expected: $RUNNER_LABEL)"

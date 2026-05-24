@@ -19,7 +19,8 @@ CLIENT_ID="${CLIENT_ID:-raghava-organics}"
 GITHUB_REPO_URL="${GITHUB_REPO_URL:-https://github.com/bb3agency/raghava-organics-site}"
 RUNNER_NAME="${RUNNER_NAME:-${CLIENT_ID}-vps}"
 RUNNER_LABEL="${RUNNER_LABEL:-${CLIENT_ID}-vps}"
-RUNNER_DIR="${RUNNER_DIR:-$HOME/actions-runner}"
+# Per-client folder on multi-tenant VPS (e.g. ~/actions-runner-raghava-organics)
+RUNNER_DIR="${RUNNER_DIR:-$HOME/actions-runner-${CLIENT_ID}}"
 
 log() { echo "[install-runner] $*"; }
 die() { log "ERROR: $*"; exit 1; }

@@ -15,6 +15,7 @@
 | VPS IP | `<vps-ip>` |
 | Deploy user | `<deploy-user>` |
 | Runner name / label | `<client-id>-vps` |
+| Runner install dir | `/home/<deploy-user>/actions-runner-<client-id>` |
 
 ---
 
@@ -41,7 +42,7 @@
 
 ```bash
 ssh <deploy-user>@<vps-ip>
-mkdir -p ~/actions-runner && cd ~/actions-runner
+mkdir -p ~/actions-runner-<client-id> && cd ~/actions-runner-<client-id>
 # GitHub → repo → Settings → Actions → Runners → New self-hosted runner
 # Copy curl URL + registration token from that page
 curl -o actions-runner-linux-x64.tar.gz -L <URL_FROM_GITHUB>

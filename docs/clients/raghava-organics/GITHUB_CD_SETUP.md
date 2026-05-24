@@ -16,6 +16,7 @@
 | Deploy user | `d_user` |
 | Runner name / label | `raghava-organics-vps` |
 | Monorepo path | `/var/www/raghava-organics` |
+| Runner install dir | `/home/d_user/actions-runner-raghava-organics` |
 
 ---
 
@@ -40,7 +41,9 @@
 
 ## VPS runner (one-time) — **required for push-to-deploy**
 
-If `verify-cd-status.sh` shows **`[FAIL] No ~/actions-runner`**, auto-deploy will **never** run until this step is done.
+If `verify-cd-status.sh` shows **`[FAIL] No runner`**, auto-deploy will **never** run until this step is done.
+
+Runner directory is **`~/actions-runner-raghava-organics`** (not generic `~/actions-runner`) so multiple clients on one VPS stay isolated.
 
 ### Option A — guided installer (recommended)
 
@@ -62,7 +65,7 @@ bash docs/clients/raghava-organics/scripts/install-github-runner.sh
 
 ```bash
 ssh d_user@178.104.46.202
-mkdir -p ~/actions-runner && cd ~/actions-runner
+mkdir -p ~/actions-runner-raghava-organics && cd ~/actions-runner-raghava-organics
 # GitHub → bb3agency/raghava-organics-site → Settings → Actions → Runners → New
 curl -o actions-runner-linux-x64.tar.gz -L <URL_FROM_GITHUB>
 tar xzf ./actions-runner-linux-x64.tar.gz
@@ -73,6 +76,12 @@ tar xzf ./actions-runner-linux-x64.tar.gz
   --labels "self-hosted,raghava-organics-vps" \
   --unattended
 sudo ./svc.sh install && sudo ./svc.sh start
+```
+
+### Already installed at `~/actions-runner`? (one-time rename)
+
+```bash
+bash /var/www/raghava-organics/docs/clients/raghava-organics/scripts/migrate-runner-directory.sh
 ```
 
 **Verify:** Runners page shows **raghava-organics-vps** as **Idle** (green).

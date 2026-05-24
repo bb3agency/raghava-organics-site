@@ -109,7 +109,8 @@ Do **not** maintain two separate clones for backend and frontend — they will d
 SSH as deploy user. Token from **client repo → Settings → Actions → Runners → New self-hosted runner** (expires in ~1 hour).
 
 ```bash
-mkdir -p ~/actions-runner && cd ~/actions-runner
+# One folder per client on multi-tenant VPS (never share ~/actions-runner across repos)
+mkdir -p ~/actions-runner-<client-id> && cd ~/actions-runner-<client-id>
 
 # Use exact curl URL + version from the GitHub UI (do not guess the version)
 curl -o actions-runner-linux-x64.tar.gz -L <URL_FROM_GITHUB>
@@ -126,6 +127,8 @@ sudo ./svc.sh install
 sudo ./svc.sh start
 sudo ./svc.sh status
 ```
+
+**Multi-client on one VPS:** client A → `~/actions-runner-greengrocer`, client B → `~/actions-runner-raghava-organics`. Each runner registers to **its own** GitHub repo; `VPS_RUNNER_LABEL` in each repo prevents cross-routing.
 
 **Verify:** GitHub → Settings → Actions → Runners → **Idle** (green) for `<client-id>-vps`.
 
@@ -234,7 +237,7 @@ Use when you need a redeploy without a new commit. Prefer `git revert` + `git pu
 |---------|--------------|-----|
 | No workflows on push | Workflows not at **repo root** `.github/workflows/` | Add root workflows for monorepo; push to `main` |
 | CI runs, deploy never starts | `VPS_DEPLOY_ENABLED` not `true` or not a **Variable** | Fix repo Variables |
-| Deploy job queued forever | Runner offline or wrong label | `sudo ~/actions-runner/svc.sh status`; fix `VPS_RUNNER_LABEL` |
+| Deploy job queued forever | Runner offline or wrong label | `sudo ~/actions-runner-<client-id>/svc.sh status`; fix `VPS_RUNNER_LABEL` |
 | Deploy hit wrong VPS client | Missing/wrong `VPS_RUNNER_LABEL` | Unique label per client repo |
 | Backend deploy fails at readiness | Phase 8 incomplete | Ops config save + restart; verify `/health/ready` |
 | `SHA mismatch` | Another push during deploy | Re-run workflow |
@@ -272,7 +275,7 @@ docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml u
 GitHub deprecates old runner versions. Re-register:
 
 ```bash
-cd ~/actions-runner
+cd ~/actions-runner-<client-id>
 sudo ./svc.sh stop
 ./config.sh remove --token <REMOVAL_TOKEN>
 # Download new runner package, extract
