@@ -38,7 +38,27 @@
 
 ---
 
-## VPS runner (one-time)
+## VPS runner (one-time) — **required for push-to-deploy**
+
+If `verify-cd-status.sh` shows **`[FAIL] No ~/actions-runner`**, auto-deploy will **never** run until this step is done.
+
+### Option A — guided installer (recommended)
+
+1. GitHub → [bb3agency/raghava-organics-site → Settings → Actions → Runners → New self-hosted runner](https://github.com/bb3agency/raghava-organics-site/settings/actions/runners/new)
+2. Choose **Linux** / **x64** — copy the **download URL** and **token** (token expires in ~1 hour).
+3. On VPS:
+
+```bash
+ssh d_user@178.104.46.202
+cd /var/www/raghava-organics
+git pull origin main   # get install-github-runner.sh if needed
+
+export RUNNER_TOKEN='<paste-token>'
+export RUNNER_DOWNLOAD_URL='<paste-curl-url-from-github>'
+bash docs/clients/raghava-organics/scripts/install-github-runner.sh
+```
+
+### Option B — manual
 
 ```bash
 ssh d_user@178.104.46.202
@@ -55,7 +75,9 @@ tar xzf ./actions-runner-linux-x64.tar.gz
 sudo ./svc.sh install && sudo ./svc.sh start
 ```
 
-Preflight: `bash /var/www/raghava-organics/docs/clients/raghava-organics/scripts/phase9-github-cd-setup.sh`
+**Verify:** Runners page shows **raghava-organics-vps** as **Idle** (green).
+
+Preflight after install: `bash /var/www/raghava-organics/docs/clients/raghava-organics/scripts/verify-cd-status.sh`
 
 ---
 
