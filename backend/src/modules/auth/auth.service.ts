@@ -36,6 +36,7 @@ type LoginInput = {
 
 type OtpInput = {
   phone: string;
+  channel: 'sms' | 'whatsapp' | 'email';
   email?: string;
   turnstileToken?: string;
 };
@@ -127,6 +128,56 @@ function stableHash(value: string): string {
 
 export class AuthService {
   constructor(private readonly fastify: FastifyInstance) {}
+
+  private isEnabled(value: string | undefined, defaultValue: boolean): boolean {
+    const normalized = (value ?? '').trim().toLowerCase();
+    if (normalized.length === 0) {
+      return defaultValue;
+    }
+    return normalized === 'true';
+  }
+
+  private hasSmsProviderCredentials(): boolean {
+    const provider = (process.env.SMS_PROVIDER ?? 'msg91').trim().toLowerCase();
+    if (provider === 'noop') {
+      return false;
+    }
+    if (provider === 'msg91') {
+      return Boolean((process.env.MSG91_AUTH_KEY ?? '').trim());
+    }
+    if (provider === 'fast2sms') {
+      return Boolean((process.env.FAST2SMS_API_KEY ?? '').trim());
+    }
+    return false;
+  }
+
+  private isEmailChannelConfigured(): boolean {
+    return this.isEnabled(process.env.NOTIFY_EMAIL_ENABLED, true) && Boolean((process.env.RESEND_API_KEY ?? '').trim());
+  }
+
+  private isSmsChannelConfigured(): boolean {
+    return this.isEnabled(process.env.NOTIFY_SMS_ENABLED, true) && this.hasSmsProviderCredentials();
+  }
+
+  private isWhatsappChannelConfigured(): boolean {
+    return this.isEnabled(process.env.NOTIFY_WHATSAPP_ENABLED, false) &&
+      Boolean((process.env.META_WHATSAPP_ACCESS_TOKEN ?? '').trim()) &&
+      Boolean((process.env.META_WHATSAPP_PHONE_NUMBER_ID ?? '').trim());
+  }
+
+  private getAvailableOtpChannels(): Array<'sms' | 'whatsapp' | 'email'> {
+    const channels: Array<'sms' | 'whatsapp' | 'email'> = [];
+    if (this.isSmsChannelConfigured()) {
+      channels.push('sms');
+    }
+    if (this.isWhatsappChannelConfigured()) {
+      channels.push('whatsapp');
+    }
+    if (this.isEmailChannelConfigured()) {
+      channels.push('email');
+    }
+    return channels;
+  }
 
   private resolveRefreshSecret(): string {
     const secret = process.env.JWT_REFRESH_SECRET?.trim();
@@ -486,6 +537,21 @@ export class AuthService {
     const otp = generateOtp();
     const otpHash = hashOtp(otp);
     const customerEmail = input.email?.trim().toLowerCase() || undefined;
+    const availableChannels = this.getAvailableOtpChannels();
+    if (availableChannels.length === 0) {
+      throw new AppError(
+        ERROR_CODES.VALIDATION_ERROR,
+        'No login/signup communication channel is configured. Configure at least one of SMS, WhatsApp, or Email in Ops.',
+        400
+      );
+    }
+    if (!availableChannels.includes(input.channel)) {
+      throw new AppError(
+        ERROR_CODES.VALIDATION_ERROR,
+        `Selected channel '${input.channel}' is not configured. Available channels: ${availableChannels.join(', ')}`,
+        400
+      );
+    }
 
     let recipientEmail: string | undefined;
     if (customerEmail) {
@@ -509,27 +575,58 @@ export class AuthService {
     const storeName = (storeSettings?.storeName ?? '').trim() || 'Our Store';
 
     try {
-      await this.enqueueOutboxMessage('notifications', 'send-primary', {
-        email: recipientEmail ?? null,
-        phone: input.phone,
-        template: 'CustomerOtpVerification',
-        data: {
-          otp,
-          storeName
+      if (input.channel === 'email') {
+        if (!recipientEmail) {
+          throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Email is required for email OTP delivery', 400);
         }
-      }, `otp:${input.phone}:${Date.now()}`);
+        await this.enqueueOutboxMessage(
+          'notifications',
+          'send-email',
+          {
+            to: recipientEmail,
+            template: 'CustomerOtpVerification',
+            data: { otp, storeName }
+          },
+          `otp:email:${input.phone}:${Date.now()}`
+        );
+      } else if (input.channel === 'sms') {
+        await this.enqueueOutboxMessage(
+          'notifications',
+          'send-sms',
+          {
+            phone: input.phone,
+            template: 'CustomerOtpVerification',
+            data: { otp, storeName }
+          },
+          `otp:sms:${input.phone}:${Date.now()}`
+        );
+      } else {
+        await this.enqueueOutboxMessage(
+          'notifications',
+          'send-whatsapp',
+          {
+            phone: input.phone,
+            template: 'CustomerOtpVerification',
+            data: { otp, storeName }
+          },
+          `otp:whatsapp:${input.phone}:${Date.now()}`
+        );
+      }
     } catch (error) {
       await sendNotificationFailureAlert({
         prisma: this.fastify.prisma,
         template: 'CustomerOtpVerification',
-        channel: 'UNKNOWN',
-        recipient: recipientEmail ?? input.phone,
+        channel: input.channel.toUpperCase() as 'SMS' | 'WHATSAPP' | 'EMAIL',
+        recipient: input.channel === 'email' ? (recipientEmail ?? input.phone) : input.phone,
         errorMessage: error instanceof Error ? error.message : 'Unable to enqueue OTP delivery',
         failureStage: 'QUEUE_ENQUEUE',
         queueName: 'notifications',
-        jobName: 'send-primary'
+        jobName: input.channel === 'email' ? 'send-email' : input.channel === 'sms' ? 'send-sms' : 'send-whatsapp'
       });
       await this.fastify.redis.del(otpKey, cooldownKey, globalCooldownKey);
+      if (error instanceof AppError) {
+        throw error;
+      }
       throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Unable to enqueue OTP delivery', 502);
     }
 

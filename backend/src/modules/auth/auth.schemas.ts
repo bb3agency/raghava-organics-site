@@ -68,9 +68,10 @@ export const sendOtpSchema = {
   body: {
     type: 'object',
     additionalProperties: false,
-    required: ['phone'],
+    required: ['phone', 'channel'],
     properties: {
       phone: { type: 'string', maxLength: 20 },
+      channel: { type: 'string', enum: ['sms', 'whatsapp', 'email'], maxLength: 16 },
       email: { type: 'string', format: 'email', maxLength: 255 },
       turnstileToken: { type: 'string', maxLength: 4096 }
     }

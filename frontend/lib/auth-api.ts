@@ -19,6 +19,8 @@ export interface AuthSessionResponse {
 
 export interface SendOtpInput {
   phone: string;
+  channel: "sms" | "whatsapp" | "email";
+  email?: string;
   turnstileToken?: string;
 }
 

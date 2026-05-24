@@ -87,7 +87,12 @@ function OpsConfigFieldRow({
       </div>
 
       <div className="grid gap-2">
-        {field.inputKind === "boolean" ? (
+        {field.envLocked ? (
+          <div className="rounded-md border border-border/60 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+            Runtime value is currently sourced from environment. Edit the deployment env file and
+            restart services to change this key.
+          </div>
+        ) : field.inputKind === "boolean" ? (
           <OpsSelect
             id={`config-${field.key}`}
             value={entry.value}
@@ -144,12 +149,6 @@ function OpsConfigFieldRow({
             ) : null}
           </div>
         )}
-        {field.envLocked ? (
-          <p className="text-xs text-muted-foreground">
-            This key is currently sourced from runtime environment. Update it in the deployment
-            env file and restart services.
-          </p>
-        ) : null}
         {field.hint ? <p className="text-xs text-muted-foreground">{field.hint}</p> : null}
       </div>
 

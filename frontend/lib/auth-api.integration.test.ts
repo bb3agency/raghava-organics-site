@@ -37,6 +37,7 @@ describe("auth api integration", () => {
     await expect(
       sendOtp({
         phone: "99999",
+        channel: "sms",
       }),
     ).rejects.toBeTruthy();
   });

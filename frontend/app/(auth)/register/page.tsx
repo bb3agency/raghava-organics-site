@@ -28,7 +28,7 @@ export default function RegisterPage() {
       <div>
         <h1 className="font-heading text-2xl font-semibold">Create account</h1>
         <p className="mt-2 text-sm text-muted-foreground">
-          Verify OTP to create your customer account.
+          Send OTP via SMS, WhatsApp, or Email and verify to create your account.
         </p>
       </div>
       <SignupPhoneForm onSuccess={handleSuccess} />

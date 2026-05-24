@@ -18,8 +18,6 @@ export interface OpsConfigFieldDefinition {
 const SELECT_OPTIONS: Record<string, Array<{ value: string; label: string }>> = {
   PAYMENT_PROVIDER: [
     { value: "razorpay", label: "Razorpay" },
-    { value: "cod", label: "Cash on delivery" },
-    { value: "noop", label: "Noop (dev only)" },
   ],
   SHIPPING_PROVIDER: [
     { value: "delhivery", label: "Delhivery" },
@@ -69,8 +67,7 @@ export function buildOpsConfigFieldDefinitions(
     group.items
       .filter((item) => item.mutableViaOps && item.runtimeSource !== "env-bootstrap")
       .map((item) => {
-        const hasStoredValue = storedByKey.has(item.key);
-        const envLocked = item.present && !hasStoredValue;
+        const envLocked = item.present;
         const selectOptions = SELECT_OPTIONS[item.key];
         let inputKind: OpsConfigFieldDefinition["inputKind"] = "text";
         if (BOOLEAN_KEYS.has(item.key)) {

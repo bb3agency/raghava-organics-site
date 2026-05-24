@@ -1,8 +1,19 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { AuthService } from './auth.service';
 
 describe('AuthService sendOtp', () => {
+  beforeEach(() => {
+    vi.stubEnv('NOTIFY_SMS_ENABLED', 'true');
+    vi.stubEnv('SMS_PROVIDER', 'msg91');
+    vi.stubEnv('MSG91_AUTH_KEY', 'msg91-auth-key');
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
   it('requires challenge token when turnstile secret is configured', async () => {
     process.env.TURNSTILE_SECRET_KEY = 'turnstile-secret';
     const redisGet = vi.fn().mockResolvedValue(null);
@@ -33,7 +44,7 @@ describe('AuthService sendOtp', () => {
     const service = new AuthService(fastify);
     await expect(
       service.sendOtp(
-        { phone: '9876543210' },
+        { phone: '9876543210', channel: 'sms' },
         { clientIp: '127.0.0.1', risk: { sessionId: 's-1', deviceFingerprint: 'd-1' } }
       )
     ).rejects.toMatchObject({
@@ -74,7 +85,7 @@ describe('AuthService sendOtp', () => {
 
     const service = new AuthService(fastify);
     const result = await service.sendOtp(
-      { phone: '9876543210', turnstileToken: 'token-ok' },
+      { phone: '9876543210', channel: 'sms', turnstileToken: 'token-ok' },
       { clientIp: '127.0.0.1', risk: { sessionId: 's-1' } }
     );
 
@@ -82,9 +93,8 @@ describe('AuthService sendOtp', () => {
     expect(redisSet).toHaveBeenCalledWith('otp:9876543210', expect.any(String), 'EX', 300);
     expect(redisSet).toHaveBeenCalledWith('otp:cooldown:9876543210', '1', 'EX', 60);
     expect(notificationsAdd).toHaveBeenCalledWith(
-      'send-primary',
+      'send-sms',
       expect.objectContaining({
-        email: 'customer@example.com',
         phone: '9876543210',
         template: 'CustomerOtpVerification',
         data: expect.objectContaining({
@@ -93,7 +103,7 @@ describe('AuthService sendOtp', () => {
         })
       }),
       expect.objectContaining({
-        jobId: expect.stringContaining('otp:9876543210:')
+        jobId: expect.stringContaining('otp:sms:9876543210:')
       })
     );
   });
@@ -117,11 +127,12 @@ describe('AuthService sendOtp', () => {
     } as unknown as FastifyInstance;
 
     const service = new AuthService(fastify);
-    await service.sendOtp({ phone: '9876543210' });
+    await service.sendOtp({ phone: '9876543210', channel: 'sms' });
 
     expect(notificationsAdd).toHaveBeenCalledWith(
-      'send-primary',
+      'send-sms',
       expect.objectContaining({
+        phone: '9876543210',
         template: 'CustomerOtpVerification',
         data: expect.objectContaining({ storeName: 'Our Store' })
       }),
@@ -167,7 +178,7 @@ describe('AuthService sendOtp', () => {
     const service = new AuthService(fastify);
 
     process.env.TURNSTILE_SECRET_KEY = 'turnstile-secret';
-    await expect(service.sendOtp({ phone: '9876543210', turnstileToken: 'ok-token' }, { clientIp: '127.0.0.1' })).rejects.toMatchObject({
+    await expect(service.sendOtp({ phone: '9876543210', channel: 'sms', turnstileToken: 'ok-token' }, { clientIp: '127.0.0.1' })).rejects.toMatchObject({
       code: 'INTERNAL_ERROR',
       statusCode: 502
     });
@@ -177,6 +188,5 @@ describe('AuthService sendOtp', () => {
       'otp:cooldown:9876543210'
     );
     delete process.env.TURNSTILE_SECRET_KEY;
-    vi.unstubAllGlobals();
   });
 });

@@ -21,7 +21,7 @@ export default function LoginPage() {
   const [mode, setMode] = useState<LoginMode>("otp");
 
   const modeLabel = useMemo(() => {
-    return mode === "otp" ? "Phone OTP login" : "Email password login";
+    return mode === "otp" ? "Phone OTP login (SMS, WhatsApp, or Email)" : "Email password login";
   }, [mode]);
 
   const handleSuccess = async (session: AuthSession) => {
@@ -38,7 +38,7 @@ export default function LoginPage() {
       <div>
         <h1 className="font-heading text-2xl font-semibold">Sign in</h1>
         <p className="mt-2 text-sm text-muted-foreground">
-          Continue to {APP_NAME} using OTP or email.
+          Continue to {APP_NAME} using OTP (SMS/WhatsApp/Email) or email + password.
         </p>
       </div>
 

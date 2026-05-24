@@ -19,6 +19,8 @@ export const passwordSchema = z
 
 export const sendOtpInputSchema = z.object({
   phone: phoneSchema,
+  channel: z.enum(["sms", "whatsapp", "email"]),
+  email: emailSchema.optional(),
   turnstileToken: z.string().max(4096).optional(),
 });
 

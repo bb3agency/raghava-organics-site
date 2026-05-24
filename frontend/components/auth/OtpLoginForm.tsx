@@ -13,6 +13,7 @@ import type { AuthSession } from "@/types/user";
 const phoneSchema = sendOtpInputSchema.pick({ phone: true });
 type PhoneValues = z.infer<typeof phoneSchema>;
 type VerifyValues = z.infer<typeof verifyOtpInputSchema>;
+type OtpChannel = "sms" | "whatsapp" | "email";
 
 interface OtpLoginFormProps {
   onSuccess: (session: AuthSession) => Promise<void> | void;
@@ -22,6 +23,8 @@ export function OtpLoginForm({ onSuccess }: OtpLoginFormProps) {
   const [step, setStep] = useState<"phone" | "otp">("phone");
   const [error, setError] = useState<string | null>(null);
   const [phone, setPhone] = useState("");
+  const [email, setEmail] = useState("");
+  const [channel, setChannel] = useState<OtpChannel>("sms");
   const [info, setInfo] = useState<string | null>(null);
 
   const phoneForm = useForm<PhoneValues>({
@@ -37,7 +40,11 @@ export function OtpLoginForm({ onSuccess }: OtpLoginFormProps) {
   const send = phoneForm.handleSubmit(async (values) => {
     try {
       setError(null);
-      const result = await sendOtp(values);
+      const result = await sendOtp({
+        phone: values.phone,
+        channel,
+        ...(channel === "email" && email.trim() ? { email: email.trim() } : {}),
+      });
       setInfo(result.message);
       setPhone(values.phone);
       verifyForm.setValue("phone", values.phone);
@@ -60,6 +67,22 @@ export function OtpLoginForm({ onSuccess }: OtpLoginFormProps) {
   return step === "phone" ? (
     <form onSubmit={send} className="grid gap-4">
       <div className="grid gap-1">
+        <label htmlFor="otp-channel" className="text-sm font-medium">
+          Receive OTP via
+        </label>
+        <select
+          id="otp-channel"
+          value={channel}
+          onChange={(event) => setChannel(event.target.value as OtpChannel)}
+          className="h-11 rounded-md border border-border bg-background px-3 text-sm"
+        >
+          <option value="sms">SMS</option>
+          <option value="whatsapp">WhatsApp</option>
+          <option value="email">Email</option>
+        </select>
+      </div>
+
+      <div className="grid gap-1">
         <label htmlFor="phone" className="text-sm font-medium">
           Phone number
         </label>
@@ -75,6 +98,22 @@ export function OtpLoginForm({ onSuccess }: OtpLoginFormProps) {
           {phoneForm.formState.errors.phone?.message}
         </p>
       </div>
+      {channel === "email" ? (
+        <div className="grid gap-1">
+          <label htmlFor="otp-email" className="text-sm font-medium">
+            Email for OTP
+          </label>
+          <input
+            id="otp-email"
+            type="email"
+            autoComplete="email"
+            className="h-11 rounded-md border border-border bg-background px-3 text-sm"
+            value={email}
+            onChange={(event) => setEmail(event.target.value)}
+            required
+          />
+        </div>
+      ) : null}
       <AuthErrorBanner message={error} />
       <button
         type="submit"
