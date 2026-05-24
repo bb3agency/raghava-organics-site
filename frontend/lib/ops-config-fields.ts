@@ -12,6 +12,7 @@ export interface OpsConfigFieldDefinition {
   requiresRestart: boolean;
   present: boolean;
   storedMasked?: string;
+  envLocked: boolean;
 }
 
 const SELECT_OPTIONS: Record<string, Array<{ value: string; label: string }>> = {
@@ -68,6 +69,8 @@ export function buildOpsConfigFieldDefinitions(
     group.items
       .filter((item) => item.mutableViaOps && item.runtimeSource !== "env-bootstrap")
       .map((item) => {
+        const hasStoredValue = storedByKey.has(item.key);
+        const envLocked = item.present && !hasStoredValue;
         const selectOptions = SELECT_OPTIONS[item.key];
         let inputKind: OpsConfigFieldDefinition["inputKind"] = "text";
         if (BOOLEAN_KEYS.has(item.key)) {
@@ -87,6 +90,7 @@ export function buildOpsConfigFieldDefinitions(
           ...(selectOptions ? { options: selectOptions } : {}),
           requiresRestart: item.requiresRestart,
           present: item.present,
+          envLocked,
           ...(storedByKey.has(item.key) ? { storedMasked: storedByKey.get(item.key) } : {}),
         };
       }),

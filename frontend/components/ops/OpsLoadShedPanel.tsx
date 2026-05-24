@@ -15,6 +15,8 @@ import { useOpsCanWrite } from "@/components/ops/OpsSessionProvider";
 export function OpsLoadShedPanel() {
   const canWrite = useOpsCanWrite();
   const [mode, setMode] = useState<OpsLoadShedStatus["mode"] | null>(null);
+  const [targetMode, setTargetMode] = useState<OpsLoadShedStatus["mode"]>("reduced");
+  const [reason, setReason] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -54,22 +56,29 @@ export function OpsLoadShedPanel() {
           description="Applies immediately after OTP verification. Use emergency only when the platform is under severe pressure."
           buttonLabel="Apply mode change"
           onExecute={async ({ challengeId, otpCode }) => {
-            const form = document.getElementById("load-shed-form") as HTMLFormElement | null;
-            const formData = form ? new FormData(form) : null;
-            const nextMode = String(formData?.get("mode") ?? "reduced") as OpsLoadShedStatus["mode"];
-            const reason = String(formData?.get("reason") ?? "").trim();
+            const trimmedReason = reason.trim();
+            if (trimmedReason.length < 10) {
+              throw new Error("Reason must be at least 10 characters.");
+            }
             const result = await setOpsLoadShedMode({
-              mode: nextMode,
-              reason,
+              mode: targetMode,
+              reason: trimmedReason,
               challengeId,
               otpCode,
             });
             setMode(result.mode);
           }}
         >
-          <div id="load-shed-form" className="grid gap-4">
+          <div className="grid gap-4">
             <OpsField label="Target mode" htmlFor="load-shed-mode">
-              <OpsSelect id="load-shed-mode" name="mode" defaultValue="reduced">
+              <OpsSelect
+                id="load-shed-mode"
+                name="mode"
+                value={targetMode}
+                onChange={(event) => {
+                  setTargetMode(event.target.value as OpsLoadShedStatus["mode"]);
+                }}
+              >
                 <option value="normal">Normal — full traffic</option>
                 <option value="reduced">Reduced — defer non-critical work</option>
                 <option value="emergency">Emergency — strict protection</option>
@@ -82,6 +91,8 @@ export function OpsLoadShedPanel() {
                 minLength={10}
                 required
                 placeholder="Describe why this mode change is required…"
+                value={reason}
+                onChange={(event) => setReason(event.target.value)}
               />
             </OpsField>
           </div>

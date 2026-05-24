@@ -7,6 +7,8 @@ import { errorDetailsSchema } from '@common/errors/error-response.schema';
 import { Prisma, Role } from '@prisma/client';
 import { ERROR_CODES } from '@common/errors/error-codes';
 import { parseWebhookIpAllowlist, resolveSecurityClientIp } from '@common/security/webhook-allowlist';
+import { opsAuthGuard } from '@common/guards/ops-auth.guard';
+import { opsPermissionGuard } from '@common/guards/ops-permissions.guard';
 import { sendTechnicalFailureAlert } from '@modules/notifications/notification-failure-alert';
 
 function sanitizeSummary(value: unknown, depth = 0): unknown {
@@ -238,13 +240,22 @@ export async function registerObservabilityPlugin(fastify: FastifyInstance): Pro
 
       const allowlisted = Boolean(resolvedClientIp && allowlist.includes(resolvedClientIp));
       const tokenMatched = Boolean(opsToken && secureEquals(token, opsToken));
-      const hasValidAccess = isProduction ? (allowlisted && tokenMatched) : (allowlisted || tokenMatched);
-      if (!hasValidAccess) {
+      const hasTokenOrAllowlistAccess = isProduction ? (allowlisted && tokenMatched) : (allowlisted || tokenMatched);
+      if (hasTokenOrAllowlistAccess) {
+        return;
+      }
+
+      try {
+        // Allow authenticated ops UI users (cookie session) to view metrics from /ops route.
+        await opsAuthGuard(request, reply);
+        await opsPermissionGuard('ops:read')(request, reply);
+        return;
+      } catch {
         reply.code(403);
         return reply.send({
           success: false,
           error: {
-              code: ERROR_CODES.FORBIDDEN,
+            code: ERROR_CODES.FORBIDDEN,
             message: 'Metrics endpoint is restricted',
             statusCode: 403,
             details: {
@@ -253,8 +264,8 @@ export async function registerObservabilityPlugin(fastify: FastifyInstance): Pro
               retryable: false,
               retryAfterSeconds: null,
               remediation: isProduction
-                ? 'Use a valid x-ops-token from a trusted ops network.'
-                : 'Use an allowlisted source and valid x-ops-token.'
+                ? 'Use a valid x-ops-token from a trusted ops network or an authenticated ops session.'
+                : 'Use an allowlisted source, valid x-ops-token, or an authenticated ops session.'
             }
           }
         });

@@ -66,6 +66,7 @@ function OpsConfigFieldRow({
   const [showSecret, setShowSecret] = useState(false);
   const hasStoredValue = Boolean(field.storedMasked);
   const isDirty = entry.touched || entry.cleared;
+  const canEditField = canWrite && !field.envLocked;
 
   return (
     <div className="grid gap-3 rounded-lg border border-border/60 bg-muted/15 p-4 sm:grid-cols-[minmax(0,220px)_1fr_auto] sm:items-start sm:gap-4">
@@ -79,6 +80,7 @@ function OpsConfigFieldRow({
             <OpsBadge tone="danger">Missing</OpsBadge>
           )}
           {hasStoredValue ? <OpsBadge tone="info">Saved in DB</OpsBadge> : null}
+          {field.envLocked ? <OpsBadge tone="muted">Managed via env file</OpsBadge> : null}
           {field.requiresRestart ? <OpsBadge tone="muted">Restart required</OpsBadge> : null}
           {isDirty ? <OpsBadge tone="warning">Unsaved</OpsBadge> : null}
         </div>
@@ -89,7 +91,7 @@ function OpsConfigFieldRow({
           <OpsSelect
             id={`config-${field.key}`}
             value={entry.value}
-            disabled={!canWrite}
+            disabled={!canEditField}
             onChange={(event) => onChange(field.key, event.target.value)}
           >
             <option value="">— Select —</option>
@@ -100,7 +102,7 @@ function OpsConfigFieldRow({
           <OpsSelect
             id={`config-${field.key}`}
             value={entry.value}
-            disabled={!canWrite}
+            disabled={!canEditField}
             onChange={(event) => onChange(field.key, event.target.value)}
           >
             <option value="">— Select —</option>
@@ -116,7 +118,7 @@ function OpsConfigFieldRow({
               id={`config-${field.key}`}
               type={field.inputKind === "secret" && !showSecret ? "password" : "text"}
               value={entry.value}
-              disabled={!canWrite}
+              disabled={!canEditField}
               placeholder={
                 entry.cleared
                   ? "Will remove stored value on save"
@@ -142,6 +144,12 @@ function OpsConfigFieldRow({
             ) : null}
           </div>
         )}
+        {field.envLocked ? (
+          <p className="text-xs text-muted-foreground">
+            This key is currently sourced from runtime environment. Update it in the deployment
+            env file and restart services.
+          </p>
+        ) : null}
         {field.hint ? <p className="text-xs text-muted-foreground">{field.hint}</p> : null}
       </div>
 
@@ -150,7 +158,7 @@ function OpsConfigFieldRow({
           type="button"
           variant="outline"
           size="sm"
-          disabled={!canWrite || (!entry.value && !hasStoredValue && !entry.cleared)}
+          disabled={!canEditField || (!entry.value && !hasStoredValue && !entry.cleared)}
           onClick={() => onClear(field.key)}
           className="gap-1"
         >
@@ -266,8 +274,7 @@ export function OpsConfigEditor({ overview, stored, onConfigSaved }: OpsConfigEd
     }
   }
 
-  async function handleSave(event: React.FormEvent) {
-    event.preventDefault();
+  async function executeSave() {
     if (!canWrite) {
       return;
     }
@@ -319,7 +326,7 @@ export function OpsConfigEditor({ overview, stored, onConfigSaved }: OpsConfigEd
       if (err instanceof ApiError && err.code === "ops_audit_chain_lock_timeout") {
         setError(getApiErrorMessageWithHint(err));
         window.setTimeout(() => {
-          void handleSave(event);
+          void executeSave();
         }, 1500);
         return;
       }
@@ -327,6 +334,11 @@ export function OpsConfigEditor({ overview, stored, onConfigSaved }: OpsConfigEd
     } finally {
       setIsLoading(false);
     }
+  }
+
+  async function handleSave(event: React.FormEvent) {
+    event.preventDefault();
+    await executeSave();
   }
 
   if (!canWrite) {

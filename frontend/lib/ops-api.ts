@@ -4,6 +4,7 @@
  */
 import { ApiError } from "@/lib/api";
 import { assertOpsUiAccessFromServerAction } from "@/lib/ops-ui-auth";
+import { headers } from "next/headers";
 
 const OPS_BASE_URL =
   process.env.INTERNAL_API_BASE_URL ??
@@ -22,12 +23,25 @@ export async function getOpsMetricsSnapshot(): Promise<string> {
     await assertOpsUiAccessFromServerAction();
   }
 
+  const requestHeaders = await headers();
+  const forwardedCookie = requestHeaders.get("cookie");
+  const forwardedAuthorization = requestHeaders.get("authorization");
   const metricsToken = process.env.OPS_METRICS_TOKEN;
   const url = `${OPS_BASE_URL.replace(/\/$/, "")}/ops/metrics`;
+  const outboundHeaders: Record<string, string> = {};
+  if (metricsToken) {
+    outboundHeaders["x-ops-token"] = metricsToken;
+  }
+  if (forwardedCookie) {
+    outboundHeaders.cookie = forwardedCookie;
+  }
+  if (forwardedAuthorization) {
+    outboundHeaders.authorization = forwardedAuthorization;
+  }
   const response = await fetch(url, {
     method: "GET",
     cache: "no-store",
-    headers: metricsToken ? { "x-ops-token": metricsToken } : undefined,
+    headers: Object.keys(outboundHeaders).length > 0 ? outboundHeaders : undefined,
   });
 
   if (!response.ok) {

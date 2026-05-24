@@ -76,8 +76,7 @@ export function OpsCriticalOtpForm({
     }
   }
 
-  async function handleSubmit(event: React.FormEvent) {
-    event.preventDefault();
+  async function executeAction() {
     if (!challengeId || otpCode.trim().length !== 6) {
       setError("Request an OTP and enter the 6-digit code.");
       return;
@@ -98,7 +97,7 @@ export function OpsCriticalOtpForm({
       if (err instanceof ApiError && err.code === "ops_audit_chain_lock_timeout") {
         setError(getApiErrorMessageWithHint(err));
         window.setTimeout(() => {
-          void handleSubmit(event);
+          void executeAction();
         }, 1500);
         return;
       }
@@ -106,6 +105,11 @@ export function OpsCriticalOtpForm({
     } finally {
       setIsLoading(false);
     }
+  }
+
+  async function handleSubmit(event: React.FormEvent) {
+    event.preventDefault();
+    await executeAction();
   }
 
   return (

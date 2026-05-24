@@ -331,16 +331,45 @@ function getOpsApiBase(): string {
 export async function fetchOpsReadinessStatus(): Promise<ReadinessStatus> {
   const url = `${getOpsApiBase()}/health/ready`;
   const response = await fetch(url, { cache: "no-store", credentials: "include" });
-  const body: unknown = await response.json().catch(() => ({}));
+  const rawBody = await response.text();
+  let body: unknown = {};
+  if (rawBody) {
+    try {
+      body = JSON.parse(rawBody);
+    } catch {
+      body = {};
+    }
+  }
 
   if (
     typeof body === "object" &&
     body !== null &&
     "data" in body &&
     typeof (body as { data: unknown }).data === "object" &&
-    (body as { data: { status?: string } }).data?.status
+    (body as { data: { status?: string; runtimeConfigMissingKeys?: unknown } }).data
   ) {
-    return (body as { data: ReadinessStatus }).data;
+    const envelopeData = (body as { data: ReadinessStatus }).data;
+    if (typeof envelopeData.status === "string") {
+      return envelopeData;
+    }
+    if (Array.isArray((envelopeData as { runtimeConfigMissingKeys?: unknown }).runtimeConfigMissingKeys)) {
+      return {
+        status: "not_ready",
+        database: "disconnected",
+        redis: "disconnected",
+        degradationMode: "runtime_config_missing",
+        runtimeConfigMissingKeys: (envelopeData as { runtimeConfigMissingKeys: string[] })
+          .runtimeConfigMissingKeys,
+        queues: {
+          waiting: 0,
+          active: 0,
+          oldestWaitingAgeSeconds: 0,
+          workerFreshness: "unknown",
+        },
+        timestamp: new Date().toISOString(),
+        version: "unknown",
+      };
+    }
   }
 
   if (
