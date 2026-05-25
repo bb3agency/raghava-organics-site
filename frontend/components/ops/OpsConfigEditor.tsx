@@ -44,7 +44,14 @@ type DraftEntry = {
 function buildInitialDraft(fields: OpsConfigFieldDefinition[]): Record<string, DraftEntry> {
   const draft: Record<string, DraftEntry> = {};
   for (const field of fields) {
-    draft[field.key] = { value: "", touched: false, cleared: false };
+    // Prefill non-secret keys with their currently stored value so the user
+    // can see the saved selection (e.g. SHIPPING_PROVIDER=shiprocket) without
+    // having to retype it. Secrets remain blank — the masked value is shown
+    // separately via the "Saved in DB" badge and placeholder text.
+    // `touched: false` keeps the field out of the dirty diff until the user
+    // actually changes it, so re-saving is a true no-op.
+    const prefill = field.storedPlaintext ?? "";
+    draft[field.key] = { value: prefill, touched: false, cleared: false };
   }
   return draft;
 }
@@ -75,12 +82,15 @@ function OpsConfigFieldRow({
         <code className="text-xs font-medium text-foreground">{field.key}</code>
         <p className="text-xs text-muted-foreground">{field.label}</p>
         <div className="flex flex-wrap gap-1">
-          {field.present ? (
-            <OpsBadge tone="success">Runtime present</OpsBadge>
+          {field.present && hasStoredValue ? (
+            <OpsBadge tone="success">Runtime present (DB overlay)</OpsBadge>
+          ) : field.present ? (
+            <OpsBadge tone="success">Runtime present (env file)</OpsBadge>
+          ) : hasStoredValue ? (
+            <OpsBadge tone="warning">Saved — restart pending</OpsBadge>
           ) : (
             <OpsBadge tone="danger">Missing</OpsBadge>
           )}
-          {hasStoredValue ? <OpsBadge tone="info">Saved in DB</OpsBadge> : null}
           {field.envLocked ? <OpsBadge tone="muted">Managed via env file</OpsBadge> : null}
           {field.requiresRestart ? <OpsBadge tone="muted">Restart required</OpsBadge> : null}
           {isDirty ? <OpsBadge tone="warning">Unsaved</OpsBadge> : null}
@@ -128,7 +138,7 @@ function OpsConfigFieldRow({
               placeholder={
                 entry.cleared
                   ? "Will remove stored value on save"
-                  : hasStoredValue
+                  : field.inputKind === "secret" && hasStoredValue
                     ? `Stored: ${field.storedMasked} — enter new value to replace`
                     : "Enter value"
               }
@@ -179,6 +189,7 @@ export function OpsConfigEditor({ overview, stored, onConfigSaved }: OpsConfigEd
   const sections = useMemo(() => groupOpsConfigFieldsByDomain(fields), [fields]);
 
   const [draft, setDraft] = useState<Record<string, DraftEntry>>(() => buildInitialDraft(fields));
+  const [trackedFields, setTrackedFields] = useState(fields);
   const [challengeId, setChallengeId] = useState("");
   const [expiresAt, setExpiresAt] = useState<string | null>(null);
   const [otpCode, setOtpCode] = useState("");
@@ -187,9 +198,18 @@ export function OpsConfigEditor({ overview, stored, onConfigSaved }: OpsConfigEd
   const [message, setMessage] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
-  useEffect(() => {
+  // Derived-state-during-render pattern (React docs: "Storing information
+  // from previous renders"): when the parent passes a fresh `fields` array
+  // — e.g. after a successful save triggers a refetch of overview + stored
+  // config — reset the draft to the new prefills so the editor reflects the
+  // newly saved values and clears any leftover unsaved edits. Doing this in
+  // a useEffect would trigger react-hooks/set-state-in-effect and cause a
+  // cascading render. Setting state directly during render is the
+  // React-recommended replacement.
+  if (fields !== trackedFields) {
+    setTrackedFields(fields);
     setDraft(buildInitialDraft(fields));
-  }, [fields]);
+  }
 
   useEffect(() => {
     if (!expiresAt) {

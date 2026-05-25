@@ -71,6 +71,13 @@ export interface OpsStoredConfig {
     domain: "core" | "payments" | "shipping" | "notifications" | "opsSecurity";
     key: string;
     maskedValue: string;
+    /**
+     * Present only for non-secret keys (provider selectors, base URLs,
+     * pincodes, allowlist CIDRs, boolean flags, public key IDs, sender
+     * addresses, login emails) — see backend `isOpsConfigSecretKey`. Real
+     * secrets are never returned in plaintext; only `maskedValue` is set.
+     */
+    plaintextValue?: string;
     keyVersion: number;
     requiresRestart: boolean;
     updatedAt: string;

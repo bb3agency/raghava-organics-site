@@ -10,8 +10,26 @@ export interface OpsConfigFieldDefinition {
   inputKind: "text" | "secret" | "boolean" | "select";
   options?: Array<{ value: string; label: string }>;
   requiresRestart: boolean;
+  /** Runtime value exists in `process.env` (sourced from env file *or* DB overlay). */
   present: boolean;
+  /** Masked representation of the DB-stored value, shown for both secret + non-secret keys when set. */
   storedMasked?: string;
+  /**
+   * Plaintext DB-stored value — populated only for non-secret keys
+   * (provider selectors, base URLs, pincodes, allowlist CIDRs, boolean
+   * flags, login emails, public key IDs). Used to prefill the form field
+   * so the saved value is visible and editable without retyping. Real
+   * secrets only carry `storedMasked` and never reach the UI as plaintext.
+   */
+  storedPlaintext?: string;
+  /**
+   * True only when the runtime value is sourced from the deployment env
+   * file (i.e. `present && !storedMasked`). When the value comes from a
+   * DB-overlay row, the field stays editable — otherwise once a key is
+   * saved via Ops UI and the API restarts, the editor would permanently
+   * lock it because `applyOpsConfigRuntimeOverlay` writes DB-stored
+   * values into `process.env` and makes them look env-locked.
+   */
   envLocked: boolean;
 }
 
@@ -61,13 +79,20 @@ export function buildOpsConfigFieldDefinitions(
   overview: OpsConfigOverview,
   stored: OpsStoredConfig,
 ): OpsConfigFieldDefinition[] {
-  const storedByKey = new Map(stored.items.map((item) => [item.key, item.maskedValue]));
+  const storedByKey = new Map(stored.items.map((item) => [item.key, item] as const));
 
   return overview.domains.flatMap((group) =>
     group.items
       .filter((item) => item.mutableViaOps && item.runtimeSource !== "env-bootstrap")
       .map((item) => {
-        const envLocked = item.present;
+        const storedItem = storedByKey.get(item.key);
+        // `envLocked` is true ONLY when the runtime value originated from
+        // the deployment env file. If a DB-overlay row exists, the field
+        // is editable even when `present === true`, because
+        // `applyOpsConfigRuntimeOverlay` writes the saved value into
+        // `process.env` and would otherwise make every DB-saved key look
+        // permanently env-locked after the first API restart.
+        const envLocked = item.present && !storedItem;
         const selectOptions = SELECT_OPTIONS[item.key];
         let inputKind: OpsConfigFieldDefinition["inputKind"] = "text";
         if (BOOLEAN_KEYS.has(item.key)) {
@@ -88,7 +113,10 @@ export function buildOpsConfigFieldDefinitions(
           requiresRestart: item.requiresRestart,
           present: item.present,
           envLocked,
-          ...(storedByKey.has(item.key) ? { storedMasked: storedByKey.get(item.key) } : {}),
+          ...(storedItem ? { storedMasked: storedItem.maskedValue } : {}),
+          ...(storedItem?.plaintextValue !== undefined
+            ? { storedPlaintext: storedItem.plaintextValue }
+            : {}),
         };
       }),
   );
