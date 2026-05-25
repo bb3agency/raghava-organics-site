@@ -89,6 +89,16 @@ export function isConflictErrorCode(code: string): boolean {
 export function getApiErrorMessageWithHint(error: unknown): string {
   const message = getApiErrorMessage(error);
   if (error instanceof ApiError) {
+    const hintKey =
+      typeof error.details === "object" && error.details !== null
+        ? (error.details as { hintKey?: unknown }).hintKey
+        : undefined;
+    if (hintKey === "ops_restart_enqueue_failed") {
+      return "Unable to schedule restart because queue/Redis is unavailable. Check backend, workers, and Redis health, then retry.";
+    }
+    if (hintKey === "ops_restart_load_shed_set_failed") {
+      return "Unable to schedule restart because load-shed state could not be updated. Check Redis health and retry.";
+    }
     if (error.code === "CONFIG_NOT_READY") {
       const fields = error.details?.fields ?? [];
       const missingKeys = fields
