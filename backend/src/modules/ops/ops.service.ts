@@ -939,6 +939,29 @@ export class OpsService {
     if (input.expectedAction && challenge.action !== input.expectedAction) {
       throw new AppError(ERROR_CODES.FORBIDDEN, 'OTP challenge action mismatch', 403);
     }
+    const incomingHash = hashOpaqueToken(input.code.trim());
+    // Idempotent retry path: if OTP was already VERIFIED by an earlier request
+    // (for example, verification succeeded but a downstream step failed), allow
+    // one-click retries with the same still-unexpired code instead of forcing a
+    // fresh OTP request. This is safe because the user must still provide the
+    // same correct code hash and have a valid ops session.
+    if (challenge.status === 'VERIFIED') {
+      if (challenge.expiresAt.getTime() >= Date.now() && incomingHash === challenge.codeHash) {
+        return { verified: true };
+      }
+      throw new AppError(
+        ERROR_CODES.CONFLICT,
+        `OTP challenge is not pending (current status: ${challenge.status}). Request a fresh OTP and retry.`,
+        409,
+        {
+          kind: 'business_rule',
+          hintKey: 'ops_otp_challenge_not_pending',
+          retryable: false,
+          remediation: 'Click "Send OTP to email" to request a new code, then retry the action.',
+          currentStatus: challenge.status
+        }
+      );
+    }
     if (challenge.status !== 'PENDING') {
       throw new AppError(
         ERROR_CODES.CONFLICT,
@@ -962,7 +985,6 @@ export class OpsService {
       throw new AppError(ERROR_CODES.TOKEN_EXPIRED, 'OTP challenge expired', 401);
     }
 
-    const incomingHash = hashOpaqueToken(input.code.trim());
     if (incomingHash !== challenge.codeHash) {
       const attempts = challenge.failedAttempts + 1;
       // Atomic CAS: only update if still PENDING (prevents races with concurrent expiry).

@@ -105,7 +105,8 @@ Requests with any other `action` string return `400 VALIDATION_ERROR`. On commit
 - **Delivery:** Email via Resend (async, best-effort)
 - **Storage:** SHA256 hash in `OpsOtpChallenge.codeHash`
 - **Lockout:** After max failures, challenge status becomes `FAILED`, must request new
-- **Single use:** Challenge moves to `VERIFIED` on successful verify; each mutation needs a fresh `otp/request`
+- **Single-use by default:** Challenge moves to `VERIFIED` on successful verify.
+- **Idempotent retry exception (critical reliability hardening):** If a downstream step fails *after* OTP verification (for example queue enqueue failure during `system-restart`), `verifyEmailOtp()` accepts a retry using the same `challengeId` + same OTP code while the challenge is still within TTL and hash-matches. This prevents "first click fails with transient 500, second click fails with OTP not pending" loops.
 
 ### 2.3 Permission Model (2 Permissions Only)
 
@@ -755,7 +756,7 @@ Common error responses:
 - `401 UNAUTHORISED`: missing/invalid ops auth or MFA
 - `403 FORBIDDEN`: permission missing or self-deactivation attempted
 - `404 NOT_FOUND`: resource/user missing
-- `409 CONFLICT`: invite/OTP already consumed, expired, or state mismatch
+- `409 CONFLICT`: invite/OTP state mismatch (for OTP, usually stale/terminal challenge state)
 
 UI should surface actionable remediation from `error.details.remediation` when present.
 

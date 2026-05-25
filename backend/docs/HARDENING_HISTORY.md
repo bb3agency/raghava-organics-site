@@ -4,6 +4,39 @@ This document preserves detailed hardening history for engineering traceability.
 
 ## Recent hardening changes
 
+**Ops restart OTP retry stability + scheduleRestart structured failure envelope — May 2026:**
+
+Ops users were still seeing two confusing states on `/ops/system`:
+
+1. `500 INTERNAL_ERROR` generic banner (`"Something went wrong. Please try again. You can safely retry after a short pause."`) when restart scheduling failed after OTP verification.
+2. On the next click with the same OTP challenge, `409 CONFLICT` (`"OTP challenge is not pending"`), because the first attempt had already moved the challenge from `PENDING` to `VERIFIED`.
+
+This made operators feel stuck: first attempt failed for a transient backend reason, second attempt failed because OTP was considered consumed.
+
+Implemented hardening in `backend/src/modules/ops/ops.service.ts`:
+
+- `verifyEmailOtp()` now supports **idempotent retry** for already-`VERIFIED` challenges when:
+  - challenge is still unexpired, and
+  - submitted OTP hash matches the original challenge hash.
+- This allows immediate retry of the same critical action after a transient downstream error (for example queue enqueue failure), without forcing a brand-new OTP request every time.
+- Non-retryable terminal states still return structured conflict errors with explicit hint keys:
+  - `ops_otp_challenge_not_pending`
+  - `ops_otp_challenge_consumed_concurrently`
+
+`scheduleRestart()` was also hardened end-to-end:
+
+- Missing queue guard with structured `AppError` (`ops_restart_queue_unavailable`).
+- Load-shed set failure handling (`ops_restart_load_shed_set_failed`).
+- Audit write failure handling (`ops_restart_audit_failed`) with load-shed rollback.
+- Queue enqueue failure handling (`ops_restart_enqueue_failed`) with load-shed rollback.
+- Post-enqueue audit write becomes non-fatal (log + alert only; restart still proceeds).
+- All failure paths now log root cause via `fastify.log.error(...)` for actionable `docker compose logs backend` diagnostics.
+
+Tests updated in `backend/src/modules/ops/ops.service.test.ts`:
+
+- Enqueue failure now asserts structured `AppError` (`INTERNAL_ERROR`, `503`, `hintKey=ops_restart_enqueue_failed`) and verifies load-shed rollback to previous mode.
+- New test: `verifyEmailOtp allows idempotent retry for already VERIFIED challenge when code still matches`.
+
 **Ops OTP email diagnosability — actionable Resend error surfacing + on-VPS triage script — May 2026:**
 
 `backend/src/modules/notifications/adapters/resend.adapter.ts` previously discarded the response body on non-2xx and threw `Resend request failed: <status>` with no further detail. Resend, however, always returns a structured body explaining *why* (`{"statusCode":403,"name":"validation_error","message":"You can only send testing emails to your own email address … verify a domain at resend.com/domains"}`, `{"name":"missing_api_key","message":"API key not found"}`, etc.). With the body discarded, `NotificationLog.errorMessage` stored only the bare status code, leaving operators unable to tell config errors from outages without manual API replays.

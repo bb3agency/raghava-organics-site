@@ -4,6 +4,44 @@
 
 ---
 
+## [2026-05-25] Idempotent OTP verification retry for critical ops actions + structured restart scheduling failures
+
+**Context:** Operators were blocked by a two-step failure loop on `POST /api/v1/ops/system/restart`:
+
+1. First submit could fail after OTP verification because of transient infra issues (Redis/BullMQ/Prisma), resulting in generic `INTERNAL_ERROR`.
+2. Retrying the same UI state immediately then failed with `409 CONFLICT` (`OTP challenge is not pending`) because OTP status was already moved to `VERIFIED` by the first attempt.
+
+This produced a bad operator experience under transient faults and encouraged repeated manual page refresh + OTP request churn.
+
+**Decision 1 — `verifyEmailOtp` supports idempotent retry for VERIFIED challenges:**  
+When challenge state is already `VERIFIED`, verification now succeeds if:
+- submitted OTP hash matches stored challenge hash, and
+- challenge TTL has not expired.
+
+All other non-pending states still return structured conflict with explicit hint keys (`ops_otp_challenge_not_pending`, `ops_otp_challenge_consumed_concurrently`) and remediation.
+
+**Decision 2 — `scheduleRestart` returns structured failure envelopes and performs load-shed rollback:**  
+`scheduleRestart` no longer throws raw queue/audit errors. It now emits `AppError(INTERNAL_ERROR, 503)` with specific `hintKey` values:
+- `ops_restart_queue_unavailable`
+- `ops_restart_load_shed_set_failed`
+- `ops_restart_audit_failed`
+- `ops_restart_enqueue_failed`
+
+On failures after switching load-shed to `emergency`, the previous mode is restored (best-effort) so the system does not stay degraded due to a failed restart schedule request.
+
+**Rationale:**
+- Converts ambiguous UI "something went wrong" into actionable backend contracts.
+- Prevents OTP-consumed dead-end after transient failures.
+- Preserves payment-safe restart semantics while improving operator recovery time.
+
+**Alternatives considered:**
+- Keep strict single-use OTP and force a fresh OTP request after every transient failure. Rejected — operationally noisy and fragile under incident conditions.
+- Auto-restart directly from API when queue fails. Rejected — bypasses payment-drain safeguards and weakens restart orchestration guarantees.
+
+**Affects:** `backend/src/modules/ops/ops.service.ts`, `backend/src/modules/ops/ops.service.test.ts`, `backend/docs/OPS_CONTROL_PLANE_GUIDE.md`, `backend/docs/HARDENING_HISTORY.md`.
+
+---
+
 ## [2026-05-25] `COMPOSE_FILE` + `COMPOSE_PROJECT_NAME` in VPS `.env` so bare `docker compose` always uses the prod overlay
 
 **Context:** `backend/docker-compose.yml` declares a containerised `postgres` service that publishes port `5432:5432` to the host — needed for local dev where there is no host PostgreSQL, harmful on the VPS where the native PostgreSQL already owns `5432`. The `docker-compose.prod.yml` overlay handles VPS reality by (a) dropping the `postgres` `depends_on` from `backend`/`workers` via `depends_on: !reset` and (b) hiding the `postgres` service behind a `compose-local-postgres-only` profile.

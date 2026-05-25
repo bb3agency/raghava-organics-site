@@ -278,6 +278,36 @@ describe('OpsService failcase coverage', () => {
     });
   });
 
+  it('verifyEmailOtp allows idempotent retry for already VERIFIED challenge when code still matches', async () => {
+    const { service, mocks } = createOpsServiceHarness();
+
+    const expectedCodeHash = crypto.createHash('sha256').update('654321').digest('hex');
+    mocks.opsOtpChallengeFindUnique.mockResolvedValue({
+      id: 'challenge_verified',
+      opsUserId: 'ops_1',
+      action: 'system-restart',
+      status: 'VERIFIED',
+      codeHash: expectedCodeHash,
+      expiresAt: new Date(Date.now() + 60_000),
+      failedAttempts: 0
+    });
+
+    await expect(
+      service.verifyEmailOtp({
+        opsUserId: 'ops_1',
+        challengeId: 'challenge_verified',
+        code: '654321',
+        expectedAction: 'system-restart',
+        requestIp: '127.0.0.1',
+        requestPath: '/api/v1/ops/system/restart',
+        method: 'POST'
+      })
+    ).resolves.toEqual({ verified: true });
+
+    // No status transition needed; we intentionally reuse the verified challenge.
+    expect(mocks.opsOtpChallengeUpdateMany).not.toHaveBeenCalled();
+  });
+
   it('saveConfigDraft upserts only runtime overlay keys from contract', async () => {
     const { service, mocks } = createOpsServiceHarness();
 
