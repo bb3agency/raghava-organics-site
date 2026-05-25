@@ -2130,33 +2130,140 @@ export class OpsService {
     const scheduledFor = new Date(Date.now() + delayMs).toISOString();
     const jobId = `ops-restart:${crypto.randomUUID()}`;
 
+    // Guard against a missing cart-cleanup queue (BullMQ plugin failed to
+    // register at boot but the process kept running).
+    const cartCleanupQueue = this.fastify.queues?.cartCleanup;
+    if (!cartCleanupQueue) {
+      this.fastify.log.error(
+        { opsUserId: input.opsUserId, jobId },
+        '[scheduleRestart] cart-cleanup queue is not available on fastify.queues'
+      );
+      throw new AppError(
+        ERROR_CODES.INTERNAL_ERROR,
+        'Restart queue is not available. The backend is missing the cart-cleanup BullMQ queue.',
+        503,
+        {
+          kind: 'transient',
+          hintKey: 'ops_restart_queue_unavailable',
+          retryable: true,
+          retryAfterSeconds: 5,
+          remediation: 'Restart backend container, verify BullMQ + Redis are healthy, then retry.'
+        }
+      );
+    }
+
+    // Snapshot the current load-shed mode so we can roll back if a downstream
+    // step (audit write, enqueue) fails after we flip to 'emergency'.
+    let previousModeRaw: string | null = null;
+    try {
+      const raw = await Promise.resolve(this.fastify.redis.get(LOAD_SHED_MODE_KEY));
+      previousModeRaw = typeof raw === 'string' ? raw : null;
+    } catch {
+      previousModeRaw = null;
+    }
+    const normalizedPrevious = previousModeRaw?.trim().toLowerCase();
+    const previousMode: LoadShedMode =
+      normalizedPrevious === 'reduced' || normalizedPrevious === 'emergency' ? normalizedPrevious : 'normal';
+
     // Set load-shed to emergency immediately so checkout mutations receive a
     // clean 503 ("Emergency degraded mode") rather than a connection-refused 502
     // during the Fastify drain window when the container restarts.
-    // The cart-cleanup worker resets this to 'normal' before publishing the
-    // restart signal, so both containers come back up in normal serving mode.
-    await setLoadShedModeViaRedis(this.fastify.redis, 'emergency');
+    try {
+      await setLoadShedModeViaRedis(this.fastify.redis, 'emergency');
+    } catch (loadShedErr) {
+      this.fastify.log.error(
+        { err: loadShedErr, opsUserId: input.opsUserId, jobId },
+        '[scheduleRestart] failed to set load-shed mode to emergency'
+      );
+      void sendTechnicalFailureAlert({
+        prisma: this.fastify.prisma,
+        template: 'ScheduledRestartLoadShed',
+        channel: 'UNKNOWN',
+        recipient: input.opsUserId,
+        errorMessage: loadShedErr instanceof Error ? loadShedErr.message : 'Unable to set load-shed mode to emergency',
+        failureStage: 'CORE_LOGIC',
+        domain: 'ops',
+        component: 'scheduleRestart',
+        jobId
+      });
+      throw new AppError(
+        ERROR_CODES.INTERNAL_ERROR,
+        'Unable to schedule restart right now because load-shed state could not be updated.',
+        503,
+        {
+          kind: 'transient',
+          hintKey: 'ops_restart_load_shed_set_failed',
+          retryable: true,
+          retryAfterSeconds: 2,
+          remediation:
+            'Check Redis connectivity (docker compose ps redis) and retry. If issue persists, restart backend/workers and verify /health.'
+        }
+      );
+    }
 
     // Audit intent BEFORE enqueue — if the queue call fails, the audit record still proves
     // the restart was requested. The cart-cleanup worker handles 'scheduled-process-restart'.
-    await this.appendAuditLog({
-      opsUserId: input.opsUserId,
-      actionType: 'CONTAINER_RESTART',
-      actionStatus: 'EXECUTED',
-      requestId: jobId,
-      requestIp: input.requestIp,
-      requestPath: input.requestPath,
-      method: input.method,
-      summary: { delayMinutes: input.delayMinutes, scheduledFor, jobId, stage: 'REQUESTED' }
-    });
+    try {
+      await this.appendAuditLog({
+        opsUserId: input.opsUserId,
+        actionType: 'CONTAINER_RESTART',
+        actionStatus: 'EXECUTED',
+        requestId: jobId,
+        requestIp: input.requestIp,
+        requestPath: input.requestPath,
+        method: input.method,
+        summary: { delayMinutes: input.delayMinutes, scheduledFor, jobId, stage: 'REQUESTED' }
+      });
+    } catch (auditErr) {
+      this.fastify.log.error(
+        { err: auditErr, opsUserId: input.opsUserId, jobId },
+        '[scheduleRestart] appendAuditLog (REQUESTED) failed'
+      );
+      try {
+        await setLoadShedModeViaRedis(this.fastify.redis, previousMode);
+      } catch (rollbackErr) {
+        this.fastify.log.error(
+          { err: rollbackErr, opsUserId: input.opsUserId, jobId, previousMode },
+          '[scheduleRestart] failed to roll back load-shed after audit failure'
+        );
+      }
+      if (auditErr instanceof AppError) {
+        throw auditErr;
+      }
+      throw new AppError(
+        ERROR_CODES.INTERNAL_ERROR,
+        `Unable to write restart audit record: ${auditErr instanceof Error ? auditErr.message : 'unknown error'}`,
+        503,
+        {
+          kind: 'transient',
+          hintKey: 'ops_restart_audit_failed',
+          retryable: true,
+          retryAfterSeconds: 2,
+          remediation:
+            'Check Postgres connectivity (docker compose ps postgres) and retry. Inspect backend logs for the underlying Prisma error.'
+        }
+      );
+    }
 
     try {
-      await this.fastify.queues.cartCleanup.add(
+      await cartCleanupQueue.add(
         'scheduled-process-restart',
         { requestedBy: input.opsUserId, scheduledFor },
         { jobId, delay: delayMs }
       );
     } catch (enqueueErr) {
+      this.fastify.log.error(
+        { err: enqueueErr, opsUserId: input.opsUserId, jobId },
+        '[scheduleRestart] cart-cleanup queue.add(scheduled-process-restart) failed'
+      );
+      try {
+        await setLoadShedModeViaRedis(this.fastify.redis, previousMode);
+      } catch (rollbackErr) {
+        this.fastify.log.error(
+          { err: rollbackErr, opsUserId: input.opsUserId, jobId, previousMode },
+          '[scheduleRestart] failed to roll back load-shed after enqueue failure'
+        );
+      }
       void sendTechnicalFailureAlert({
         prisma: this.fastify.prisma,
         template: 'ScheduledRestartEnqueue',
@@ -2170,19 +2277,50 @@ export class OpsService {
         jobName: 'scheduled-process-restart',
         jobId
       });
-      throw enqueueErr;
+      throw new AppError(
+        ERROR_CODES.INTERNAL_ERROR,
+        `Unable to schedule restart job: ${enqueueErr instanceof Error ? enqueueErr.message : 'queue service unavailable'}.`,
+        503,
+        {
+          kind: 'transient',
+          hintKey: 'ops_restart_enqueue_failed',
+          retryable: true,
+          retryAfterSeconds: 2,
+          remediation: 'Ensure Redis and workers are healthy (docker compose ps), then retry scheduling restart from Ops → System.'
+        }
+      );
     }
 
-    await this.appendAuditLog({
-      opsUserId: input.opsUserId,
-      actionType: 'CONTAINER_RESTART',
-      actionStatus: 'EXECUTED',
-      requestId: `${jobId}:enqueued`,
-      requestIp: input.requestIp,
-      requestPath: input.requestPath,
-      method: input.method,
-      summary: { delayMinutes: input.delayMinutes, scheduledFor, jobId, stage: 'ENQUEUED' }
-    });
+    try {
+      await this.appendAuditLog({
+        opsUserId: input.opsUserId,
+        actionType: 'CONTAINER_RESTART',
+        actionStatus: 'EXECUTED',
+        requestId: `${jobId}:enqueued`,
+        requestIp: input.requestIp,
+        requestPath: input.requestPath,
+        method: input.method,
+        summary: { delayMinutes: input.delayMinutes, scheduledFor, jobId, stage: 'ENQUEUED' }
+      });
+    } catch (auditErr) {
+      // Job is already enqueued — do NOT roll back. The worker will still
+      // execute the restart and the earlier REQUESTED audit row proves intent.
+      this.fastify.log.error(
+        { err: auditErr, opsUserId: input.opsUserId, jobId },
+        '[scheduleRestart] appendAuditLog (ENQUEUED) failed after successful enqueue — proceeding'
+      );
+      void sendTechnicalFailureAlert({
+        prisma: this.fastify.prisma,
+        template: 'ScheduledRestartEnqueue',
+        channel: 'UNKNOWN',
+        recipient: input.opsUserId,
+        errorMessage: auditErr instanceof Error ? auditErr.message : 'Unable to record ENQUEUED audit row',
+        failureStage: 'CORE_LOGIC',
+        domain: 'ops',
+        component: 'scheduleRestart',
+        jobId
+      });
+    }
 
     return { jobId, scheduledFor };
   }

@@ -100,6 +100,22 @@ function createOpsServiceHarness() {
       cartCleanup: {
         add: vi.fn(async () => undefined)
       }
+    },
+    log: {
+      error: vi.fn(),
+      warn: vi.fn(),
+      info: vi.fn(),
+      debug: vi.fn(),
+      trace: vi.fn(),
+      fatal: vi.fn(),
+      child: vi.fn(() => ({
+        error: vi.fn(),
+        warn: vi.fn(),
+        info: vi.fn(),
+        debug: vi.fn(),
+        trace: vi.fn(),
+        fatal: vi.fn()
+      }))
     }
   } as unknown as FastifyInstance;
 
@@ -700,7 +716,7 @@ describe('OpsService failcase coverage', () => {
     );
   });
 
-  it('scheduleRestart emits QUEUE_ENQUEUE alert and rethrows when cartCleanup.add() throws', async () => {
+  it('scheduleRestart wraps enqueue failure in structured AppError and rolls back load-shed', async () => {
     const { service, fastify, mocks } = createOpsServiceHarness();
     const cartCleanupAdd = (fastify as unknown as { queues: { cartCleanup: { add: ReturnType<typeof vi.fn> } } }).queues.cartCleanup.add;
     cartCleanupAdd.mockRejectedValueOnce(new Error('Redis ECONNREFUSED'));
@@ -714,6 +730,7 @@ describe('OpsService failcase coverage', () => {
       failedAttempts: 0
     });
     mocks.opsOtpChallengeUpdateMany.mockResolvedValueOnce({ count: 1 });
+    mocks.redisGet.mockResolvedValueOnce('normal');
 
     const alertSpy = vi.spyOn(alertModule, 'sendTechnicalFailureAlert').mockResolvedValue(undefined);
     afterEach(() => vi.restoreAllMocks());
@@ -728,8 +745,17 @@ describe('OpsService failcase coverage', () => {
         requestPath: '/api/v1/ops/system/restart',
         method: 'POST'
       })
-    ).rejects.toThrow('Redis ECONNREFUSED');
+    ).rejects.toMatchObject({
+      code: ERROR_CODES.INTERNAL_ERROR,
+      statusCode: 503,
+      details: expect.objectContaining({
+        hintKey: 'ops_restart_enqueue_failed',
+        retryable: true
+      })
+    });
 
+    expect(mocks.redisSet).toHaveBeenCalledWith(LOAD_SHED_MODE_KEY, 'emergency');
+    expect(mocks.redisSet).toHaveBeenCalledWith(LOAD_SHED_MODE_KEY, 'normal');
     expect(alertSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         failureStage: 'QUEUE_ENQUEUE',
