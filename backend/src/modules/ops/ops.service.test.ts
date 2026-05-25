@@ -731,7 +731,7 @@ describe('OpsService failcase coverage', () => {
       method: 'POST'
     });
 
-    expect(result.jobId).toMatch(/^ops-restart:/);
+    expect(result.jobId).toMatch(/^ops-restart-/);
     expect(result.scheduledFor).toBeTruthy();
     expect(cartCleanupAdd).toHaveBeenCalledWith(
       'scheduled-process-restart',

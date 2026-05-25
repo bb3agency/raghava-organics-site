@@ -760,6 +760,9 @@ Common error responses:
 
 UI should surface actionable remediation from `error.details.remediation` when present.
 
+Restart-specific note:
+- If `/ops/system/restart` returns `ops_restart_enqueue_failed` and server detail includes `CustomId cannot contain :`, the backend is running an old restart job-id format. Restart job IDs must avoid colon (`:`). Current contract uses `ops-restart-<uuid>`.
+
 ### 9.1 Storefront 502 after Ops config save / restart
 
 If the storefront starts returning `502 Bad Gateway` on `/api/v1/*` shortly after an Ops config save followed by an API/worker restart, the API container is almost always **crash-looping**, not the network. Most common cause:

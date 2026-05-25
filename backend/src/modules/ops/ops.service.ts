@@ -2150,7 +2150,8 @@ export class OpsService {
 
     const delayMs = Math.max(0, Math.floor(input.delayMinutes)) * 60_000;
     const scheduledFor = new Date(Date.now() + delayMs).toISOString();
-    const jobId = `ops-restart:${crypto.randomUUID()}`;
+    // BullMQ custom job ids must not contain ":".
+    const jobId = `ops-restart-${crypto.randomUUID()}`;
 
     // Guard against a missing cart-cleanup queue (BullMQ plugin failed to
     // register at boot but the process kept running).

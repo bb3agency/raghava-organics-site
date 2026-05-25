@@ -4,6 +4,21 @@ This document preserves detailed hardening history for engineering traceability.
 
 ## Recent hardening changes
 
+**Ops system restart enqueue fix — BullMQ CustomId cannot contain `:` — May 2026:**
+
+Production `/ops/system/restart` failed after OTP verification with:
+`Unable to schedule restart job CustomId cannot contain :` (`hint=ops_restart_enqueue_failed`).
+
+Root cause: `scheduleRestart()` used `jobId = ops-restart:<uuid>`. BullMQ rejects custom job IDs containing colon in this path.
+
+Fix:
+- `backend/src/modules/ops/ops.service.ts` now generates restart IDs as `ops-restart-<uuid>` (hyphen, no colon).
+- `backend/src/modules/ops/ops.service.test.ts` updated assertion from `^ops-restart:` to `^ops-restart-`.
+
+Validation:
+- Backend typecheck passes.
+- `ops.service.test.ts` passes (`30/30`).
+
 **Ops restart OTP retry stability + scheduleRestart structured failure envelope — May 2026:**
 
 Ops users were still seeing two confusing states on `/ops/system`:
