@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import { FastifyInstance, FastifyRequest } from 'fastify';
 import { AppError } from '@common/errors/app-error';
 import { ERROR_CODES } from '@common/errors/error-codes';
-import { setLoadShedMode, setLoadShedModeViaRedis } from '@common/reliability/load-shed.guard';
+import { LOAD_SHED_MODE_KEY, setLoadShedMode, setLoadShedModeViaRedis } from '@common/reliability/load-shed.guard';
 import { decryptOpsConfigValue, encryptOpsConfigValue, maskSecretValue, resolveOpsEncryptionKeyVersion } from '@common/security/ops-config-crypto';
 import { sendNotificationFailureAlert, sendTechnicalFailureAlert } from '@modules/notifications/notification-failure-alert';
 import {
@@ -940,7 +940,18 @@ export class OpsService {
       throw new AppError(ERROR_CODES.FORBIDDEN, 'OTP challenge action mismatch', 403);
     }
     if (challenge.status !== 'PENDING') {
-      throw new AppError(ERROR_CODES.CONFLICT, 'OTP challenge is not pending', 409);
+      throw new AppError(
+        ERROR_CODES.CONFLICT,
+        `OTP challenge is not pending (current status: ${challenge.status}). Request a fresh OTP and retry.`,
+        409,
+        {
+          kind: 'business_rule',
+          hintKey: 'ops_otp_challenge_not_pending',
+          retryable: false,
+          remediation: 'Click "Send OTP to email" to request a new code, then retry the action.',
+          currentStatus: challenge.status
+        }
+      );
     }
     if (challenge.expiresAt.getTime() < Date.now()) {
       // Atomic CAS: only mark expired if still pending (prevents races)
@@ -986,7 +997,17 @@ export class OpsService {
       data: { status: 'VERIFIED', verifiedAt: new Date() }
     });
     if (verifyResult.count === 0) {
-      throw new AppError(ERROR_CODES.CONFLICT, 'OTP challenge is no longer pending or was already processed', 409);
+      throw new AppError(
+        ERROR_CODES.CONFLICT,
+        'OTP challenge was concurrently consumed. Request a fresh OTP and retry.',
+        409,
+        {
+          kind: 'business_rule',
+          hintKey: 'ops_otp_challenge_consumed_concurrently',
+          retryable: false,
+          remediation: 'Click "Send OTP to email" to request a new code, then retry the action.'
+        }
+      );
     }
 
     await this.appendAuditLog({
