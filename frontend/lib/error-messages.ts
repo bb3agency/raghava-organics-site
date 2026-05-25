@@ -86,18 +86,40 @@ export function isConflictErrorCode(code: string): boolean {
   return CONFLICT_CODES.has(code) || code === "CONFLICT";
 }
 
+const GENERIC_BACKEND_MESSAGES = new Set([
+  "Internal server error",
+  "Request validation failed",
+  "Rate limit exceeded",
+  "",
+]);
+
+function readHintKey(error: ApiError): string | undefined {
+  if (
+    typeof error.details === "object" &&
+    error.details !== null &&
+    "hintKey" in (error.details as Record<string, unknown>)
+  ) {
+    const value = (error.details as { hintKey?: unknown }).hintKey;
+    return typeof value === "string" ? value : undefined;
+  }
+  return undefined;
+}
+
 export function getApiErrorMessageWithHint(error: unknown): string {
   const message = getApiErrorMessage(error);
   if (error instanceof ApiError) {
-    const hintKey =
-      typeof error.details === "object" && error.details !== null
-        ? (error.details as { hintKey?: unknown }).hintKey
-        : undefined;
+    const hintKey = readHintKey(error);
+    if (hintKey === "ops_restart_queue_unavailable") {
+      return "Restart queue is not available. Backend must be restarted manually (docker compose up -d backend workers) and BullMQ + Redis verified healthy before retrying.";
+    }
     if (hintKey === "ops_restart_enqueue_failed") {
-      return "Unable to schedule restart because queue/Redis is unavailable. Check backend, workers, and Redis health, then retry.";
+      return "Unable to schedule restart because the cart-cleanup queue rejected the job. Check workers and Redis health, then retry.";
     }
     if (hintKey === "ops_restart_load_shed_set_failed") {
       return "Unable to schedule restart because load-shed state could not be updated. Check Redis health and retry.";
+    }
+    if (hintKey === "ops_restart_audit_failed") {
+      return "Unable to schedule restart because the audit record could not be written. Check Postgres connectivity and retry.";
     }
     if (error.code === "CONFIG_NOT_READY") {
       const fields = error.details?.fields ?? [];
@@ -117,6 +139,30 @@ export function getApiErrorMessageWithHint(error: unknown): string {
     }
   }
   return message;
+}
+
+/**
+ * Returns a secondary diagnostic line for ops/admin operators with the actual
+ * backend `error.message` whenever it's specific enough to be useful. Returns
+ * `null` for generic backend messages (e.g. "Internal server error") so the UI
+ * doesn't render redundant noise. Operators are trusted, so it's safe to show
+ * AppError messages (they're crafted by us, not raw stack traces).
+ */
+export function getOpsErrorDetail(error: unknown): string | null {
+  if (!(error instanceof ApiError)) {
+    return null;
+  }
+  const trimmed = (error.message ?? "").trim();
+  if (!trimmed || GENERIC_BACKEND_MESSAGES.has(trimmed)) {
+    return null;
+  }
+  const hintKey = readHintKey(error);
+  const parts: string[] = [`Server: ${trimmed}`];
+  if (hintKey && hintKey !== "internal_error" && hintKey !== "request_failed") {
+    parts.push(`hint=${hintKey}`);
+  }
+  parts.push(`code=${error.code}`);
+  return parts.join(" · ");
 }
 
 export function isAuthFailureCode(code: string): boolean {

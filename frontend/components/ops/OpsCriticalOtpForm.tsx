@@ -11,7 +11,7 @@ import {
 } from "@/components/ops/ui/ops-ui";
 import { Button } from "@/components/ui/button";
 import { ApiError } from "@/lib/api";
-import { getApiErrorMessageWithHint } from "@/lib/error-messages";
+import { getApiErrorMessageWithHint, getOpsErrorDetail } from "@/lib/error-messages";
 import {
   requestOpsOtpChallenge,
   type OpsOtpActionType,
@@ -41,6 +41,7 @@ export function OpsCriticalOtpForm({
   const [otpCode, setOtpCode] = useState("");
   const [secondsLeft, setSecondsLeft] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [errorDetail, setErrorDetail] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
@@ -62,6 +63,7 @@ export function OpsCriticalOtpForm({
 
   async function handleRequestOtp() {
     setError(null);
+    setErrorDetail(null);
     setMessage(null);
     setIsLoading(true);
     try {
@@ -71,6 +73,7 @@ export function OpsCriticalOtpForm({
       setMessage("A 6-digit code was sent to your ops email.");
     } catch (err) {
       setError(getApiErrorMessageWithHint(err));
+      setErrorDetail(getOpsErrorDetail(err));
     } finally {
       setIsLoading(false);
     }
@@ -79,14 +82,17 @@ export function OpsCriticalOtpForm({
   async function executeAction() {
     if (!challengeId || otpCode.trim().length !== 6) {
       setError("Request an OTP and enter the 6-digit code.");
+      setErrorDetail(null);
       return;
     }
     if (secondsLeft <= 0) {
       setError("OTP expired. Request a new code.");
+      setErrorDetail(null);
       return;
     }
 
     setError(null);
+    setErrorDetail(null);
     setMessage(null);
     setIsLoading(true);
     try {
@@ -96,12 +102,14 @@ export function OpsCriticalOtpForm({
     } catch (err) {
       if (err instanceof ApiError && err.code === "ops_audit_chain_lock_timeout") {
         setError(getApiErrorMessageWithHint(err));
+        setErrorDetail(getOpsErrorDetail(err));
         window.setTimeout(() => {
           void executeAction();
         }, 1500);
         return;
       }
       setError(getApiErrorMessageWithHint(err));
+      setErrorDetail(getOpsErrorDetail(err));
     } finally {
       setIsLoading(false);
     }
@@ -163,7 +171,16 @@ export function OpsCriticalOtpForm({
           {isLoading ? "Working…" : buttonLabel}
         </Button>
         {message ? <OpsAlert tone="success">{message}</OpsAlert> : null}
-        {error ? <OpsAlert tone="error">{error}</OpsAlert> : null}
+        {error ? (
+          <OpsAlert tone="error">
+            <div className="grid gap-1">
+              <span>{error}</span>
+              {errorDetail ? (
+                <span className="font-mono text-xs text-destructive/80">{errorDetail}</span>
+              ) : null}
+            </div>
+          </OpsAlert>
+        ) : null}
       </form>
     </OpsCard>
   );
