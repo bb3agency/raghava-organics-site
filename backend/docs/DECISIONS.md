@@ -4,6 +4,49 @@
 
 ---
 
+## [2026-05-25] System restart drains BullMQ queues with explicit pause + active-count poll + resume, in addition to PENDING_PAYMENT drain
+
+**Context:** Until this change, the `scheduled-process-restart` worker drained only `Order.status='PENDING_PAYMENT'` orders before publishing the restart pub/sub signal. Other BullMQ queues (`notifications`, `shipping`, `refunds`, `inventory-alerts`, `analytics`, `cart-cleanup`, `reconciliation`, `outbox-dispatch`) were left to natural `Worker.close()` drain on `process.exit(0)`. While at-least-once semantics ensured no work was lost (BullMQ stalled-job detection re-queues interrupted handlers on the post-restart workers), this meant:
+
+1. In-flight handlers that were near completion got interrupted and restarted from scratch on the new workers — wasted compute, longer effective downtime.
+2. The outbox-dispatch worker could be mid-fan-out when workers exit, leaving the operator unable to easily verify which downstream jobs survived the restart.
+3. Operator-facing telemetry to confirm "queues are drained" required reading worker logs across two container generations.
+
+**Decision — Add a two-phase queue pause + active-count drain + resume protocol to the `scheduled-process-restart` handler:**
+
+1. Pause `outbox-dispatch` queue FIRST. This is the primary fan-out producer (the recurring `publish-pending` scheduler that claims rows from the `OutboxMessage` table and adds jobs to every downstream queue). Stopping it first halts the influx of new work.
+2. Wait a configurable grace period (default 1500 ms via `RESTART_QUEUE_PAUSE_GRACE_MS`) for any in-flight outbox-dispatch iteration to complete its fan-out.
+3. Pause every producer queue except `dead-letter`. The `dead-letter` queue stays active so failure alerts continue to flow during the drain.
+4. Poll `Queue.getActiveCount()` on every paused queue every 1 s, waiting for the sum to reach 0. Capped by `RESTART_QUEUE_DRAIN_TIMEOUT_MS` (default 60 s). On timeout, a `ProcessRestartQueueDrainTimeout` alert is sent and the restart proceeds — BullMQ stalled-job detection re-queues any interrupted handlers on the post-restart workers (at-least-once preserved).
+5. Run the existing PENDING_PAYMENT drain unchanged.
+6. Resume every paused queue BEFORE publishing the restart signal, so post-restart workers boot with queues in resumed state and immediately process the backlog accumulated during the pause window.
+7. Publish the restart signal and exit as before.
+
+The protocol is feature-flagged via `RESTART_PAUSE_AND_DRAIN_QUEUES_ENABLED` (default `true`) for emergency rollback to the legacy `PENDING_PAYMENT`-only behaviour without code revert.
+
+**Rationale:**
+- Allows in-flight queue handlers to complete naturally (within 60 s) rather than being interrupted and re-run on the new workers. Reduces effective downtime and avoids duplicate work for non-idempotent handlers.
+- Makes drain status explicitly observable via `Queue.getActiveCount()` rather than inferring from worker logs across container generations.
+- Preserves at-least-once semantics — `Queue.pause()` does not drop jobs, `Queue.add()` calls during the pause window land jobs in waiting state, outbox messages keep accumulating as `PENDING` in the DB.
+- Zero impact on storefront browsing: `Queue.pause()` is a queue-layer state in Redis that affects only worker consumption. HTTP serving and DB writes are completely unaffected.
+
+**Alternatives considered:**
+- Pause queues but skip the active-count poll, relying solely on stalled-detection retry. Rejected — defeats the point of the change (we want in-flight handlers to *finish*, not get retried).
+- Call `Queue.drain()` to remove waiting + delayed jobs before restart. Rejected — drops legitimate work, violates at-least-once contract.
+- Stop the outbox-dispatch scheduler permanently and rely on direct `Queue.add()` from API handlers. Rejected — out of scope, transactional outbox pattern is the right design.
+- Pause queues but skip the resume step and let new workers resume on boot. Rejected — requires changes to every worker's bootstrap code and creates a race window where the wrong worker resumes first.
+
+**Affects:**
+- `backend/queues/workers/cart-cleanup.worker.ts` — added Step 0 (pause + drain) and Step 2.5 (resume) inside the `scheduled-process-restart` handler. Injected `createQueueRegistry`, `queueDrainTimeoutMs`, `queuePauseGraceMs`, `pauseAndDrainQueuesEnabled` deps for testability.
+- `backend/queues/workers/cart-cleanup.worker.test.ts` — added 10 new test cases covering pause order, grace period, drain polling, drain timeout, resume-before-publish, queue close, single-pause-failure non-blocking, resume-failure terminal alert, feature flag disable, and registry-creation-failure fallback.
+- `backend/docs/HARDENING_HISTORY.md` and `backend/docs/OPS_CONTROL_PLANE_GUIDE.md` — operator documentation of the new protocol, environment variables, and failure modes.
+
+**Validation:**
+- Backend typecheck passes.
+- `backend npm run test:unit` → 650/650 tests pass across 135 files (28/28 in `cart-cleanup.worker.test.ts`).
+
+---
+
 ## [2026-05-25] Idempotent OTP verification retry for critical ops actions + structured restart scheduling failures
 
 **Context:** Operators were blocked by a two-step failure loop on `POST /api/v1/ops/system/restart`:

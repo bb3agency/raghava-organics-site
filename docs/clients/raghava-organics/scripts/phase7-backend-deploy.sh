@@ -60,6 +60,14 @@ for i in $(seq 1 30); do
     log "Readiness snapshot (expected may be not_ready until Phase 8 Ops config):"
     curl -sS "$READY_URL" || true
     log "Phase 7 backend health OK"
+
+    # Trim post-deploy cruft. Safe on live containers — only removes
+    # dangling images and BuildKit cache layers; running containers,
+    # in-use images, and named volumes are untouched.
+    log "Post-deploy cleanup: dangling images + BuildKit cache (keep 3GB)..."
+    docker image prune -f >/dev/null 2>&1 || true
+    docker buildx prune --force --keep-storage 3GB >/dev/null 2>&1 || true
+
     exit 0
   fi
   sleep 2

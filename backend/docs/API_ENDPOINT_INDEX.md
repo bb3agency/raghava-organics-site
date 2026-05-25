@@ -266,7 +266,7 @@ Ops endpoints are platform/developer controls. Do not expose write controls in n
 | GET | `/api/v1/ops/session` | Bootstrap ops user/session |
 | GET | `/api/v1/ops/config/overview` | Runtime config overview |
 | POST | `/api/v1/ops/config/validate` | Validate config draft (ops:read) |
-| GET | `/api/v1/ops/config/stored` | Masked stored DB config |
+| GET | `/api/v1/ops/config/stored` | DB-backed config rows. Per item: `{ domain, key, maskedValue, plaintextValue?, keyVersion, requiresRestart, updatedAt }`. `plaintextValue` is present only for non-secret keys (`isOpsConfigSecretKey()` → `false`); real secrets stay `maskedValue`-only. (ops:read) |
 | POST | `/api/v1/ops/config/save` | Save encrypted DB config (OTP `config-save`; `domain?` optional; `null` deactivates key) |
 | POST | `/api/v1/ops/otp/request` | Request privileged-write OTP — body `{ action }` ∈ `config-save`, `load-shed-change`, `user-deactivate`, `system-restart`, `invite-revoke` |
 | POST | `/api/v1/ops/otp/verify` | Verify privileged-write OTP |
@@ -283,7 +283,7 @@ Ops endpoints are platform/developer controls. Do not expose write controls in n
 | GET | `/api/v1/ops/load-shed` | Current load-shed mode |
 | POST | `/api/v1/ops/load-shed` | Apply load-shed mode change immediately — requires OTP (`challengeId`, `otpCode`) |
 | GET | `/api/v1/ops/audit/logs` | Ops audit timeline (filterable by opsUserId) |
-| POST | `/api/v1/ops/system/restart` | Schedule process restart — requires OTP (`challengeId`, `otpCode`); `delayMinutes:0` = now, `>0` = deferred (survives logout) |
+| POST | `/api/v1/ops/system/restart` | Schedule process restart — requires OTP (`challengeId`, `otpCode`); `delayMinutes:0` = now, `>0` = deferred (survives logout). Worker runs 6-step drain: pause outboxDispatch → grace (`RESTART_QUEUE_PAUSE_GRACE_MS`) → pause all producer queues → poll `getActiveCount()` until 0 or `RESTART_QUEUE_DRAIN_TIMEOUT_MS` → drain PENDING_PAYMENT orders (`RESTART_PAYMENT_DRAIN_TIMEOUT_MS`) → resume queues → publish restart signal → `process.exit(0)`. Feature-flagged via `RESTART_PAUSE_AND_DRAIN_QUEUES_ENABLED` (default `true`). No queue job lost. |
 | GET | `/api/v1/ops/queues` | BullMQ Bull Board UI — queue dashboard (ops:read) |
 | GET | `/api/v1/ops/queues/dlq/summary` | DLQ summary card — totals and per-source-queue counts (ops:read) |
 

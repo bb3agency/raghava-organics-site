@@ -1,9 +1,10 @@
-import { Worker, type ConnectionOptions } from 'bullmq';
+import { Worker, type ConnectionOptions, type Queue } from 'bullmq';
 import { PrismaClient as RealPrismaClient } from '@prisma/client';
 import IORedis from 'ioredis';
 import { sendProcessRestartAlert, sendTechnicalFailureAlert } from '@modules/notifications/notification-failure-alert';
 import { publishRestartSignal, SYSTEM_RESTART_CHANNEL, type RestartPublisherLike } from '@common/restart/system-restart';
 import { LOAD_SHED_MODE_KEY } from '@common/reliability/load-shed.guard';
+import { createQueueRegistry as createRealQueueRegistry, type QueueRegistry } from '@queues/queue-registry';
 
 /**
  * Maximum time (ms) to wait for in-flight PENDING_PAYMENT orders to reach
@@ -16,6 +17,59 @@ const DEFAULT_PAYMENT_DRAIN_TIMEOUT_MS = 5 * 60 * 1000;
  * Interval (ms) between DB polls while waiting for payments to drain.
  */
 const PAYMENT_DRAIN_POLL_INTERVAL_MS = 5_000;
+
+/**
+ * Maximum time (ms) to wait for in-flight BullMQ queue jobs to settle
+ * (i.e. for `getActiveCount()` to reach 0 on every paused queue) before
+ * proceeding with the restart anyway.
+ * Default: 60 seconds. Override via RESTART_QUEUE_DRAIN_TIMEOUT_MS env var.
+ *
+ * This is independent of the PENDING_PAYMENT drain — payments are tracked at
+ * the DB level (`Order.status`) while queues are tracked at the Redis level
+ * (`Queue.getActiveCount`). Both drains run in sequence: queue drain first
+ * (to stop new outbound notification / shipping / fulfillment work), then
+ * payment drain (to ensure money-affecting writes settle), then restart.
+ */
+const DEFAULT_QUEUE_DRAIN_TIMEOUT_MS = 60 * 1000;
+
+/**
+ * Interval (ms) between active-count polls while waiting for queues to drain.
+ */
+const QUEUE_DRAIN_POLL_INTERVAL_MS = 1_000;
+
+/**
+ * Grace period (ms) after pausing the outbox dispatcher and before pausing
+ * downstream queues. Allows any in-flight outbox-dispatch handler iteration
+ * to finish fanning out the jobs it has already claimed from the DB. Without
+ * this, the dispatcher could be mid-loop when downstream queues are paused
+ * and the queue.add() calls would succeed (jobs land in waiting state) but
+ * could not be processed before the active-count drain check fires.
+ * Default: 1500 ms. Override via RESTART_QUEUE_PAUSE_GRACE_MS env var.
+ */
+const DEFAULT_QUEUE_PAUSE_GRACE_MS = 1500;
+
+/**
+ * Queue keys (from QueueRegistry) that participate in the pause+drain protocol.
+ * The dead-letter queue is intentionally excluded — it processes terminal
+ * failure logging and must keep accepting failure notifications during the
+ * drain window. The outbox-dispatch queue is paused FIRST (separately) to
+ * stop the influx of fan-out jobs into the other queues.
+ */
+const DRAINABLE_QUEUE_KEYS: ReadonlyArray<Exclude<keyof QueueRegistry, 'outboxDispatch' | 'deadLetter'>> = [
+  'orderProcessing',
+  'notifications',
+  'shipping',
+  'inventoryAlerts',
+  'refunds',
+  'analytics',
+  'cartCleanup',
+  'reconciliation'
+];
+
+function isQueuePauseAndDrainEnabled(): boolean {
+  const raw = (process.env['RESTART_PAUSE_AND_DRAIN_QUEUES_ENABLED'] ?? 'true').trim().toLowerCase();
+  return raw !== 'false' && raw !== '0' && raw !== 'no';
+}
 
 export type CartCleanupWorkerDeps = {
   PrismaClient?: typeof RealPrismaClient;
@@ -34,6 +88,26 @@ export type CartCleanupWorkerDeps = {
    * Payment drain timeout override in ms (for tests).
    */
   paymentDrainTimeoutMs?: number;
+  /**
+   * Injectable queue registry factory for tests. Receives the same `connection`
+   * the worker was created with; in production this returns real BullMQ Queue
+   * instances bound to Redis. Tests inject mocks that record pause/resume/
+   * getActiveCount/close calls.
+   */
+  createQueueRegistry?: (connection: ConnectionOptions) => QueueRegistry;
+  /**
+   * Queue drain timeout override in ms (for tests).
+   */
+  queueDrainTimeoutMs?: number;
+  /**
+   * Outbox dispatcher pause grace period override in ms (for tests).
+   */
+  queuePauseGraceMs?: number;
+  /**
+   * Feature flag override (for tests). When false, skips the queue pause+drain
+   * protocol entirely and falls back to the legacy PENDING_PAYMENT-only drain.
+   */
+  pauseAndDrainQueuesEnabled?: boolean;
 };
 
 export function createCartCleanupWorker(
@@ -49,6 +123,18 @@ export function createCartCleanupWorker(
     (process.env['RESTART_PAYMENT_DRAIN_TIMEOUT_MS']
       ? Number(process.env['RESTART_PAYMENT_DRAIN_TIMEOUT_MS'])
       : DEFAULT_PAYMENT_DRAIN_TIMEOUT_MS);
+  const queueDrainTimeoutMs =
+    deps?.queueDrainTimeoutMs ??
+    (process.env['RESTART_QUEUE_DRAIN_TIMEOUT_MS']
+      ? Number(process.env['RESTART_QUEUE_DRAIN_TIMEOUT_MS'])
+      : DEFAULT_QUEUE_DRAIN_TIMEOUT_MS);
+  const queuePauseGraceMs =
+    deps?.queuePauseGraceMs ??
+    (process.env['RESTART_QUEUE_PAUSE_GRACE_MS']
+      ? Number(process.env['RESTART_QUEUE_PAUSE_GRACE_MS'])
+      : DEFAULT_QUEUE_PAUSE_GRACE_MS);
+  const pauseAndDrainEnabled = deps?.pauseAndDrainQueuesEnabled ?? isQueuePauseAndDrainEnabled();
+  const createQueueRegistry = deps?.createQueueRegistry ?? createRealQueueRegistry;
 
   const deleteManyIfDelegateExists = async (delegateName: string, where: Record<string, unknown>) => {
     const delegate = (prisma as unknown as Record<string, unknown>)[delegateName] as
@@ -149,6 +235,134 @@ export function createCartCleanupWorker(
         const requestedBy = String(job.data?.requestedBy ?? 'unknown');
         const scheduledFor = String(job.data?.scheduledFor ?? new Date().toISOString());
 
+        // ── Step 0: Pause outbox first, then producer queues, then drain ───────
+        // Two-phase pause is required because the outbox-dispatch worker is the
+        // primary fan-out producer for every other queue (notifications, shipping,
+        // refunds, etc.). Pausing outbox first stops the influx; the grace period
+        // lets any in-flight outbox-dispatch handler complete the loop iteration
+        // it has already claimed from the DB (those queue.add() calls land jobs in
+        // waiting state on the soon-to-be-paused downstream queues, which is fine
+        // — they get picked up by the post-restart workers, no work lost).
+        //
+        // After downstream pause, we poll Queue.getActiveCount() on every paused
+        // queue until the sum reaches 0 (all in-flight handlers have completed)
+        // or the queue-drain timeout elapses. This is the BullMQ-side equivalent
+        // of the PENDING_PAYMENT DB drain that follows.
+        //
+        // No HTTP request is affected by these pauses — Queue.pause() only stops
+        // workers from picking new jobs. Queue.add() calls from API request
+        // handlers still succeed and land jobs in waiting state, which get
+        // processed by the post-restart workers. Storefront browsing, cart
+        // operations, and outbox writes (transactional DB inserts) are
+        // completely unaffected.
+        let registry: QueueRegistry | null = null;
+        if (pauseAndDrainEnabled) {
+          try {
+            registry = createQueueRegistry(connection);
+
+            // Pause outbox-dispatch first — stops the recurring publish-pending
+            // scheduler from claiming new DB rows. Outbox messages keep
+            // accumulating in the DB as PENDING (no work lost) and are dispatched
+            // by the new worker after restart.
+            await registry.outboxDispatch.pause();
+
+            // Grace period: lets any in-flight outbox-dispatch handler finish
+            // the iteration it has already claimed before we pause downstream
+            // queues. Without this, the downstream pause could land in the
+            // middle of a fan-out loop and leave handler-level state in a
+            // confusing place.
+            if (queuePauseGraceMs > 0) {
+              await sleepFn(queuePauseGraceMs);
+            }
+
+            // Pause every other producer queue except dead-letter (which keeps
+            // accepting failure alerts during the drain window).
+            await Promise.all(
+              DRAINABLE_QUEUE_KEYS.map(async (key) => {
+                try {
+                  await registry![key].pause();
+                } catch (pauseErr) {
+                  // Pause failure on a single queue must not block the restart —
+                  // the worker will be exiting in a moment anyway. Best-effort.
+                  await sendTechnicalFailureAlert({
+                    prisma,
+                    template: 'ProcessRestartQueuePauseFailed',
+                    channel: 'UNKNOWN',
+                    recipient: 'ops-restart',
+                    errorMessage: `Queue.pause() failed on ${key}: ${pauseErr instanceof Error ? pauseErr.message : String(pauseErr)}. Restart proceeding.`,
+                    failureStage: 'PROCESS_RESTART',
+                    domain: 'ops',
+                    component: 'scheduled-process-restart',
+                    jobId,
+                    terminalFailure: false
+                  });
+                }
+              })
+            );
+
+            // Poll active-count across every paused queue until sum reaches 0
+            // (all in-flight handlers completed) or the timeout elapses.
+            const queueDrainDeadline = Date.now() + queueDrainTimeoutMs;
+            const sampleActiveCounts = async (): Promise<Record<string, number>> => {
+              const entries = await Promise.all(
+                [...DRAINABLE_QUEUE_KEYS, 'outboxDispatch' as const].map(async (key) => {
+                  try {
+                    const q = registry![key as keyof QueueRegistry] as Queue;
+                    const count = await q.getActiveCount();
+                    return [key, count] as const;
+                  } catch {
+                    return [key, 0] as const;
+                  }
+                })
+              );
+              return Object.fromEntries(entries) as Record<string, number>;
+            };
+
+            let activeCounts = await sampleActiveCounts();
+            let activeTotal = Object.values(activeCounts).reduce((s, n) => s + n, 0);
+            while (activeTotal > 0 && Date.now() < queueDrainDeadline) {
+              await sleepFn(QUEUE_DRAIN_POLL_INTERVAL_MS);
+              activeCounts = await sampleActiveCounts();
+              activeTotal = Object.values(activeCounts).reduce((s, n) => s + n, 0);
+            }
+
+            if (activeTotal > 0) {
+              // Timeout — alert ops that some in-flight queue jobs did not
+              // complete. They will be stalled by BullMQ on the worker exit
+              // and retried by the post-restart workers (at-least-once
+              // semantics — no work lost, may produce duplicate processing
+              // for non-idempotent handlers).
+              await sendTechnicalFailureAlert({
+                prisma,
+                template: 'ProcessRestartQueueDrainTimeout',
+                channel: 'UNKNOWN',
+                recipient: 'ops-restart',
+                errorMessage: `Restart proceeding with ${activeTotal} active queue job(s) still in-flight after ${queueDrainTimeoutMs}ms drain timeout. Counts: ${JSON.stringify(activeCounts)}. Jobs will be stalled+retried by BullMQ on the post-restart workers.`,
+                failureStage: 'PROCESS_RESTART',
+                domain: 'ops',
+                component: 'scheduled-process-restart',
+                jobId,
+                terminalFailure: false
+              });
+            }
+          } catch (pauseDrainErr) {
+            // Any unexpected failure in the pause+drain protocol falls through
+            // to the legacy PENDING_PAYMENT drain + restart. Best-effort alert.
+            await sendTechnicalFailureAlert({
+              prisma,
+              template: 'ProcessRestartPauseDrainFailed',
+              channel: 'UNKNOWN',
+              recipient: 'ops-restart',
+              errorMessage: `Queue pause+drain protocol failed: ${pauseDrainErr instanceof Error ? pauseDrainErr.message : String(pauseDrainErr)}. Falling back to PENDING_PAYMENT drain + restart.`,
+              failureStage: 'PROCESS_RESTART',
+              domain: 'ops',
+              component: 'scheduled-process-restart',
+              jobId,
+              terminalFailure: false
+            });
+          }
+        }
+
         // ── Step 1: Payment-safe drain ──────────────────────────────────────────
         // Poll the DB until all orders in PENDING_PAYMENT reach a terminal state
         // (CONFIRMED, PAYMENT_FAILED, CANCELLED, etc.) or the timeout elapses.
@@ -183,7 +397,52 @@ export function createCartCleanupWorker(
           }
         }
 
-        // ── Step 2: Pre-exit alert ──────────────────────────────────────────────
+        // ── Step 2: Resume queues so post-restart workers immediately process backlog ──
+        // We resume BEFORE publishing the restart signal so the queue state in
+        // Redis is 'resumed' by the time the new worker containers boot. Any
+        // jobs added during the pause window are sitting in waiting state and
+        // get picked up on the very first poll after boot. The tiny race window
+        // between resume and process.exit (where the current worker process
+        // could theoretically pick up a job) is handled by BullMQ's stalled-job
+        // detection — if a handler is interrupted by exit, the job is
+        // automatically re-queued on the post-restart worker, preserving
+        // at-least-once semantics. No work lost.
+        if (registry) {
+          try {
+            await Promise.all(
+              [...DRAINABLE_QUEUE_KEYS, 'outboxDispatch' as const].map(async (key) => {
+                try {
+                  const q = registry![key as keyof QueueRegistry] as Queue;
+                  await q.resume();
+                } catch (resumeErr) {
+                  // Resume failure means the queue stays paused — the operator
+                  // must manually call queue.resume() via Bull Board or a
+                  // one-off script. Alert so they know to do that.
+                  await sendTechnicalFailureAlert({
+                    prisma,
+                    template: 'ProcessRestartQueueResumeFailed',
+                    channel: 'UNKNOWN',
+                    recipient: 'ops-restart',
+                    errorMessage: `Queue.resume() failed on ${key}: ${resumeErr instanceof Error ? resumeErr.message : String(resumeErr)}. Operator must manually resume the ${key} queue after restart, otherwise jobs will accumulate in waiting state.`,
+                    failureStage: 'PROCESS_RESTART',
+                    domain: 'ops',
+                    component: 'scheduled-process-restart',
+                    jobId,
+                    terminalFailure: true
+                  });
+                }
+              })
+            );
+          } finally {
+            // Close registry queues to release Redis connections before exit.
+            // Best-effort — process.exit(0) below will tear everything down anyway.
+            await Promise.allSettled(
+              Object.values(registry).map((q) => (q as Queue).close())
+            );
+          }
+        }
+
+        // ── Step 3: Pre-exit alert ──────────────────────────────────────────────
         // Notify ops/admin users that the restart is imminent. Best-effort.
         try {
           await sendProcessRestartAlert({ prisma, requestedBy, scheduledFor, jobId });
@@ -191,7 +450,7 @@ export function createCartCleanupWorker(
           // Non-fatal — alert failure must never block the restart.
         }
 
-        // ── Step 3: Publish restart signal ─────────────────────────────────────
+        // ── Step 4: Publish restart signal ─────────────────────────────────────
         // The API process and worker-index both subscribe to SYSTEM_RESTART_CHANNEL.
         // Publishing here triggers graceful shutdown in both processes simultaneously.
         const createPublisher = deps?.createPublisher ?? (() => {
@@ -229,7 +488,7 @@ export function createCartCleanupWorker(
           await publisher?.quit().catch(() => { /* best-effort */ });
         }
 
-        // ── Step 4: Exit worker process ────────────────────────────────────────
+        // ── Step 5: Exit worker process ────────────────────────────────────────
         // Docker restart: unless-stopped brings the worker container back.
         // The API process exits independently on receipt of the pub/sub message.
         process.exit(0);

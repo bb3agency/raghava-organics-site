@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ERROR_CODES } from '@common/errors/error-codes';
 import * as alertModule from '@modules/notifications/notification-failure-alert';
 import { LOAD_SHED_MODE_KEY } from '@common/reliability/load-shed.guard';
+import { encryptOpsConfigValue, maskSecretValue } from '@common/security/ops-config-crypto';
 import { OpsService } from './ops.service';
 
 // Helper to compute OTP hash the same way the service does
@@ -1021,6 +1022,182 @@ describe('OpsService failcase coverage', () => {
     expect(mocks.opsAuditLogCreate).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ actionType: 'LOAD_SHED_CHANGE' })
+      })
+    );
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// getStoredConfigSecrets — returns plaintextValue ONLY for non-secret keys
+// ─────────────────────────────────────────────────────────────────────────────
+describe('OpsService.getStoredConfigSecrets', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    process.env.OPS_DB_ENCRYPTION_KEY = 'test-ops-db-encryption-key';
+    process.env.OPS_DB_ENCRYPTION_KEY_VERSION = '1';
+  });
+
+  type ConfigSecretRow = {
+    domain: 'CORE' | 'PAYMENTS' | 'SHIPPING' | 'NOTIFICATIONS' | 'OPS_SECURITY';
+    secretKey: string;
+    encryptedValue: string;
+    keyVersion: number;
+    requiresRestart: boolean;
+    updatedAt: Date;
+  };
+
+  function makeRow(domain: ConfigSecretRow['domain'], key: string, plain: string): ConfigSecretRow {
+    return {
+      domain,
+      secretKey: key,
+      encryptedValue: encryptOpsConfigValue(plain),
+      keyVersion: 1,
+      requiresRestart: true,
+      updatedAt: new Date('2026-05-25T10:00:00.000Z')
+    };
+  }
+
+  // Helper that casts to satisfy the harness's `never[]`-inferred mock default
+  // — the harness intentionally defaults `opsConfigSecretFindMany` to
+  // `vi.fn(async () => [])`, which narrows the generic to `never[]`. These
+  // tests need to return real rows for assertions; the cast is bounded to
+  // test code and remains type-safe via the `ConfigSecretRow` shape.
+  function mockRows(mock: ReturnType<typeof vi.fn>, rows: ConfigSecretRow[]): void {
+    mock.mockResolvedValueOnce(rows as unknown as never);
+  }
+
+  it('returns plaintextValue for non-secret keys (provider selectors, URLs, integer thresholds)', async () => {
+    const { service, mocks } = createOpsServiceHarness();
+    mockRows(mocks.opsConfigSecretFindMany, [
+      makeRow('SHIPPING', 'SHIPPING_PROVIDER', 'shiprocket'),
+      makeRow('SHIPPING', 'SHIPROCKET_BASE_URL', 'https://apiv2.shiprocket.in/v1/external'),
+      makeRow('SHIPPING', 'SHIPROCKET_WEBHOOK_MAX_SKEW_SECONDS', '300'),
+      makeRow('SHIPPING', 'SHIPROCKET_PICKUP_PINCODE', '500001')
+    ]);
+
+    const items = await service.getStoredConfigSecrets('shipping');
+
+    expect(items).toHaveLength(4);
+    expect(items.find((i) => i.key === 'SHIPPING_PROVIDER')).toMatchObject({
+      key: 'SHIPPING_PROVIDER',
+      plaintextValue: 'shiprocket',
+      maskedValue: expect.any(String)
+    });
+    expect(items.find((i) => i.key === 'SHIPROCKET_BASE_URL')).toMatchObject({
+      plaintextValue: 'https://apiv2.shiprocket.in/v1/external'
+    });
+    expect(items.find((i) => i.key === 'SHIPROCKET_WEBHOOK_MAX_SKEW_SECONDS')).toMatchObject({
+      plaintextValue: '300'
+    });
+    expect(items.find((i) => i.key === 'SHIPROCKET_PICKUP_PINCODE')).toMatchObject({
+      plaintextValue: '500001'
+    });
+  });
+
+  it('does NOT return plaintextValue for secret keys (passwords, tokens, API keys)', async () => {
+    const { service, mocks } = createOpsServiceHarness();
+    const secretPassword = 'super-secret-password-do-not-leak';
+    const secretApiKey = 're_test_actual_api_key_value';
+    const secretToken = 'shiprocket-webhook-bearer-token';
+
+    mockRows(mocks.opsConfigSecretFindMany, [
+      makeRow('SHIPPING', 'SHIPROCKET_PASSWORD', secretPassword),
+      makeRow('NOTIFICATIONS', 'RESEND_API_KEY', secretApiKey),
+      makeRow('SHIPPING', 'SHIPROCKET_WEBHOOK_TOKEN', secretToken)
+    ]);
+
+    const items = await service.getStoredConfigSecrets();
+
+    const password = items.find((i) => i.key === 'SHIPROCKET_PASSWORD');
+    const apiKey = items.find((i) => i.key === 'RESEND_API_KEY');
+    const token = items.find((i) => i.key === 'SHIPROCKET_WEBHOOK_TOKEN');
+
+    // Secrets MUST be masked.
+    expect(password?.maskedValue).toBe(maskSecretValue(secretPassword));
+    expect(apiKey?.maskedValue).toBe(maskSecretValue(secretApiKey));
+    expect(token?.maskedValue).toBe(maskSecretValue(secretToken));
+
+    // Secrets MUST NOT carry plaintextValue.
+    expect(password).not.toHaveProperty('plaintextValue');
+    expect(apiKey).not.toHaveProperty('plaintextValue');
+    expect(token).not.toHaveProperty('plaintextValue');
+
+    // Belt-and-braces: the raw plaintext value MUST NOT appear anywhere in the
+    // serialised response (guards against accidental leakage via toJSON,
+    // toString, or stringification edge cases).
+    const serialised = JSON.stringify(items);
+    expect(serialised).not.toContain(secretPassword);
+    expect(serialised).not.toContain(secretApiKey);
+    expect(serialised).not.toContain(secretToken);
+  });
+
+  it('returns plaintextValue for the documented early-return non-secret keys (RAZORPAY_KEY_ID, RESEND_FROM, SHIPROCKET_EMAIL)', async () => {
+    const { service, mocks } = createOpsServiceHarness();
+    mockRows(mocks.opsConfigSecretFindMany, [
+      makeRow('PAYMENTS', 'RAZORPAY_KEY_ID', 'rzp_test_public_id_123'),
+      makeRow('NOTIFICATIONS', 'RESEND_FROM', 'noreply@store.example.com'),
+      makeRow('SHIPPING', 'SHIPROCKET_EMAIL', 'shipping-account@store.example.com')
+    ]);
+
+    const items = await service.getStoredConfigSecrets();
+
+    expect(items.find((i) => i.key === 'RAZORPAY_KEY_ID')).toMatchObject({
+      plaintextValue: 'rzp_test_public_id_123'
+    });
+    expect(items.find((i) => i.key === 'RESEND_FROM')).toMatchObject({
+      plaintextValue: 'noreply@store.example.com'
+    });
+    expect(items.find((i) => i.key === 'SHIPROCKET_EMAIL')).toMatchObject({
+      plaintextValue: 'shipping-account@store.example.com'
+    });
+  });
+
+  it('masks but does not leak plaintext for _SECRET / _APP_SECRET / _PASSWORD / _AUTH_KEY suffixes', async () => {
+    const { service, mocks } = createOpsServiceHarness();
+    mockRows(mocks.opsConfigSecretFindMany, [
+      makeRow('CORE', 'JWT_SECRET', 'jwt-signing-secret-32chars'),
+      makeRow('PAYMENTS', 'RAZORPAY_WEBHOOK_SECRET', 'razorpay-webhook-secret'),
+      makeRow('NOTIFICATIONS', 'META_WHATSAPP_APP_SECRET', 'whatsapp-app-secret'),
+      makeRow('NOTIFICATIONS', 'MSG91_AUTH_KEY', 'msg91-auth-key-12345')
+    ]);
+
+    const items = await service.getStoredConfigSecrets();
+
+    for (const item of items) {
+      expect(item).not.toHaveProperty('plaintextValue');
+      expect(item.maskedValue).not.toContain(item.key); // sanity check
+    }
+  });
+
+  it('correctly distinguishes _SECONDS suffix from _SECRET pattern (regression guard)', async () => {
+    const { service, mocks } = createOpsServiceHarness();
+    mockRows(mocks.opsConfigSecretFindMany, [
+      makeRow('SHIPPING', 'SHIPROCKET_WEBHOOK_MAX_SKEW_SECONDS', '300'),
+      makeRow('SHIPPING', 'DELHIVERY_WEBHOOK_MAX_SKEW_SECONDS', '180')
+    ]);
+
+    const items = await service.getStoredConfigSecrets();
+
+    // These end in _SECONDS — must NOT be confused with _SECRET and must
+    // return plaintextValue so the operator sees the actual numeric value
+    // in the Ops Config editor field.
+    expect(items.find((i) => i.key === 'SHIPROCKET_WEBHOOK_MAX_SKEW_SECONDS')).toMatchObject({
+      plaintextValue: '300'
+    });
+    expect(items.find((i) => i.key === 'DELHIVERY_WEBHOOK_MAX_SKEW_SECONDS')).toMatchObject({
+      plaintextValue: '180'
+    });
+  });
+
+  it('preserves domain filtering — domain parameter passed through to prisma query', async () => {
+    const { service, mocks } = createOpsServiceHarness();
+    mockRows(mocks.opsConfigSecretFindMany, []);
+
+    await service.getStoredConfigSecrets('payments');
+
+    expect(mocks.opsConfigSecretFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ domain: 'PAYMENTS' })
       })
     );
   });

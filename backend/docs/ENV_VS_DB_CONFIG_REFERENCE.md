@@ -193,6 +193,9 @@ These are runtime tuning values — safe to adjust without security concern.
 | `CART_RESERVATION_TTL_MINUTES` | How long a cart reservation holds stock | `15` |
 | `RECONCILIATION_AUTO_HEAL_ISSUES` | Issue types the reconciliation worker auto-resolves | *(empty)* |
 | `RESTART_PAYMENT_DRAIN_TIMEOUT_MS` | Max time (ms) the `scheduled-process-restart` BullMQ job waits for all `PENDING_PAYMENT` orders to reach a terminal state before proceeding with the restart. If the timeout elapses, a `ProcessRestartPaymentDrainTimeout` alert is sent and the restart proceeds anyway. **Workers process only** — not consumed by the API process. Set lower (e.g. `10000`) in staging/test environments. | `300000` (5 min) |
+| `RESTART_QUEUE_DRAIN_TIMEOUT_MS` | Max time (ms) the `scheduled-process-restart` BullMQ job waits for **all BullMQ queues** to reach `getActiveCount() === 0` after pausing `outboxDispatch` first, then all other producer queues. Timeout → `ProcessRestartQueueDrainTimeout` alert sent (with per-queue active counts); restart proceeds anyway because in-flight jobs that exceed the budget will retry from BullMQ's durable `attempts` state when containers come back. **Workers process only**. Lower this in staging (e.g. `5000`) for fast iteration. | `60000` (60 s) |
+| `RESTART_QUEUE_PAUSE_GRACE_MS` | Settle delay (ms) between pausing `outboxDispatch` and pausing all other producer queues. Gives the in-flight outbox publish loop time to commit rows it has already claimed before downstream queues are frozen. Async `sleep()` — workers stay responsive. **Workers process only**. | `1500` |
+| `RESTART_PAUSE_AND_DRAIN_QUEUES_ENABLED` | Feature flag for the full queue pause + active-count drain + resume protocol. When `false`, the worker falls back to the legacy payment-status-only drain (skips queue pause/drain/resume entirely). Use only as emergency rollback if a queue-handle bug ever blocks scheduled restarts. **Workers process only**. | `true` |
 | `LOAD_SHED_MODE` | Startup load-shed level: `normal`, `reduced`, or `emergency` | `normal` |
 | `HEALTH_QUEUE_STALE_WAITING_SECONDS` | Threshold for queue health checks | `300` |
 
@@ -434,7 +437,7 @@ Guardrail scripts (both wired into `npm run ci:reliability-gates`):
 ## 7) Ops Config API
 
 - `GET /api/v1/ops/config/overview` — per-domain items with `mutableViaOps`, `requiresRestart`, `runtimeSource`, present/placeholder flags.
-- `GET /api/v1/ops/config/stored` — masked stored entries (values shown as `ab****cd`).
+- `GET /api/v1/ops/config/stored` — DB-backed config rows. Per item: `{ domain, key, maskedValue, plaintextValue?, keyVersion, requiresRestart, updatedAt }`. `maskedValue` is always present (`ab****cd` format). `plaintextValue` is present **only for non-secret keys** (provider selectors, URLs, booleans, integer thresholds, public IDs, sender addresses, login emails) so the Ops UI can prefill non-secret form inputs without operators retyping. Real cryptographic secrets (`_SECRET`, `_TOKEN`, `_PASSWORD`, `_API_KEY`, `_AUTH_KEY`, `_APP_SECRET`) never carry `plaintextValue`. Classification via `isOpsConfigSecretKey()` in `ops-config-contract.ts` (mirrors frontend `isSecretKey()` exactly; regression-guarded against `_SECONDS` vs `_SECRET`).
 - `POST /api/v1/ops/config/validate` — dry-run: allowlist / bootstrap rejection / provider enum / placeholder checks for the **submitted batch only**. Body: `{ domain?, values }`.
 - `POST /api/v1/ops/config/save` — OTP required (`action: config-save` on `otp/request`). Body: `{ values, challengeId, otpCode, domain? }`.
   - **`domain` optional:** omit to save keys across multiple contract domains in one request (domain resolved per key via `resolveOpsConfigDomainForKey`).
@@ -473,7 +476,7 @@ Guardrail scripts (both wired into `npm run ci:reliability-gates`):
 
 ## 10) Operational Playbook
 
-1. **Set bootstrap keys in `.env`:** `DATABASE_URL`, `REDIS_URL`, `REDIS_PASSWORD`, `OPS_DB_ENCRYPTION_KEY`, `JWT_SECRET`, `JWT_REFRESH_SECRET`, `PORT`/`HOST`, `STOREFRONT_URL`, `ADMIN_URL`, `ADMIN_ALERT_EMAIL`, `TURNSTILE_SECRET_KEY`, `AUDIT_ANCHOR_SECRET`, `REDIS_KEY_PEPPER`, `IDEMPOTENCY_SCOPE_SECRET`, `OPS_COOKIE_SECRET`, `OPS_BROWSER_SESSION_TTL_SECONDS`, `OPS_LOGIN_OTP_TTL_SECONDS`, `CLIENT_ID`, feature flags, OTEL vars, and **workers-only** tuning vars: `RECONCILIATION_AUTO_HEAL_ISSUES`, `RESTART_PAYMENT_DRAIN_TIMEOUT_MS`.
+1. **Set bootstrap keys in `.env`:** `DATABASE_URL`, `REDIS_URL`, `REDIS_PASSWORD`, `OPS_DB_ENCRYPTION_KEY`, `JWT_SECRET`, `JWT_REFRESH_SECRET`, `PORT`/`HOST`, `STOREFRONT_URL`, `ADMIN_URL`, `ADMIN_ALERT_EMAIL`, `TURNSTILE_SECRET_KEY`, `AUDIT_ANCHOR_SECRET`, `REDIS_KEY_PEPPER`, `IDEMPOTENCY_SCOPE_SECRET`, `OPS_COOKIE_SECRET`, `OPS_BROWSER_SESSION_TTL_SECONDS`, `OPS_LOGIN_OTP_TTL_SECONDS`, `CLIENT_ID`, feature flags, OTEL vars, and **workers-only** tuning vars: `RECONCILIATION_AUTO_HEAL_ISSUES`, `RESTART_PAYMENT_DRAIN_TIMEOUT_MS`, `RESTART_QUEUE_DRAIN_TIMEOUT_MS`, `RESTART_QUEUE_PAUSE_GRACE_MS`, `RESTART_PAUSE_AND_DRAIN_QUEUES_ENABLED`.
 2. **Start the server** and complete ops user bootstrap (first invite + consume).
 3. **Apply DB-overlay keys via Ops UI** (`POST /api/v1/ops/config/save` with OTP): payment credentials, shipping credentials, notification credentials, ops security params (`OPS_METRICS_TOKEN`, `REPLAY_APPROVAL_TOKEN`, `TRUSTED_PROXY_ALLOWLIST_CIDR`, etc.).
 4. **Restart API + workers** to apply overlay.

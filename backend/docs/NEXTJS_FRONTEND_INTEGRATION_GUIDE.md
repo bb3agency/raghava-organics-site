@@ -359,7 +359,7 @@ Use the following backend routes when building a dedicated ops frontend (or ops 
 
 - `GET /ops/session` — bootstrap operator profile + permissions + MFA/IP posture
 - `GET /ops/config/overview` — per-key metadata (present, placeholder, mutableViaOps, runtimeSource)
-- `GET /ops/config/stored` — masked DB-backed config metadata
+- `GET /ops/config/stored` — DB-backed config rows. Items shape: `{ domain, key, maskedValue, plaintextValue?, keyVersion, requiresRestart, updatedAt }`. `plaintextValue` is **only** populated for non-secret keys (provider selectors, URLs, booleans, integer thresholds, public IDs like `RAZORPAY_KEY_ID`, sender addresses, login emails) — classified by `isOpsConfigSecretKey()` in `ops-config-contract.ts`, which mirrors the frontend `isSecretKey()` predicate. Real cryptographic secrets (`_SECRET`, `_TOKEN`, `_PASSWORD`, `_API_KEY`, `_AUTH_KEY`, `_APP_SECRET`) never carry `plaintextValue`. Use this field to prefill non-secret form inputs in the ops config editor so operators see what's saved without retyping; for secret keys, show `maskedValue` as placeholder text and treat the input as write-only.
 - `POST /ops/config/validate` — dry-run draft values before save
 - `POST /ops/config/save` — validated + OTP-authorized config save (`domain` optional; `null` value removes overlay key)
 - `GET /health/ready` — runtime readiness (parse `data` on 503 for missing keys list)

@@ -4,6 +4,91 @@ This document preserves detailed hardening history for engineering traceability.
 
 ## Recent hardening changes
 
+**Ops Config editor — backend half of "show DB-stored non-secret values in fields" — May 2026:**
+
+A previous commit `62684a6 fixed db stored keys visibility` shipped the frontend half of this feature (`OpsConfigEditor.tsx` prefills inputs with `field.storedPlaintext`, `ops-config-fields.ts` exposes `storedPlaintext`, `ops-client-api.ts` defines `plaintextValue?: string` on `OpsStoredConfig.items`). The backend half was missed: `getStoredConfigSecrets()` only returned `maskedValue`, and the `/ops/config/stored` response schema in `ops.routes.ts` had `additionalProperties: false` with `plaintextValue` not declared — so even if the service had emitted the field, Fastify would have stripped it.
+
+Operators saw the symptom: every UI-editable key (e.g. `SHIPPING_PROVIDER=shiprocket`, `SHIPROCKET_WEBHOOK_MAX_SKEW_SECONDS=300`, `SHIPROCKET_PICKUP_PINCODE=500001`) appeared with placeholder `Stored: *** — enter new value to replace` and an empty input, with no way to verify what was saved without re-typing or running a DB query on the VPS.
+
+Fixed by completing the backend contract:
+
+1. **New predicate** `isOpsConfigSecretKey()` in `backend/src/modules/ops/ops-config-contract.ts` — mirrors `frontend/lib/ops-config-fields.ts > isSecretKey` exactly. Early-returns false for the three non-secret suffixes that contain secret-like substrings (`_KEY_ID` for public Razorpay key IDs, `_FROM` for sender addresses, `_EMAIL` for login emails), then matches the union of secret suffix patterns (`_SECRET`, `_TOKEN`, `_PASSWORD`, `_AUTH_KEY`, `_API_KEY`, `_APP_SECRET`) and three exact-match constants (`OPS_METRICS_TOKEN`, `REPLAY_APPROVAL_TOKEN`, `OPS_COOKIE_SECRET`).
+2. **Service update** `getStoredConfigSecrets()` in `backend/src/modules/ops/ops.service.ts` — now decrypts every row once, classifies the key via `isOpsConfigSecretKey()`, and emits `plaintextValue: decrypted` for non-secret keys only. Secrets continue to expose `maskedValue` only.
+3. **Schema update** `/api/v1/ops/config/stored` response in `backend/src/modules/ops/ops.routes.ts` — added optional `plaintextValue: { type: 'string', maxLength: 4096 }` to the per-item schema.
+
+Tests added:
+
+- `backend/src/modules/ops/ops-config-contract.test.ts` — `isOpsConfigSecretKey` classification table (47 test cases covering every mutable contract key + early-return non-secret suffixes + `_SECONDS` vs `_SECRET` regression guard + deterministic-classification belt-and-braces).
+- `backend/src/modules/ops/ops.service.test.ts` — 6 cases for `getStoredConfigSecrets`: non-secret keys return plaintext, secret keys never leak plaintext (also verified via `JSON.stringify` substring search), early-return non-secret keys (`RAZORPAY_KEY_ID`, `RESEND_FROM`, `SHIPROCKET_EMAIL`) return plaintext, all `_SECRET`/`_APP_SECRET`/`_PASSWORD`/`_AUTH_KEY` suffixes mask without leak, `_SECONDS` vs `_SECRET` regression guard, domain filter pass-through.
+
+Security model preserved:
+
+- Real cryptographic secrets (`_SECRET`, `_TOKEN`, `_PASSWORD`, `_API_KEY`, `_AUTH_KEY`, `_APP_SECRET`, ops cookie secret, signed approval tokens) **NEVER** appear in the response as plaintext — they continue to be masked. This complies with the workspace rule "Never show plaintext secret values in admin UI — always mask".
+- Only operational metadata (provider selectors, base URLs, pincodes, allowlist CIDRs, boolean flags, integer thresholds, public IDs, sender addresses, login emails) is returned in plaintext — these are operator-knowledge values that have no security benefit from masking.
+- `ops:read` permission is still required to call the endpoint; bootstrap keys (`DATABASE_URL`, `REDIS_URL`, `OPS_DB_ENCRYPTION_KEY`) are excluded by virtue of not being persisted in `OpsConfigSecret`.
+
+Operator UX impact:
+
+- `SHIPPING_PROVIDER` field now shows `shiprocket` (or whatever value was saved) prefilled in the select — operator sees the saved selection.
+- `SHIPROCKET_WEBHOOK_MAX_SKEW_SECONDS` field now shows `300` (or saved value) prefilled — operator sees the saved integer.
+- `RAZORPAY_KEY_ID` field shows the public Razorpay key id — operator can verify the right account is wired up.
+- `SHIPROCKET_PASSWORD`, `RAZORPAY_KEY_SECRET`, etc. continue to show only `Stored: <masked> — enter new value to replace` — masked-only treatment unchanged.
+
+Validation:
+
+- Backend typecheck passes.
+- `backend npm run test:unit` → 711/711 tests pass across 135 files (66 in `ops-config-contract.test.ts`, 36 in `ops.service.test.ts`, 28 in `cart-cleanup.worker.test.ts`).
+
+**Save does NOT auto-restart — restart is always operator-initiated:**
+
+Verified that `POST /api/v1/ops/config/save` writes encrypted values to `OpsConfigSecret` and returns `requiresRestart: true` but does NOT trigger a container restart. The frontend `OpsConfigEditor` displays the existing post-save message: *"Saved N key(s) to the database. Restart the API and workers next — there is no automatic popup; use Ops → System or SSH on the VPS."* Operators must:
+
+1. Click Save (saves to DB, no restart)
+2. Navigate to Ops → System
+3. Click "Schedule restart" with OTP confirmation (triggers the pause+drain+restart protocol documented in the earlier hardening entry)
+
+This is the intentional two-step UX — config changes accumulate safely in the DB until the operator decides downtime is acceptable. There is no path in the codebase where saving a config row schedules or invokes a process exit.
+
+**Ops system restart — full queue pause + active-count drain + resume protocol — May 2026:**
+
+Previously, the `scheduled-process-restart` worker drained only `Order.status='PENDING_PAYMENT'` orders before publishing the restart pub/sub signal. Other BullMQ queues (`notifications`, `shipping`, `refunds`, `inventory-alerts`, `analytics`, `cart-cleanup`, `reconciliation`, `outbox-dispatch`) were left to natural `Worker.close()` drain on `process.exit(0)` — meaning the outbox dispatcher could be mid-fan-out when workers exit, and downstream handlers could be interrupted, requiring BullMQ stalled-job detection to retry them on the post-restart workers.
+
+While at-least-once semantics meant no work was lost, the gap left two operator complaints:
+1. Restart "feels abrupt" — handlers that were 90% done get interrupted and re-run from scratch on the new worker.
+2. Hard to verify *which* in-flight jobs survived the restart — requires reading worker logs across both container generations.
+
+Hardened in `backend/queues/workers/cart-cleanup.worker.ts`:
+
+- **Step 0 (new): Pause outbox-dispatch FIRST.** Stops the recurring `publish-pending` scheduler from claiming new outbox rows. Outbox messages keep accumulating in the DB as `PENDING` (no work lost) and are dispatched by the new worker after restart.
+- **Step 0b (new): Grace period** (`RESTART_QUEUE_PAUSE_GRACE_MS`, default 1500ms). Lets any in-flight outbox-dispatch handler iteration finish before downstream queues are paused — avoids confusing handler-level state mid-fan-out.
+- **Step 0c (new): Pause every producer queue** except `dead-letter`. `dead-letter` stays active so failure alerts continue to flow during the drain window.
+- **Step 0d (new): Active-count drain.** Polls `Queue.getActiveCount()` on every paused queue every 1s, waiting for sum to reach 0. Capped by `RESTART_QUEUE_DRAIN_TIMEOUT_MS` (default 60s). If timeout fires with active jobs still in flight, `ProcessRestartQueueDrainTimeout` alert is sent and restart proceeds (BullMQ stalled-job detection re-queues them on the post-restart workers — at-least-once preserved).
+- **Step 2.5 (new): Resume all queues** before publishing the restart signal. This ensures the new worker containers boot with queues in resumed state and immediately start processing the accumulated backlog. The tiny race window between resume and `process.exit(0)` is handled by BullMQ stalled-job detection.
+- Each pause/resume operation is wrapped in independent error handling. Pause failure on a single queue emits `ProcessRestartQueuePauseFailed` (non-terminal) and proceeds. Resume failure emits `ProcessRestartQueueResumeFailed` (terminal — operator must manually resume that queue post-restart). Registry creation failure emits `ProcessRestartPauseDrainFailed` (non-terminal) and falls through to the legacy `PENDING_PAYMENT`-only drain.
+- Behavior controlled by `RESTART_PAUSE_AND_DRAIN_QUEUES_ENABLED` (default `true`). Set to `false` for emergency rollback to legacy behaviour without code revert.
+
+**No storefront impact, no work loss:**
+- `Queue.pause()` only stops *workers* from picking new jobs. `Queue.add()` calls from API request handlers still succeed and land jobs in waiting state — they get picked up by the post-restart workers.
+- Storefront browsing, cart operations (add/update/remove), product reads, login, register, and outbox writes (transactional DB inserts) are completely unaffected.
+- Outbox messages written during the drain window accumulate in the `OutboxMessage` table as `PENDING` and are dispatched by the new worker after restart.
+
+Tests added in `backend/queues/workers/cart-cleanup.worker.test.ts`:
+
+- `pauses outbox-dispatch FIRST, then every other producer queue`
+- `waits the pause grace period between outbox pause and downstream pause`
+- `polls getActiveCount until sum reaches 0, then proceeds to publish`
+- `emits ProcessRestartQueueDrainTimeout alert when active jobs do not drain in time`
+- `resumes all queues BEFORE publishing the restart signal`
+- `closes queue registry handles before exiting`
+- `does not block the restart when a single queue.pause() throws`
+- `emits terminal alert when queue.resume() fails (operator must manually resume)`
+- `falls through to legacy payment-only drain when pauseAndDrainQueuesEnabled=false`
+- `queue pause+drain failure does not abort the restart sequence`
+
+Validation:
+- Backend typecheck passes.
+- `backend npm run test:unit` → 650/650 tests pass across 135 files (28/28 in `cart-cleanup.worker.test.ts`).
+
 **Ops system restart enqueue fix — BullMQ CustomId cannot contain `:` — May 2026:**
 
 Production `/ops/system/restart` failed after OTP verification with:

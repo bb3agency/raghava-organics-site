@@ -380,7 +380,10 @@ Response fields:
 
 `GET /api/v1/ops/config/stored` (`ops:read`)
 
-- Returns masked DB-backed encrypted config values by domain/key metadata.
+- Returns DB-backed encrypted config rows decrypted server-side, then classified key-by-key. Item shape: `{ domain, key, maskedValue, plaintextValue?, keyVersion, requiresRestart, updatedAt }`.
+- **Secret keys (`maskedValue` only):** anything matching `_SECRET`, `_TOKEN`, `_PASSWORD`, `_API_KEY`, `_AUTH_KEY`, `_APP_SECRET`, ops cookie secret, or signed approval tokens. Frontend treats these inputs as write-only — `maskedValue` is shown as placeholder text and the field is blank until the operator types a replacement.
+- **Non-secret keys (`maskedValue` + `plaintextValue`):** provider selectors (`PAYMENT_PROVIDER`, `SHIPPING_PROVIDER`, `SMS_PROVIDER`, `EMAIL_PROVIDER`), URLs (`*_BASE_URL`), pincodes (`*_PICKUP_PINCODE`), allowlist CIDRs (`*_WEBHOOK_ALLOWLIST_CIDR`, `TRUSTED_PROXY_ALLOWLIST_CIDR`), boolean flags (`NOTIFY_*_ENABLED`, `*_FAILOVER_ENABLED`), integer thresholds (`*_MAX_SKEW_SECONDS`, `*_CB_FAILURE_THRESHOLD`, `*_CB_COOLDOWN_MS`, `REPLAY_AUDIT_RETENTION_DAYS`), public identifiers (`RAZORPAY_KEY_ID`, `MSG91_SENDER_ID`, `META_WHATSAPP_PHONE_NUMBER_ID`), sender addresses (`RESEND_FROM`), login emails (`SHIPROCKET_EMAIL`). Frontend prefills the input with `plaintextValue` so operators can see and edit the saved value in place. Classification is implemented in `isOpsConfigSecretKey()` in `ops-config-contract.ts`, mirroring the frontend `isSecretKey()` predicate exactly — regression-guarded against `_SECONDS` vs `_SECRET` confusion (e.g. `SHIPROCKET_WEBHOOK_MAX_SKEW_SECONDS` is non-secret and DOES return `plaintextValue`).
+- **Why this matters operationally:** before this change (May 2026), the Ops UI showed non-secret operational metadata like `SHIPPING_PROVIDER=shiprocket` or `SHIPROCKET_WEBHOOK_MAX_SKEW_SECONDS=300` as masked or "Managed via env file" — even though those keys are explicitly DB-overlay-editable. Operators had to retype values from memory on every edit. The fix is purely backend (`getStoredConfigSecrets` + route schema); the frontend already knew how to consume `plaintextValue` but the field was being stripped by Fastify schema validation. There is **no security regression**: real cryptographic secrets remain masked-only.
 
 `POST /api/v1/ops/config/save` (`ops:write`)
 
@@ -568,17 +571,29 @@ Response: `{ jobId, scheduledFor }` — ISO-8601 timestamp of when the restart w
 
 0. **At schedule time (before the job fires):** `scheduleRestart` immediately sets the Redis load-shed mode key (`ops:load_shed:mode`) to `emergency`. This proactively sheds non-essential traffic while the restart is pending, protecting the database from write pressure during the drain window.
 1. BullMQ fires the `scheduled-process-restart` job in the worker process.
-2. **Payment-safe drain:** Worker polls `prisma.order.count({ where: { status: 'PENDING_PAYMENT' } })` every 5 s until the count reaches 0 or the drain timeout elapses (default 5 min; override via `RESTART_PAYMENT_DRAIN_TIMEOUT_MS`). If orders are still pending when the timeout fires, a `ProcessRestartPaymentDrainTimeout` alert is sent to all ops/admin recipients and the restart proceeds — the system is never blocked indefinitely.
-3. Worker calls `sendProcessRestartAlert()` — best-effort pre-exit email to all active ops users and verified admin users. Wrapped in its own `try/catch` so a failed send never blocks step 4.
-4. **Load-shed reset to `normal`** — best-effort `redis.set(ops:load_shed:mode, 'normal')` before publishing the restart signal, so both containers come back up in full-serving mode. Failure here is swallowed and does not block the restart.
-5. Worker creates a short-lived Redis publisher connection and calls `publishRestartSignal()` on the `system:restart` pub/sub channel. If the publish call throws (e.g. Redis unreachable), a `ProcessRestartPublishFailed` alert is sent (`terminalFailure: true`) warning that the API container will **not** restart automatically.
-6. `process.exit(0)` is called unconditionally — all failure paths above are guarded and never prevent this step.
-7. **API process** (`src/main.ts`) receives the pub/sub message → calls `gracefulShutdown()` (Fastify drain + tracing shutdown + subscriber connection close) → `process.exit(0)`. Docker restarts the `backend` container.
-8. **Worker process** (`queues/workers/index.ts`) receives the same pub/sub message → calls `shutdown()` (closes all BullMQ workers, queues, and the subscriber connection) → `process.exit(0)`. Docker restarts the `workers` container.
-9. Both processes boot fresh, re-apply the DB config overlay, and resume serving.
+2. **Queue pause + active-count drain (Step 0 of the worker handler):**
+   - The worker pauses the `outbox-dispatch` queue FIRST. This stops the recurring `publish-pending` scheduler from claiming new outbox rows. Outbox messages written by the API process during the drain window keep accumulating in the DB as `PENDING` (no work lost) and are dispatched by the new worker after restart.
+   - The worker waits a grace period (default 1500 ms, override via `RESTART_QUEUE_PAUSE_GRACE_MS`) so any in-flight outbox-dispatch handler iteration can finish fanning out the jobs it has already claimed.
+   - The worker pauses every other producer queue: `order-processing`, `notifications`, `shipping`, `inventory-alerts`, `refunds`, `analytics`, `cart-cleanup`, `reconciliation`. The `dead-letter` queue is intentionally NOT paused — it keeps accepting failure alerts during the drain window.
+   - The worker then polls `Queue.getActiveCount()` on every paused queue every 1 s, waiting for the sum to reach 0 (all in-flight handlers completed). Capped by `RESTART_QUEUE_DRAIN_TIMEOUT_MS` (default 60 s). On timeout, a `ProcessRestartQueueDrainTimeout` alert is sent and the restart proceeds — BullMQ stalled-job detection re-queues any interrupted handlers on the post-restart workers, preserving at-least-once semantics.
+   - Failure modes are independently handled: single-queue pause failure emits `ProcessRestartQueuePauseFailed` (non-terminal); registry creation failure emits `ProcessRestartPauseDrainFailed` (non-terminal) and falls through to the legacy `PENDING_PAYMENT`-only drain.
+   - Disable the protocol entirely (emergency rollback) by setting `RESTART_PAUSE_AND_DRAIN_QUEUES_ENABLED=false` in the workers `.env`. The legacy `PENDING_PAYMENT`-only behaviour resumes.
+   - **No storefront impact:** `Queue.pause()` only stops *workers* from picking new jobs. `Queue.add()` calls from API request handlers still succeed and land jobs in waiting state, which get processed by the post-restart workers. Storefront browsing, cart operations, product reads, login, and outbox writes are completely unaffected. The only HTTP traffic blocked during the window is what load-shed `emergency` already blocks (non-critical admin + checkout mutations).
+3. **Payment-safe drain:** Worker polls `prisma.order.count({ where: { status: 'PENDING_PAYMENT' } })` every 5 s until the count reaches 0 or the drain timeout elapses (default 5 min; override via `RESTART_PAYMENT_DRAIN_TIMEOUT_MS`). If orders are still pending when the timeout fires, a `ProcessRestartPaymentDrainTimeout` alert is sent to all ops/admin recipients and the restart proceeds — the system is never blocked indefinitely.
+4. **Resume all paused queues** before publishing the restart signal. This ensures the new worker containers boot with queues in resumed state and immediately start processing the backlog accumulated during the pause window. Resume failure on any queue emits `ProcessRestartQueueResumeFailed` (`terminalFailure: true`) — the operator must manually `queue.resume()` that queue via Bull Board or a one-off script, otherwise jobs accumulate in waiting state forever.
+5. Worker calls `sendProcessRestartAlert()` — best-effort pre-exit email to all active ops users and verified admin users. Wrapped in its own `try/catch` so a failed send never blocks step 6.
+6. **Load-shed reset to `normal`** — best-effort `redis.set(ops:load_shed:mode, 'normal')` before publishing the restart signal, so both containers come back up in full-serving mode. Failure here is swallowed and does not block the restart.
+7. Worker creates a short-lived Redis publisher connection and calls `publishRestartSignal()` on the `system:restart` pub/sub channel. If the publish call throws (e.g. Redis unreachable), a `ProcessRestartPublishFailed` alert is sent (`terminalFailure: true`) warning that the API container will **not** restart automatically.
+8. `process.exit(0)` is called unconditionally — all failure paths above are guarded and never prevent this step.
+9. **API process** (`src/main.ts`) receives the pub/sub message → calls `gracefulShutdown()` (Fastify drain + tracing shutdown + subscriber connection close) → `process.exit(0)`. Docker restarts the `backend` container.
+10. **Worker process** (`queues/workers/index.ts`) receives the same pub/sub message → calls `shutdown()` (closes all BullMQ workers, queues, and the subscriber connection) → `process.exit(0)`. Docker restarts the `workers` container.
+11. Both processes boot fresh, re-apply the DB config overlay, and resume serving.
 
-**Environment variable:**
-- `RESTART_PAYMENT_DRAIN_TIMEOUT_MS` — set in `.env` for the workers process. Default `300000` (5 minutes). Set to a smaller value (e.g. `10000`) in staging/test environments. Declared in `scripts/env-runtime-contract.js` (`composeRequiredByService.workers`) and in `docker-compose.yml` workers service environment.
+**Environment variables (workers process `.env`):**
+- `RESTART_PAYMENT_DRAIN_TIMEOUT_MS` — Default `300000` (5 minutes). Set to a smaller value (e.g. `10000`) in staging/test environments. Declared in `scripts/env-runtime-contract.js` (`composeRequiredByService.workers`) and in `docker-compose.yml` workers service environment.
+- `RESTART_QUEUE_DRAIN_TIMEOUT_MS` — Default `60000` (60 seconds). Maximum time the worker waits for in-flight BullMQ job handlers to complete (per Step 2 above) before forcing the restart. On timeout, jobs are stalled-detected and re-queued on the post-restart workers.
+- `RESTART_QUEUE_PAUSE_GRACE_MS` — Default `1500` (1.5 seconds). Grace period between pausing `outbox-dispatch` and pausing downstream queues. Tuned to allow a single outbox-dispatch handler iteration to complete.
+- `RESTART_PAUSE_AND_DRAIN_QUEUES_ENABLED` — Default `true`. Set to `false` for emergency rollback to the legacy `PENDING_PAYMENT`-only drain (no queue pause, no active-count poll). Use only if the pause+drain protocol itself misbehaves in production.
 
 **Active user safety:**
 
@@ -588,7 +603,9 @@ Response: `{ jobId, scheduledFor }` — ISO-8601 timestamp of when the restart w
 | Cart filled, not yet submitted | Cart persists in Postgres. User can complete checkout after reconnect. |
 | Mid-payment (Razorpay redirect open) | Payment completes on Razorpay's side. Webhook fires to the restarted API. Idempotency record deduplicates any retry. Order is fulfilled normally. |
 | Payment webhook in-flight during exit | If the HTTP connection drops during `fastify.close()`, Razorpay retries the webhook. Idempotency record prevents duplicate processing. |
-| BullMQ job processing in worker | BullMQ jobs are durable in Redis. In-flight jobs re-queue and are retried when the worker restarts. `removeOnFail: false` is the default. |
+| BullMQ job processing in worker | Queues are explicitly paused during the drain window and the worker polls `getActiveCount()` until 0 before restart. In-flight handlers that complete within `RESTART_QUEUE_DRAIN_TIMEOUT_MS` (default 60s) are NOT interrupted. Any that exceed the timeout are stalled-detected by BullMQ and re-queued on the post-restart workers. `removeOnFail: false` is the default. |
+| Outbox write during drain window | DB insert succeeds normally. `OutboxMessage` row stays in `PENDING` state while `outbox-dispatch` queue is paused. After restart, the new worker resumes the queue and dispatches the backlog. No work lost. |
+| `Queue.add()` during drain window | Job is added to Redis in waiting state (queue paused, not closed). Picked up by the post-restart worker on its first poll. No work lost. |
 
 **Other important behaviour:**
 

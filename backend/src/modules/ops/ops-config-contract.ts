@@ -182,6 +182,50 @@ function getProviderValue(draftEnv: NodeJS.ProcessEnv, key: string): string {
   return raw || (OPS_PROVIDER_DEFAULTS[key] ?? '');
 }
 
+/**
+ * Classifies an Ops config key as a "secret" (cryptographic credential, signed
+ * token, password) vs a "non-secret" (provider selector, base URL, pincode,
+ * allowlist CIDR, boolean flag, public ID, login email, sender address).
+ *
+ * Used by `getStoredConfigSecrets()` to decide whether a stored value is
+ * returnable to the Ops UI as plaintext (non-secret — prefills the editable
+ * field so the operator can see what was saved without retyping) or must stay
+ * masked (secret — only the masked representation reaches the browser, per
+ * the security rule: "Never show plaintext secret values in admin UI").
+ *
+ * Mirrors `frontend/lib/ops-config-fields.ts > isSecretKey` exactly — keep
+ * the two regexes in sync. Both implementations:
+ *   1. Early-return false for the three non-secret suffixes that look like
+ *      they could match the regex but are intentionally public:
+ *        - `_KEY_ID`        e.g. RAZORPAY_KEY_ID — Razorpay's *public* key id
+ *        - `_FROM`          e.g. RESEND_FROM     — public sender address
+ *        - `_EMAIL`         e.g. SHIPROCKET_EMAIL — login email (paired w/ password)
+ *   2. Match the union of secret suffix patterns.
+ *
+ * @example
+ *   isOpsConfigSecretKey('SHIPPING_PROVIDER')                  // false (selector)
+ *   isOpsConfigSecretKey('SHIPROCKET_WEBHOOK_MAX_SKEW_SECONDS')// false (number)
+ *   isOpsConfigSecretKey('RAZORPAY_KEY_ID')                    // false (public id, early-return)
+ *   isOpsConfigSecretKey('RESEND_FROM')                        // false (sender address, early-return)
+ *   isOpsConfigSecretKey('RAZORPAY_KEY_SECRET')                // true  (_SECRET)
+ *   isOpsConfigSecretKey('SHIPROCKET_WEBHOOK_TOKEN')           // true  (_TOKEN)
+ *   isOpsConfigSecretKey('SHIPROCKET_PASSWORD')                // true  (_PASSWORD)
+ *   isOpsConfigSecretKey('RESEND_API_KEY')                     // true  (_API_KEY)
+ *   isOpsConfigSecretKey('MSG91_AUTH_KEY')                     // true  (_AUTH_KEY)
+ *   isOpsConfigSecretKey('META_WHATSAPP_APP_SECRET')           // true  (_APP_SECRET)
+ *   isOpsConfigSecretKey('OPS_METRICS_TOKEN')                  // true  (exact match)
+ *   isOpsConfigSecretKey('REPLAY_APPROVAL_TOKEN')              // true  (exact match)
+ *   isOpsConfigSecretKey('OPS_COOKIE_SECRET')                  // true  (exact match)
+ */
+export function isOpsConfigSecretKey(key: string): boolean {
+  if (key.endsWith('_KEY_ID') || key.endsWith('_FROM') || key.endsWith('_EMAIL')) {
+    return false;
+  }
+  return /(_SECRET|_TOKEN|_PASSWORD|_AUTH_KEY|_API_KEY|_APP_SECRET|OPS_METRICS_TOKEN|REPLAY_APPROVAL_TOKEN|OPS_COOKIE_SECRET)/.test(
+    key
+  );
+}
+
 export function isOpsConfigMutableKey(key: string): boolean {
   return OPS_CONFIG_MUTABLE_KEYS.has(key);
 }

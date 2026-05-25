@@ -211,6 +211,13 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
                     domain: { type: 'string', enum: ['core', 'payments', 'shipping', 'notifications', 'opsSecurity'], maxLength: 24 },
                     key: { type: 'string', maxLength: 120 },
                     maskedValue: { type: 'string', maxLength: 300 },
+                    // Optional plaintext value — present only for non-secret keys
+                    // (provider selectors, URLs, pincodes, CIDRs, boolean flags,
+                    // numeric thresholds, public IDs, sender addresses, login
+                    // emails). Real cryptographic secrets never appear here —
+                    // only `maskedValue`. Classification is performed by
+                    // `isOpsConfigSecretKey()` in `ops-config-contract.ts`.
+                    plaintextValue: { type: 'string', maxLength: 4096 },
                     keyVersion: { type: 'number' },
                     requiresRestart: { type: 'boolean' },
                     updatedAt: { type: 'string', maxLength: 40 }

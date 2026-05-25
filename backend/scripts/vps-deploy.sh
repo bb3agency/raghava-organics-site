@@ -176,9 +176,24 @@ if [ "$WORKERS_STATUS" != "running" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 7. Clean up dangling images from previous builds
+# 7. Clean up dangling images and trim BuildKit cache from this deploy
+#
+# Why both:
+#   - `docker image prune -f` removes untagged/dangling images from this build.
+#   - `docker buildx prune --keep-storage 3GB` caps the BuildKit cache so
+#     long-lived multi-client VPS hosts don't accumulate tens of GB of
+#     intermediate build layers (observed: 20 GB cache after ~35 builds in
+#     40h). The 3GB ceiling preserves enough recent layers to keep the next
+#     build fast, while evicting older layers automatically.
+#
+# Safety: neither command touches running containers, in-use images, named
+# volumes (e.g. Redis data), or any container filesystem. Only build-time
+# scratch data is removed.
 # ---------------------------------------------------------------------------
 log "Pruning dangling images..."
 docker image prune -f >/dev/null 2>&1 || true
+
+log "Trimming BuildKit cache (keep last 3GB of reusable layers)..."
+docker buildx prune --force --keep-storage 3GB >/dev/null 2>&1 || true
 
 log "Deploy complete. SHA=$CURRENT_SHA Port=$BACKEND_PORT"

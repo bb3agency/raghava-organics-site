@@ -6,6 +6,7 @@ import {
   isOpsConfigBootstrapKey,
   isOpsConfigMutableKey,
   isOpsConfigRuntimeOverlayKey,
+  isOpsConfigSecretKey,
   listOpsConfigMutableKeys,
   listOpsConfigRuntimeOverlayKeys,
   OPS_CONFIG_OVERVIEW_GROUPS
@@ -157,5 +158,107 @@ describe('ops config contract', () => {
     const allKeys = OPS_CONFIG_OVERVIEW_GROUPS.flatMap((group) => group.items.map((item) => item.key));
     const unique = new Set(allKeys);
     expect(unique.size).toBe(allKeys.length);
+  });
+
+  describe('isOpsConfigSecretKey — secret vs non-secret classification', () => {
+    // Real cryptographic secrets — must mask, never leak plaintext.
+    it.each([
+      ['JWT_SECRET'],
+      ['JWT_REFRESH_SECRET'],
+      ['RAZORPAY_KEY_SECRET'],
+      ['RAZORPAY_WEBHOOK_SECRET'],
+      ['RAZORPAY_WEBHOOK_SECRET_OLD'],
+      ['DELHIVERY_API_KEY'],
+      ['DELHIVERY_WEBHOOK_TOKEN'],
+      ['SHIPROCKET_PASSWORD'],
+      ['SHIPROCKET_WEBHOOK_TOKEN'],
+      ['RESEND_API_KEY'],
+      ['MSG91_AUTH_KEY'],
+      ['FAST2SMS_API_KEY'],
+      ['META_WHATSAPP_ACCESS_TOKEN'],
+      ['META_WHATSAPP_WEBHOOK_VERIFY_TOKEN'],
+      ['META_WHATSAPP_APP_SECRET'],
+      ['OPS_METRICS_TOKEN'],
+      ['REPLAY_APPROVAL_TOKEN'],
+      ['OPS_COOKIE_SECRET']
+    ])('classifies %s as secret', (key) => {
+      expect(isOpsConfigSecretKey(key)).toBe(true);
+    });
+
+    // Non-secret keys — operator-visible plaintext is intentional so the
+    // Ops UI editor can prefill the field with the saved value.
+    it.each([
+      ['SHIPPING_PROVIDER'],
+      ['SHIPPING_PROVIDER_FAILOVER_ENABLED'],
+      ['SHIPPING_CB_FAILURE_THRESHOLD'],
+      ['SHIPPING_CB_COOLDOWN_MS'],
+      ['SHIPPING_WEBHOOK_ALLOWLIST_CIDR'],
+      ['PAYMENT_PROVIDER'],
+      ['PAYMENT_PROVIDER_FAILOVER_ENABLED'],
+      ['PAYMENT_CB_FAILURE_THRESHOLD'],
+      ['PAYMENT_CB_COOLDOWN_MS'],
+      ['RAZORPAY_WEBHOOK_ALLOWLIST_CIDR'],
+      ['RAZORPAY_WEBHOOK_MAX_SKEW_SECONDS'],
+      ['DELHIVERY_BASE_URL'],
+      ['DELHIVERY_PICKUP_PINCODE'],
+      ['DELHIVERY_WEBHOOK_ALLOWLIST_CIDR'],
+      ['DELHIVERY_WEBHOOK_MAX_SKEW_SECONDS'],
+      ['SHIPROCKET_BASE_URL'],
+      ['SHIPROCKET_PICKUP_PINCODE'],
+      ['SHIPROCKET_WEBHOOK_ALLOWLIST_CIDR'],
+      ['SHIPROCKET_WEBHOOK_MAX_SKEW_SECONDS'],
+      ['NOTIFY_EMAIL_ENABLED'],
+      ['NOTIFY_SMS_ENABLED'],
+      ['NOTIFY_WHATSAPP_ENABLED'],
+      ['EMAIL_PROVIDER'],
+      ['SMS_PROVIDER'],
+      ['MSG91_SENDER_ID'],
+      ['MSG91_ROUTE'],
+      ['META_WHATSAPP_PHONE_NUMBER_ID'],
+      ['META_WHATSAPP_API_VERSION'],
+      ['OPS_METRICS_ALLOWLIST'],
+      ['REPLAY_AUDIT_RETENTION_DAYS'],
+      ['TRUSTED_PROXY_ALLOWLIST_CIDR'],
+      ['INVOICE_STORAGE_ROOT']
+    ])('classifies %s as non-secret', (key) => {
+      expect(isOpsConfigSecretKey(key)).toBe(false);
+    });
+
+    // Special early-return suffixes — these contain substrings that look
+    // secret-ish but the suffix proves they're public identifiers.
+    it('classifies RAZORPAY_KEY_ID as non-secret (public key id, NOT the secret)', () => {
+      expect(isOpsConfigSecretKey('RAZORPAY_KEY_ID')).toBe(false);
+    });
+    it('classifies RESEND_FROM as non-secret (public sender address)', () => {
+      expect(isOpsConfigSecretKey('RESEND_FROM')).toBe(false);
+    });
+    it('classifies SHIPROCKET_EMAIL as non-secret (login email; paired with separately-masked SHIPROCKET_PASSWORD)', () => {
+      expect(isOpsConfigSecretKey('SHIPROCKET_EMAIL')).toBe(false);
+    });
+
+    // Regression guard for the SECONDS vs SECRET confusion: a non-secret
+    // integer threshold ending in `_SECONDS` must NOT be confused with the
+    // `_SECRET` substring matcher.
+    it('does NOT confuse _SECONDS suffix with _SECRET pattern', () => {
+      expect(isOpsConfigSecretKey('SHIPROCKET_WEBHOOK_MAX_SKEW_SECONDS')).toBe(false);
+      expect(isOpsConfigSecretKey('DELHIVERY_WEBHOOK_MAX_SKEW_SECONDS')).toBe(false);
+      expect(isOpsConfigSecretKey('RAZORPAY_WEBHOOK_MAX_SKEW_SECONDS')).toBe(false);
+      expect(isOpsConfigSecretKey('OPS_BROWSER_SESSION_TTL_SECONDS')).toBe(false);
+      expect(isOpsConfigSecretKey('OPS_LOGIN_OTP_TTL_SECONDS')).toBe(false);
+    });
+
+    // Belt-and-braces contract check: every mutable key in the contract must
+    // resolve to either secret or non-secret deterministically (no exceptions
+    // thrown, no undefined output). This guards against future contract
+    // additions that introduce ambiguous patterns.
+    it('classifies every mutable ops config key deterministically', () => {
+      for (const group of OPS_CONFIG_OVERVIEW_GROUPS) {
+        for (const item of group.items) {
+          if (!item.mutableViaOps) continue;
+          const result = isOpsConfigSecretKey(item.key);
+          expect(typeof result).toBe('boolean');
+        }
+      }
+    });
   });
 });

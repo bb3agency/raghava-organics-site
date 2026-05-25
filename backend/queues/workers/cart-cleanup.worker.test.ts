@@ -193,6 +193,65 @@ describe('cart-cleanup worker — scheduled-process-restart', () => {
   const quitMock = vi.fn();
   const setMock = vi.fn();
 
+  // ── Queue registry mocks ──────────────────────────────────────────────────
+  // Captured call order (pause/resume) is asserted by tests below to verify
+  // the protocol: outbox-dispatch must be paused FIRST, then drainable queues.
+  const queueKeys = [
+    'orderProcessing',
+    'notifications',
+    'shipping',
+    'inventoryAlerts',
+    'refunds',
+    'analytics',
+    'cartCleanup',
+    'outboxDispatch',
+    'reconciliation',
+    'deadLetter'
+  ] as const;
+  type QueueKey = (typeof queueKeys)[number];
+
+  // Per-queue mocks, recreated each test in beforeEach to avoid leaking state.
+  let queueMocks: Record<QueueKey, {
+    pause: ReturnType<typeof vi.fn>;
+    resume: ReturnType<typeof vi.fn>;
+    getActiveCount: ReturnType<typeof vi.fn>;
+    close: ReturnType<typeof vi.fn>;
+    name: string;
+  }>;
+  let pauseCallOrder: QueueKey[];
+  let resumeCallOrder: QueueKey[];
+  // Active-count behavior: per-queue queue-of-return-values consumed FIFO,
+  // falling back to a final default. Tests override these per case.
+  let activeCountValues: Partial<Record<QueueKey, number[]>>;
+  let activeCountDefaults: Partial<Record<QueueKey, number>>;
+
+  function buildQueueMocks(): typeof queueMocks {
+    const mocks = {} as typeof queueMocks;
+    for (const key of queueKeys) {
+      mocks[key] = {
+        name: key,
+        pause: vi.fn().mockImplementation(async () => {
+          pauseCallOrder.push(key);
+        }),
+        resume: vi.fn().mockImplementation(async () => {
+          resumeCallOrder.push(key);
+        }),
+        getActiveCount: vi.fn().mockImplementation(async () => {
+          const queueValues = activeCountValues[key];
+          if (queueValues && queueValues.length > 0) {
+            return queueValues.shift() ?? 0;
+          }
+          return activeCountDefaults[key] ?? 0;
+        }),
+        close: vi.fn().mockResolvedValue(undefined)
+      };
+    }
+    return mocks;
+  }
+
+  const createMockQueueRegistry: NonNullable<CartCleanupWorkerDeps['createQueueRegistry']> = () =>
+    queueMocks as unknown as ReturnType<NonNullable<CartCleanupWorkerDeps['createQueueRegistry']>>;
+
   function makePublisher() {
     return { publish: publishMock, quit: quitMock, set: setMock };
   }
@@ -227,6 +286,12 @@ describe('cart-cleanup worker — scheduled-process-restart', () => {
     quitMock.mockResolvedValue('OK' as unknown);
     setMock.mockResolvedValue('OK' as unknown);
 
+    pauseCallOrder = [];
+    resumeCallOrder = [];
+    activeCountValues = {};
+    activeCountDefaults = {};
+    queueMocks = buildQueueMocks();
+
     sendProcessRestartAlertSpy = vi.spyOn(alertModule, 'sendProcessRestartAlert').mockResolvedValue(undefined);
     sendTechnicalFailureAlertSpy = vi.spyOn(alertModule, 'sendTechnicalFailureAlert').mockResolvedValue(undefined);
     exitSpy = vi.spyOn(process, 'exit').mockImplementation((_code?: string | number | null) => undefined as never);
@@ -242,7 +307,14 @@ describe('cart-cleanup worker — scheduled-process-restart', () => {
       PrismaClient: (overrides.PrismaClient ?? MockPrismaClient) as unknown as CartCleanupPrismaType,
       createPublisher: (overrides.createPublisher ?? makePublisher) as NonNullable<CartCleanupWorkerDeps['createPublisher']>,
       sleep: overrides.sleep ?? (vi.fn().mockResolvedValue(undefined) as (ms: number) => Promise<void>),
-      paymentDrainTimeoutMs: overrides.paymentDrainTimeoutMs ?? 100
+      paymentDrainTimeoutMs: overrides.paymentDrainTimeoutMs ?? 100,
+      // Inject the mock queue registry by default so existing tests don't try
+      // to hit real Redis. Tests can override to simulate failure modes.
+      createQueueRegistry: overrides.createQueueRegistry ?? createMockQueueRegistry,
+      queueDrainTimeoutMs: overrides.queueDrainTimeoutMs ?? 100,
+      queuePauseGraceMs: overrides.queuePauseGraceMs ?? 0,
+      pauseAndDrainQueuesEnabled:
+        overrides.pauseAndDrainQueuesEnabled !== undefined ? overrides.pauseAndDrainQueuesEnabled : true
     };
     return base as CartCleanupWorkerDeps;
   };
@@ -415,6 +487,211 @@ describe('cart-cleanup worker — scheduled-process-restart', () => {
     await processor?.({ name: 'scheduled-process-restart', id: 'job-9', data: {} });
 
     expect(orderCount).not.toHaveBeenCalled();
+    expect(publishMock).toHaveBeenCalledOnce();
+    expect(exitSpy).toHaveBeenCalledWith(0);
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Queue pause + drain protocol (Step 0 / Step 2.5)
+  // ─────────────────────────────────────────────────────────────────────────
+
+  it('pauses outbox-dispatch FIRST, then every other producer queue', async () => {
+    orderCount.mockResolvedValue(0);
+    createCartCleanupWorker({}, baseWorkerDeps());
+
+    await processor?.({ name: 'scheduled-process-restart', id: 'job-pause-order', data: {} });
+
+    expect(pauseCallOrder[0]).toBe('outboxDispatch');
+    expect(pauseCallOrder).toEqual(
+      expect.arrayContaining([
+        'outboxDispatch',
+        'orderProcessing',
+        'notifications',
+        'shipping',
+        'inventoryAlerts',
+        'refunds',
+        'analytics',
+        'cartCleanup',
+        'reconciliation'
+      ])
+    );
+    expect(pauseCallOrder).not.toContain('deadLetter');
+  });
+
+  it('waits the pause grace period between outbox pause and downstream pause', async () => {
+    orderCount.mockResolvedValue(0);
+    const sleepMock = vi.fn().mockResolvedValue(undefined);
+    createCartCleanupWorker(
+      {},
+      baseWorkerDeps({ sleep: sleepMock, queuePauseGraceMs: 1500 })
+    );
+
+    await processor?.({ name: 'scheduled-process-restart', id: 'job-grace', data: {} });
+
+    expect(sleepMock).toHaveBeenCalledWith(1500);
+    // outboxDispatch.pause must complete before the grace sleep, which must
+    // complete before any drainable queue is paused.
+    expect(queueMocks.outboxDispatch.pause).toHaveBeenCalledOnce();
+  });
+
+  it('polls getActiveCount until sum reaches 0, then proceeds to publish', async () => {
+    orderCount.mockResolvedValue(0);
+    // First sample: notifications=2 active; second sample: 0 (drained).
+    activeCountValues = { notifications: [2, 0] };
+    const sleepMock = vi.fn().mockResolvedValue(undefined);
+    createCartCleanupWorker({}, baseWorkerDeps({ sleep: sleepMock }));
+
+    await processor?.({ name: 'scheduled-process-restart', id: 'job-drain', data: {} });
+
+    // Two samples for notifications = polled twice.
+    expect(queueMocks.notifications.getActiveCount).toHaveBeenCalledTimes(2);
+    // No drain-timeout alert because we drained successfully.
+    expect(sendTechnicalFailureAlertSpy).not.toHaveBeenCalledWith(
+      expect.objectContaining({ template: 'ProcessRestartQueueDrainTimeout' })
+    );
+    expect(publishMock).toHaveBeenCalledOnce();
+  });
+
+  it('emits ProcessRestartQueueDrainTimeout alert when active jobs do not drain in time', async () => {
+    orderCount.mockResolvedValue(0);
+    // Always returns 3 — drain never completes; timeout fires immediately.
+    activeCountDefaults = { shipping: 3 };
+    createCartCleanupWorker({}, baseWorkerDeps({ queueDrainTimeoutMs: 0 }));
+
+    await processor?.({ name: 'scheduled-process-restart', id: 'job-drain-timeout', data: {} });
+
+    expect(sendTechnicalFailureAlertSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        template: 'ProcessRestartQueueDrainTimeout',
+        failureStage: 'PROCESS_RESTART',
+        terminalFailure: false
+      })
+    );
+    // Restart still proceeds after timeout.
+    expect(publishMock).toHaveBeenCalledOnce();
+    expect(exitSpy).toHaveBeenCalledWith(0);
+  });
+
+  it('resumes all queues BEFORE publishing the restart signal', async () => {
+    orderCount.mockResolvedValue(0);
+    let publishCalledWithResumedQueues = false;
+    publishMock.mockImplementation(async () => {
+      // At the moment publish is called, every drainable queue + outbox must
+      // already have been resumed. This guarantees the post-restart workers
+      // boot with queues in the resumed state and immediately start
+      // processing the accumulated backlog.
+      publishCalledWithResumedQueues =
+        resumeCallOrder.includes('outboxDispatch') &&
+        resumeCallOrder.includes('notifications') &&
+        resumeCallOrder.includes('orderProcessing') &&
+        resumeCallOrder.includes('shipping') &&
+        resumeCallOrder.includes('inventoryAlerts') &&
+        resumeCallOrder.includes('refunds') &&
+        resumeCallOrder.includes('analytics') &&
+        resumeCallOrder.includes('cartCleanup') &&
+        resumeCallOrder.includes('reconciliation');
+      return 1 as unknown;
+    });
+
+    createCartCleanupWorker({}, baseWorkerDeps());
+
+    await processor?.({ name: 'scheduled-process-restart', id: 'job-resume', data: {} });
+
+    expect(publishCalledWithResumedQueues).toBe(true);
+    // dead-letter is intentionally NOT touched.
+    expect(queueMocks.deadLetter.pause).not.toHaveBeenCalled();
+    expect(queueMocks.deadLetter.resume).not.toHaveBeenCalled();
+  });
+
+  it('closes queue registry handles before exiting', async () => {
+    orderCount.mockResolvedValue(0);
+    createCartCleanupWorker({}, baseWorkerDeps());
+
+    await processor?.({ name: 'scheduled-process-restart', id: 'job-close', data: {} });
+
+    // Every queue (including dead-letter) gets close() called — releasing Redis
+    // connection handles before process.exit. Best-effort, must not throw.
+    for (const key of queueKeys) {
+      expect(queueMocks[key].close).toHaveBeenCalled();
+    }
+  });
+
+  it('does not block the restart when a single queue.pause() throws', async () => {
+    orderCount.mockResolvedValue(0);
+    queueMocks.shipping.pause.mockRejectedValueOnce(new Error('redis transient'));
+    createCartCleanupWorker({}, baseWorkerDeps());
+
+    await processor?.({ name: 'scheduled-process-restart', id: 'job-pause-fail', data: {} });
+
+    expect(sendTechnicalFailureAlertSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        template: 'ProcessRestartQueuePauseFailed',
+        failureStage: 'PROCESS_RESTART',
+        terminalFailure: false
+      })
+    );
+    // Restart still proceeds.
+    expect(publishMock).toHaveBeenCalledOnce();
+    expect(exitSpy).toHaveBeenCalledWith(0);
+  });
+
+  it('emits terminal alert when queue.resume() fails (operator must manually resume)', async () => {
+    orderCount.mockResolvedValue(0);
+    queueMocks.notifications.resume.mockRejectedValueOnce(new Error('redis EOF'));
+    createCartCleanupWorker({}, baseWorkerDeps());
+
+    await processor?.({ name: 'scheduled-process-restart', id: 'job-resume-fail', data: {} });
+
+    expect(sendTechnicalFailureAlertSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        template: 'ProcessRestartQueueResumeFailed',
+        failureStage: 'PROCESS_RESTART',
+        terminalFailure: true
+      })
+    );
+    // Restart still proceeds — operator gets alerted to manually resume.
+    expect(publishMock).toHaveBeenCalledOnce();
+    expect(exitSpy).toHaveBeenCalledWith(0);
+  });
+
+  it('falls through to legacy payment-only drain when pauseAndDrainQueuesEnabled=false', async () => {
+    orderCount.mockResolvedValue(0);
+    createCartCleanupWorker(
+      {},
+      baseWorkerDeps({ pauseAndDrainQueuesEnabled: false })
+    );
+
+    await processor?.({ name: 'scheduled-process-restart', id: 'job-disabled', data: {} });
+
+    // No pause/resume invoked when the protocol is disabled.
+    expect(pauseCallOrder).toEqual([]);
+    expect(resumeCallOrder).toEqual([]);
+    // Restart still proceeds via the legacy path.
+    expect(publishMock).toHaveBeenCalledOnce();
+    expect(exitSpy).toHaveBeenCalledWith(0);
+  });
+
+  it('queue pause+drain failure does not abort the restart sequence', async () => {
+    orderCount.mockResolvedValue(0);
+    // Force createQueueRegistry to throw, simulating Redis-unreachable at the
+    // protocol start. Restart must still proceed via the legacy path.
+    const throwingRegistry: NonNullable<CartCleanupWorkerDeps['createQueueRegistry']> = () => {
+      throw new Error('redis connection refused');
+    };
+    createCartCleanupWorker(
+      {},
+      baseWorkerDeps({ createQueueRegistry: throwingRegistry })
+    );
+
+    await processor?.({ name: 'scheduled-process-restart', id: 'job-registry-fail', data: {} });
+
+    expect(sendTechnicalFailureAlertSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        template: 'ProcessRestartPauseDrainFailed',
+        failureStage: 'PROCESS_RESTART',
+        terminalFailure: false
+      })
+    );
     expect(publishMock).toHaveBeenCalledOnce();
     expect(exitSpy).toHaveBeenCalledWith(0);
   });

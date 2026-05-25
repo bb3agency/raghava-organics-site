@@ -10,6 +10,7 @@ import {
   isOpsConfigBootstrapKey,
   isOpsConfigMutableKey,
   isOpsConfigRuntimeOverlayKey,
+  isOpsConfigSecretKey,
   OPS_CONFIG_OVERVIEW_GROUPS,
   OpsConfigDomain,
   resolveOpsConfigDomainForKey
@@ -504,6 +505,25 @@ export class OpsService {
     domain: OpsConfigDomain;
     key: string;
     maskedValue: string;
+    /**
+     * Plaintext stored value — present ONLY for non-secret keys (provider
+     * selectors, base URLs, pincodes, allowlist CIDRs, boolean flags, public
+     * key IDs, sender addresses, login emails, integer thresholds). Real
+     * cryptographic secrets (`_SECRET`, `_TOKEN`, `_PASSWORD`, `_API_KEY`,
+     * `_AUTH_KEY`, `_APP_SECRET`, signed approval tokens, ops cookie secret)
+     * never appear here — only `maskedValue` is set for them.
+     *
+     * Classified by `isOpsConfigSecretKey()` in ops-config-contract.ts —
+     * mirrors the frontend `isSecretKey()` predicate so the two stay aligned.
+     *
+     * Returning plaintext for non-secrets lets the Ops Config editor prefill
+     * the input with the actual saved value (e.g. `SHIPPING_PROVIDER=shiprocket`,
+     * `SHIPROCKET_WEBHOOK_MAX_SKEW_SECONDS=300`) so the operator can verify
+     * what was saved without retyping. The same value the operator submitted
+     * via `POST /ops/config/save` is what they see back here — no DB-stored
+     * data is hidden behind a mask when there is no security justification.
+     */
+    plaintextValue?: string;
     keyVersion: number;
     requiresRestart: boolean;
     updatedAt: string;
@@ -532,14 +552,19 @@ export class OpsService {
       keyVersion: number;
       requiresRestart: boolean;
       updatedAt: Date;
-    }) => ({
-      domain: domainMap[row.domain] ?? 'core',
-      key: row.secretKey,
-      maskedValue: maskSecretValue(decryptOpsConfigValue(row.encryptedValue)),
-      keyVersion: row.keyVersion,
-      requiresRestart: row.requiresRestart,
-      updatedAt: row.updatedAt.toISOString()
-    }));
+    }) => {
+      const decrypted = decryptOpsConfigValue(row.encryptedValue);
+      const isSecret = isOpsConfigSecretKey(row.secretKey);
+      return {
+        domain: domainMap[row.domain] ?? 'core',
+        key: row.secretKey,
+        maskedValue: maskSecretValue(decrypted),
+        ...(isSecret ? {} : { plaintextValue: decrypted }),
+        keyVersion: row.keyVersion,
+        requiresRestart: row.requiresRestart,
+        updatedAt: row.updatedAt.toISOString()
+      };
+    });
   }
 
   async createOpsInvite(input: {

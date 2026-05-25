@@ -583,7 +583,9 @@ Related ops configuration hardening:
 3. Save the new key via Ops UI (`POST /api/v1/ops/config/save`) — requires ops auth, `ops:write` permission, and email OTP challenge.
 4. If supported, keep overlap window before revoking old key:
    - Example: `RAZORPAY_WEBHOOK_SECRET_OLD` during transition.
-5. Restart containers to apply the DB-overlay change: `docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml up -d backend workers`.
+5. Restart containers to apply the DB-overlay change. Two options:
+   - **Ops UI (preferred, no SSH):** `POST /api/v1/ops/system/restart` with OTP. The cart-cleanup worker pauses `outboxDispatch` first, drains all queues (`RESTART_QUEUE_DRAIN_TIMEOUT_MS`, default 60 s) and `PENDING_PAYMENT` orders (`RESTART_PAYMENT_DRAIN_TIMEOUT_MS`, default 5 min), resumes queues, then publishes a restart signal. No queue job is lost; ~3–5 s downtime window.
+   - **SSH/VPS:** `docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml up -d backend workers`.
 6. Verify live traffic succeeds with new credential.
 7. Revoke old key/secret after verification window.
 
@@ -645,7 +647,7 @@ Rotation execution checklist:
 1. Generate new provider credential.
 2. Update vault entry and credential register metadata.
 3. Save new credential via Ops UI (`POST /api/v1/ops/config/save`) — ops auth + email OTP required.
-4. Restart containers: `docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml up -d backend workers`.
+4. Restart containers (Ops UI preferred — `POST /api/v1/ops/system/restart` with OTP runs the graceful queue+payment drain protocol; SSH fallback: `docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml up -d backend workers`).
 5. Verify provider flow in staging/production-safe path.
 6. Revoke old credential after overlap window.
 
@@ -657,7 +659,7 @@ Drill sequence (`revoke -> regenerate -> ops-save -> restart -> verify`):
 1. Revoke selected credential in provider dashboard.
 2. Regenerate replacement credential.
 3. Update vault and save new credential via Ops UI (`POST /api/v1/ops/config/save`) — ops auth + email OTP required.
-4. Restart containers: `docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml up -d backend workers` (not restart-only).
+4. Restart containers — full recreate, not `docker restart` (because env-var overlay only re-reads on container start). Ops UI: `POST /api/v1/ops/system/restart` with OTP (the graceful drain protocol pauses queues, drains in-flight jobs and `PENDING_PAYMENT` orders, then exits — Docker `restart: unless-stopped` brings them back with fresh overlay). SSH fallback: `docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml up -d backend workers`.
 5. Verify affected flow succeeds and old credential is unusable.
 6. Record elapsed time, blockers, and remediation actions.
 
