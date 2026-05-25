@@ -34,12 +34,20 @@ Deploy to VPS (workflow_run trigger)
     │  queued for runner label <client-id>-vps
     ▼
 Self-hosted runner on client VPS (polling GitHub)
-    ├─ deploy-backend  → bash $VPS_CLIENT_PATH/scripts/vps-deploy.sh
-    │       git pull + SHA verify → npm ci → migrate → docker compose swap
-    │       /health + /health/ready gate
-    └─ deploy-frontend → bash $VPS_CLIENT_PATH/scripts/vps-frontend-deploy.sh $VPS_FRONTEND_PATH
-            git pull → change detect → npm ci → build → pm2 reload (zero downtime)
+    ├─ deploy-backend
+    │       1. Sync monorepo root via git pull   (explicit, visible step)
+    │            cd $(git -C $VPS_CLIENT_PATH rev-parse --show-toplevel)
+    │            git fetch --prune origin main && git pull origin main --ff-only
+    │       2. bash $VPS_CLIENT_PATH/scripts/vps-deploy.sh
+    │            re-verifies SHA → npm ci → migrate → docker compose swap
+    │            /health + /health/ready gate (readiness is warning-only)
+    └─ deploy-frontend
+            1. Sync monorepo root via git pull   (no-op if backend ran first)
+            2. bash $VPS_CLIENT_PATH/scripts/vps-frontend-deploy.sh $VPS_FRONTEND_PATH
+                 change detect → npm ci → build → pm2 reload (zero downtime)
 ```
+
+> **Why an explicit root pull step (added May 2026):** Previously the `git pull` lived only inside the deploy scripts and ran *after* preflight checks (`.env` present, `docker-compose.yml` present, etc.). If a preflight failed, the on-disk source tree at `/var/www/<client-id>/` stayed stale and you couldn't tell from the Actions UI. The explicit `Sync monorepo root via git pull` step runs **before** the deploy script, surfaces the resolved git root + expected/actual SHA in the job log, and guarantees the VPS source tree is current even when the rest of the deploy aborts. The deploy script's internal pull stays as defense-in-depth (idempotent — `--ff-only` from a current tree is a no-op).
 
 **Daily workflow after setup:** `git commit && git push origin main` — nothing else.
 

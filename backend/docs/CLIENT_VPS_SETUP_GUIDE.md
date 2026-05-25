@@ -343,7 +343,18 @@ Use **`migrate deploy`** in production (not `migrate dev`). Migration SQL lives 
 
 ## 10. Start the backend stack
 
-Now build and start the Node application services:
+> **One-time recommendation — set Docker Compose's special vars in the VPS `.env` before running any compose command:**
+>
+> Append these two lines to `/var/www/<client-id>/backend/.env` (next to `CLIENT_ID`). Compose reads them automatically as special variables, so every `docker compose ...` command run from this directory will merge both files and use the right project name — no `-f` / `-p` flags to remember:
+>
+> ```bash
+> COMPOSE_FILE=docker-compose.yml:docker-compose.prod.yml
+> COMPOSE_PROJECT_NAME=<client-id>   # same value as CLIENT_ID
+> ```
+>
+> Without these, a bare `docker compose up -d backend workers` falls back to the base file only, tries to start the containerised Postgres, collides with the host's native Postgres on port 5432, and creates a stale orphan container on retry. CD (`backend/scripts/vps-deploy.sh`) passes flags explicitly and is unaffected — these only fix manual ops commands. See `OPS_CONTROL_PLANE_GUIDE.md` §6.10 and `PHASE7_VPS_DEPLOY_INCIDENT_PLAYBOOK.md` §3.
+
+Now build and start the Node application services. The explicit `-f`/`-p` form below works regardless of whether the `.env` shortcut is set:
 
 ```bash
 docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml up -d --build backend workers
@@ -351,9 +362,17 @@ docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml l
 docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml logs -f workers
 ```
 
+With the `.env` shortcut applied, the same becomes:
+
+```bash
+docker compose up -d --build backend workers
+docker compose logs -f backend
+docker compose logs -f workers
+```
+
 Verify:
 
-1. Containers: `${CLIENT_ID}-postgres`, `${CLIENT_ID}-redis`, `${CLIENT_ID}-backend`, `${CLIENT_ID}-workers`.
+1. Containers: `${CLIENT_ID}-redis`, `${CLIENT_ID}-backend`, `${CLIENT_ID}-workers`. **There is no `${CLIENT_ID}-postgres` container on the VPS** — the prod overlay hides the `postgres` service behind a `compose-local-postgres-only` profile so the host's native PostgreSQL stays authoritative.
 2. Health: `curl -sS http://127.0.0.1:<BACKEND_PORT>/api/v1/health` — must report DB + Redis connected (`TRD.md` §4.3).
 3. Readiness: `curl -sS http://127.0.0.1:<BACKEND_PORT>/api/v1/health/ready` — before go-live this must be `status=ready` with `runtimeConfigMissingKeys=[]`.
 4. Workers processing: trigger a test flow or inspect **`GET /api/v1/ops/queues`** (Bull Board, ops session + `ops:read` — `TRD.md` §10.1).

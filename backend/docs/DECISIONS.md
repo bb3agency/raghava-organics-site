@@ -4,6 +4,55 @@
 
 ---
 
+## [2026-05-25] `COMPOSE_FILE` + `COMPOSE_PROJECT_NAME` in VPS `.env` so bare `docker compose` always uses the prod overlay
+
+**Context:** `backend/docker-compose.yml` declares a containerised `postgres` service that publishes port `5432:5432` to the host — needed for local dev where there is no host PostgreSQL, harmful on the VPS where the native PostgreSQL already owns `5432`. The `docker-compose.prod.yml` overlay handles VPS reality by (a) dropping the `postgres` `depends_on` from `backend`/`workers` via `depends_on: !reset` and (b) hiding the `postgres` service behind a `compose-local-postgres-only` profile.
+
+`backend/scripts/vps-deploy.sh` (CD path) already passes `-f docker-compose.yml -f docker-compose.prod.yml -p $CLIENT_ID` explicitly, so automated deploys are correct. Manual ops commands (`docker compose -p <client-id> up -d backend workers`), however, default to the base file only. On a VPS this causes:
+1. First attempt: `failed to bind host port 0.0.0.0:5432/tcp: address already in use` because the containerised Postgres collides with the host's native Postgres.
+2. Second attempt: Compose reports all containers "Healthy" — but the `<client-id>-postgres` container is only bound to the internal docker bridge network, never to the host port. The backend uses `host.docker.internal:5432` (the real host Postgres). A stale, useless `<client-id>-postgres` container now exists and reappears on every manual restart.
+
+Operators hit this trap whenever they SSH in to do anything outside CD.
+
+**Decision:** Add `COMPOSE_FILE=docker-compose.yml:docker-compose.prod.yml` and `COMPOSE_PROJECT_NAME=<client-id>` to `/var/www/<client-id>/backend/.env` on every VPS. Docker Compose v2 reads these special variables from the `.env` in the working directory, so every bare `docker compose ...` command run from that directory automatically merges both files and uses the right project name — `up`, `down`, `ps`, `logs`, `restart`, `pull`, `build`, all of it. No flags to remember; no orphan containers.
+
+The repo `backend/.env.example` ships these lines **commented** with an inline explanation (VPS-only — local dev usually wants only the base file). `backend/scripts/vps-deploy.sh` continues to pass `-f`/`-p` explicitly, so CD is unchanged and the new defaults can be rolled out per-VPS without touching the script.
+
+**Rationale:**
+- Single-source-of-truth for the VPS compose configuration (one `.env`, every command picks it up).
+- Robust against operator memory — no `-f` flags to forget under pressure.
+- No code change required; purely an operational hygiene fix.
+- Preserves the asymmetry between local dev (containerised Postgres OK) and VPS (host Postgres mandatory) without making the base compose file behave differently.
+
+**Alternatives considered:**
+- Move the `ports: 5432:5432` into a profile in the base `docker-compose.yml`. Rejected — breaks local dev's "just run `docker compose up -d postgres redis`" muscle memory.
+- Replace `docker-compose.prod.yml` with a `docker-compose.override.yml` (which Compose auto-loads when present). Rejected — `override.yml` is a magic filename that local devs would inadvertently inherit if they pull the wrong branch, and conflicts with the "two-file explicit" semantics the deploy script uses.
+- A `scripts/vps-compose.sh` wrapper. Rejected — yet another file to remember; the `.env` solution requires zero new files.
+- Rewriting the deploy script to remove `-f` flags. Rejected — defense-in-depth; the script must work even on a VPS where someone hasn't applied the `.env` change yet.
+
+**Affects:** `backend/.env.example`, `backend/docs/OPS_CONTROL_PLANE_GUIDE.md` (new §6.10 + cross-references), `backend/docs/PHASE7_VPS_DEPLOY_INCIDENT_PLAYBOOK.md` §3, `backend/docs/CLIENT_VPS_SETUP_GUIDE.md` §10 (verification list updated — no `${CLIENT_ID}-postgres` container expected on VPS).
+
+---
+
+## [2026-05-25] Explicit `git pull` of VPS monorepo root as a visible workflow step
+
+**Context:** The `.github/workflows/deploy.yml` deploy jobs (`deploy-backend`, `deploy-frontend`) delegated all git operations to `backend/scripts/vps-deploy.sh` and `backend/scripts/vps-frontend-deploy.sh`. Both scripts pulled at the resolved git root (the monorepo root `/var/www/<client-id>/` for monorepo layouts), but only **after** validating `.env`, `docker-compose.yml`, and `docker-compose.prod.yml` existed. If any preflight check failed, the on-disk source at the monorepo root stayed stale, even though the Actions job appeared to have "run". From the Actions UI alone, an operator could not tell whether the VPS source tree was current.
+
+**Decision:** Promote the monorepo-root pull to an explicit, visible workflow step that runs **before** the deploy script in every job. The step resolves the git root from `VPS_CLIENT_PATH` (or `VPS_FRONTEND_PATH` for the frontend job), runs `git fetch --prune origin main && git pull origin main --ff-only`, and logs the resolved root path plus expected/actual SHA. The deploy script's internal pull stays as defense-in-depth (idempotent on a current tree). Applied to both `.github/workflows/deploy.yml` (monorepo) and `backend/.github/workflows/deploy.yml` (backend-only template) so future client clones inherit it.
+
+**Rationale:**
+- Visibility — operators see the resolved root + SHA in the GitHub Actions step log, immediately diagnose stale-clone problems.
+- Resilience — a missing `.env` or mis-mounted `docker-compose.prod.yml` no longer blocks the source pull, so the next deploy after a fix has a clean slate.
+- `--ff-only` protects against accidental rebase/force-push history landing on the VPS without a conflict signal.
+
+**Alternatives considered:**
+- A separate `sync-monorepo-root` job that both deploy jobs `needs:`. Rejected because it adds queue latency on the single-runner case for no benefit — the per-job step is fast and idempotent, and self-hosted runners on a single VPS already process jobs sequentially by default.
+- Removing the internal pull from the deploy scripts. Rejected to preserve defense-in-depth: the scripts can also be invoked manually (`bash scripts/vps-deploy.sh ...`) without GitHub Actions, and the internal pull keeps that path self-contained.
+
+**Affects:** `.github/workflows/deploy.yml`, `backend/.github/workflows/deploy.yml`, `backend/docs/GITHUB_CD_SELF_HOSTED_RUNNER_GUIDE.md`.
+
+---
+
 ## [2026-05-25] Incremental Ops config save + boot tolerance for incomplete provider chains
 
 **Context:** During Phase 8 ops bootstrap on Raghava Organics, two related failure modes surfaced:

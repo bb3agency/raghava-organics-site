@@ -49,16 +49,50 @@ Notes:
 
 Do not run plain base compose in VPS production when host PostgreSQL is authoritative.
 
-Use:
+Use either of these — they're equivalent:
 
 ```bash
+# Explicit (the only thing CD does):
 docker compose -f docker-compose.yml -f docker-compose.prod.yml -p <client-id> up -d backend workers
+
+# Implicit (after the one-time .env setup below — recommended for manual ops):
+docker compose up -d backend workers
 ```
 
 Why:
-- Base compose includes a `postgres` service with port bind `:5432`.
+- Base `docker-compose.yml` declares a `postgres` service that publishes port `:5432` to the host.
 - If host PostgreSQL already uses 5432, plain compose startup causes:
   - `failed to bind host port 0.0.0.0:5432: address already in use`
+- The `docker-compose.prod.yml` overlay drops the `postgres` `depends_on` from `backend`/`workers` and hides the `postgres` service behind a profile.
+
+### One-time VPS `.env` fix so bare `docker compose` never picks up the wrong files
+
+Add these two lines to `/var/www/<client-id>/backend/.env` (alongside `CLIENT_ID`). Docker Compose v2 reads them automatically as special variables; every subsequent `docker compose ...` command run from that directory merges both files and uses the right project name. Leave them **commented in the repo template `.env.example`** — they're VPS-only:
+
+```bash
+COMPOSE_FILE=docker-compose.yml:docker-compose.prod.yml
+COMPOSE_PROJECT_NAME=<client-id>   # same value as CLIENT_ID
+```
+
+### Observed second-run "works" anti-pattern
+
+Running `docker compose -p <client-id> up -d backend workers` twice on a VPS that already has host Postgres:
+
+```
+1st run:  Error: failed to bind host port 0.0.0.0:5432/tcp: address already in use
+2nd run:  ✔ Container <client-id>-postgres   Healthy
+          ✔ Container <client-id>-backend    Running
+          ✔ Container <client-id>-workers    Running
+```
+
+The "Healthy" status on run 2 is misleading — the postgres container is up on the internal docker bridge network but the host port is still owned by native Postgres. The backend container is using `host.docker.internal:5432` (i.e. the host Postgres), not the containerised one. You now have a useless `<client-id>-postgres` container that will reappear on every plain restart and consume disk via its `pg-data` volume. Apply the `.env` fix above, then clean it up:
+
+```bash
+docker stop  <client-id>-postgres 2>/dev/null || true
+docker rm    <client-id>-postgres 2>/dev/null || true
+# Optional: remove the orphan volume (it was never the source of truth)
+docker volume rm "<client-id>_pg-data" 2>/dev/null || true
+```
 
 ---
 

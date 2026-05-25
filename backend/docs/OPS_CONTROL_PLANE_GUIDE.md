@@ -601,9 +601,46 @@ Response: `{ jobId, scheduledFor }` — ISO-8601 timestamp of when the restart w
 
 1. After calling `POST /ops/config/save`, the response includes `requiresRestart: true`.
 2. Show a restart banner: "Configuration saved. A process restart is required for changes to take effect." **There is no automatic restart prompt or modal** — restart is always operator-initiated.
-3. Offer two paths in copy: a link to the **Ops → System** page (where the operator runs the OTP-protected `/ops/system/restart` flow with optional delay), and a hint that VPS operators can also run `docker compose -p <client-id> up -d backend workers` directly.
+3. Offer two paths in copy: a link to the **Ops → System** page (where the operator runs the OTP-protected `/ops/system/restart` flow with optional delay), and a hint that VPS operators can also run `docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml up -d backend workers` directly (or just `docker compose up -d backend workers` if `COMPOSE_FILE` and `COMPOSE_PROJECT_NAME` are set in the VPS `.env` — see §6.10).
 4. On success of `/ops/system/restart`, display the returned `jobId` and `scheduledFor` time so the ops user knows when to expect downtime.
 5. Poll `GET /api/v1/health` to detect when the API is back online.
+
+### 6.10 Manual `docker compose` commands on the VPS (always include the prod overlay)
+
+The `backend/docker-compose.yml` base file declares a containerised `postgres` service that publishes port `5432:5432` to the host — useful for local dev, **wrong for the VPS**, where the native (host) PostgreSQL is already bound to `5432`. The `backend/docker-compose.prod.yml` overlay handles this by (a) dropping the `postgres` dependency from `backend`/`workers` via `depends_on: !reset` and (b) hiding the `postgres` service behind a profile so it's not started.
+
+**The CD path is safe** — `backend/scripts/vps-deploy.sh` passes both files explicitly:
+
+```bash
+COMPOSE_FILES=(-f docker-compose.yml -f docker-compose.prod.yml)
+docker compose -p "$COMPOSE_PROJECT" "${COMPOSE_FILES[@]}" up -d backend workers
+```
+
+**Manual commands are not.** If an operator SSHes in and runs `docker compose -p <client-id> up -d backend workers`, only the base file is loaded; Compose tries to start the containerised Postgres, fails on the first attempt with `failed to bind host port 0.0.0.0:5432/tcp: address already in use`, and on the second attempt leaves a partially-initialised, port-unbound `<client-id>-postgres` container running on the internal docker network — which the backend is **not** connected to. The site appears to come up; in reality it's still talking to the host Postgres (correct) but you now have a stale, conflicting container that will reappear on every manual restart.
+
+**Fix on every VPS:** add two lines to the VPS `.env` (next to `CLIENT_ID`):
+
+```bash
+# Makes bare `docker compose ...` commands auto-include the prod overlay
+# and use the client-specific project name. VPS-only — leave commented in local dev.
+COMPOSE_FILE=docker-compose.yml:docker-compose.prod.yml
+COMPOSE_PROJECT_NAME=<client-id>          # must match CLIENT_ID
+```
+
+Docker Compose v2 reads these special variables from the `.env` in the current working directory. After this, every `docker compose ...` command run from `/var/www/<client-id>/backend/` automatically merges both files and picks the right project name — including `docker compose up`, `down`, `ps`, `logs`, `restart`, `pull`, `build`, etc. No flags to remember.
+
+**If you've already created the orphan container** (one-time cleanup on a misconfigured VPS):
+
+```bash
+cd /var/www/<client-id>/backend
+docker stop <client-id>-postgres 2>/dev/null || true
+docker rm <client-id>-postgres   2>/dev/null || true
+docker volume rm "$(docker compose -p <client-id> config --format json | jq -r '.volumes."pg-data".name')" 2>/dev/null || true
+# Then add the two COMPOSE_* lines to .env (above) and restart cleanly:
+docker compose up -d backend workers
+```
+
+Without the prod overlay, the same trap exists on every container restart command. The two-line `.env` change is the permanent fix.
 
 ## 7) Suggested frontend UX flow
 
@@ -740,7 +777,7 @@ curl -sS http://127.0.0.1:<BACKEND_PORT>/api/v1/health # 502/connection refused 
 **Resolution path (preferred — code fix already in template, May 2026):**
 
 1. `git pull` the template fix that makes `validateConditionalEnv` boot-tolerant (boot only rejects unsupported provider enums and placeholder values for keys that *are* set; full chains move to `/health/ready`).
-2. Rebuild: `docker compose -p <client-id> build backend && docker compose -p <client-id> up -d backend workers`.
+2. Rebuild: `docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml build backend && docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml up -d backend workers`. (Both `-f` flags are required on the VPS — see §6.10. Skipping the prod overlay tries to start the containerised Postgres and collides with the host's native Postgres on port 5432.)
 3. Confirm `/api/v1/health` returns `ok`, then finish remaining Ops keys and restart again.
 
 **Emergency rollback (no pull yet):** deactivate the incomplete overlay rows so the next boot does not enter the crash path. Example for `PAYMENT_PROVIDER` / `SHIPPING_PROVIDER`:
@@ -751,7 +788,7 @@ SET "isActive" = false
 WHERE "secretKey" IN ('PAYMENT_PROVIDER','SHIPPING_PROVIDER') AND "isActive" = true;
 ```
 
-Then `docker compose -p <client-id> up -d backend workers`. After the site is back, save the remaining provider secrets via Ops UI and restart again. This is incident-only; the boot-tolerance fix is the long-term answer.
+Then `docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml up -d backend workers` (or bare `docker compose up -d backend workers` if `COMPOSE_FILE` is set in the VPS `.env` per §6.10). After the site is back, save the remaining provider secrets via Ops UI and restart again. This is incident-only; the boot-tolerance fix is the long-term answer.
 
 ---
 

@@ -66,6 +66,41 @@ jobs:
             echo "runner label (e.g. 'greengrocer-vps') to prevent cross-client deploy misfires."
           fi
 
+      - name: Sync monorepo/repo root via git pull
+        env:
+          VPS_CLIENT_PATH: ${{ secrets.VPS_CLIENT_PATH }}
+          COMMIT_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          # Resolves the git root from VPS_CLIENT_PATH. For a monorepo layout
+          # (/var/www/<client-id>/backend) this returns /var/www/<client-id>;
+          # for backend-only repos it returns the backend directory itself.
+          # Either way the pull keeps the on-disk source in sync with `main`
+          # before the deploy script's preflight checks run.
+          if [ ! -d "$VPS_CLIENT_PATH" ]; then
+            echo "::error::VPS_CLIENT_PATH does not exist on this runner: $VPS_CLIENT_PATH"
+            exit 1
+          fi
+          GIT_ROOT=$(git -C "$VPS_CLIENT_PATH" rev-parse --show-toplevel 2>/dev/null || true)
+          if [ -z "$GIT_ROOT" ]; then
+            echo "::error::$VPS_CLIENT_PATH is not inside a git working tree."
+            echo "Clone the client repo first (see docs/CLIENT_VPS_SETUP_GUIDE.md §22)."
+            exit 1
+          fi
+          echo "Pulling git root: $GIT_ROOT (expected SHA: $COMMIT_SHA)"
+          cd "$GIT_ROOT"
+          git fetch --prune origin main
+          git checkout main 2>/dev/null || git checkout -B main origin/main
+          # --ff-only protects against rebased/force-pushed history landing on the VPS.
+          git pull origin main --ff-only
+          ACTUAL_SHA=$(git rev-parse HEAD)
+          if [ "$ACTUAL_SHA" != "$COMMIT_SHA" ]; then
+            echo "::warning::Git root SHA ($ACTUAL_SHA) does not match CI SHA ($COMMIT_SHA)."
+            echo "A newer push may have landed mid-deploy. The deploy script will re-verify."
+          else
+            echo "Git root in sync at $ACTUAL_SHA"
+          fi
+
       - name: Deploy backend locally via vps-deploy.sh
         env:
           VPS_CLIENT_PATH: ${{ secrets.VPS_CLIENT_PATH }}
@@ -99,6 +134,37 @@ jobs:
             echo "::error::Missing required secrets: ${missing[*]}"
             echo "See docs/CLIENT_VPS_SETUP_GUIDE.md §22 for frontend setup instructions."
             exit 1
+          fi
+
+      - name: Sync monorepo root via git pull
+        env:
+          VPS_FRONTEND_PATH: ${{ secrets.VPS_FRONTEND_PATH }}
+          COMMIT_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          # Resolves the monorepo root from VPS_FRONTEND_PATH. If deploy-backend
+          # already ran, this is a no-op (`git pull --ff-only` on a current tree).
+          if [ ! -d "$VPS_FRONTEND_PATH" ]; then
+            echo "::error::VPS_FRONTEND_PATH does not exist on this runner: $VPS_FRONTEND_PATH"
+            exit 1
+          fi
+          GIT_ROOT=$(git -C "$VPS_FRONTEND_PATH" rev-parse --show-toplevel 2>/dev/null || true)
+          if [ -z "$GIT_ROOT" ]; then
+            echo "::error::$VPS_FRONTEND_PATH is not inside a git working tree."
+            echo "Clone the client repo first (see docs/CLIENT_VPS_SETUP_GUIDE.md §22)."
+            exit 1
+          fi
+          echo "Pulling monorepo root: $GIT_ROOT (expected SHA: $COMMIT_SHA)"
+          cd "$GIT_ROOT"
+          git fetch --prune origin main
+          git checkout main 2>/dev/null || git checkout -B main origin/main
+          git pull origin main --ff-only
+          ACTUAL_SHA=$(git rev-parse HEAD)
+          if [ "$ACTUAL_SHA" != "$COMMIT_SHA" ]; then
+            echo "::warning::Monorepo root SHA ($ACTUAL_SHA) does not match CI SHA ($COMMIT_SHA)."
+            echo "A newer push may have landed mid-deploy. The deploy script will re-verify."
+          else
+            echo "Monorepo root in sync at $ACTUAL_SHA"
           fi
 
       - name: Deploy frontend locally via vps-frontend-deploy.sh
