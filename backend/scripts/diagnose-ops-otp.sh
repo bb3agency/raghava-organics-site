@@ -105,18 +105,6 @@ cat <<'EOF'
 
 How to interpret the output above:
 
-• Step 1 shows STATUS="Restarting (X) Y seconds ago" → the workers container
-  is crash-looping at boot. Step 7 will contain "Error: Missing required worker
-  env var: <KEY>" (most often SHIPROCKET_EMAIL / MSG91_AUTH_KEY). This used to
-  happen when a provider selector (SHIPPING_PROVIDER, SMS_PROVIDER, etc.) was
-  saved via Ops UI without the rest of its credential chain. Fix: ensure you
-  are on the latest backend code (the May 25, 2026 patch makes the worker
-  bootstrap boot-tolerant), then:
-      git pull origin main
-      docker compose up -d --build workers
-  Queued OTP jobs will drain on recovery and emails land in the inbox in a
-  burst.
-
 • Step 1 says "Up" but step 5 has no recent challenge row → the OTP request
   didn't reach the API. Check frontend network tab + the API container logs.
 

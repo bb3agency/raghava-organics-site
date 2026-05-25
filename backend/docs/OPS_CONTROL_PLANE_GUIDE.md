@@ -764,7 +764,7 @@ UI should surface actionable remediation from `error.details.remediation` when p
 If the storefront starts returning `502 Bad Gateway` on `/api/v1/*` shortly after an Ops config save followed by an API/worker restart, the API container is almost always **crash-looping**, not the network. Most common cause:
 
 - The DB overlay applied a partial provider setting (e.g. `PAYMENT_PROVIDER=razorpay` or `SHIPPING_PROVIDER=shiprocket`) before the matching provider secrets were saved.
-- Older boot validation (`validateConditionalEnv` in `src/config/app.config.ts` for the API process **and** `validateWorkerEnv` in `queues/workers/index.ts` for the workers process) called `requireEnv` on the full dependency chain and threw `Missing required env var: …` / `Missing required worker env var: …` at startup, exiting the container. Docker restart policy keeps re-launching it, and nginx returns 502 between attempts. The workers variant is especially destructive because every background queue (notifications, shipping, refunds, analytics, reconciliation, dead-letter, …) shares a single container — one missing provider key kills all of them. The most visible symptom is Ops OTP emails not arriving (notification jobs sit queued); see `PHASE7_VPS_DEPLOY_INCIDENT_PLAYBOOK.md` §A.5.
+- Older boot validation (`validateConditionalEnv` in `src/config/app.config.ts`) called `requireEnv` on the full dependency chain and threw `Missing required env var: …` at startup, exiting the API process. Docker restart policy keeps re-launching the container, and nginx returns 502 between attempts.
 
 **Triage on the VPS:**
 
@@ -776,7 +776,7 @@ curl -sS http://127.0.0.1:<BACKEND_PORT>/api/v1/health # 502/connection refused 
 
 **Resolution path (preferred — code fix already in template, May 2026):**
 
-1. `git pull` the template fix that makes both `validateConditionalEnv` (API process) and `validateWorkerEnv` (workers process) boot-tolerant. Boot now only rejects unsupported provider enums and placeholder values for keys that *are* set; full chains move to `/health/ready`. The two processes are kept in lockstep — see `HARDENING_HISTORY.md` and `DECISIONS.md` 2026-05-25 entry.
+1. `git pull` the template fix that makes `validateConditionalEnv` boot-tolerant (boot only rejects unsupported provider enums and placeholder values for keys that *are* set; full chains move to `/health/ready`).
 2. Rebuild: `docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml build backend && docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml up -d backend workers`. (Both `-f` flags are required on the VPS — see §6.10. Skipping the prod overlay tries to start the containerised Postgres and collides with the host's native Postgres on port 5432.)
 3. Confirm `/api/v1/health` returns `ok`, then finish remaining Ops keys and restart again.
 
@@ -819,7 +819,7 @@ All security verification gates passing:
 | **API Key Path Removal** | May 2026 | Browser session is the only auth mechanism |
 | **OTP Test Fixes** | June 2026 | SHA256 hash computation verified in all tests |
 | **Ops config + readiness hardening** | May 2026 | `invite-revoke` in OTP enum; OTP action binding; optional `domain` on config save; empty value deactivates overlay; `/health/ready` 503 returns `data` + `CONFIG_NOT_READY` |
-| **Incremental config save + boot tolerance** | May 2026 | `validateConfigDraft` only validates submitted keys (partial saves no longer rejected for unrelated required keys). `validateConditionalEnv` (API process) **and** `validateWorkerEnv` (workers process) no longer call `requireEnv` on full provider chains at boot — only enum correctness and placeholder safety on keys that are present. Full go-live coverage stays at `GET /api/v1/health/ready`. Prevents API crash-loops / nginx 502s **and** the workers-container crash-loops that previously stalled every async queue (notifications including Ops OTP emails, shipping, refunds, dead-letter replay) during incremental Ops setup. |
+| **Incremental config save + boot tolerance** | May 2026 | `validateConfigDraft` only validates submitted keys (partial saves no longer rejected for unrelated required keys). `validateConditionalEnv` no longer calls `requireEnv` on full provider chains at boot — only enum and placeholder safety. Full go-live coverage stays at `GET /api/v1/health/ready`. Prevents API crash-loops / nginx 502s during incremental Ops setup. |
 
 ### 10.3 Verified Security Invariants
 
