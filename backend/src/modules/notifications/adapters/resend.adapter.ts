@@ -40,7 +40,25 @@ export class ResendAdapter implements EmailProviderAdapter {
 
     const payload = await this.parsePayload(response);
     if (!response.ok) {
-      throw new AppError(ERROR_CODES.INTERNAL_ERROR, `Resend request failed: ${response.status}`, 502);
+      // Resend returns a structured body on every failure, e.g.:
+      //   { "statusCode": 403, "name": "validation_error",
+      //     "message": "You can only send testing emails to your own email address ..." }
+      //   { "statusCode": 401, "name": "missing_api_key", "message": "API key not found" }
+      //   { "statusCode": 422, "name": "validation_error",
+      //     "message": "The `from` domain is not verified ..." }
+      // The body's `message` field is the only field that tells an operator how to fix
+      // the problem. Including it in the thrown error means it ends up in
+      // NotificationLog.errorMessage (capped to a reasonable length to keep DB rows lean).
+      const providerMessage = this.extractMessage(payload);
+      const providerName = this.extractName(payload);
+      const detail = providerMessage
+        ? ` — ${providerName ? `[${providerName}] ` : ''}${providerMessage}`
+        : '';
+      throw new AppError(
+        ERROR_CODES.INTERNAL_ERROR,
+        `Resend request failed: ${response.status}${detail}`,
+        502
+      );
     }
 
     const messageId = typeof payload.id === 'string' ? payload.id : undefined;
@@ -57,5 +75,20 @@ export class ResendAdapter implements EmailProviderAdapter {
     } catch {
       return { raw: text };
     }
+  }
+
+  private extractMessage(payload: Record<string, unknown>): string | null {
+    const raw = typeof payload['message'] === 'string' ? payload['message'] : null;
+    if (!raw) {
+      // Fall back to the unparsed body if we have one — covers HTML error pages or
+      // gateway-level rejections that don't return JSON.
+      const rawText = typeof payload['raw'] === 'string' ? payload['raw'].trim() : '';
+      return rawText.length > 0 ? rawText.slice(0, 280) : null;
+    }
+    return raw.slice(0, 280);
+  }
+
+  private extractName(payload: Record<string, unknown>): string | null {
+    return typeof payload['name'] === 'string' ? payload['name'] : null;
   }
 }

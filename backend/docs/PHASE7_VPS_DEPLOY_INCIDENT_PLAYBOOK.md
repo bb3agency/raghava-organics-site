@@ -105,6 +105,34 @@ Cause:
 Fix:
 - Copy filled production env to `backend/.env` on VPS before phase script.
 
+### A.5) Ops OTP email never arrives
+
+Symptoms:
+- Ops UI shows "OTP sent" / challenge created (HTTP 200).
+- The recipient inbox (and spam folder) stays empty.
+- No obvious crash in `docker compose logs workers`.
+
+Triage (single command — prints all evidence at once):
+```bash
+cd /var/www/<client-id>/backend
+bash scripts/diagnose-ops-otp.sh
+```
+
+This prints: worker container state, `NOTIFY_EMAIL_ENABLED` inside the container, `StoreSettings.notifyEmailEnabled`, presence of `RESEND_API_KEY` + `RESEND_FROM` in `OpsConfigSecret` (masked — only length), the last 5 `OpsOtpChallenge` rows (confirms the API received the request), the last 5 `NotificationLog` rows for `template='OpsActionOtp'` (the actual send outcome), and filtered worker logs.
+
+Most common root causes (from the `NotificationLog.errorMessage` printed in step 6):
+
+| `errorMessage` text | Cause | Fix |
+|---|---|---|
+| `Email notifications disabled or RESEND_API_KEY missing` | `RESEND_API_KEY` not in `OpsConfigSecret` and not in `.env`, or `StoreSettings.notifyEmailEnabled=false` | Save `RESEND_API_KEY` + `RESEND_FROM` via Ops → Config; restart workers via `docker compose up -d workers`. If `notifyEmailEnabled=false`, flip it via admin settings. |
+| `Resend request failed: 403 — [validation_error] You can only send testing emails to your own email address … verify a domain` | Resend test-mode restriction — recipient ≠ Resend account email and sending domain not verified | Either set the recipient ops user's email to your Resend account email (quickest test) **or** verify your sending domain at `https://resend.com/domains` and set `RESEND_FROM=noreply@<your-verified-domain>`. |
+| `Resend request failed: 401 — [missing_api_key] API key not found` | `RESEND_API_KEY` value invalid or revoked | Regenerate at `https://resend.com/api-keys`, save via Ops → Config. |
+| `Resend request failed: 422 — [validation_error] The 'from' domain is not verified` | `RESEND_FROM` uses a domain you haven't added at `https://resend.com/domains` | Verify the domain (add DNS records Resend shows) or temporarily switch to `RESEND_FROM=onboarding@resend.dev`. |
+| Step 6 has no rows but step 5 does | Job sits in BullMQ queue; worker isn't consuming | Check step 1 (container state) and step 7 (filtered logs) for crash/connection errors. Likely a Redis password/URL mismatch or a worker bootstrap crash. |
+| Step 5 also has no fresh rows | API never received the OTP request | Check frontend network tab + the API container logs (`docker compose logs backend --tail 80`). |
+
+Note: prior to May 2026 the worker only logged `Resend request failed: <status>` without the body. If you see bare-status entries, the older code is still deployed — `git pull` + redeploy to get the structured Resend error text in `NotificationLog.errorMessage`.
+
 ### B) Prisma `P1012` / datasource `url` no longer supported
 Cause:
 - `npx prisma` pulled latest Prisma CLI (v7) because dependencies were not installed.

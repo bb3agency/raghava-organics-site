@@ -4,6 +4,14 @@ This document preserves detailed hardening history for engineering traceability.
 
 ## Recent hardening changes
 
+**Ops OTP email diagnosability — actionable Resend error surfacing + on-VPS triage script — May 2026:**
+
+`backend/src/modules/notifications/adapters/resend.adapter.ts` previously discarded the response body on non-2xx and threw `Resend request failed: <status>` with no further detail. Resend, however, always returns a structured body explaining *why* (`{"statusCode":403,"name":"validation_error","message":"You can only send testing emails to your own email address … verify a domain at resend.com/domains"}`, `{"name":"missing_api_key","message":"API key not found"}`, etc.). With the body discarded, `NotificationLog.errorMessage` stored only the bare status code, leaving operators unable to tell config errors from outages without manual API replays.
+
+Fixed by extracting `payload.message` (Resend's actionable field) plus `payload.name` (their error taxonomy), capping the combined detail at 280 chars to keep DB rows lean, and falling back to the truncated raw body when the response isn't JSON (e.g. WAF HTML pages, gateway 502s). The new tests cover both the 403 test-mode case and a 502 non-JSON fallback. Worker logs and `NotificationLog` now carry the full actionable reason (`Resend request failed: 403 — [validation_error] You can only send testing emails …`).
+
+Added `backend/scripts/diagnose-ops-otp.sh` — a single-shot triage script run on the VPS that surfaces: (1) `workers` container state, (2) `NOTIFY_EMAIL_ENABLED` inside the container, (3) `StoreSettings.notifyEmailEnabled` DB value, (4) `OpsConfigSecret` presence for `RESEND_API_KEY`/`RESEND_FROM` (masked — only length, never plaintext), (5) recent `OpsOtpChallenge` rows (did the OTP request hit the API?), (6) recent `NotificationLog` rows for `template='OpsActionOtp'` (the actual send outcome), and (7) filtered `docker compose logs workers` output for email/otp/notification/resend keywords. Honors `COMPOSE_FILE` / `COMPOSE_PROJECT_NAME` in `.env` (per the prior decision) and falls back to explicit `-f`/`-p` flags when not set. Inline interpretation guide at the end of the script maps common `errorMessage` patterns to the exact remediation step.
+
 **Incremental Ops config save + boot tolerance for incomplete provider chains — May 2026:**
 
 During Phase 8 ops bootstrap on Raghava Organics, a chain of three issues blocked the storefront:
