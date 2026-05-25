@@ -110,7 +110,35 @@ Fix:
 Symptoms:
 - Ops UI shows "OTP sent" / challenge created (HTTP 200).
 - The recipient inbox (and spam folder) stays empty.
-- No obvious crash in `docker compose logs workers`.
+- New OTP requests appear in `OpsOtpChallenge` but no new rows in `NotificationLog` for `template='OpsActionOtp'`.
+
+**First check — is the `workers` container alive?**
+
+This is the May 25, 2026 incident root cause and the most common cause: a single missing provider key (`SHIPROCKET_EMAIL`, `MSG91_AUTH_KEY`, etc.) was historically crashing the workers process at boot via `validateWorkerEnv`, killing every queue including notifications. Run:
+
+```bash
+cd /var/www/<client-id>/backend
+docker compose ps workers
+```
+
+If the `STATUS` column shows `Restarting (1) X seconds ago` instead of `Up`, the worker is crash-looping. Inspect the boot logs to confirm:
+
+```bash
+docker compose logs workers --tail 40 | grep -E "Missing required worker env var|Unsupported"
+```
+
+If you see `Error: Missing required worker env var: <KEY>` repeatedly, pull the latest backend code (the May 25, 2026 fix makes `validateWorkerEnv` boot-tolerant — only enum correctness and placeholder safety are enforced at boot; full chains are checked at `/health/ready`):
+
+```bash
+git pull origin main
+docker compose up -d --build workers
+sleep 10
+docker compose ps workers   # should now show "Up X seconds (healthy)"
+```
+
+After the container recovers, queued OTP jobs drain and any pending OTPs land in the inbox in quick succession. Trigger a fresh OTP request to confirm.
+
+**Then — if the container is `Up` but emails still aren't arriving, run the full diagnostic:**
 
 Triage (single command — prints all evidence at once):
 ```bash

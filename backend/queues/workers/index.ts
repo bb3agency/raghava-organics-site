@@ -35,46 +35,117 @@ function requireWorkerEnv(name: string): string {
   return value;
 }
 
+function envVarPresentForWorker(name: string): boolean {
+  return Boolean((process.env[name] ?? '').trim());
+}
+
+function isPlaceholderValueForWorker(value: string | undefined): boolean {
+  const normalized = (value ?? '').trim().toLowerCase();
+  return (
+    normalized.startsWith('replace_with_') ||
+    normalized.startsWith('change_me') ||
+    normalized.startsWith('<')
+  );
+}
+
+// Production safety for a key that is already set — never requires missing
+// overlay keys at boot. Mirrors `assertEnvNotPlaceholderIfPresent` in
+// src/config/app.config.ts so workers and API have the same tolerance.
+function assertWorkerEnvNotPlaceholderIfPresent(name: string): void {
+  if (!envVarPresentForWorker(name)) {
+    return;
+  }
+  if (isPlaceholderValueForWorker(process.env[name])) {
+    throw new Error(`Invalid ${name}: placeholder values are not allowed in production-like profiles`);
+  }
+}
+
 function validateWorkerEnv(): void {
+  // Boot tolerance contract (matches src/config/app.config.ts validateConditionalEnv):
+  //   - Hard-require core infrastructure keys (database, ops crypto, OTel endpoint
+  //     when tracing is enabled). These cannot be loaded from the Ops DB overlay
+  //     because the overlay itself needs them.
+  //   - For every provider chain (email/SMS/WhatsApp/shipping), only validate the
+  //     selector enum value and placeholder safety on keys that ARE present. Do
+  //     not throw if a full chain is incomplete — the notifications/shipping
+  //     workers already read provider keys fresh from OpsConfigSecret on every
+  //     job and log a FAILED NotificationLog row when the key is missing. A crash
+  //     loop here would kill ALL queues (notifications, shipping, refunds,
+  //     analytics, reconciliation, dead-letter, …) over a single missing
+  //     provider key, which is exactly the failure mode we saw on the VPS
+  //     (May 25, 2026 — SHIPPING_PROVIDER=shiprocket saved without the chain).
+  //   - Full chain completeness is enforced at go-live by GET /health/ready
+  //     (findMissingStrictOpsConfigKeys) — not as a per-restart gate.
   const env = (process.env.NODE_ENV ?? 'development').toLowerCase();
   const isStrictProfile = env !== 'development' && env !== 'test';
+
   if (isStrictProfile) {
     requireWorkerEnv('DATABASE_URL');
     requireWorkerEnv('OPS_DB_ENCRYPTION_KEY');
   }
+
+  // Email — worker resolveRuntimeConfig reads RESEND_API_KEY/RESEND_FROM from
+  // OpsConfigSecret on every job, so missing-at-boot is acceptable.
   if (isEnabled(process.env.NOTIFY_EMAIL_ENABLED)) {
-    requireWorkerEnv('RESEND_API_KEY');
-    requireWorkerEnv('RESEND_FROM');
+    assertWorkerEnvNotPlaceholderIfPresent('RESEND_API_KEY');
+    assertWorkerEnvNotPlaceholderIfPresent('RESEND_FROM');
+  }
+
+  // SMS — validate enum + placeholder safety only.
+  const smsProviderRaw = (process.env.SMS_PROVIDER ?? '').trim().toLowerCase();
+  if (smsProviderRaw && !['msg91', 'fast2sms', 'noop'].includes(smsProviderRaw)) {
+    throw new Error(`Unsupported SMS_PROVIDER for workers: ${smsProviderRaw}. Allowed: msg91, fast2sms, noop`);
   }
   if (isEnabled(process.env.NOTIFY_SMS_ENABLED)) {
-    const smsProvider = (process.env.SMS_PROVIDER ?? 'msg91').trim().toLowerCase();
-    if (smsProvider === 'msg91') {
-      requireWorkerEnv('MSG91_AUTH_KEY');
-      requireWorkerEnv('MSG91_SENDER_ID');
-    } else if (smsProvider === 'fast2sms') {
-      requireWorkerEnv('FAST2SMS_API_KEY');
-    } else if (smsProvider !== 'noop') {
-      throw new Error(`Unsupported SMS_PROVIDER for workers: ${smsProvider}`);
-    }
+    assertWorkerEnvNotPlaceholderIfPresent('MSG91_AUTH_KEY');
+    assertWorkerEnvNotPlaceholderIfPresent('MSG91_SENDER_ID');
+    assertWorkerEnvNotPlaceholderIfPresent('FAST2SMS_API_KEY');
   }
-  // GST invoicing fields are DB-backed; validated post-overlay below.
+
+  // WhatsApp — validate placeholder safety only.
+  if (isEnabled(process.env.NOTIFY_WHATSAPP_ENABLED)) {
+    assertWorkerEnvNotPlaceholderIfPresent('META_WHATSAPP_ACCESS_TOKEN');
+    assertWorkerEnvNotPlaceholderIfPresent('META_WHATSAPP_PHONE_NUMBER_ID');
+    assertWorkerEnvNotPlaceholderIfPresent('META_WHATSAPP_WEBHOOK_VERIFY_TOKEN');
+    assertWorkerEnvNotPlaceholderIfPresent('META_WHATSAPP_APP_SECRET');
+  }
+
+  // OTel endpoint must be reachable at boot when tracing is enabled — it is
+  // initialised once per process, not per-job, so this is a true hard requirement.
   if (isEnabled(process.env.OTEL_TRACING_ENABLED)) {
     requireWorkerEnv('OTEL_EXPORTER_OTLP_ENDPOINT');
   }
+
+  // Shipping — validate enum + placeholder safety only. The shipping worker
+  // resolves provider credentials per-job from OpsConfigSecret, identical to
+  // the notifications worker pattern.
   const shippingProviderRaw = (process.env.SHIPPING_PROVIDER ?? '').trim().toLowerCase();
-  const shippingProvider = shippingProviderRaw || 'delhivery';
-  if (!shippingProviderRaw) {
-    // Allow first bootstrap without provider mode set in env.
-  } else if (shippingProvider === 'delhivery') {
-    requireWorkerEnv('DELHIVERY_API_KEY');
-    if (isStrictProfile) {
-      requireWorkerEnv('DELHIVERY_WEBHOOK_TOKEN');
+  if (shippingProviderRaw && !['delhivery', 'shiprocket', 'noop'].includes(shippingProviderRaw)) {
+    throw new Error(
+      `Unsupported SHIPPING_PROVIDER for workers: ${shippingProviderRaw}. Allowed: delhivery, shiprocket, noop`
+    );
+  }
+  if (shippingProviderRaw === 'delhivery') {
+    assertWorkerEnvNotPlaceholderIfPresent('DELHIVERY_API_KEY');
+    assertWorkerEnvNotPlaceholderIfPresent('DELHIVERY_WEBHOOK_TOKEN');
+  }
+  if (shippingProviderRaw === 'shiprocket') {
+    assertWorkerEnvNotPlaceholderIfPresent('SHIPROCKET_EMAIL');
+    assertWorkerEnvNotPlaceholderIfPresent('SHIPROCKET_PASSWORD');
+    assertWorkerEnvNotPlaceholderIfPresent('SHIPROCKET_WEBHOOK_TOKEN');
+  }
+
+  if (isStrictProfile) {
+    // noop providers are dev/test only — same rule as the API process.
+    if (smsProviderRaw === 'noop') {
+      throw new Error(
+        `Invalid SMS_PROVIDER=noop when NODE_ENV=${env}. 'noop' is allowed only in development-like profiles (development/test).`
+      );
     }
-  } else if (shippingProvider === 'shiprocket') {
-    requireWorkerEnv('SHIPROCKET_EMAIL');
-    requireWorkerEnv('SHIPROCKET_PASSWORD');
-    if (isStrictProfile) {
-      requireWorkerEnv('SHIPROCKET_WEBHOOK_TOKEN');
+    if (shippingProviderRaw === 'noop') {
+      throw new Error(
+        `Invalid SHIPPING_PROVIDER=noop when NODE_ENV=${env}. 'noop' is allowed only in development-like profiles (development/test).`
+      );
     }
   }
 }

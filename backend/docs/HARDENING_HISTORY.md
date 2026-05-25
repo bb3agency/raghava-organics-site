@@ -4,6 +4,18 @@ This document preserves detailed hardening history for engineering traceability.
 
 ## Recent hardening changes
 
+**Worker boot tolerance for incomplete provider chains — May 2026:**
+
+When we made the API process boot-tolerant of partial Ops config saves (`backend/src/config/app.config.ts` `validateConditionalEnv`), we missed the matching change in `backend/queues/workers/index.ts` `validateWorkerEnv`. The two processes share the same Ops DB overlay but had divergent validation contracts — the API would boot with `SHIPPING_PROVIDER=shiprocket` even without `SHIPROCKET_EMAIL`, the workers process would not.
+
+The gap surfaced as a production incident on Raghava Organics (May 25, 2026): saving `SHIPPING_PROVIDER=shiprocket` via Ops UI before the credential pair was filled caused the workers container to crash-loop with `Error: Missing required worker env var: SHIPROCKET_EMAIL` every ~10 s. Because every queue (notifications, shipping, refunds, analytics, reconciliation, dead-letter, cart-cleanup, outbox-dispatch, inventory-alerts) runs in the *same* `workers` container, **one missing provider key killed the entire async pipeline**. Symptoms: OTP emails not arriving (notification jobs sat queued), no order-fulfilment activity, no analytics rollup, no dead-letter replay UI working — but the storefront and admin API stayed healthy because the API process has its own container.
+
+Fix: refactored `validateWorkerEnv` to mirror `validateConditionalEnv`. Boot-time validation is now limited to (a) infrastructure keys that cannot be loaded from the Ops overlay (`DATABASE_URL`, `OPS_DB_ENCRYPTION_KEY`, `OTEL_EXPORTER_OTLP_ENDPOINT` when tracing is enabled), (b) provider selector enum correctness (`PAYMENT_PROVIDER`, `SHIPPING_PROVIDER`, `SMS_PROVIDER` must be `razorpay`/`cod`/`delhivery`/`shiprocket`/`msg91`/`fast2sms`/`noop`), (c) placeholder safety on keys that are present, and (d) the production-profile rejection of `noop` providers. Full chain completeness is enforced at go-live by `GET /health/ready` (`findMissingStrictOpsConfigKeys`) — *not* as a per-restart gate.
+
+The runtime safety contract is preserved: each worker (notifications, shipping, refunds, …) already re-reads provider credentials from `OpsConfigSecret` on every job and fails the *job* — not the process — when keys are missing. Failed jobs surface in `NotificationLog` / `OutboxMessage` / dead-letter queue with actionable error text; the container stays alive to keep processing every other queue.
+
+`OPS_CONTROL_PLANE_GUIDE.md`, `BACKEND_GO_LIVE_CHECKLIST.md`, and `PHASE7_VPS_DEPLOY_INCIDENT_PLAYBOOK.md` updated to reflect the change. `DECISIONS.md` has a paired entry.
+
 **Ops OTP email diagnosability — actionable Resend error surfacing + on-VPS triage script — May 2026:**
 
 `backend/src/modules/notifications/adapters/resend.adapter.ts` previously discarded the response body on non-2xx and threw `Resend request failed: <status>` with no further detail. Resend, however, always returns a structured body explaining *why* (`{"statusCode":403,"name":"validation_error","message":"You can only send testing emails to your own email address … verify a domain at resend.com/domains"}`, `{"name":"missing_api_key","message":"API key not found"}`, etc.). With the body discarded, `NotificationLog.errorMessage` stored only the bare status code, leaving operators unable to tell config errors from outages without manual API replays.

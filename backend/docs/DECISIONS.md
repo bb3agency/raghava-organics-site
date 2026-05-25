@@ -4,6 +4,34 @@
 
 ---
 
+## [2026-05-25] Worker bootstrap inherits the API's boot-tolerance contract for incomplete provider chains
+
+**Context:** Earlier on the same day we made `src/config/app.config.ts` `validateConditionalEnv` tolerant of partial Ops config saves (the API process would otherwise crash-loop after a user saved `SHIPPING_PROVIDER=shiprocket` via Ops UI without yet filling `SHIPROCKET_EMAIL`/`SHIPROCKET_PASSWORD`). The matching workers-process bootstrap (`queues/workers/index.ts` `validateWorkerEnv`) was missed and remained strict, calling `requireWorkerEnv('SHIPROCKET_EMAIL')` whenever `SHIPPING_PROVIDER==='shiprocket'` was present after the DB overlay.
+
+On 2026-05-25 the gap caused a Raghava Organics production incident: the `workers` container entered `Restarting (1) 18 seconds ago` immediately after the shipping provider selector was saved without the credential pair. Because every queue runs inside that one container (notifications, shipping, refunds, analytics, reconciliation, dead-letter, cart-cleanup, outbox-dispatch, inventory-alerts), a single missing provider key killed the entire async pipeline. OTP emails (the visible symptom) sat queued; existing `OpsActionOtp` rows in `NotificationLog` were all `status=SENT` but timestamped from before the crash loop began.
+
+**Decision:** Make `validateWorkerEnv` mirror `validateConditionalEnv` exactly. Boot validation is limited to:
+1. Hard requirements that cannot come from the Ops DB overlay (`DATABASE_URL`, `OPS_DB_ENCRYPTION_KEY`, `OTEL_EXPORTER_OTLP_ENDPOINT` when tracing is enabled — these are needed *before* the overlay query can run, or are not classified as overlay-eligible).
+2. Provider selector enum correctness (`PAYMENT_PROVIDER`, `SHIPPING_PROVIDER`, `SMS_PROVIDER` must be one of the supported values — unsupported values should still fail loudly because they indicate a data corruption, not a partial save).
+3. Placeholder-value safety on keys that *are* present (`replace_with_…`, `change_me…`, `<…>` prefixes).
+4. Production-profile rejection of `noop` providers.
+
+Full provider-chain completeness is enforced at go-live by `GET /health/ready` (`findMissingStrictOpsConfigKeys`) — never as a per-restart gate.
+
+**Rationale:**
+- A workers container that boots empty is strictly safer than one that crash-loops: each individual job fails with a clear `errorMessage` (e.g. "Shipping provider is not configured"), gets retried per BullMQ policy, eventually moves to the dead-letter queue, and the operator sees it in the queue inspection UI. Crash-loops, by contrast, kill every queue including the dead-letter worker itself.
+- The notifications/shipping/refunds workers already re-read provider credentials from `OpsConfigSecret` on every job (`resolveRuntimeConfig`). Boot-time validation provided no real safety on top of that — only a footgun.
+- Keeping enum validation strict catches actual mistakes (typos in `SHIPPING_PROVIDER`) while letting partial credential saves through.
+
+**Alternatives considered:**
+- A `STRICT_BOOT_VALIDATION=true` env flag to opt in/out. Rejected — adds a toggle no one would touch and another way to misconfigure.
+- Moving the boot check to "warning, not fatal". Rejected — silent warnings on container restart are the same antipattern as silent CD warnings; we want a single hard contract (fail fast on enum/placeholder, succeed on partial chain).
+- Adding `SHIPROCKET_EMAIL` etc. to the `validateBootstrapEnv` hard-requirement list (alongside `DATABASE_URL`). Rejected — that *prevents* incremental Ops config save entirely, the exact regression we just fixed for the API.
+
+**Affects:** `backend/queues/workers/index.ts`, `backend/docs/HARDENING_HISTORY.md`, `backend/docs/OPS_CONTROL_PLANE_GUIDE.md`, `backend/docs/PHASE7_VPS_DEPLOY_INCIDENT_PLAYBOOK.md`.
+
+---
+
 ## [2026-05-25] `COMPOSE_FILE` + `COMPOSE_PROJECT_NAME` in VPS `.env` so bare `docker compose` always uses the prod overlay
 
 **Context:** `backend/docker-compose.yml` declares a containerised `postgres` service that publishes port `5432:5432` to the host — needed for local dev where there is no host PostgreSQL, harmful on the VPS where the native PostgreSQL already owns `5432`. The `docker-compose.prod.yml` overlay handles VPS reality by (a) dropping the `postgres` `depends_on` from `backend`/`workers` via `depends_on: !reset` and (b) hiding the `postgres` service behind a `compose-local-postgres-only` profile.
