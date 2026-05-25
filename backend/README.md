@@ -34,7 +34,7 @@ Required slice flow:
 Recommended sequence:
 
 1. Foundation (`auth`, refresh, API client, `error.code` mapper, permission-aware nav)
-2. Ops control surfaces (public `/ops/login` + `/ops/setup` only; console nav after session; session, load-shed, audit timeline)
+2. Ops control surfaces (public `/ops/login` + `/ops/setup` only; console nav after session; session, load-shed including the durable `maintenance` mode with 2-min warning + Nginx-served static page, audit timeline)
 3. Admin read surfaces (dashboard, orders read views, inventory read)
 4. Admin mutation surfaces (status/ship/cancel/refund/stock/settings)
 5. Reliability surfaces (reconciliation, inbox/outbox replay, queue visibility)

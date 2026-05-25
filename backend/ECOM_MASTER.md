@@ -1338,15 +1338,21 @@ Mode is **cached for 5 seconds** per request to avoid Redis hammering.
 **Route Classification:**
 
 ```typescript
-// Never shed — always serve
+// Never shed — always serve. These prefixes pass through every mode,
+// including `maintenance/active`. The maintenance status + Nginx gate
+// routes are listed here so the storefront banner and Nginx subrequest
+// can keep polling/evaluating while the platform is degraded.
 ALWAYS_ALLOWED_PREFIXES = [
   '/api/v1/health',
   '/api/v1/auth',
   '/api/v1/payments/webhook',
-  '/api/v1/shipping/webhook'
+  '/api/v1/shipping/webhook',
+  '/api/v1/notifications/webhook',
+  '/api/v1/ops',
+  '/api/v1/maintenance'
 ];
 
-// Shed in reduced + emergency modes
+// Shed in reduced + emergency modes (and `maintenance/pending`)
 NON_CRITICAL_ADMIN_PREFIXES = [
   '/api/v1/admin/analytics',
   '/api/v1/admin/dashboard',
@@ -1360,21 +1366,30 @@ NON_CRITICAL_ADMIN_PREFIXES = [
   '/api/v1/admin/categories'
 ];
 
-// Shed in emergency mode only (checkout mutations)
+// Shed in emergency mode and `maintenance/pending` (checkout mutations)
 REDUCED_MODE_MUTATION_PREFIXES = [
   '/api/v1/orders',
   '/api/v1/payments/initiate',
   '/api/v1/cart'
 ];
+
+// Carved out of the maintenance/pending block so in-flight payments
+// can finish during the 2-minute warning window.
+PAYMENT_DRAIN_ALLOWLIST = [
+  '/api/v1/payments/verify',
+  '/api/v1/payments/retry'
+];
 ```
 
 **Shedding Rules:**
 
-| Mode | Shed Behavior |
-|------|---------------|
-| `normal` | All traffic allowed |
-| `reduced` | Non-critical admin routes return `503` |
-| `emergency` | Non-critical admin + checkout mutations return `503` |
+| Mode | Phase | Shed Behavior |
+|------|-------|---------------|
+| `normal` | n/a | All traffic allowed |
+| `reduced` | n/a | Non-critical admin routes return `503` |
+| `emergency` | n/a | Non-critical admin + checkout mutations return `503` |
+| `maintenance` | `pending` (2-min warning) | Like `emergency`, but `PAYMENT_DRAIN_ALLOWLIST` is allowed so verify/retry can finalise in-flight payments. Storefront banner shows a countdown |
+| `maintenance` | `active` (post-cutover) | Everything outside `ALWAYS_ALLOWED_PREFIXES` returns `503`. Nginx serves the static maintenance.html for non-ops customer traffic |
 
 **503 Response Body:**
 ```json
@@ -1385,10 +1400,16 @@ REDUCED_MODE_MUTATION_PREFIXES = [
 ```
 
 **Guard Application:**
-The `loadShedGuard` is a Fastify preHandler applied to all admin/ops mutation routes. It runs **after** auth/permission guards but **before** idempotency and business logic handlers.
+The `loadShedGuard` is a Fastify preHandler applied to all admin/ops mutation routes. It runs **after** auth/permission guards but **before** idempotency and business logic handlers. The `maintenance` mode short-circuits before the legacy `reduced/emergency` checks because its rules are stricter and its state lives in Postgres rather than only Redis (so it survives a Redis flush).
+
+**Durable maintenance state:**
+`mode = maintenance` is durable — backed by a single-row `MaintenanceState` table in Postgres (source of truth) with a Redis cache (`ops:maintenance:state`) for hot reads. Survives Redis flush, container restart, and database failover. Exits **only** when an ops user POSTs a different mode to `/api/v1/ops/load-shed` (OTP required). `LOAD_SHED_MODE` env var cannot force `maintenance`, preventing accidentally stuck downtime windows.
+
+**Rate limit interaction:**
+Both `pending` and `active` maintenance phases are mapped to `emergency` inside the rate-limit policy resolver, so the protective per-tier limits kick in during the warning window even though the load-shed guard's mode-string is `maintenance`.
 
 **Operational Control:**
-Ops users with `ops:write` permission can set modes via `POST /api/v1/ops/load-shed` (OTP-confirmed). Mode changes apply immediately after OTP verification.
+Ops users with `ops:write` permission can set modes via `POST /api/v1/ops/load-shed` (OTP-confirmed). Mode changes apply immediately after OTP verification. Setting `mode: 'maintenance'` writes the durable row in `phase: 'pending'` with `pendingUntil = now + 120s` and enqueues a `maintenance-activation` job on the `cart-cleanup` queue that pauses outbox + producer queues, drains BullMQ active counts (timeout `MAINTENANCE_QUEUE_DRAIN_TIMEOUT_MS`, default 120s), drains `PENDING_PAYMENT` orders (timeout `MAINTENANCE_PAYMENT_DRAIN_TIMEOUT_MS`, default 5min), flips the durable row to `phase: 'active'`, then resumes every paused queue so internal background work keeps flowing while customer traffic is gated at Nginx.
 
 ### 11.2 Fastify Request Pipeline
 

@@ -956,6 +956,31 @@ model ReconciliationIssue {
   @@index([issueType, detectedAt])
 }
 
+/// Durable, Postgres-backed source of truth for the runtime load-shed/maintenance
+/// state. Redis is the fast read cache; this table is consulted on cache miss and
+/// on process boot so the chosen mode survives full infrastructure resets
+/// (Redis restart, Redis flush, container redeploy). Single-row table keyed by
+/// `singletonKey = "singleton"`.
+///
+/// `mode` mirrors `load-shed.guard` modes: 'normal' | 'reduced' | 'emergency' | 'maintenance'.
+/// `phase` is only meaningful when `mode = 'maintenance'`:
+///   - 'pending' — 2-minute warning window with emergency-style gating; payment jobs continue.
+///   - 'active'  — Nginx serves maintenance page for all non-ops, non-health, non-webhook traffic.
+/// Maintenance exits only when an ops user changes the mode away from 'maintenance' via
+/// `POST /api/v1/ops/load-shed`. Until then, the state is reapplied on every boot.
+model MaintenanceState {
+  id              String    @id @default(uuid())
+  singletonKey    String    @unique @default("singleton")
+  mode            String    @default("normal")
+  phase           String?
+  pendingUntil    DateTime?
+  activatedAt     DateTime?
+  reason          String?
+  setByOpsUserId  String?
+  setAt           DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+}
+
 model StoreSettings {
   id                        String   @id @default(uuid())
   singletonKey              String   @unique @default("default")

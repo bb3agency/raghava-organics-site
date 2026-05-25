@@ -713,13 +713,25 @@ Sets `isActive = false` on the `OpsUser` record and appends a `USER_DEACTIVATED`
 
 ### Load shedding (traffic control)
 
-Load shedding has three modes: `normal` → `reduced` → `emergency`. Mode changes are applied immediately after OTP confirmation — no separate approval step.
+Load shedding has four modes: `normal` → `reduced` → `emergency` → `maintenance`. Mode changes are applied immediately after OTP confirmation — no separate approval step.
 
 #### `GET /api/v1/ops/load-shed`
-**`ops:read`** — Returns `{ mode: 'normal' | 'reduced' | 'emergency' }`.
+**`ops:read`** — Returns `{ mode, phase, pendingUntil, activatedAt, reason }`. `mode` is one of `normal | reduced | emergency | maintenance`. `phase` is `null | pending | active` (only non-null when `mode === 'maintenance'`). `pendingUntil` / `activatedAt` are ISO-8601 timestamps for the maintenance transitions.
 
 #### `POST /api/v1/ops/load-shed`
-**`ops:write`** — Apply a mode change immediately after OTP confirmation. Body: `{ mode, reason, challengeId, otpCode }` (reason min 10 chars). Returns `{ mode, reason, updatedAt }`.
+**`ops:write`** — Apply a mode change immediately after OTP confirmation. Body: `{ mode, reason, challengeId, otpCode }` (reason min 10 chars). Returns `{ mode, updated, phase, pendingUntil }`. Setting `mode: 'maintenance'` writes a durable Postgres-backed `MaintenanceState` row (Redis cache + fallback), starts a 2-minute `pending` phase, and enqueues a `maintenance-activation` job that pauses outbox + producer queues, drains BullMQ active counts, drains `PENDING_PAYMENT` orders, flips the durable row to `active`, then resumes every queue (background work like notifications/refunds keeps flowing while Nginx serves the static maintenance page at the edge). Setting any other mode while currently `maintenance` clears `phase`/`pendingUntil`/`activatedAt` on the durable row; no extra job is needed because queues were already resumed at the end of the activation handler, and any in-flight activation job that fires after the exit re-checks the durable state and becomes a no-op. The durable row survives Redis flushes, container restarts, and database failovers — maintenance exits only via this endpoint.
+
+---
+
+### Public maintenance status
+
+Used by the storefront banner (`MaintenanceBanner`) and by Nginx as the `auth_request` gate that decides whether to serve `/maintenance.html`. Both endpoints are **always reachable**, even while `mode === 'maintenance'` is `active`. They have no auth requirement and live under `/api/v1/maintenance/*`.
+
+#### `GET /api/v1/maintenance/status`
+**Public** — JSON snapshot for the storefront. Returns `{ mode, phase, pendingUntil, activatedAt, serverTime }`. `serverTime` is included so the client-side countdown stays aligned with the server clock instead of trusting the device clock. Polled every ~30 s in `normal` and every ~5 s during the `pending` window.
+
+#### `GET /api/v1/maintenance/gate`
+**Internal (used by Nginx `auth_request` only)** — Always returns `200 OK` so Nginx's subrequest semantics behave correctly. The decision is carried by the `X-Maintenance-Active: 0|1` response header: `1` means "this `X-Original-URI` should be blocked by the maintenance page", `0` means "let it through". The Nginx guarded `location` blocks read the header via `auth_request_set` and convert `1` to a `503` (which then triggers `error_page 503 /maintenance.html`). Routes always allowed even in the `active` phase: `/ops/*`, `/api/v1/health*`, `/api/v1/auth/*`, `/api/v1/maintenance/*`, `/api/v1/payments/webhook`, `/api/v1/shipping/webhook`.
 
 ---
 
@@ -922,7 +934,7 @@ Reviews are only visible on the storefront after admin approval.
 | Endpoint | Permission | OTP Required | Purpose |
 |----------|------------|--------------|---------|
 | `POST /ops/config/save` | ops:write | ✅ Yes | Save runtime config |
-| `POST /ops/load-shed` | ops:write | ✅ Yes | Change load-shed mode |
+| `POST /ops/load-shed` | ops:write | ✅ Yes | Change load-shed mode (incl. `maintenance`) |
 | `POST /ops/system/restart` | ops:write | ✅ Yes | Schedule restart |
 | `POST /ops/users/:id/deactivate` | ops:write | ✅ Yes | Deactivate ops user |
 | `POST /ops/invites/:id/revoke` | ops:write | ✅ Yes | Revoke pending invite |

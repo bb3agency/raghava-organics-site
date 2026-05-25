@@ -29,6 +29,8 @@ Canonical low-noise index of backend HTTP endpoints. Route files and schemas rem
 | GET | `/api/v1/products/categories/:slug/products` | Products by category | `products.routes.ts` |
 | GET | `/api/v1/products/:slug` | Product detail by slug | `products.routes.ts` |
 | GET | `/api/v1/reviews/product/:slug` | Public product reviews | `reviews.routes.ts` |
+| GET | `/api/v1/maintenance/status` | Maintenance snapshot for storefront banner — `{ mode, phase, pendingUntil, activatedAt, serverTime }`. Always reachable, even during `maintenance/active`. Polled every ~30 s normally, ~5 s during `pending` | `maintenance.routes.ts` |
+| GET | `/api/v1/maintenance/gate` | Internal Nginx `auth_request` gate. Always returns `200`; carries decision in `X-Maintenance-Active: 0|1` response header based on `X-Original-URI`. Not for direct client use | `maintenance.routes.ts` |
 
 ---
 
@@ -280,8 +282,8 @@ Ops endpoints are platform/developer controls. Do not expose write controls in n
 | GET | `/api/v1/ops/users` | List ops users (filterable by isActive) |
 | GET | `/api/v1/ops/users/:opsUserId` | Get single ops user profile |
 | POST | `/api/v1/ops/users/:opsUserId/deactivate` | Deactivate ops user account — requires OTP (`challengeId`, `otpCode`) |
-| GET | `/api/v1/ops/load-shed` | Current load-shed mode |
-| POST | `/api/v1/ops/load-shed` | Apply load-shed mode change immediately — requires OTP (`challengeId`, `otpCode`) |
+| GET | `/api/v1/ops/load-shed` | Current load-shed snapshot: `{ mode, phase, pendingUntil, activatedAt, reason }`. Mode ∈ `normal | reduced | emergency | maintenance`; `phase` ∈ `null | pending | active` (only non-null in `maintenance`) |
+| POST | `/api/v1/ops/load-shed` | Apply load-shed mode change immediately — requires OTP (`challengeId`, `otpCode`). `mode: 'maintenance'` writes durable `MaintenanceState` row, starts 2-min `pending` window, enqueues `maintenance-activation` job that pauses outbox+producer queues, drains active counts, drains `PENDING_PAYMENT`, flips `active`, then resumes queues (background work continues; Nginx serves the maintenance page at the edge). Exit by setting any other mode — durable row's phase/pendingUntil/activatedAt are cleared; no separate deactivation job needed |
 | GET | `/api/v1/ops/audit/logs` | Ops audit timeline (filterable by opsUserId) |
 | POST | `/api/v1/ops/system/restart` | Schedule process restart — requires OTP (`challengeId`, `otpCode`); `delayMinutes:0` = now, `>0` = deferred (survives logout). Worker runs 6-step drain: pause outboxDispatch → grace (`RESTART_QUEUE_PAUSE_GRACE_MS`) → pause all producer queues → poll `getActiveCount()` until 0 or `RESTART_QUEUE_DRAIN_TIMEOUT_MS` → drain PENDING_PAYMENT orders (`RESTART_PAYMENT_DRAIN_TIMEOUT_MS`) → resume queues → publish restart signal → `process.exit(0)`. Feature-flagged via `RESTART_PAUSE_AND_DRAIN_QUEUES_ENABLED` (default `true`). No queue job lost. |
 | GET | `/api/v1/ops/queues` | BullMQ Bull Board UI — queue dashboard (ops:read) |

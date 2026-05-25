@@ -9,6 +9,12 @@ export function loadShedBadgeTone(mode: OpsLoadShedStatus["mode"]): OpsBadgeTone
       return "warning";
     case "emergency":
       return "danger";
+    case "maintenance":
+      // Maintenance is a planned, persistent state — keep it visually
+      // distinct from the unplanned 'danger' tone so operators can see at a
+      // glance whether the site is being deliberately taken down vs.
+      // being protected from accidental overload.
+      return "info";
     default:
       return "default";
   }

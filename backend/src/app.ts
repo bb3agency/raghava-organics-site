@@ -6,6 +6,7 @@ import { registerCouponsRoutes } from './modules/coupons/coupons.routes';
 import { registerDashboardRoutes } from './modules/dashboard/dashboard.routes';
 import { registerHealthRoutes } from './modules/health/health.routes';
 import { registerInventoryRoutes } from './modules/inventory/inventory.routes';
+import { registerMaintenanceRoutes } from './modules/maintenance/maintenance.routes';
 import { registerNotificationsWebhookRoutes } from './modules/notifications-webhook/notifications-webhook.routes';
 import { registerOrdersRoutes } from './modules/orders/orders.routes';
 import { registerOpsRoutes } from './modules/ops/ops.routes';
@@ -20,6 +21,10 @@ import { assertAdminPolicyRegistryIntegrity } from '@common/auth/admin-policy-re
 export async function registerApp(fastify: FastifyInstance): Promise<void> {
   assertAdminPolicyRegistryIntegrity();
   await registerHealthRoutes(fastify);
+  // Public maintenance status + Nginx auth_request gate. Registered before
+  // auth/cart/etc so the routes are reachable while the platform is in
+  // `maintenance` mode (they are listed in `ALWAYS_ALLOWED_PREFIXES`).
+  await registerMaintenanceRoutes(fastify);
   await registerAuthRoutes(fastify);
   await registerCartRoutes(fastify);
   await registerUsersRoutes(fastify);

@@ -227,6 +227,15 @@ async function resolveLoadShedMode(request: FastifyRequest): Promise<'normal' | 
     const fromRedis = (await request.server.redis.get(LOAD_SHED_MODE_KEY))?.trim().toLowerCase();
     if (fromRedis === 'reduced' || fromRedis === 'emergency') {
       cachedLoadShedMode = fromRedis;
+    } else if (fromRedis === 'maintenance') {
+      // Maintenance mode (both `pending` and `active` phases) collapses to
+      // `emergency` for rate-limit purposes. During `pending` we want
+      // emergency-style limits so the warning window protects the backend
+      // from a last-minute traffic spike; during `active` Nginx is already
+      // serving the static page for non-allowed routes but the allowed
+      // routes (ops, health, webhooks, payments-drain) still benefit from
+      // tighter limits to give the backend headroom during the cutover.
+      cachedLoadShedMode = 'emergency';
     } else {
       cachedLoadShedMode = 'normal';
     }

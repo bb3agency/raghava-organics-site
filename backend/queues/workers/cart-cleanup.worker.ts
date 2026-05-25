@@ -4,6 +4,12 @@ import IORedis from 'ioredis';
 import { sendProcessRestartAlert, sendTechnicalFailureAlert } from '@modules/notifications/notification-failure-alert';
 import { publishRestartSignal, SYSTEM_RESTART_CHANNEL, type RestartPublisherLike } from '@common/restart/system-restart';
 import { LOAD_SHED_MODE_KEY } from '@common/reliability/load-shed.guard';
+import {
+  readMaintenanceState,
+  writeMaintenanceState,
+  type MaintenanceStatePrismaLike,
+  type MaintenanceStateRedisLike
+} from '@common/reliability/maintenance-state';
 import { createQueueRegistry as createRealQueueRegistry, type QueueRegistry } from '@queues/queue-registry';
 
 /**
@@ -227,6 +233,201 @@ export function createCartCleanupWorker(
             lt: new Date()
           }
         });
+        return;
+      }
+
+      if (job.name === 'maintenance-activation') {
+        // ── Maintenance cutover ──────────────────────────────────────────────
+        // Fires `DEFAULT_MAINTENANCE_PENDING_WINDOW_MS` after the ops user
+        // selected mode='maintenance'. The state row is already in
+        // mode='maintenance', phase='pending' (the API set it synchronously),
+        // and the storefront banner has been counting down to this moment.
+        //
+        // Responsibilities here (in strict order):
+        //   1. Re-check durable state — operator might have already exited
+        //      maintenance during the warning window; if so, no-op.
+        //   2. Pause outbox + downstream queues so no new jobs enter the
+        //      system during the drain (reuses the same protocol as
+        //      `scheduled-process-restart`).
+        //   3. Wait for BullMQ active counts to drain (with timeout).
+        //   4. Wait for PENDING_PAYMENT orders to reach terminal status —
+        //      this is the "no payment lost" gate the operator was
+        //      promised. Payment-flow routes (/payments/verify and /retry)
+        //      remain reachable throughout because they are in
+        //      `PAYMENT_DRAIN_ALLOWLIST` of `load-shed.guard.ts`.
+        //   5. Flip phase to 'active' in Postgres + Redis. Once this row
+        //      is written, the Nginx `auth_request` gate starts returning
+        //      503 for non-ops routes and the storefront blocks at the edge.
+        //   6. Resume the queues so post-maintenance workers can pick up
+        //      anything that arrived during the drain window. Tower is still
+        //      gated at Nginx, but background jobs (notifications, refunds,
+        //      etc.) continue to run normally for whoever can still write
+        //      via ops/webhook routes.
+        const prismaState = prisma as unknown as MaintenanceStatePrismaLike;
+        let redisForState: MaintenanceStateRedisLike | null = null;
+        try {
+          const redisUrl = process.env['REDIS_URL'];
+          if (redisUrl) {
+            redisForState = new IORedis(redisUrl, { maxRetriesPerRequest: null, family: 4 }) as unknown as MaintenanceStateRedisLike;
+          }
+        } catch {
+          redisForState = null;
+        }
+
+        try {
+          const current = await readMaintenanceState({ prisma: prismaState, redis: redisForState });
+          if (current.mode !== 'maintenance' || current.phase !== 'pending') {
+            // Operator already exited maintenance (or it's already active).
+            // Nothing to do — the durable row is the source of truth.
+            return;
+          }
+
+          // Pause queues to stop the influx.
+          let registry: QueueRegistry | null = null;
+          if (pauseAndDrainEnabled) {
+            try {
+              registry = createQueueRegistry(connection);
+              await registry.outboxDispatch.pause();
+              if (queuePauseGraceMs > 0) {
+                await sleepFn(queuePauseGraceMs);
+              }
+              await Promise.all(
+                DRAINABLE_QUEUE_KEYS.map(async (key) => {
+                  try {
+                    await registry![key].pause();
+                  } catch {
+                    // Best-effort — proceeding is safer than failing the cutover.
+                  }
+                })
+              );
+
+              // Drain BullMQ active counts.
+              const drainDeadline = Date.now() + queueDrainTimeoutMs;
+              const sampleActiveCounts = async (): Promise<number> => {
+                const counts = await Promise.all(
+                  [...DRAINABLE_QUEUE_KEYS, 'outboxDispatch' as const].map(async (key) => {
+                    try {
+                      const q = registry![key as keyof QueueRegistry] as Queue;
+                      return await q.getActiveCount();
+                    } catch {
+                      return 0;
+                    }
+                  })
+                );
+                return counts.reduce((s, n) => s + n, 0);
+              };
+
+              let active = await sampleActiveCounts();
+              while (active > 0 && Date.now() < drainDeadline) {
+                await sleepFn(QUEUE_DRAIN_POLL_INTERVAL_MS);
+                active = await sampleActiveCounts();
+              }
+              if (active > 0) {
+                await sendTechnicalFailureAlert({
+                  prisma,
+                  template: 'MaintenanceActivationQueueDrainTimeout',
+                  channel: 'UNKNOWN',
+                  recipient: 'ops-maintenance',
+                  errorMessage: `Maintenance cutover proceeding with ${active} active queue job(s) still in-flight after ${queueDrainTimeoutMs}ms drain timeout. Jobs will be stalled+retried by BullMQ.`,
+                  failureStage: 'CORE_LOGIC',
+                  domain: 'ops',
+                  component: 'maintenance-activation',
+                  jobId: String(job.id ?? 'unknown'),
+                  terminalFailure: false
+                });
+              }
+            } catch (pauseErr) {
+              await sendTechnicalFailureAlert({
+                prisma,
+                template: 'MaintenanceActivationPauseFailed',
+                channel: 'UNKNOWN',
+                recipient: 'ops-maintenance',
+                errorMessage: `Queue pause/drain protocol failed: ${pauseErr instanceof Error ? pauseErr.message : String(pauseErr)}. Cutover proceeding without queue drain.`,
+                failureStage: 'CORE_LOGIC',
+                domain: 'ops',
+                component: 'maintenance-activation',
+                jobId: String(job.id ?? 'unknown'),
+                terminalFailure: false
+              });
+            }
+          }
+
+          // PENDING_PAYMENT drain — the contract the operator was promised:
+          // "no payment lost". We poll until count reaches 0 or the timeout
+          // elapses. Payment-flow routes stay reachable during this window.
+          const orderDelegate = (prisma as unknown as {
+            order?: { count: (args: { where: Record<string, unknown> }) => Promise<number> };
+          }).order;
+          if (orderDelegate?.count) {
+            const drainDeadline = Date.now() + paymentDrainTimeoutMs;
+            let pendingCount = await orderDelegate.count({ where: { status: 'PENDING_PAYMENT' } });
+            while (pendingCount > 0 && Date.now() < drainDeadline) {
+              await sleepFn(PAYMENT_DRAIN_POLL_INTERVAL_MS);
+              pendingCount = await orderDelegate.count({ where: { status: 'PENDING_PAYMENT' } });
+            }
+            if (pendingCount > 0) {
+              await sendTechnicalFailureAlert({
+                prisma,
+                template: 'MaintenanceActivationPaymentDrainTimeout',
+                channel: 'UNKNOWN',
+                recipient: 'ops-maintenance',
+                errorMessage: `Maintenance cutover proceeding with ${pendingCount} PENDING_PAYMENT order(s) still in-flight after ${paymentDrainTimeoutMs}ms. Manual reconciliation may be required.`,
+                failureStage: 'CORE_LOGIC',
+                domain: 'ops',
+                component: 'maintenance-activation',
+                jobId: String(job.id ?? 'unknown'),
+                terminalFailure: false
+              });
+            }
+          }
+
+          // Flip phase → 'active'. This is the moment Nginx starts serving
+          // the maintenance page for non-ops traffic and the storefront
+          // banner switches from countdown to "we'll be back soon".
+          const activatedAtIso = new Date().toISOString();
+          await writeMaintenanceState({
+            prisma: prismaState,
+            redis: redisForState,
+            record: {
+              mode: 'maintenance',
+              phase: 'active',
+              pendingUntil: current.pendingUntil,
+              activatedAt: activatedAtIso,
+              reason: current.reason,
+              setByOpsUserId: current.setByOpsUserId,
+              setAt: activatedAtIso
+            }
+          });
+
+          // Resume queues so internal background work (notifications, refunds)
+          // can continue while the storefront is gated. Best-effort — if a
+          // resume fails the operator can manually resume via Bull Board.
+          if (registry) {
+            try {
+              await Promise.all(
+                [...DRAINABLE_QUEUE_KEYS, 'outboxDispatch' as const].map(async (key) => {
+                  try {
+                    const q = registry![key as keyof QueueRegistry] as Queue;
+                    await q.resume();
+                  } catch {
+                    // Best-effort.
+                  }
+                })
+              );
+            } finally {
+              await Promise.allSettled(Object.values(registry).map((q) => (q as Queue).close()));
+            }
+          }
+        } finally {
+          // Always close the local Redis client created for state writes.
+          if (redisForState && typeof (redisForState as { quit?: () => Promise<unknown> }).quit === 'function') {
+            try {
+              await (redisForState as unknown as { quit: () => Promise<unknown> }).quit();
+            } catch {
+              // Ignore — process is long-lived, the next job will recreate.
+            }
+          }
+        }
         return;
       }
 

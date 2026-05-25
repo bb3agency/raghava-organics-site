@@ -15,7 +15,13 @@ import { registerRateLimitPlugin } from './common/plugins/rate-limit.plugin';
 import { registerRedisPlugin } from './common/plugins/redis.plugin';
 import { registerSwaggerPlugin } from './common/plugins/swagger.plugin';
 import { registerObservabilityPlugin } from './common/plugins/observability.plugin';
-import { loadShedGuard } from '@common/reliability/load-shed.guard';
+import { loadShedGuard, setLoadShedModeViaRedis } from '@common/reliability/load-shed.guard';
+import {
+  readMaintenanceState,
+  writeMaintenanceState,
+  type MaintenanceStatePrismaLike,
+  type MaintenanceStateRedisLike
+} from '@common/reliability/maintenance-state';
 import { initializeTracing, shutdownTracing } from '@common/observability/tracing';
 import { registerResponseEnvelopeHook } from '@common/hooks/response-envelope.hook';
 import { featureFlags, refreshFeatureFlags } from '@config/feature-flags';
@@ -175,6 +181,63 @@ async function bootstrap(): Promise<void> {
     host: appConfig.host,
     port: appConfig.port
   });
+
+  // Rehydrate the durable maintenance/load-shed state from Postgres into
+  // Redis on every boot. Without this, a Redis flush (or a fresh Redis
+  // container) would silently default to 'normal' on the next request even
+  // though the DB still has 'maintenance' persisted — exactly the
+  // "survives infra reset" contract this feature promises. Best-effort: a
+  // failure here does NOT block startup, the on-demand cache miss read in
+  // `readMaintenanceStateFromRequest` will catch up on the first request.
+  //
+  // Critical: we ONLY upsert the durable row when one already exists. On a
+  // fresh deploy (no row yet) we leave the table empty and rely on
+  // `readMaintenanceState`'s default `normal` fallback. Without this guard,
+  // every backend boot on a fresh DB would create a synthetic row with
+  // `setAt = 1970-01-01` and `setByOpsUserId = null`, which would then
+  // appear in audit-style queries as a phantom "load-shed change".
+  void (async () => {
+    try {
+      const prismaForState = prismaClient as unknown as MaintenanceStatePrismaLike;
+      const redisForState = fastify.redis as unknown as MaintenanceStateRedisLike;
+      const row = await prismaForState.maintenanceState.findUnique({
+        where: { singletonKey: 'singleton' }
+      });
+      if (!row) {
+        // Fresh DB. Populate Redis cache with the default `normal` state so
+        // the very first request after boot doesn't have to round-trip to
+        // Postgres just to learn there is no override.
+        await setLoadShedModeViaRedis(fastify.redis, 'normal');
+        fastify.log.info('Maintenance state rehydrate: no DB row, using default normal mode');
+        return;
+      }
+
+      // Real row exists — refresh Redis cache + legacy mode key so every
+      // downstream reader (load-shed guard, status route, rate-limit
+      // policies) sees the same value within one resolution cycle. The
+      // upsert uses identical values to the existing row, so it is a safe
+      // no-op on the DB side but lets `writeMaintenanceState` repopulate
+      // the Redis JSON blob in one place.
+      const state = await readMaintenanceState({ prisma: prismaForState, redis: redisForState });
+      await writeMaintenanceState({
+        prisma: prismaForState,
+        redis: redisForState,
+        record: {
+          mode: state.mode,
+          phase: state.phase,
+          pendingUntil: state.pendingUntil,
+          activatedAt: state.activatedAt,
+          reason: state.reason,
+          setByOpsUserId: state.setByOpsUserId,
+          setAt: state.setAt
+        }
+      });
+      await setLoadShedModeViaRedis(fastify.redis, state.mode);
+      fastify.log.info({ mode: state.mode, phase: state.phase }, 'Maintenance state rehydrated on boot');
+    } catch (rehydrateErr) {
+      fastify.log.warn({ err: rehydrateErr }, 'Maintenance state rehydration failed (non-fatal)');
+    }
+  })();
 
   // --- Signal handlers ---
   process.once('SIGINT', () => {

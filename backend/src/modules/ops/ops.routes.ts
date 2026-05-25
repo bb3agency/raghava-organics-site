@@ -2,7 +2,6 @@ import { FastifyInstance } from 'fastify';
 import { standardAdminErrorResponses } from '@common/errors/error-response.schema';
 import { AppError } from '@common/errors/app-error';
 import { ERROR_CODES } from '@common/errors/error-codes';
-import { getLoadShedMode } from '@common/reliability/load-shed.guard';
 import { routeRateLimitProfiles } from '@common/rate-limit/rate-limit-policies';
 import { opsAuthGuard } from '@common/guards/ops-auth.guard';
 import { opsPermissionGuard } from '@common/guards/ops-permissions.guard';
@@ -973,18 +972,24 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
           200: {
             type: 'object',
             additionalProperties: false,
-            required: ['mode'],
+            required: ['mode', 'phase', 'pendingUntil', 'activatedAt', 'reason'],
             properties: {
-              mode: { type: 'string', enum: ['normal', 'reduced', 'emergency'], maxLength: 20 }
+              mode: { type: 'string', enum: ['normal', 'reduced', 'emergency', 'maintenance'], maxLength: 20 },
+              // Phase is non-null only when mode = 'maintenance'. 'pending' = 2-minute warning window
+              // with emergency-style gating + drain runs in the background; 'active' = Nginx serves
+              // the maintenance page for all non-ops/non-health/non-webhook traffic.
+              phase: { type: ['string', 'null'], enum: ['pending', 'active', null], maxLength: 16 },
+              pendingUntil: { type: ['string', 'null'], maxLength: 40 },
+              activatedAt: { type: ['string', 'null'], maxLength: 40 },
+              reason: { type: ['string', 'null'], maxLength: 500 }
             }
           },
           ...standardAdminErrorResponses
         }
       }
     },
-    async (request) => {
-      const mode = await getLoadShedMode(request);
-      return { mode };
+    async () => {
+      return opsService.getLoadShedStatus();
     }
   );
 
@@ -1001,7 +1006,10 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
           additionalProperties: false,
           required: ['mode', 'reason', 'challengeId', 'otpCode'],
           properties: {
-            mode: { type: 'string', enum: ['normal', 'reduced', 'emergency'], maxLength: 20 },
+            // 'maintenance' is a persistent, multi-step transition (pending → drain →
+            // active). Persistence survives Redis loss / process restart and exits only
+            // when an ops user picks a different mode here.
+            mode: { type: 'string', enum: ['normal', 'reduced', 'emergency', 'maintenance'], maxLength: 20 },
             reason: { type: 'string', minLength: 10, maxLength: 500 },
             challengeId: { type: 'string', minLength: 1, maxLength: 80 },
             otpCode: { type: 'string', minLength: 6, maxLength: 6, pattern: '^[0-9]{6}$' }
@@ -1011,10 +1019,12 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
           200: {
             type: 'object',
             additionalProperties: false,
-            required: ['mode', 'updated'],
+            required: ['mode', 'updated', 'phase', 'pendingUntil'],
             properties: {
-              mode: { type: 'string', enum: ['normal', 'reduced', 'emergency'], maxLength: 20 },
-              updated: { type: 'boolean' }
+              mode: { type: 'string', enum: ['normal', 'reduced', 'emergency', 'maintenance'], maxLength: 20 },
+              updated: { type: 'boolean' },
+              phase: { type: ['string', 'null'], enum: ['pending', 'active', null], maxLength: 16 },
+              pendingUntil: { type: ['string', 'null'], maxLength: 40 }
             }
           },
           ...standardAdminErrorResponses
@@ -1026,7 +1036,12 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
       if (!opsUser) {
         throw new AppError(ERROR_CODES.UNAUTHORISED, 'Ops authentication required', 401);
       }
-      const body = request.body as { mode: 'normal' | 'reduced' | 'emergency'; reason: string; challengeId: string; otpCode: string };
+      const body = request.body as {
+        mode: 'normal' | 'reduced' | 'emergency' | 'maintenance';
+        reason: string;
+        challengeId: string;
+        otpCode: string;
+      };
       return opsService.setLoadShedModeDirect({
         request,
         requesterId: opsUser.id,

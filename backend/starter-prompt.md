@@ -220,10 +220,15 @@ await api.get('/ops/config/overview', { credentials: 'include' });
 The following 5 operations require a 2-step OTP flow:
 
 1. `POST /ops/config/save` - Save system configuration
-2. `POST /ops/load-shed` - Enable/disable load shedding  
+2. `POST /ops/load-shed` - Change load-shed mode (`normal | reduced | emergency | maintenance`). `maintenance` is durable (Postgres-backed) with a 2-min `pending` warning before Nginx serves the static maintenance page; exits only via another mode change here.
 3. `POST /ops/system/restart` - Restart application services
 4. `POST /ops/users/:id/deactivate` - Deactivate admin users
 5. `POST /ops/invites/:id/revoke` - Revoke admin invitations
+
+**Public maintenance status (storefront banner):**
+- `GET /api/v1/maintenance/status` — public, unauthenticated, rate-limit-exempt. Returns `{ mode, phase, pendingUntil, activatedAt, serverTime }`. Poll every 60 s in steady state, every 5 s during `maintenance/pending` to keep the countdown accurate. Always use `serverTime` to anchor the countdown — never the device clock.
+- `GET /api/v1/maintenance/gate` — internal Nginx subrequest only; clients should never call this directly.
+- Mount a global `MaintenanceBanner` in the root layout; hide it on `/ops/*` routes; render nothing in `normal | reduced | emergency` modes.
 
 **OTP Challenge Pattern:**
 ```typescript

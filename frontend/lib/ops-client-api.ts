@@ -22,8 +22,28 @@ export interface OpsSession {
   lastLoginAt: string | null;
 }
 
+export type OpsLoadShedMode = "normal" | "reduced" | "emergency" | "maintenance";
+
+/**
+ * Snapshot of the durable load-shed/maintenance state.
+ *
+ * `phase` is only populated when `mode === 'maintenance'`:
+ *   - `pending` — 2-minute warning window with emergency-style gating; the
+ *                 storefront still serves but blocks new checkout
+ *                 mutations. The frontend banner shows a countdown to
+ *                 `pendingUntil`.
+ *   - `active`  — Full maintenance. Nginx serves the static maintenance
+ *                 page for every non-ops, non-health, non-webhook route.
+ *                 The banner will normally not render in this phase
+ *                 (because the storefront SSR isn't reachable) but the
+ *                 ops console still shows it for clarity.
+ */
 export interface OpsLoadShedStatus {
-  mode: "normal" | "reduced" | "emergency";
+  mode: OpsLoadShedMode;
+  phase: "pending" | "active" | null;
+  pendingUntil: string | null;
+  activatedAt: string | null;
+  reason: string | null;
 }
 
 export interface OpsAuditRecord {
@@ -275,7 +295,12 @@ export async function setOpsLoadShedMode(input: {
   reason: string;
   challengeId: string;
   otpCode: string;
-}): Promise<{ mode: OpsLoadShedStatus["mode"]; updated: boolean }> {
+}): Promise<{
+  mode: OpsLoadShedStatus["mode"];
+  updated: boolean;
+  phase: "pending" | "active" | null;
+  pendingUntil: string | null;
+}> {
   return opsFetch("/ops/load-shed", {
     method: "POST",
     body: JSON.stringify(input),

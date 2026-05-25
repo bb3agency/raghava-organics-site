@@ -1066,6 +1066,19 @@ fastify.addContentTypeParser(
 
 **`[MUST]`** Custom fraud or scoring integrations `[MUST]` implement `CheckoutRiskAssessmentPort` from `src/common/interfaces/checkout-risk.interface.ts`. Before `registerOrdersRoutes`, either rely on the built-in default (`registerOrdersRoutes` calls `fastify.decorate('checkoutRisk', new CheckoutRiskService(fastify))` when the decorator is absent) or register your own: `fastify.decorate('checkoutRisk', myAdapter)` in an application plugin that runs **before** `registerOrdersRoutes` in `registerApp` (`src/app.ts`). `OrdersService` reads `fastify.checkoutRisk` (with a same-process fallback for tests). Vendor adapters `[MUST]` map failures only to `ERROR_CODES` from §4.5 (see `docs/DECISIONS.md`).
 
+### 7.14 Public maintenance status (`/api/v1/maintenance`)
+
+Public, unauthenticated routes that power the storefront maintenance banner and the Nginx `auth_request` gate for the durable `maintenance` load-shed mode. Both routes are listed in `ALWAYS_ALLOWED_PREFIXES` so they remain reachable while `mode === 'maintenance'` with `phase === 'active'`.
+
+| Method | Path | Auth | Notes |
+|--------|------|------|-------|
+| GET | `/maintenance/status` | None | JSON snapshot for the storefront banner. Returns `{ mode, phase, pendingUntil, activatedAt, serverTime }`. `serverTime` is always present (required field on the response schema) so the client-side countdown aligns with the server clock instead of the device clock. Rate-limit-exempt. |
+| GET | `/maintenance/gate` | None (internal Nginx subrequest) | Always returns `200 { allowed }`. The decision is carried in the `X-Maintenance-Active: 0|1` response header derived from `X-Original-URI`. Nginx guarded `location` blocks read this via `auth_request_set` and convert `1` into a `503`, which then triggers `error_page 503 /maintenance.html`. Routes under `ALWAYS_ALLOWED_PREFIXES` always return `0`. Rate-limit-exempt. |
+
+**`[MUST]`** Maintenance mode is durable — backed by the `MaintenanceState` Postgres model (single-row singleton, source of truth) with a Redis cache (`ops:maintenance:state`, 5-min TTL). Survives Redis flush, container restart, and database failover. The backend rehydrates the Redis cache from Postgres on boot if a row exists.
+
+**`[MUST]`** The `LOAD_SHED_MODE` env var cannot force `maintenance` — only the Ops API can. This prevents accidentally stuck maintenance windows via leftover env config and ensures every transition is audit-logged (`LOAD_SHED_CHANGE`) with the phase flip and any `pendingUntil` deadline.
+
 ### 7.17 Ops Control Plane Routes (`/api/v1/ops`)
 
 **Layer C operations (developer/platform only).** All routes require a browser session cookie issued after email-OTP login. There is no API key path.
@@ -1116,7 +1129,8 @@ fastify.addContentTypeParser(
 |--------|------|------|-------|
 | GET | `/session` | Ops auth | Returns current session user profile (id, email, permissions, lastLoginAt). |
 | GET | `/metrics` | `x-ops-token` matching `OPS_METRICS_TOKEN` | Prometheus text format. Allowlist is defense-in-depth. |
-| POST | `/load-shed` | Ops auth (`ops:write`) + verified OTP | Body: `{ mode: 'normal'|'reduced'|'emergency', reason, challengeId, otpCode }`. Applies mode change immediately. Returns `{ mode, updated: true }`. |
+| GET | `/load-shed` | Ops auth (`ops:read`) | Returns `{ mode, phase, pendingUntil, activatedAt, reason }`. `mode ∈ normal | reduced | emergency | maintenance`; `phase ∈ null | pending | active` (non-null only for `maintenance`). |
+| POST | `/load-shed` | Ops auth (`ops:write`) + verified OTP | Body: `{ mode: 'normal'|'reduced'|'emergency'|'maintenance', reason, challengeId, otpCode }`. Applies mode change immediately. `mode: 'maintenance'` writes a durable Postgres-backed `MaintenanceState` row, starts a 2-minute `pending` window, and enqueues a `maintenance-activation` job that drains queues + `PENDING_PAYMENT` before flipping to `active`. Returns `{ mode, updated: true, phase, pendingUntil }`. |
 | GET | `/users` | Ops auth (`ops:read`) | List ops users. |
 | GET | `/users/:opsUserId` | Ops auth (`ops:read`) | Get ops user profile. |
 | POST | `/users/:opsUserId/deactivate` | Ops auth (`ops:write`) + verified OTP | Body: `{ reason, challengeId, otpCode }`. Deactivate an ops user. |

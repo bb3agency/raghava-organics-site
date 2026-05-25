@@ -493,21 +493,29 @@ Load shedding drops non-essential traffic during system stress. Three modes: `no
 | Checkout mutations | `/orders` (POST/PATCH/PUT/DELETE), `/payments/initiate`, `/cart` | Shed in `emergency` only |
 
 **Mode resolution priority:**
-1. `LOAD_SHED_MODE` env var (immediate override)
-2. Redis key `ops:load_shed:mode` (DB-backed, dynamic)
-3. Default: `normal`
+1. `LOAD_SHED_MODE` env var (immediate override — `normal | reduced | emergency` only; cannot force `maintenance`)
+2. Durable `MaintenanceState` row in Postgres (`maintenance`) — source of truth for `maintenance` and survives Redis flushes
+3. Redis key `ops:load_shed:mode` (fast cache, also written by writer)
+4. Default: `normal`
 
-Mode is **cached 5 seconds** per request to avoid Redis hammering.
+Mode is **cached 5 seconds** per request to avoid Redis hammering. The `MaintenanceState` row is itself fronted by a Redis cache (`ops:maintenance:state`) with a 5-minute TTL; a missed Redis read falls back to Postgres and rehydrates the cache, so the mode persists across Redis restarts/flushes.
 
 `GET /api/v1/ops/load-shed` (`ops:read`)
 
-- Returns current mode: `normal | reduced | emergency`
+- Returns: `{ mode, phase, pendingUntil, activatedAt, reason }`
+- `mode`: `normal | reduced | emergency | maintenance`
+- `phase`: `null | pending | active` (only set when `mode === 'maintenance'`)
+- `pendingUntil`: ISO-8601 timestamp of pending → active flip (null otherwise)
+- `activatedAt`: ISO-8601 timestamp of `active` cutover (null otherwise)
 
 `POST /api/v1/ops/load-shed` (`ops:write`)
 
 - Request: `{ mode, reason, challengeId, otpCode }` (reason min 10 chars)
-- Applies the mode change immediately after OTP confirmation (sets Redis key)
-- Returns `200 { mode, reason, updatedAt }`
+- `mode`: `normal | reduced | emergency | maintenance`
+- Applies the mode change immediately after OTP confirmation (writes durable `MaintenanceState` row + Redis cache + Redis fast-path key)
+- For `mode: maintenance`: persists `phase=pending`, sets `pendingUntil = now + 120s` (`DEFAULT_MAINTENANCE_PENDING_WINDOW_MS`), and enqueues a `maintenance-activation` job on the `cart-cleanup` queue with `delay = 120s`.
+- For any other mode (when previous mode was `maintenance`): explicitly clears `phase`, `pendingUntil`, and `activatedAt` so the durable row reverts cleanly.
+- Returns `200 { mode, phase, pendingUntil, reason, updatedAt }`
 
 **503 response when shedding:**
 ```json
@@ -518,10 +526,69 @@ Mode is **cached 5 seconds** per request to avoid Redis hammering.
 ```
 
 **Use cases:**
-- **Reduced mode:** Temporarily shed analytics/reporting during traffic spikes to preserve checkout capacity
-- **Emergency mode:** Protect database during outages — only health/auth/webhooks serve; all commerce mutations shed
+- **Reduced mode:** Temporarily shed analytics/reporting during traffic spikes to preserve checkout capacity.
+- **Emergency mode:** Protect database during outages — only health/auth/webhooks serve; all commerce mutations shed. Reversible at any moment.
+- **Maintenance mode (added May 2026):** Planned, persistent downtime (DB migrations, schema swaps, certificate rotation, scheduled provider upgrades). 2-minute warning + emergency behavior + payment drain + Nginx-served maintenance page for every non-`/ops/*` route. Survives full infrastructure resets (Redis flush, container restart). Exits **only** when ops explicitly switches the mode back to `normal/reduced/emergency` via this endpoint.
 
-> **Automatic interaction with system restart:** `POST /api/v1/ops/system/restart` automatically sets load-shed to `emergency` at scheduling time. Just before the restart signal is published, the cart-cleanup worker resets it to `normal` so both containers come back up in full-serving mode. You do not need to manually change load-shed before or after scheduling a restart.
+> **Automatic interaction with system restart:** `POST /api/v1/ops/system/restart` automatically sets load-shed to `emergency` at scheduling time. Just before the restart signal is published, the cart-cleanup worker resets it to `normal` so both containers come back up in full-serving mode. You do not need to manually change load-shed before or after scheduling a restart. `system-restart` does **not** flip to `maintenance` — use the maintenance flow for planned-downtime cutovers, and `system-restart` for "apply config + bounce" without a customer-facing maintenance page.
+
+### 6.7.1 Maintenance mode lifecycle (`mode = maintenance`)
+
+The `maintenance` mode is a staged, durable transition designed for planned downtime that must visibly inform shoppers and reliably block all non-critical traffic at the edge.
+
+**State machine:**
+
+```
+normal/reduced/emergency  ──(POST /ops/load-shed mode=maintenance)──>  maintenance/pending
+                                                                              │  2-min countdown +
+                                                                              │  emergency-style gate
+                                                                              ▼
+                                                                  cart-cleanup worker job
+                                                                  "maintenance-activation"
+                                                                              │  pause + drain queues +
+                                                                              │  drain PENDING_PAYMENT
+                                                                              ▼
+                                                                       maintenance/active
+                                                                              │  Nginx serves maintenance.html
+                                                                              │  for every non-allowed route
+                                                                              ▼
+                          (POST /ops/load-shed mode=normal/reduced/emergency) ──>  back to that mode
+```
+
+**Phase 1 — `pending` (0–120s):**
+
+- Triggered the moment ops POSTs `mode: 'maintenance'` (after OTP verification).
+- Writes durable row to `MaintenanceState` (Postgres) + Redis cache + Redis fast-path key.
+- Enqueues a delayed (`delay = 120000 ms`) `maintenance-activation` job on the `cart-cleanup` queue.
+- During this phase the load-shed guard (`backend/src/common/reliability/load-shed.guard.ts → enforceMaintenance`) blocks every new checkout/order/payment mutation with `503 MAINTENANCE_PENDING` and lets only the `PAYMENT_DRAIN_ALLOWLIST` through (`/api/v1/payments/initiate`, `/api/v1/payments/verify`, `/api/v1/payments/retry`, `/api/v1/payments/webhook`, `/api/v1/shipping/webhook`, `/api/v1/orders/:id`, `/api/v1/orders/:id/payment-status`) so in-flight purchases can complete cleanly.
+- `/ops/*`, `/api/v1/health*`, `/api/v1/maintenance/*`, and `/api/v1/auth/*` remain fully open.
+- Frontend storefront polls `GET /api/v1/maintenance/status` every ~5 s and shows the `MaintenanceBanner` countdown on every non-ops route.
+
+**Phase 2 — activation job runs at `pendingUntil`:**
+
+- Worker re-reads the durable state; if it has been cancelled (mode flipped away), the job exits as a no-op.
+- Pauses the `outbox-dispatch` queue first (the main producer of all other queues), then pauses every other producer queue.
+- Polls `Queue.getActiveCount()` on every paused queue until the sum reaches 0 or `MAINTENANCE_QUEUE_DRAIN_TIMEOUT_MS` (default 120 s) elapses. Drain timeout emits a `MaintenanceQueueDrainTimeout` alert and the activation proceeds (BullMQ at-least-once semantics handle the stragglers when queues resume after the maintenance window).
+- Polls `prisma.order.count({ where: { status: 'PENDING_PAYMENT' } })` every 5 s until it reaches 0 or `MAINTENANCE_PAYMENT_DRAIN_TIMEOUT_MS` (default 5 min) elapses. Drain timeout emits a `MaintenancePaymentDrainTimeout` alert and the activation proceeds.
+- Writes `phase = active`, `activatedAt = now()` to `MaintenanceState` and Redis cache.
+- **Resumes every paused queue at the end of the activation handler.** Background jobs (notifications, refunds, outbox dispatch) keep running while the storefront is gated at Nginx, because internal work has to keep flowing for the operator to finish whatever the maintenance window was scheduled for. Customer traffic is what is blocked — by Nginx, not by paused queues.
+
+**Phase 3 — `active`:**
+
+- Nginx subrequests `/_maintenance_gate → /api/v1/maintenance/gate`; the backend returns 200 with header `X-Maintenance-Active: 1` for routes outside `ALWAYS_ALLOWED_PREFIXES`, and the Nginx guarded location converts that to a `503` → `error_page 503 /maintenance.html`. Ops, health, auth, and provider-webhook locations explicitly skip the gate.
+- Durable state survives Redis flushes, backend container restarts, worker restarts, and database failovers. On boot, `backend/src/main.ts` rehydrates `MaintenanceState` from Postgres into Redis so the gate keeps serving correctly even after a cold start in the middle of a maintenance window.
+
+**Exiting maintenance:**
+
+- Ops POSTs `mode: 'normal' | 'reduced' | 'emergency'` to `/api/v1/ops/load-shed` (OTP required).
+- The writer (`setLoadShedModeDirect`) updates the durable row and unconditionally clears `phase`/`pendingUntil`/`activatedAt` (so any stale activation job that fires after the exit is a no-op via its re-check of the durable state). The Nginx `auth_request` gate sees `mode !== 'maintenance'` on its next subrequest and starts returning `X-Maintenance-Active: 0` immediately — traffic flows again on the next request. There is no separate "deactivation" job because the activation handler already resumed every paused queue when it completed the cutover.
+
+**Operational tunables (workers `.env`):**
+
+- `MAINTENANCE_QUEUE_DRAIN_TIMEOUT_MS` (default `120000`) — max wait for active jobs to finish before activation proceeds.
+- `MAINTENANCE_PAYMENT_DRAIN_TIMEOUT_MS` (default `300000`) — max wait for `PENDING_PAYMENT` orders to settle.
+- `MAINTENANCE_QUEUE_PAUSE_GRACE_MS` (default `1500`) — grace window after pausing `outbox-dispatch` so the in-flight publish iteration finishes.
+- `DEFAULT_MAINTENANCE_PENDING_WINDOW_MS` (compile-time constant in `maintenance-state.ts`, currently `120000`) — the 2-minute warning window. Change requires a deploy.
 
 
 ### 6.8 Operational audit timeline
@@ -538,7 +605,7 @@ Query params:
 
 Response items include: `id`, `requestId`, `actionType`, `actionStatus`, `requestPath`, `method`, `summary`, `createdAt`.
 
-Audit action types recorded: `INVITE_CREATED`, `INVITE_CONSUMED`, `INVITE_EXPIRED_CLEANED`, `INVITE_REVOKED`, `OTP_CHALLENGE_REQUESTED`, `OTP_CHALLENGE_VERIFIED`, `OTP_CHALLENGE_FAILED`, `USER_DEACTIVATED`, `OPS_USER_LOGGED_IN`, `OPS_USER_LOGGED_OUT`, `ENV_READ`, `ENV_UPDATE`, `LOAD_SHED_CHANGE`, `CONTAINER_RESTART`.
+Audit action types recorded: `INVITE_CREATED`, `INVITE_CONSUMED`, `INVITE_EXPIRED_CLEANED`, `INVITE_REVOKED`, `OTP_CHALLENGE_REQUESTED`, `OTP_CHALLENGE_VERIFIED`, `OTP_CHALLENGE_FAILED`, `USER_DEACTIVATED`, `OPS_USER_LOGGED_IN`, `OPS_USER_LOGGED_OUT`, `ENV_READ`, `ENV_UPDATE`, `LOAD_SHED_CHANGE`, `CONTAINER_RESTART`. The `LOAD_SHED_CHANGE` payload includes the previous and new `mode` and (for maintenance transitions) the `phase` flip and any `pendingUntil` deadline, so post-incident review can reconstruct the exact downtime window.
 
 Use in UI for:
 

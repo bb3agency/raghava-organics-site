@@ -196,7 +196,10 @@ These are runtime tuning values — safe to adjust without security concern.
 | `RESTART_QUEUE_DRAIN_TIMEOUT_MS` | Max time (ms) the `scheduled-process-restart` BullMQ job waits for **all BullMQ queues** to reach `getActiveCount() === 0` after pausing `outboxDispatch` first, then all other producer queues. Timeout → `ProcessRestartQueueDrainTimeout` alert sent (with per-queue active counts); restart proceeds anyway because in-flight jobs that exceed the budget will retry from BullMQ's durable `attempts` state when containers come back. **Workers process only**. Lower this in staging (e.g. `5000`) for fast iteration. | `60000` (60 s) |
 | `RESTART_QUEUE_PAUSE_GRACE_MS` | Settle delay (ms) between pausing `outboxDispatch` and pausing all other producer queues. Gives the in-flight outbox publish loop time to commit rows it has already claimed before downstream queues are frozen. Async `sleep()` — workers stay responsive. **Workers process only**. | `1500` |
 | `RESTART_PAUSE_AND_DRAIN_QUEUES_ENABLED` | Feature flag for the full queue pause + active-count drain + resume protocol. When `false`, the worker falls back to the legacy payment-status-only drain (skips queue pause/drain/resume entirely). Use only as emergency rollback if a queue-handle bug ever blocks scheduled restarts. **Workers process only**. | `true` |
-| `LOAD_SHED_MODE` | Startup load-shed level: `normal`, `reduced`, or `emergency` | `normal` |
+| `MAINTENANCE_QUEUE_DRAIN_TIMEOUT_MS` | Max time (ms) the `maintenance-activation` BullMQ job (`cart-cleanup` queue) waits for **all paused queues** to reach `getActiveCount() === 0` after pausing `outbox-dispatch` first then every other producer queue. Timeout → `MaintenanceQueueDrainTimeout` alert; activation proceeds (stragglers retry via BullMQ at-least-once when queues resume). **Workers process only**. | `120000` (2 min) |
+| `MAINTENANCE_PAYMENT_DRAIN_TIMEOUT_MS` | Max time (ms) the `maintenance-activation` job waits for `prisma.order.count({ where: { status: 'PENDING_PAYMENT' } })` to reach 0 before flipping `MaintenanceState.phase` to `active`. Timeout → `MaintenancePaymentDrainTimeout` alert; activation proceeds. **Workers process only**. | `300000` (5 min) |
+| `MAINTENANCE_QUEUE_PAUSE_GRACE_MS` | Settle delay (ms) between pausing `outbox-dispatch` and pausing other producer queues inside the `maintenance-activation` handler. Same intent as `RESTART_QUEUE_PAUSE_GRACE_MS`. **Workers process only**. | `1500` |
+| `LOAD_SHED_MODE` | Startup load-shed override: `normal`, `reduced`, or `emergency`. **Cannot force `maintenance`** — that is a durable, DB-backed state set only via the Ops API. When set, this env var overrides the DB-backed mode for `normal/reduced/emergency` (highest priority); leave unset in production so the Ops UI can manage runtime mode dynamically. | `normal` |
 | `HEALTH_QUEUE_STALE_WAITING_SECONDS` | Threshold for queue health checks | `300` |
 
 ---
@@ -388,6 +391,34 @@ These are stored AES-256-GCM encrypted in the `OpsConfigSecret` table and applie
 
 **`INVOICE_STORAGE_ROOT`**
 - **What:** Filesystem path where PDF GST invoices are stored. Must be writable by the process user. Only relevant when `FEATURE_GST_INVOICING_ENABLED=true`.
+
+---
+
+## 3.5) MaintenanceState — DB-backed, Ops-facing (durable runtime mode)
+
+Added May 2026 alongside the `maintenance` load-shed mode. A single-row Postgres table that is the **source of truth** for the maintenance lifecycle. Fronted by a Redis cache (`ops:maintenance:state`, 5-min TTL) for fast reads, but the cache is treated as an optimisation — every read falls back to Postgres when the Redis key is missing and rehydrates the cache. This is what lets maintenance mode survive Redis flushes, container restarts, and full infra resets.
+
+| Column | Purpose |
+|--------|---------|
+| `singletonKey` | Always `'global'` — unique constraint enforces a single row |
+| `mode` | One of `normal | reduced | emergency | maintenance` |
+| `phase` | `null` outside maintenance; `pending` during the 2-min warning; `active` after the worker drain completes |
+| `pendingUntil` | ISO timestamp when `pending` → `active` is scheduled (null otherwise) |
+| `activatedAt` | ISO timestamp the row flipped to `active` (null otherwise) |
+| `reason` | Operator-supplied reason for the mode change (min 10 chars) |
+| `setByOpsUserId` | Ops user who last wrote the row |
+| `setAt` / `updatedAt` | Audit timestamps |
+
+Write path:
+- `POST /api/v1/ops/load-shed` → `OpsService.setLoadShedModeDirect()` → `writeMaintenanceState()` (Postgres `upsert` + Redis cache + Redis fast-path key).
+- For `mode: 'maintenance'`: also enqueues a delayed `maintenance-activation` job on the `cart-cleanup` queue.
+- For any other mode while currently `maintenance`: clears `phase`/`pendingUntil`/`activatedAt` and enqueues a `maintenance-deactivation` job that resumes every paused queue.
+
+Read path:
+- Load-shed guard: `readMaintenanceStateFromRequest()` — request-scoped 5 s cache → Redis cache → Postgres fallback.
+- Boot: `backend/src/main.ts` calls `readMaintenanceState()` after `fastify.listen` to rehydrate the Redis cache from Postgres, so a cold-started backend keeps serving the maintenance page if it boots mid-window.
+
+No env fallback. The mode never returns to `normal` "by accident" — it requires an explicit ops mode change.
 
 ---
 

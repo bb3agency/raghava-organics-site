@@ -84,6 +84,14 @@ function createOpsServiceHarness() {
         create: opsAuditLogCreate,
         findMany: vi.fn(async () => []),
         count: vi.fn(async () => 0)
+      },
+      // Durable maintenance/load-shed state singleton — accessed by
+      // setLoadShedModeDirect (writeMaintenanceState) and getLoadShedStatus
+      // (readMaintenanceState). Default to "no row exists" so the service
+      // initialises from the legacy 'normal' default.
+      maintenanceState: {
+        findUnique: vi.fn(async () => null),
+        upsert: vi.fn(async () => ({}))
       }
     },
     redis: {
@@ -1024,6 +1032,167 @@ describe('OpsService failcase coverage', () => {
         data: expect.objectContaining({ actionType: 'LOAD_SHED_CHANGE' })
       })
     );
+  });
+
+  it('setLoadShedModeDirect(maintenance) starts pending phase + enqueues activation job', async () => {
+    const { service, mocks, fastify } = createOpsServiceHarness();
+    mocks.opsOtpChallengeFindUnique.mockResolvedValueOnce({
+      id: 'challenge_1',
+      opsUserId: 'ops_1',
+      action: 'load-shed-change',
+      codeHash: hashOtp('123456'),
+      status: 'PENDING',
+      expiresAt: new Date(Date.now() + 60000),
+      failedAttempts: 0
+    });
+    mocks.opsOtpChallengeUpdateMany.mockResolvedValueOnce({ count: 1 });
+
+    const cartCleanupAdd = (fastify as unknown as {
+      queues: { cartCleanup: { add: ReturnType<typeof vi.fn> } };
+    }).queues.cartCleanup.add;
+    const maintenanceUpsert = (fastify as unknown as {
+      prisma: { maintenanceState: { upsert: ReturnType<typeof vi.fn> } };
+    }).prisma.maintenanceState.upsert;
+
+    const mockRequest = {
+      id: 'req_2',
+      server: { redis: { set: mocks.redisSet } }
+    } as unknown as import('fastify').FastifyRequest;
+
+    const result = await service.setLoadShedModeDirect({
+      request: mockRequest,
+      requesterId: 'ops_1',
+      mode: 'maintenance',
+      reason: 'Planned downtime for DB migration',
+      challengeId: 'challenge_1',
+      otpCode: '123456',
+      requestIp: '127.0.0.1',
+      requestPath: '/api/v1/ops/load-shed',
+      method: 'POST'
+    });
+
+    expect(result.mode).toBe('maintenance');
+    expect(result.phase).toBe('pending');
+    expect(result.pendingUntil).not.toBeNull();
+    // pendingUntil must be ~120s in the future (DEFAULT_MAINTENANCE_PENDING_WINDOW_MS)
+    if (result.pendingUntil) {
+      const diff = new Date(result.pendingUntil).getTime() - Date.now();
+      expect(diff).toBeGreaterThan(115_000);
+      expect(diff).toBeLessThan(125_000);
+    }
+
+    // Durable row was written with mode='maintenance', phase='pending'
+    expect(maintenanceUpsert).toHaveBeenCalledTimes(1);
+    const upsertCall = maintenanceUpsert.mock.calls[0];
+    if (!upsertCall) throw new Error('maintenanceState.upsert was not called');
+    const upsertArgs = upsertCall[0] as { create: { mode: string; phase: string | null } };
+    expect(upsertArgs.create.mode).toBe('maintenance');
+    expect(upsertArgs.create.phase).toBe('pending');
+
+    // Activation job was enqueued with a delay of 120s
+    expect(cartCleanupAdd).toHaveBeenCalledWith(
+      'maintenance-activation',
+      expect.objectContaining({ requestedBy: 'ops_1' }),
+      expect.objectContaining({ delay: expect.any(Number) })
+    );
+    const enqueueCall = cartCleanupAdd.mock.calls[0];
+    if (!enqueueCall) throw new Error('cartCleanup.add was not called');
+    const enqueueOpts = enqueueCall[2] as { delay: number };
+    expect(enqueueOpts.delay).toBeGreaterThan(115_000);
+    expect(enqueueOpts.delay).toBeLessThan(125_000);
+  });
+
+  it('setLoadShedModeDirect(normal) exits maintenance and clears phase/pendingUntil', async () => {
+    const { service, mocks, fastify } = createOpsServiceHarness();
+    mocks.opsOtpChallengeFindUnique.mockResolvedValueOnce({
+      id: 'challenge_2',
+      opsUserId: 'ops_1',
+      action: 'load-shed-change',
+      codeHash: hashOtp('234567'),
+      status: 'PENDING',
+      expiresAt: new Date(Date.now() + 60000),
+      failedAttempts: 0
+    });
+    mocks.opsOtpChallengeUpdateMany.mockResolvedValueOnce({ count: 1 });
+
+    // Existing maintenance/active row in DB.
+    (fastify as unknown as {
+      prisma: { maintenanceState: { findUnique: ReturnType<typeof vi.fn> } };
+    }).prisma.maintenanceState.findUnique.mockResolvedValueOnce({
+      mode: 'maintenance',
+      phase: 'active',
+      pendingUntil: null,
+      activatedAt: new Date(),
+      reason: 'previous',
+      setByOpsUserId: 'ops_other',
+      setAt: new Date(),
+      updatedAt: new Date()
+    });
+
+    const maintenanceUpsert = (fastify as unknown as {
+      prisma: { maintenanceState: { upsert: ReturnType<typeof vi.fn> } };
+    }).prisma.maintenanceState.upsert;
+    const cartCleanupAdd = (fastify as unknown as {
+      queues: { cartCleanup: { add: ReturnType<typeof vi.fn> } };
+    }).queues.cartCleanup.add;
+
+    const mockRequest = {
+      id: 'req_3',
+      server: { redis: { set: mocks.redisSet } }
+    } as unknown as import('fastify').FastifyRequest;
+
+    const result = await service.setLoadShedModeDirect({
+      request: mockRequest,
+      requesterId: 'ops_1',
+      mode: 'normal',
+      reason: 'Maintenance window completed',
+      challengeId: 'challenge_2',
+      otpCode: '234567',
+      requestIp: '127.0.0.1',
+      requestPath: '/api/v1/ops/load-shed',
+      method: 'POST'
+    });
+
+    expect(result.mode).toBe('normal');
+    expect(result.phase).toBeNull();
+    expect(result.pendingUntil).toBeNull();
+
+    // Phase/pendingUntil/activatedAt are explicitly cleared on the upsert
+    expect(maintenanceUpsert).toHaveBeenCalledTimes(1);
+    const upsertCall = maintenanceUpsert.mock.calls[0];
+    if (!upsertCall) throw new Error('maintenanceState.upsert was not called');
+    const upsertArgs = upsertCall[0] as {
+      update: { mode: string; phase: string | null; pendingUntil: Date | null; activatedAt: Date | null };
+    };
+    expect(upsertArgs.update.mode).toBe('normal');
+    expect(upsertArgs.update.phase).toBeNull();
+    expect(upsertArgs.update.pendingUntil).toBeNull();
+    expect(upsertArgs.update.activatedAt).toBeNull();
+
+    // No activation job enqueued when exiting maintenance.
+    expect(cartCleanupAdd).not.toHaveBeenCalled();
+  });
+
+  it('getLoadShedStatus returns full snapshot (mode + phase + pendingUntil)', async () => {
+    const { service, fastify } = createOpsServiceHarness();
+    (fastify as unknown as {
+      prisma: { maintenanceState: { findUnique: ReturnType<typeof vi.fn> } };
+    }).prisma.maintenanceState.findUnique.mockResolvedValueOnce({
+      mode: 'maintenance',
+      phase: 'pending',
+      pendingUntil: new Date('2030-01-01T00:02:00Z'),
+      activatedAt: null,
+      reason: 'planned',
+      setByOpsUserId: 'ops_1',
+      setAt: new Date('2030-01-01T00:00:00Z'),
+      updatedAt: new Date('2030-01-01T00:00:00Z')
+    });
+
+    const snapshot = await service.getLoadShedStatus();
+    expect(snapshot.mode).toBe('maintenance');
+    expect(snapshot.phase).toBe('pending');
+    expect(snapshot.pendingUntil).toBe('2030-01-01T00:02:00.000Z');
+    expect(snapshot.reason).toBe('planned');
   });
 });
 

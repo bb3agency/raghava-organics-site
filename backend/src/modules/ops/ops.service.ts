@@ -2,7 +2,18 @@ import crypto from 'crypto';
 import { FastifyInstance, FastifyRequest } from 'fastify';
 import { AppError } from '@common/errors/app-error';
 import { ERROR_CODES } from '@common/errors/error-codes';
-import { LOAD_SHED_MODE_KEY, setLoadShedMode, setLoadShedModeViaRedis } from '@common/reliability/load-shed.guard';
+import { invalidateLoadShedProcessCache, LOAD_SHED_MODE_KEY, setLoadShedMode, setLoadShedModeViaRedis } from '@common/reliability/load-shed.guard';
+import {
+  DEFAULT_MAINTENANCE_PENDING_WINDOW_MS,
+  invalidateMaintenanceProcessCache,
+  readMaintenanceState,
+  writeMaintenanceState,
+  type LoadShedModeWithMaintenance,
+  type MaintenancePhase,
+  type MaintenanceStatePrismaLike,
+  type MaintenanceStateRedisLike,
+  type MaintenanceStateRecord
+} from '@common/reliability/maintenance-state';
 import { decryptOpsConfigValue, encryptOpsConfigValue, maskSecretValue, resolveOpsEncryptionKeyVersion } from '@common/security/ops-config-crypto';
 import { sendNotificationFailureAlert, sendTechnicalFailureAlert } from '@modules/notifications/notification-failure-alert';
 import {
@@ -15,7 +26,21 @@ import {
   resolveOpsConfigDomainForKey
 } from './ops-config-contract';
 
-type LoadShedMode = 'normal' | 'reduced' | 'emergency';
+type LoadShedMode = LoadShedModeWithMaintenance;
+
+/**
+ * Public-facing snapshot of the durable maintenance/load-shed state. Returned
+ * from `GET /api/v1/ops/load-shed` and the public
+ * `GET /api/v1/maintenance/status` route so the frontend banner can render
+ * a countdown and the Ops console can label the current phase.
+ */
+export interface LoadShedStatusSnapshot {
+  mode: LoadShedMode;
+  phase: MaintenancePhase | null;
+  pendingUntil: string | null;
+  activatedAt: string | null;
+  reason: string | null;
+}
 
 type OpsActionTypeValue =
   | 'LOAD_SHED_CHANGE'
@@ -1841,7 +1866,7 @@ export class OpsService {
     requestIp: string;
     requestPath: string;
     method: string;
-  }): Promise<{ mode: LoadShedMode; updated: true }> {
+  }): Promise<{ mode: LoadShedMode; updated: true; phase: MaintenancePhase | null; pendingUntil: string | null }> {
     await this.verifyEmailOtp({
       opsUserId: input.requesterId,
       challengeId: input.challengeId,
@@ -1851,7 +1876,115 @@ export class OpsService {
       requestPath: input.requestPath,
       method: input.method
     });
-    await setLoadShedMode(input.request, input.mode);
+
+    const prisma = this.fastify.prisma as unknown as MaintenanceStatePrismaLike;
+    const redis = (this.fastify.redis as unknown) as MaintenanceStateRedisLike;
+    const previous = await readMaintenanceState({ prisma, redis });
+
+    // Build the next durable record. 'maintenance' is a multi-step transition
+    // (pending → activation job → active); every other mode is a direct flip.
+    const nowMs = Date.now();
+    const nowIso = new Date(nowMs).toISOString();
+    let nextRecord: Omit<MaintenanceStateRecord, 'updatedAt'>;
+    let activationJobId: string | null = null;
+
+    if (input.mode === 'maintenance') {
+      // Honour an existing 'active' state — flipping maintenance to maintenance
+      // is a no-op (keeps the original pendingUntil/activatedAt).
+      if (previous.mode === 'maintenance' && previous.phase === 'active') {
+        nextRecord = {
+          mode: 'maintenance',
+          phase: 'active',
+          pendingUntil: previous.pendingUntil,
+          activatedAt: previous.activatedAt ?? nowIso,
+          reason: input.reason,
+          setByOpsUserId: input.requesterId,
+          setAt: nowIso
+        };
+      } else {
+        // Fresh maintenance request — start a pending window. The
+        // cart-cleanup worker handles the `maintenance-activation` job
+        // after the warning timer + queue + payment drain completes.
+        const pendingUntilIso = new Date(nowMs + DEFAULT_MAINTENANCE_PENDING_WINDOW_MS).toISOString();
+        nextRecord = {
+          mode: 'maintenance',
+          phase: 'pending',
+          pendingUntil: pendingUntilIso,
+          activatedAt: null,
+          reason: input.reason,
+          setByOpsUserId: input.requesterId,
+          setAt: nowIso
+        };
+        activationJobId = `maintenance-activation:${nowMs}`;
+      }
+    } else {
+      // Exiting maintenance (or staying in normal/reduced/emergency). Clear
+      // phase/pendingUntil/activatedAt unconditionally so a stale activation
+      // job (if it ever lands after we exit) doesn't flip us back to active.
+      nextRecord = {
+        mode: input.mode,
+        phase: null,
+        pendingUntil: null,
+        activatedAt: null,
+        reason: input.reason,
+        setByOpsUserId: input.requesterId,
+        setAt: nowIso
+      };
+    }
+
+    // Persist to Postgres first (source of truth), then refresh Redis cache
+    // + in-process memo. We deliberately keep the legacy Redis-only key
+    // (`ops:load_shed:mode`) in sync via `setLoadShedMode` so any code path
+    // still consulting it directly sees a consistent mode string.
+    await writeMaintenanceState({ prisma, redis, record: nextRecord, now: () => nowMs });
+    try {
+      await setLoadShedMode(input.request, nextRecord.mode);
+    } catch {
+      // Best-effort — the durable write already succeeded. The mode is
+      // resolved from the maintenance state cache on the next request.
+    }
+    invalidateLoadShedProcessCache();
+    invalidateMaintenanceProcessCache();
+
+    // For maintenance transitions that need an activation job, enqueue it
+    // after the durable write succeeds. The worker drains queues + payments
+    // and then flips phase → 'active'. We use a delay equal to the warning
+    // window so the worker only starts draining at the cutover moment.
+    if (input.mode === 'maintenance' && nextRecord.phase === 'pending' && activationJobId) {
+      try {
+        const cartCleanupQueue = this.fastify.queues?.cartCleanup;
+        if (cartCleanupQueue) {
+          await cartCleanupQueue.add(
+            'maintenance-activation',
+            {
+              requestedBy: input.requesterId,
+              reason: input.reason,
+              pendingUntil: nextRecord.pendingUntil
+            },
+            { jobId: activationJobId, delay: DEFAULT_MAINTENANCE_PENDING_WINDOW_MS }
+          );
+        }
+      } catch (enqueueErr) {
+        // Enqueue failure does not roll back the durable state — the worker
+        // can reconcile by checking the row on its next heartbeat. We still
+        // alert ops so they know the activation has to be retried manually.
+        this.fastify.log.error(
+          { err: enqueueErr, opsUserId: input.requesterId },
+          '[setLoadShedModeDirect] maintenance-activation enqueue failed'
+        );
+        void sendTechnicalFailureAlert({
+          prisma: this.fastify.prisma,
+          template: 'MaintenanceActivationEnqueue',
+          channel: 'UNKNOWN',
+          recipient: input.requesterId,
+          errorMessage:
+            enqueueErr instanceof Error ? enqueueErr.message : 'Unable to enqueue maintenance-activation',
+          failureStage: 'QUEUE_ENQUEUE',
+          domain: 'ops',
+          component: 'maintenance-activation'
+        });
+      }
+    }
 
     const requestId = crypto.randomUUID();
     await this.appendAuditLog({
@@ -1862,11 +1995,36 @@ export class OpsService {
       requestIp: input.requestIp,
       requestPath: input.requestPath,
       method: input.method,
-      newState: { mode: input.mode },
+      previousState: { mode: previous.mode, phase: previous.phase },
+      newState: { mode: nextRecord.mode, phase: nextRecord.phase, pendingUntil: nextRecord.pendingUntil },
       summary: { reason: input.reason }
     });
 
-    return { mode: input.mode, updated: true };
+    return {
+      mode: nextRecord.mode,
+      updated: true,
+      phase: nextRecord.phase,
+      pendingUntil: nextRecord.pendingUntil
+    };
+  }
+
+  /**
+   * Returns the current load-shed/maintenance snapshot for both the Ops
+   * console (`GET /api/v1/ops/load-shed`) and the public storefront banner
+   * (`GET /api/v1/maintenance/status`). Reads through the durable state
+   * helper so it survives Redis loss.
+   */
+  async getLoadShedStatus(): Promise<LoadShedStatusSnapshot> {
+    const prisma = this.fastify.prisma as unknown as MaintenanceStatePrismaLike;
+    const redis = (this.fastify.redis as unknown) as MaintenanceStateRedisLike;
+    const record = await readMaintenanceState({ prisma, redis });
+    return {
+      mode: record.mode,
+      phase: record.phase,
+      pendingUntil: record.pendingUntil,
+      activatedAt: record.activatedAt,
+      reason: record.reason
+    };
   }
 
   async listAuditLogs(query: {

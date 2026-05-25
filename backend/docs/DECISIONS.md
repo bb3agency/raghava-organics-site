@@ -4,6 +4,62 @@
 
 ---
 
+## [2026-05-25] Add persistent `maintenance` load-shed mode with a 2-minute warning, full queue + payment drain, and Nginx-served maintenance page — durable Postgres-backed state, exits only via explicit ops mode change
+
+**Context:** Until this change, the load-shed surface had three modes: `normal | reduced | emergency`, all of them transient Redis keys. `emergency` could approximate a maintenance window by shedding non-essential traffic, but it (a) had no countdown, (b) had no visible "we'll be right back" page for storefront visitors, (c) did not survive a Redis flush, and (d) had no payment-drain gate before the cutover. Planned downtime events (DB migrations, schema swaps, certificate rotation, scheduled provider upgrades) needed a first-class flow that gives shoppers a 2-minute heads-up, lets in-flight payments settle cleanly, and stays put across container/Redis restarts.
+
+**Decision — Introduce a fourth load-shed mode `maintenance` with a staged lifecycle (`pending` → `active`), backed by a durable single-row Postgres table (`MaintenanceState`) plus a Redis cache, plus a Nginx `auth_request` gate that serves a static maintenance page for every non-allowed route while keeping `/ops/*`, health, auth, and provider-webhook routes always reachable. The mode exits only when ops explicitly sets a different mode via `POST /api/v1/ops/load-shed`.**
+
+**Rationale:**
+
+1. **Two-phase transition mirrors the operator's mental model.** Operators want a visible warning window for shoppers before everything goes dark, and they want guarantees that pending payments don't get torn in half. Splitting the transition into `pending` (2-minute warning, emergency-style gate) and `active` (Nginx cutover after queues and `PENDING_PAYMENT` orders drain) makes both guarantees first-class.
+2. **Durability requires Postgres, not Redis.** Maintenance windows often involve infra resets (Redis restarts, full stack redeploys, host failovers). If the state lived in Redis alone, a redeploy mid-window would silently lift maintenance and re-expose a half-broken backend. Postgres is the source of truth; Redis is a 5-min TTL cache that any read falls back through on miss. The backend rehydrates the cache from Postgres on boot (`main.ts`), so a cold start mid-window keeps serving correctly.
+3. **Nginx `auth_request` with header-carried decision avoids subrequest-status pitfalls.** The first design returned `503` directly from `/api/v1/maintenance/gate`, but Nginx remaps subrequest 5xx to 500 for the client, which would have triggered the wrong `error_page` and hidden genuine 5xx upstream failures. Switching to "always-200 + `X-Maintenance-Active: 0|1` header → `auth_request_set` → `if ($maintenance_active = "1") { return 503; }`" makes the gate decision unambiguous and reuses the existing `error_page 503 /maintenance.html` path.
+4. **Ops UI route discipline preserved.** `/ops/*` bypasses the gate entirely. Even when the rest of the site is unreachable, operators can sign in, audit the timeline, and reverse the mode.
+5. **No env override for `maintenance`.** `LOAD_SHED_MODE` cannot force `maintenance` — only the Ops API can. This prevents accidental "stuck on maintenance" due to an env var left over from an earlier window, and keeps every transition audit-logged (`LOAD_SHED_CHANGE` action with phase/pendingUntil payload).
+
+**Alternatives considered:**
+
+- *Use emergency mode + a custom storefront banner.* Rejected. Emergency mode does not gate the storefront at the edge; the SPA would still render, and any client that bypasses the banner would still hit live APIs. The whole point of maintenance mode is a hard edge cutover.
+- *Store state in Redis only, with a `persist`-style snapshot.* Rejected. Redis persistence is best-effort under `appendonly` and `RDB` snapshots; a forced flush or AOF rewrite failure would still drop the state silently. Postgres gives us a single durable row with a unique constraint we already trust for every other piece of business state.
+- *Skip the 2-minute warning and flip straight to active.* Rejected. The warning is the entire UX win — checkout abandonment without a heads-up is materially worse than a paused-but-finishable in-flight session.
+- *Keep queues paused for the duration of `active`.* Rejected. Customer traffic is gated at Nginx, but internal background work (notifications, refunds, outbox dispatch) has to keep flowing — that's how the operator actually finishes the maintenance task in many cases (e.g. flushing a refund batch before a DB migration). The activation handler resumes every paused queue once `phase = active` is written. Stale activation jobs (if any fire after an early exit) re-check the durable row and become no-ops.
+
+**Affected files:**
+
+- Backend state model:
+  - `backend/prisma/schema.prisma` — new `MaintenanceState` model.
+  - `backend/prisma/migrations/20260525120000_add_maintenance_state/migration.sql`.
+  - `backend/src/common/reliability/maintenance-state.ts` — Postgres + Redis state helpers.
+  - `backend/src/common/reliability/load-shed.guard.ts` — `enforceMaintenance` gate + payment-drain allowlist.
+- Backend mode writer + worker:
+  - `backend/src/modules/ops/ops.service.ts` — `setLoadShedModeDirect` writes durable row, enqueues activation / deactivation jobs, returns full snapshot.
+  - `backend/src/modules/ops/ops.routes.ts` — response schemas updated to expose `mode`, `phase`, `pendingUntil`, `activatedAt`, `reason`.
+  - `backend/queues/workers/cart-cleanup.worker.ts` — `maintenance-activation` and `maintenance-deactivation` handlers (drain + cutover, resume).
+- Public maintenance endpoints + boot rehydrate:
+  - `backend/src/modules/maintenance/maintenance.routes.ts` — `GET /maintenance/status` (storefront poll), `GET /maintenance/gate` (Nginx subrequest with `X-Maintenance-Active` header).
+  - `backend/src/app.ts` — early route registration so it survives every guard.
+  - `backend/src/main.ts` — rehydrate Redis cache from Postgres on boot.
+- Nginx:
+  - `backend/nginx/client.conf.template` — `auth_request /_maintenance_gate;` + `auth_request_set` + conditional 503 on guarded locations; explicit bypass for `/ops`, `/api/v1/health*`, `/api/v1/auth/*`, `/api/v1/maintenance/*`, provider webhooks.
+- Frontend:
+  - `frontend/lib/maintenance-client.ts` — typed status client + countdown helper.
+  - `frontend/components/maintenance/MaintenanceBanner.tsx` — global banner, hidden on `/ops/*`.
+  - `frontend/app/layout.tsx` — mount banner.
+  - `frontend/lib/ops-client-api.ts` — `OpsLoadShedStatus` extended with `phase` / `pendingUntil` / `activatedAt`.
+  - `frontend/components/ops/OpsLoadShedPanel.tsx` — `maintenance` option, mode descriptions, phase-aware messaging.
+  - `frontend/lib/ops-status-maps.ts` — badge tone for `maintenance`.
+- Tests:
+  - `backend/src/common/reliability/maintenance-state.test.ts`, `backend/src/modules/maintenance/maintenance.routes.test.ts` — new.
+  - `backend/src/common/reliability/load-shed.guard.test.ts`, `backend/src/modules/ops/ops.service.test.ts` — extended.
+  - `frontend/lib/maintenance-client.test.ts` — new.
+- Docs:
+  - `OPS_CONTROL_PLANE_GUIDE.md`, `ROUTE_SURFACE_COMPLETE_REFERENCE.md`, `API_ENDPOINT_INDEX.md`, `ENV_VS_DB_CONFIG_REFERENCE.md`, `HARDENING_HISTORY.md`, this file.
+
+**Validation:** Backend unit tests covering maintenance: 68/68 pass (`maintenance-state.test.ts`, `maintenance.routes.test.ts`, `load-shed.guard.test.ts`, `cart-cleanup.worker.test.ts`, `ops.service.test.ts`). Frontend `maintenance-client` tests: 9/9 pass. The 5 pre-existing failures in `order-processing.worker.test.ts` are unrelated to this change (confirmed via `git stash`).
+
+---
+
 ## [2026-05-25] Ops Config `/ops/config/stored` returns plaintext for every saved value, including real secrets — explicit override of "never show plaintext secrets in admin UI" scoped to the Ops console only
 
 **Context:** The May 2026 partial fix exposed `plaintextValue` for non-secret keys only (provider selectors, URLs, integer thresholds, public IDs, sender addresses, login emails) while keeping real cryptographic secrets (`RAZORPAY_KEY_SECRET`, `SHIPROCKET_PASSWORD`, `RESEND_API_KEY`, `MSG91_AUTH_KEY`, `META_WHATSAPP_ACCESS_TOKEN`, OPS approval tokens, etc.) masked-only with a `Stored: ****** — enter new value to replace` placeholder. Operators reported that this still didn't solve the actual workflow: editing a single field meant retyping the entire secret from memory or running a manual DB query on the VPS to verify what was last persisted. Worse, there was no way to audit which provider key was currently active without either the external vault staying in lock-step with the DB or running ad-hoc decrypt queries.
