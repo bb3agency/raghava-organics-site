@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { Eye, EyeOff, KeyRound, RotateCcw, Trash2 } from "lucide-react";
 import { useOpsCanWrite } from "@/components/ops/OpsSessionProvider";
 import {
@@ -314,12 +315,15 @@ export function OpsConfigEditor({ overview, stored, onConfigSaved }: OpsConfigEd
         challengeId,
         otpCode: otpCode.trim(),
       });
-      setMessage(
-        `Saved ${result.savedKeys.length} key(s). Restart API and workers when prompted.`,
-      );
+      setDraft(buildInitialDraft(fields));
       setOtpCode("");
       setChallengeId("");
       setExpiresAt(null);
+      setMessage(
+        result.requiresRestart
+          ? `Saved ${result.savedKeys.length} key(s) to the database. Restart the API and workers next — there is no automatic popup; use Ops → System or SSH on the VPS.`
+          : `Saved ${result.savedKeys.length} key(s) to the database.`,
+      );
       onConfigSaved?.();
     } catch (err) {
       if (err instanceof ApiError && err.code === "ops_audit_chain_lock_timeout") {
@@ -441,9 +445,14 @@ export function OpsConfigEditor({ overview, stored, onConfigSaved }: OpsConfigEd
           {message ? <OpsAlert tone="success">{message}</OpsAlert> : null}
           {error ? <OpsAlert tone="error">{error}</OpsAlert> : null}
 
-          <OpsAlert tone="info">
-            After saving provider keys, restart the backend API and workers on the VPS so runtime
-            overlay values load into memory.
+          <OpsAlert tone="info" title="Restart is manual">
+            Saved keys stay in the database until the running API and workers reload them. There is
+            no in-app restart prompt after save — go to{" "}
+            <Link href="/ops/system" className="font-medium underline underline-offset-2">
+              Ops → System
+            </Link>{" "}
+            (OTP + optional delay) or restart containers on the VPS (for example{" "}
+            <code className="text-xs">docker compose up -d backend workers</code>).
           </OpsAlert>
         </div>
       </OpsCard>

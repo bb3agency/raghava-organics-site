@@ -375,6 +375,7 @@ Response fields:
 - Request: `{ domain?, values }`
 - Response: `{ valid, checkedKeys, errors, warnings, requiresRestart }`
 - Does **not** mutate runtime config and does **not** return plaintext secrets.
+- **Batch-scoped validation (since May 2026):** only the keys present in `values` are validated. The validator checks allowlist, bootstrap rejection, provider enum (when `PAYMENT_PROVIDER`/`SHIPPING_PROVIDER`/`SMS_PROVIDER` are in the batch), and placeholder usage in production. It no longer fails the entire request if other go-live keys (e.g. `RAZORPAY_WEBHOOK_SECRET`, `SHIPROCKET_PASSWORD`) are missing from `process.env`. The full required-key set is still enforced at `GET /api/v1/health/ready` via `findMissingStrictOpsConfigKeys`, so go-live coverage remains strict at the readiness gate, not the save gate.
 
 `GET /api/v1/ops/config/stored` (`ops:read`)
 
@@ -391,10 +392,11 @@ Response fields:
 - Call `POST /api/v1/ops/config/validate` first (recommended; client UI does this before save).
 - Requires `OPS_DB_ENCRYPTION_KEY` to be configured from real environment; save route and boot overlay fail closed if encryption key is missing.
 - Rejects bootstrap-only keys with `BOOTSTRAP_KEY_NOT_DB_APPLICABLE`; edit them in deployment environment instead.
+- **Partial saves are supported.** Save validates only the keys in the batch (same rules as `/validate`). Operators can fill provider secrets incrementally — saving `PAYMENT_PROVIDER=razorpay` does not require `RAZORPAY_KEY_ID`/`RAZORPAY_WEBHOOK_SECRET` to also be in the batch or already present in `process.env`. Go-live completeness remains gated by `GET /api/v1/health/ready`.
 - Saved non-bootstrap keys apply after API/worker restart.
-- Response: `{ valid, savedKeys, domain, requiresRestart, masked: [{ key, maskedValue }] }` — `domain` is the primary domain touched (first saved key's domain when batching).
+- Response: `{ valid, savedKeys, domain, requiresRestart, masked: [{ key, maskedValue }] }` — `domain` is the primary domain touched (first saved key's domain when batching). `requiresRestart` is `true` whenever at least one DB-overlay key was changed; clients should display a manual restart hint (there is no automatic in-app restart prompt — operators must use `/ops/system` or restart containers on the VPS).
 
-**Client frontend reference (Raghava Organics):** `OpsConfigEditor` on `/ops/config` — sectioned fields (fixed key name + editable value), validate-then-save, OTP at bottom. Poll readiness via `GET /api/v1/health/ready` (see below).
+**Client frontend reference (Raghava Organics):** `OpsConfigEditor` on `/ops/config` — sectioned fields (fixed key name + editable value), validate-then-save, OTP at bottom. After save, the editor links operators to `Ops → System` (or VPS `docker compose up -d backend workers`) for the restart; the save response does not trigger any restart prompt automatically. Poll readiness via `GET /api/v1/health/ready` (see below).
 
 ### 6.3 Invite and setup lifecycle
 
@@ -598,9 +600,9 @@ Response: `{ jobId, scheduledFor }` — ISO-8601 timestamp of when the restart w
 **Frontend UX pattern:**
 
 1. After calling `POST /ops/config/save`, the response includes `requiresRestart: true`.
-2. Show a restart banner: "Configuration saved. A process restart is required for changes to take effect."
-3. Offer two buttons: **Restart now** (`delayMinutes: 0`) and **Schedule restart** (lets the ops user choose a delay).
-4. On success, display the `jobId` and `scheduledFor` time so the ops user knows when to expect downtime.
+2. Show a restart banner: "Configuration saved. A process restart is required for changes to take effect." **There is no automatic restart prompt or modal** — restart is always operator-initiated.
+3. Offer two paths in copy: a link to the **Ops → System** page (where the operator runs the OTP-protected `/ops/system/restart` flow with optional delay), and a hint that VPS operators can also run `docker compose -p <client-id> up -d backend workers` directly.
+4. On success of `/ops/system/restart`, display the returned `jobId` and `scheduledFor` time so the ops user knows when to expect downtime.
 5. Poll `GET /api/v1/health` to detect when the API is back online.
 
 ## 7) Suggested frontend UX flow
@@ -720,6 +722,37 @@ Common error responses:
 
 UI should surface actionable remediation from `error.details.remediation` when present.
 
+### 9.1 Storefront 502 after Ops config save / restart
+
+If the storefront starts returning `502 Bad Gateway` on `/api/v1/*` shortly after an Ops config save followed by an API/worker restart, the API container is almost always **crash-looping**, not the network. Most common cause:
+
+- The DB overlay applied a partial provider setting (e.g. `PAYMENT_PROVIDER=razorpay` or `SHIPPING_PROVIDER=shiprocket`) before the matching provider secrets were saved.
+- Older boot validation (`validateConditionalEnv` in `src/config/app.config.ts`) called `requireEnv` on the full dependency chain and threw `Missing required env var: …` at startup, exiting the API process. Docker restart policy keeps re-launching the container, and nginx returns 502 between attempts.
+
+**Triage on the VPS:**
+
+```bash
+docker compose -p <client-id> ps                       # backend may show Restarting
+docker compose -p <client-id> logs backend --tail 100  # look for `Missing required env var:` or `Unsupported PAYMENT_PROVIDER`
+curl -sS http://127.0.0.1:<BACKEND_PORT>/api/v1/health # 502/connection refused while crash-looping
+```
+
+**Resolution path (preferred — code fix already in template, May 2026):**
+
+1. `git pull` the template fix that makes `validateConditionalEnv` boot-tolerant (boot only rejects unsupported provider enums and placeholder values for keys that *are* set; full chains move to `/health/ready`).
+2. Rebuild: `docker compose -p <client-id> build backend && docker compose -p <client-id> up -d backend workers`.
+3. Confirm `/api/v1/health` returns `ok`, then finish remaining Ops keys and restart again.
+
+**Emergency rollback (no pull yet):** deactivate the incomplete overlay rows so the next boot does not enter the crash path. Example for `PAYMENT_PROVIDER` / `SHIPPING_PROVIDER`:
+
+```sql
+UPDATE "OpsConfigSecret"
+SET "isActive" = false
+WHERE "secretKey" IN ('PAYMENT_PROVIDER','SHIPPING_PROVIDER') AND "isActive" = true;
+```
+
+Then `docker compose -p <client-id> up -d backend workers`. After the site is back, save the remaining provider secrets via Ops UI and restart again. This is incident-only; the boot-tolerance fix is the long-term answer.
+
 ---
 
 > **Ops bootstrap is Phase 8 of the client onboarding process.** The correct sequence — VPS deployment complete → HTTPS confirmed → `npm run ops:newuser` (creates invite + emails setup link) → ops user completes `/ops/setup` via OTP → first login via email OTP — is detailed in **[`docs/CLIENT_ONBOARDING_EXECUTION_ORDER.md`](CLIENT_ONBOARDING_EXECUTION_ORDER.md)** §Phase 8. Do not bootstrap ops users before the backend is deployed and HTTPS is confirmed active.
@@ -749,6 +782,7 @@ All security verification gates passing:
 | **API Key Path Removal** | May 2026 | Browser session is the only auth mechanism |
 | **OTP Test Fixes** | June 2026 | SHA256 hash computation verified in all tests |
 | **Ops config + readiness hardening** | May 2026 | `invite-revoke` in OTP enum; OTP action binding; optional `domain` on config save; empty value deactivates overlay; `/health/ready` 503 returns `data` + `CONFIG_NOT_READY` |
+| **Incremental config save + boot tolerance** | May 2026 | `validateConfigDraft` only validates submitted keys (partial saves no longer rejected for unrelated required keys). `validateConditionalEnv` no longer calls `requireEnv` on full provider chains at boot — only enum and placeholder safety. Full go-live coverage stays at `GET /api/v1/health/ready`. Prevents API crash-loops / nginx 502s during incremental Ops setup. |
 
 ### 10.3 Verified Security Invariants
 

@@ -623,8 +623,10 @@ Saves one or more config keys to the DB-overlay.
 - When `domain` is set, all keys must belong to that domain.
 - `null` or `""` deactivates an existing `OpsConfigSecret` row (`isActive: false`).
 - OTP must be requested with `action: 'config-save'`; `verifyEmailOtp` enforces `expectedAction: 'config-save'`.
+- **Partial saves are accepted** (May 2026): validation only inspects keys present in `values` (allowlist, bootstrap rejection, provider enum, placeholder safety in strict profile). It does **not** require the full provider dependency chain to be present in `process.env` or the same batch. Full go-live coverage is enforced at `GET /api/v1/health/ready` only.
+- **Restart is manual**: the response sets `requiresRestart: true` when overlay keys changed, but there is no automatic restart prompt — operators must call `POST /ops/system/restart` (OTP-protected) or restart VPS containers themselves.
 
-Recommended flow: `POST /ops/config/validate` → `POST /ops/otp/request` `{ action: 'config-save' }` → `POST /ops/config/save`.
+Recommended flow: `POST /ops/config/validate` → `POST /ops/otp/request` `{ action: 'config-save' }` → `POST /ops/config/save` → (when ready) `POST /ops/system/restart`.
 
 **Only runtime-overlay keys** (`isOpsConfigRuntimeOverlayKey`) are persisted. Bootstrap keys return `BOOTSTRAP_KEY_NOT_DB_APPLICABLE` on validate; non-overlay mutable keys are skipped on save.
 

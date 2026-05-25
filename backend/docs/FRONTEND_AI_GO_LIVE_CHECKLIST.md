@@ -71,7 +71,8 @@ Pair this with `docs/BACKEND_GO_LIVE_CHECKLIST.md` for final go-live sign-off. T
 - [ ] Step 2: Show OTP input modal with 10-minute countdown timer
 - [ ] Step 3: Submit mutation with `challengeId` + `otpCode`
 - [ ] Handle 401 (invalid OTP) showing remaining attempts (max 3)
-- [ ] `POST /ops/config/save`: validate first; `domain` optional; `null` value removes overlay key
+- [ ] `POST /ops/config/save`: validate first; `domain` optional; `null` value removes overlay key; partial batches are accepted (save 1–N keys at a time)
+- [ ] After successful save, UI shows a **manual restart hint** (link to `/ops/system` and a note about VPS `docker compose up -d backend workers`) — no automatic restart prompt
 - [ ] `GET /health/ready`: parse envelope `data` on HTTP 503 (`CONFIG_NOT_READY`) for `runtimeConfigMissingKeys`
 - [ ] Handle 429 (rate limit) with backoff
 - [ ] Handle 503 `ops_audit_chain_lock_timeout` with 1-2s retry

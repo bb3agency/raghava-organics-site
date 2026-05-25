@@ -52,12 +52,14 @@ Self-hosted runner on client VPS (polling GitHub)
 | 1 | VPS host baseline (Docker, Node 22, nginx, Postgres, UFW) | 6 |
 | 2 | Monorepo or backend repo cloned on VPS; `backend/.env` present | 7 |
 | 3 | First manual backend deploy healthy: `GET /api/v1/health` | 7 |
-| 4 | Ops bootstrap + DB-overlay keys saved | 8 |
-| 5 | `/api/v1/health/ready` → `status=ready`, `runtimeConfigMissingKeys=[]` | 8 |
+| 4 | Ops bootstrap + DB-overlay keys saved (iterative — partial save supported) | 8 |
+| 5 | `/api/v1/health/ready` → `status=ready`, `runtimeConfigMissingKeys=[]` | Go-live |
 | 6 | Frontend `.env.production.local` + one-time `pm2 start` (if using frontend CD) | 10 |
 | 7 | Root or backend workflow files committed to **client** repo `main` | 7.6 |
 
-> **Important:** `vps-deploy.sh` **fails** the deploy job if readiness is not fully green. You can install the runner after Phase 7, but **backend auto-deploy succeeds only after Phase 8**.
+> **CD vs go-live gating (updated May 2026):** `vps-deploy.sh` checks `/api/v1/health/ready` but the readiness check is now **warning-only** — the deploy job completes even if readiness reports `not_ready` or non-empty `runtimeConfigMissingKeys`. This is intentional: during Phase 8 the operator is filling Ops keys incrementally, and CD must still ship code fixes (including the boot-tolerance fix that prevents 502 crash-loops on partial provider chains).
+>
+> Full readiness (`status: ready`, empty `runtimeConfigMissingKeys`) remains **required at go-live**. Verify it via the BACKEND_GO_LIVE_CHECKLIST / FRONTEND_AI_GO_LIVE_CHECKLIST before opening DNS / sending real customers, not as a per-deploy gate.
 
 ---
 
@@ -195,8 +197,8 @@ git push origin main
 4. `docker compose build`  
 5. `prisma migrate deploy` (host Postgres via `127.0.0.1` URL)  
 6. `docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml up -d backend workers`  
-7. `/api/v1/health` retry loop  
-8. `/api/v1/health/ready` — must be `ready` with `runtimeConfigMissingKeys: []`  
+7. `/api/v1/health` retry loop — **deploy fails** if backend never becomes healthy
+8. `/api/v1/health/ready` — **logged as warning only** (`status: ready` + empty `runtimeConfigMissingKeys` is recommended, missing keys do not block CD)
 9. `docker image prune -f`
 
 **Downtime:** ~3–5s (nginx serves maintenance page on 502/503).
@@ -240,7 +242,9 @@ Use when you need a redeploy without a new commit. Prefer `git revert` + `git pu
 | Deploy fails with `Missing required secrets: VPS_CLIENT_PATH ...` | Paths were added as **Variables** instead of **Secrets** | Move `VPS_CLIENT_PATH`/`VPS_FRONTEND_PATH` to repo **Secrets**; keep only booleans/labels in Variables |
 | Deploy job queued forever | Runner offline or wrong label | `sudo ~/actions-runner-<client-id>/svc.sh status`; fix `VPS_RUNNER_LABEL` |
 | Deploy hit wrong VPS client | Missing/wrong `VPS_RUNNER_LABEL` | Unique label per client repo |
-| Backend deploy fails at readiness | Phase 8 incomplete | Ops config save + restart; `curl /health/ready` — on 503, read `data.runtimeConfigMissingKeys` (not only error message) |
+| Backend deploy fails at readiness | _As of May 2026 this is warning-only and no longer fails the job._ If you still see a hard failure, you are running an old `vps-deploy.sh`. Pull template, redeploy. |
+| Backend deploy succeeds but storefront returns 502 | API container crash-looping on missing provider env vars (boot-time `requireEnv`) | Pull template fix (May 2026 `validateConditionalEnv` boot tolerance); see `PHASE7_VPS_DEPLOY_INCIDENT_PLAYBOOK.md` §4 K |
+| `/health/ready` shows `not_ready` after CD | Phase 8 still in progress | Finish Ops config saves, restart API + workers via `/ops/system` or VPS `docker compose up -d backend workers`, recheck |
 | Invite revoke OTP fails (400 on otp/request) | Backend before May 2026 | Ensure `invite-revoke` is in OTP action enum; redeploy backend |
 | `SHA mismatch` | Another push during deploy | Re-run workflow |
 | Frontend `script not found` | Workflow calls `frontend/scripts/...` | Use `$VPS_CLIENT_PATH/scripts/vps-frontend-deploy.sh` |

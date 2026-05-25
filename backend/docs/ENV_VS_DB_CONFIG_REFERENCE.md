@@ -40,9 +40,10 @@ These must be set in `.env` (or VPS secrets manager) before the process starts. 
 - **Rotation:** Update both `REDIS_PASSWORD` and the password segment of `REDIS_URL` simultaneously, then restart.
 
 **`NODE_ENV`**
-- **What:** Runtime profile switch. `production` enables strict validation (all required keys enforced), disables verbose error output, enables secure cookie flags. `development` and `test` relax some checks for local use.
+- **What:** Runtime profile switch. `production` enables strict placeholder rejection and disallows `noop` providers; disables verbose error output; enables secure cookie flags. `development` and `test` relax some checks for local use.
 - **Values:** `production` | `development` | `test`
 - **Never** store or overlay from DB — it would allow a DB attacker to switch the runtime to development mode.
+- **Note (May 2026, boot tolerance):** Strict mode no longer requires the entire provider dependency chain at boot via `requireEnv` (this caused API crash-loops + nginx 502s during incremental Ops config saves). Boot now validates only enum correctness for provider selectors and rejects placeholder values for keys that *are* set. The full go-live key set is still enforced — but at `GET /api/v1/health/ready` (which returns `runtimeConfigMissingKeys`) rather than at process start.
 
 **`CLIENT_ID`**
 - **What:** Short identifier for this client deployment. Used as Docker container name prefix and in alert emails to identify which client's instance is alerting.
@@ -434,14 +435,15 @@ Guardrail scripts (both wired into `npm run ci:reliability-gates`):
 
 - `GET /api/v1/ops/config/overview` — per-domain items with `mutableViaOps`, `requiresRestart`, `runtimeSource`, present/placeholder flags.
 - `GET /api/v1/ops/config/stored` — masked stored entries (values shown as `ab****cd`).
-- `POST /api/v1/ops/config/validate` — dry-run: required/placeholder/unknown key checks, restart requirement. Body: `{ domain?, values }`.
+- `POST /api/v1/ops/config/validate` — dry-run: allowlist / bootstrap rejection / provider enum / placeholder checks for the **submitted batch only**. Body: `{ domain?, values }`.
 - `POST /api/v1/ops/config/save` — OTP required (`action: config-save` on `otp/request`). Body: `{ values, challengeId, otpCode, domain? }`.
   - **`domain` optional:** omit to save keys across multiple contract domains in one request (domain resolved per key via `resolveOpsConfigDomainForKey`).
   - **`null` / empty value:** deactivates the DB overlay row (`isActive: false`) without erasing audit history.
-  - **Restart:** all saved overlay keys set `requiresRestart: true`; restart API + workers after save.
+  - **Partial saves:** validation runs against the submitted batch only — saving `PAYMENT_PROVIDER=razorpay` does **not** require `RAZORPAY_KEY_ID`/`RAZORPAY_WEBHOOK_SECRET` to be in the batch or in `process.env`. Operators can fill provider chains incrementally.
+  - **Restart:** all saved overlay keys set `requiresRestart: true`; restart is **manual** — operators use `/ops/system` (OTP-protected) or restart containers on the VPS. There is no automatic in-app restart prompt.
 - Bootstrap keys rejected with `BOOTSTRAP_KEY_NOT_DB_APPLICABLE`.
 
-**Readiness gate:** `GET /api/v1/health/ready` lists missing strict-profile keys in `runtimeConfigMissingKeys` (also returned in `data` on HTTP 503 with `CONFIG_NOT_READY`).
+**Readiness gate:** `GET /api/v1/health/ready` lists missing strict-profile keys in `runtimeConfigMissingKeys` (also returned in `data` on HTTP 503 with `CONFIG_NOT_READY`). This is now the single canonical "is the system go-live ready?" check — boot-time validation no longer enforces the full provider chain; it only enforces enums and placeholder safety.
 
 ---
 
@@ -518,7 +520,11 @@ All Redis keys and pub/sub channels follow the project-wide convention: `<module
 
 ## Phase 7 strict-startup reminder (May 2026 incident learnings)
 
-Before first production boot on VPS, startup-required strict-profile keys must already exist in `.env` even if later managed in Ops UI. At minimum:
+> **Updated May 2026 (boot tolerance fix):** the startup process no longer crashes when DB-overlay provider chains are incomplete. `validateConditionalEnv` in `src/config/app.config.ts` now validates only provider enums and placeholder safety; it does **not** call `requireEnv` on the full Razorpay / Shiprocket / MSG91 / Resend / WhatsApp dependency sets. This eliminates the boot crash-loop → nginx 502 cycle that occurred when operators saved a provider selector before filling its secrets. Strict go-live coverage is now enforced by `GET /api/v1/health/ready` only.
+>
+> For first deploy you still want all keys filled before traffic — the items below are still recommended for clean first boot — but if any are missing the API will boot and `/health/ready` will report the gap instead of refusing to start.
+
+At a minimum, ensure these are populated before opening the site to traffic:
 
 - `REPLAY_APPROVAL_TOKEN`
 - `OPS_METRICS_TOKEN`

@@ -4,6 +4,34 @@
 
 ---
 
+## [2026-05-25] Incremental Ops config save + boot tolerance for incomplete provider chains
+
+**Context:** During Phase 8 ops bootstrap on Raghava Organics, two related failure modes surfaced:
+1. `POST /api/v1/ops/config/save` would reject saves of 1–5 keys with errors like `SMS_PROVIDER is required for the current draft context`, `RAZORPAY_WEBHOOK_SECRET is required…` even though those keys were not part of the submitted batch. Operators could not fill credentials incrementally.
+2. After restarting the API to apply saved overlay keys, the API crash-looped on `Missing required env var: RAZORPAY_KEY_ID` (and similar) because `validateConditionalEnv` called `requireEnv` on the full provider chain at boot — even when only the provider selector had been saved so far. Crash-loop → nginx returned 502 on every storefront request.
+
+**Decision 1 — `validateConfigDraft` is batch-scoped.** The validator no longer calls `computeRequiredOpsConfigKeys()` to fail on unrelated missing keys. It validates only the keys present in `values`: allowlist membership, bootstrap rejection, provider enum (when `PAYMENT_PROVIDER`/`SHIPPING_PROVIDER`/`SMS_PROVIDER` is in the batch), and placeholder safety in strict profile. Full go-live coverage stays at `GET /api/v1/health/ready` via `findMissingStrictOpsConfigKeys`.
+
+**Decision 2 — `validateConditionalEnv` is boot-tolerant.** `src/config/app.config.ts` no longer calls `requireEnv` on the full provider dependency chain at startup. Boot now only:
+- rejects unsupported `PAYMENT_PROVIDER` / `SHIPPING_PROVIDER` / `SMS_PROVIDER` values (enum check),
+- rejects `noop` providers in production-like profiles,
+- rejects placeholder values **only for keys that are actually set** (via `assertEnvNotPlaceholderIfPresent`),
+- still requires `OPS_DB_ENCRYPTION_KEY`, `JWT_SECRET`, `JWT_REFRESH_SECRET`, and `OTEL_EXPORTER_OTLP_ENDPOINT` (when tracing is enabled) — these are infrastructure-level, not provider-level.
+
+**Decision 3 — CD readiness gate is warning-only.** `backend/scripts/vps-deploy.sh` no longer fails the deploy when `/health/ready` reports `not_ready` or non-empty `runtimeConfigMissingKeys`. It logs a warning and lets the deploy complete. Reason: during Phase 8 the operator is iterating on config; CD must still ship code fixes even when the readiness payload is incomplete. Go-live readiness is verified via the dedicated `BACKEND_GO_LIVE_CHECKLIST.md` / `FRONTEND_AI_GO_LIVE_CHECKLIST.md` gates before opening to customers, not as a per-deploy block.
+
+**Decision 4 — Restart after config save is manual, no automatic prompt.** The ops save response keeps returning `requiresRestart: true`, but the UI no longer claims a restart "prompt" will appear. The frontend `OpsConfigEditor` shows a static info banner linking to `/ops/system` (OTP-protected restart) and documents the VPS `docker compose up -d backend workers` equivalent. There is no modal, popup, or automatic trigger.
+
+**Rationale:** All four changes collapse to one principle — **save/boot/CD should accept incremental state, readiness/go-live checklist enforce completeness.** Mixing those layers caused the Raghava incident: an Ops save was blocked by global readiness requirements, and a boot crash made the site return 502 instead of letting the operator finish setup.
+
+*Alternatives considered:*
+- Two endpoints — `/config/save?strict=true` and a lenient `/config/save?incremental=true`. Rejected: more API surface for no real benefit; readiness already provides strictness from a single place.
+- Allow CD readiness gate to stay blocking but add a `?bypassReadiness=1` query. Rejected: the gate's purpose is "is this safe to serve traffic" — that's a go-live decision, not a per-deploy decision.
+
+*Affects:* `src/modules/ops/ops.service.ts` (`validateConfigDraft`), `src/config/app.config.ts` (`validateConditionalEnv`, `validateProductionProviderSafetyEnv`, new `assertEnvNotPlaceholderIfPresent`), `backend/scripts/vps-deploy.sh`, `frontend/components/ops/OpsConfigEditor.tsx`, `frontend/components/shared/BackendStatus.tsx`, `backend/src/modules/ops/ops.service.test.ts`, `backend/src/config/app.config.test.ts`, docs (`OPS_CONTROL_PLANE_GUIDE.md`, `ENV_VS_DB_CONFIG_REFERENCE.md`, `HARDENING_HISTORY.md`, `PHASE7_VPS_DEPLOY_INCIDENT_PLAYBOOK.md`, `BACKEND_GO_LIVE_CHECKLIST.md`, `FRONTEND_AI_GO_LIVE_CHECKLIST.md`, `GITHUB_CD_SELF_HOSTED_RUNNER_GUIDE.md`).
+
+---
+
 ## [2026-05-24] Ops OTP action binding, batch config save, readiness 503 payload
 
 **Decision 1 — OTP challenges are bound to a single critical `action`.**  

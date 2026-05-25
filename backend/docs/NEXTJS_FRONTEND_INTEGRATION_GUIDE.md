@@ -375,7 +375,7 @@ Use the following backend routes when building a dedicated ops frontend (or ops 
 - `GET /ops/audit/logs` — paginated operational audit timeline for UI history views
 - `GET /ops/queues` — Bull Board UI (new tab; requires `ops_session` cookie on API host)
 - `GET /ops/queues/dlq/summary` — DLQ card data: `{ total, bySourceQueue }` where `bySourceQueue` maps source queue name → job count (do not use `byQueue`)
-- `POST /ops/system/restart` — schedule a process restart (`ops:write`); body: `{ delayMinutes, challengeId, otpCode }` (requires OTP; `delayMinutes: 0` = now, up to 1440); returns `{ jobId, scheduledFor }`. Use after `POST /ops/config/save` when `requiresRestart: true` is returned.
+- `POST /ops/system/restart` — schedule a process restart (`ops:write`); body: `{ delayMinutes, challengeId, otpCode }` (requires OTP; `delayMinutes: 0` = now, up to 1440); returns `{ jobId, scheduledFor }`. Use after `POST /ops/config/save` when `requiresRestart: true` is returned. **There is no automatic restart prompt** — the UI must surface this manually (banner + link to `/ops/system`). VPS operators can equivalently run `docker compose -p <client-id> up -d backend workers`.
 
 For full operational setup and security requirements, follow `docs/OPS_CONTROL_PLANE_GUIDE.md`.
 

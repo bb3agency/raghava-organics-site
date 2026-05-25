@@ -54,11 +54,12 @@ This checklist validates both:
 - [ ] `SHIPPING_PROVIDER` is valid (`delhivery` or `shiprocket`). Invalid/missing runtime config yields call-time `CONFIG_NOT_READY` and must be resolved before launch.
 - [ ] `PAYMENT_PROVIDER=noop` is not used in production-like profiles (startup guard rejects it).
 - [ ] `SHIPPING_PROVIDER=noop` is not used in production-like profiles (startup guard rejects it).
-- [ ] Production-like startup guard rejects placeholder secrets (`replace_with_*`, `change_me*`, `<...>`) for JWT, ops, Razorpay, and shipping provider credentials.
+- [ ] Production-like startup guard rejects placeholder secrets (`replace_with_*`, `change_me*`, `<...>`) for **any provider key that is actually set** (boot tolerance — May 2026 — does **not** require missing provider chain keys at startup; readiness gate enforces completeness).
 - [ ] All external provider adapters have fetch timeouts configured (10s for Delhivery/Razorpay/Resend/MSG91).
 - [ ] Razorpay env vars are only required when `PAYMENT_PROVIDER=razorpay` (COD-only stores skip them).
 - [ ] Provider credentials are real, non-placeholder, and validated with live/sandbox handshake tests.
-- [ ] `GET /api/v1/health/ready` reports `runtimeConfigMissingKeys: []` before opening production traffic (on HTTP 503, read `data.runtimeConfigMissingKeys` from envelope — `error.code` is `CONFIG_NOT_READY`).
+- [ ] **Go-live gate:** `GET /api/v1/health/ready` reports `status: ready` and `runtimeConfigMissingKeys: []` before opening production traffic. On HTTP 503, read `data.runtimeConfigMissingKeys` from envelope — `error.code` is `CONFIG_NOT_READY`. This is the canonical "is the system go-live ready?" check; CD (`vps-deploy.sh`) no longer blocks on it but go-live must.
+- [ ] Ops UI `/ops/config` is used for incremental saves. Partial-save validation (`POST /api/v1/ops/config/save`) only checks keys in the batch — operators can save 1–5 keys, restart, save the rest. Boot tolerates incomplete provider chains.
 - [ ] Client credential register exists and is filled with owner, vault path, created on, rotated on, expiry/next rotation, and last-tested values (`docs/CLIENT_INTEGRATION_CREDENTIAL_REGISTER_TEMPLATE.md`).
 - [ ] Circuit breaker behavior is understood in multi-replica deployments: payment/shipping circuit breaker state is process-local and not shared across replicas unless explicitly redesigned with shared Redis state.
 

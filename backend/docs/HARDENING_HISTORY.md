@@ -4,6 +4,40 @@ This document preserves detailed hardening history for engineering traceability.
 
 ## Recent hardening changes
 
+**Incremental Ops config save + boot tolerance for incomplete provider chains — May 2026:**
+
+During Phase 8 ops bootstrap on Raghava Organics, a chain of three issues blocked the storefront:
+
+1. Operator could not save 1–5 config keys at a time. `POST /api/v1/ops/config/save` validation called `computeRequiredOpsConfigKeys(process.env)` and listed every missing required key — even those that were not part of the save batch (e.g. `SMS_PROVIDER`, `RAZORPAY_WEBHOOK_SECRET`, `SHIPROCKET_PASSWORD`, `SHIPPING_WEBHOOK_ALLOWLIST_CIDR`).
+2. After a partial save + restart, `validateConditionalEnv` called `requireEnv` on the full Razorpay / Shiprocket / MSG91 dependency chain at boot. Because the provider selectors were set but the credentials were still pending, the API process exited with `Missing required env var: …`. Docker's restart policy re-launched the container; nginx returned `502 Bad Gateway` on `/api/v1/cart`, `/api/v1/health`, and every storefront request between restart attempts.
+3. `vps-deploy.sh` then **failed the deploy** because `/health/ready` was not `ready`, blocking the code fix from rolling out via CD.
+
+**Fix 1 — `validateConfigDraft` batch-scoped validation (`src/modules/ops/ops.service.ts`).** Removed the `computeRequiredOpsConfigKeys` loop. Validation now runs only on the keys present in `values`: bootstrap rejection, allowlist membership, provider enum (when the provider selector is in the batch), and placeholder safety in strict profile. Two new unit tests cover the partial-batch case.
+
+**Fix 2 — `validateConditionalEnv` boot tolerance (`src/config/app.config.ts`).** Removed all `requireEnv` calls on provider dependency chains (Razorpay / Delhivery / Shiprocket / MSG91 / Fast2SMS / Resend / Meta WhatsApp). Boot now only:
+- rejects unsupported `PAYMENT_PROVIDER` / `SHIPPING_PROVIDER` / `SMS_PROVIDER` enum values;
+- rejects `noop` providers in production-like profiles;
+- rejects placeholder values for keys that are present (`assertEnvNotPlaceholderIfPresent`);
+- still requires `OPS_DB_ENCRYPTION_KEY`, `JWT_SECRET`, `JWT_REFRESH_SECRET`, and `OTEL_EXPORTER_OTLP_ENDPOINT` (when tracing on).
+
+Full provider chain coverage now lives only at `GET /api/v1/health/ready` (`findMissingStrictOpsConfigKeys`).
+
+**Fix 3 — CD readiness gate is warning-only (`backend/scripts/vps-deploy.sh`).** The "Validating readiness payload" step previously called `fail` on `status != ready` or non-empty `runtimeConfigMissingKeys`. It now logs a warning and continues. Reason: during Phase 8 the operator is iterating; CD must still ship code fixes. Go-live readiness is checked separately via the go-live checklists before opening to customers.
+
+**Fix 4 — Frontend save copy clarified (`frontend/components/ops/OpsConfigEditor.tsx`).** Replaced the misleading "Restart API and workers when prompted." success message with an explicit "restart is manual" banner linking to `/ops/system` (OTP flow) and documenting the VPS `docker compose -p <client-id> up -d backend workers` equivalent. The draft also resets after successful save so the operator can immediately begin the next batch.
+
+**Fix 5 — 502 surface improvement (`frontend/components/shared/BackendStatus.tsx`).** Storefront `BackendStatus` now distinguishes "API container down (HTTP 502)" from generic `UNKNOWN_ERROR`, telling operators where to look (`docker compose logs backend --tail 80`).
+
+**Tests added:**
+- `backend/src/modules/ops/ops.service.test.ts`: `validateConfigDraft allows partial batch without unrelated required keys`, `validateConfigDraft allows saving a provider selector without full dependency set`.
+- `backend/src/config/app.config.test.ts`: `allows boot when provider selectors are set without full dependency keys (incremental Ops save)`, `still rejects unsupported PAYMENT_PROVIDER at boot`.
+
+**Files changed:** `src/modules/ops/ops.service.ts`, `src/modules/ops/ops.service.test.ts`, `src/config/app.config.ts`, `src/config/app.config.test.ts`, `scripts/vps-deploy.sh`, `frontend/components/ops/OpsConfigEditor.tsx`, `frontend/components/shared/BackendStatus.tsx`, `docs/DECISIONS.md`, `docs/HARDENING_HISTORY.md`, `docs/OPS_CONTROL_PLANE_GUIDE.md`, `docs/ENV_VS_DB_CONFIG_REFERENCE.md`, `docs/PHASE7_VPS_DEPLOY_INCIDENT_PLAYBOOK.md`, `docs/BACKEND_GO_LIVE_CHECKLIST.md`, `docs/FRONTEND_AI_GO_LIVE_CHECKLIST.md`, `docs/GITHUB_CD_SELF_HOSTED_RUNNER_GUIDE.md`.
+
+**Validation:** `npm run typecheck` → exit 0; partial-save and boot-tolerance unit tests pass.
+
+---
+
 **Admin permission model hardening — May 2026:**
 
 Two structural changes to the admin permission model:

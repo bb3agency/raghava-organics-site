@@ -160,6 +160,42 @@ Fix:
 - Pull backend with updated `extractGuardPermission()` in `admin-policy-registry.validation.ts`.
 - Rebuild backend image (same compose command as incident H).
 
+### K) Storefront 502 + API crash loop after Ops config save (May 2026, Raghava Organics)
+Cause:
+- Operator saved a partial set of overlay keys via Ops UI (e.g. `PAYMENT_PROVIDER=razorpay` and `SHIPPING_PROVIDER=shiprocket` without the matching credentials).
+- After restart, the DB overlay applied those selectors but the matching secrets were still empty.
+- Earlier `validateConditionalEnv` in `src/config/app.config.ts` called `requireEnv` on the full provider dependency chain → API exited with `Missing required env var: RAZORPAY_KEY_ID` (or `RAZORPAY_WEBHOOK_SECRET`, `SHIPROCKET_PASSWORD`, etc.).
+- Docker's restart policy kept relaunching the container; nginx returned `502 Bad Gateway` on `/api/v1/cart`, `/api/v1/health`, every storefront request.
+
+Symptoms:
+- Storefront homepage: `API error (UNKNOWN_ERROR, HTTP 502)` (or the older generic `API error (UNKNOWN_ERROR)` without HTTP status).
+- Browser network tab: `Failed to load resource: the server responded with a status of 502 (Bad Gateway)` for `/api/v1/cart`, `/api/v1/health`, etc.
+- `docker compose -p <client-id> ps` shows backend in `Restarting (1)`.
+- `docker compose -p <client-id> logs backend --tail 80` shows `Missing required env var: …` immediately after the ops overlay banner.
+
+Fix (template, May 2026 — already in this repo):
+- `validateConditionalEnv` no longer calls `requireEnv` on provider chains. It validates only enum values and placeholder safety for keys that are present. Full coverage moved to `GET /api/v1/health/ready`.
+- `vps-deploy.sh` readiness step is now warning-only, so CD can still ship the boot-tolerance fix even while config is incomplete.
+
+Recovery on a live VPS:
+1. `git pull` the template fix, then rebuild and restart:
+   ```bash
+   cd /var/www/<client-id>/backend
+   git pull origin main
+   docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml up -d --build backend workers
+   curl -fsS http://127.0.0.1:<BACKEND_PORT>/api/v1/health
+   ```
+2. **Emergency rollback (no pull yet):** deactivate the incomplete overlay rows so the next boot does not enter the crash path:
+   ```bash
+   docker compose -p <client-id> exec postgres psql -U postgres -d <db_name> -c \
+     "UPDATE \"OpsConfigSecret\" SET \"isActive\" = false WHERE \"secretKey\" IN ('PAYMENT_PROVIDER','SHIPPING_PROVIDER') AND \"isActive\" = true;"
+   docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml up -d backend workers
+   ```
+   Then finish the remaining provider keys via Ops UI and restart again.
+3. After recovery, `/health/ready` may still list `runtimeConfigMissingKeys` — that is expected during Phase 8 setup. Complete the keys, restart, then verify `status: ready` before opening to traffic.
+
+Cross-reference: `docs/DECISIONS.md` → `[2026-05-25] Incremental Ops config save + boot tolerance`.
+
 ---
 
 ## 5) Network verification commands (authoritative)

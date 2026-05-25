@@ -14,10 +14,15 @@ export async function BackendStatus({ className }: BackendStatusProps) {
       cache: "no-store",
     });
   } catch (error) {
-    message =
-      error instanceof ApiError
-        ? `API error (${error.code})`
-        : "Backend unreachable — start `npm run dev:e2e` in ../backend";
+    if (error instanceof ApiError && error.status === 502) {
+      message =
+        "Backend unreachable (502) — API container may be down or restarting. Check VPS: docker compose logs backend --tail 80";
+    } else {
+      message =
+        error instanceof ApiError
+          ? `API error (${error.code}, HTTP ${error.status})`
+          : "Backend unreachable — start `npm run dev:e2e` in ../backend";
+    }
   }
 
   if (!health) {

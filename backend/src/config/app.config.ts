@@ -51,16 +51,23 @@ function isPlaceholderValue(value: string | undefined): boolean {
   );
 }
 
-function resolveProviderMode(
-  key: 'PAYMENT_PROVIDER' | 'SHIPPING_PROVIDER',
-  fallback: string
-): string {
-  const raw = (process.env[key] ?? '').trim().toLowerCase();
-  return raw || fallback;
+function envVarPresent(name: string): boolean {
+  return Boolean((process.env[name] ?? '').trim());
 }
 
 function assertEnvNotPlaceholder(name: string): void {
   const value = requireEnv(name);
+  if (isPlaceholderValue(value)) {
+    throw new Error(`Invalid ${name}: placeholder values are not allowed in production-like profiles`);
+  }
+}
+
+/** Production safety for a key that is already set — never requires missing overlay keys at boot. */
+function assertEnvNotPlaceholderIfPresent(name: string): void {
+  if (!envVarPresent(name)) {
+    return;
+  }
+  const value = process.env[name] ?? '';
   if (isPlaceholderValue(value)) {
     throw new Error(`Invalid ${name}: placeholder values are not allowed in production-like profiles`);
   }
@@ -88,68 +95,28 @@ function validateSecureFlowEnv(): void {
 }
 
 function validateConditionalEnv(): void {
-  const nodeEnv = getNormalizedNodeEnv();
-  const isStrictProfile = isProductionLikeProfile(nodeEnv);
+  const isStrictProfile = isProductionLikeProfile();
   const paymentProviderRaw = (process.env.PAYMENT_PROVIDER ?? '').trim().toLowerCase();
-  const paymentProvider = resolveProviderMode('PAYMENT_PROVIDER', 'razorpay');
+  const shippingProviderRaw = (process.env.SHIPPING_PROVIDER ?? '').trim().toLowerCase();
 
-  if (!paymentProviderRaw) {
-    // Allow first bootstrap without provider mode set in env.
-  } else if (paymentProvider === 'razorpay') {
-    requireEnv('RAZORPAY_KEY_ID');
-    requireEnv('RAZORPAY_KEY_SECRET');
-    requireEnv('RAZORPAY_WEBHOOK_SECRET');
-  } else if (!['cod', 'noop'].includes(paymentProvider)) {
-    throw new Error(`Unsupported PAYMENT_PROVIDER: ${paymentProvider}. Allowed: razorpay, cod, noop`);
+  // Provider dependency sets are enforced by GET /health/ready (findMissingStrictOpsConfigKeys).
+  // Boot must tolerate incremental Ops DB saves — do not require full provider chains here.
+  if (paymentProviderRaw && !['razorpay', 'cod', 'noop'].includes(paymentProviderRaw)) {
+    throw new Error(`Unsupported PAYMENT_PROVIDER: ${paymentProviderRaw}. Allowed: razorpay, cod, noop`);
+  }
+  if (shippingProviderRaw && !['delhivery', 'shiprocket', 'noop'].includes(shippingProviderRaw)) {
+    throw new Error(
+      `Unsupported SHIPPING_PROVIDER: ${shippingProviderRaw}. Allowed: delhivery, shiprocket, noop`
+    );
   }
 
-  if (isEnabled(process.env.NOTIFY_EMAIL_ENABLED)) {
-    requireEnv('RESEND_API_KEY');
-    requireEnv('RESEND_FROM');
+  const smsProviderRaw = (process.env.SMS_PROVIDER ?? '').trim().toLowerCase();
+  if (smsProviderRaw && !['msg91', 'fast2sms', 'noop'].includes(smsProviderRaw)) {
+    throw new Error(`Unsupported SMS_PROVIDER: ${smsProviderRaw}. Allowed: msg91, fast2sms, noop`);
   }
-
-  if (isEnabled(process.env.NOTIFY_SMS_ENABLED)) {
-    const smsProvider = (process.env.SMS_PROVIDER ?? 'msg91').trim().toLowerCase();
-    if (smsProvider === 'msg91') {
-      requireEnv('MSG91_AUTH_KEY');
-      requireEnv('MSG91_SENDER_ID');
-    } else if (smsProvider === 'fast2sms') {
-      requireEnv('FAST2SMS_API_KEY');
-    } else if (smsProvider !== 'noop') {
-      throw new Error(`Unsupported SMS_PROVIDER: ${smsProvider}. Allowed: msg91, fast2sms, noop`);
-    }
-  }
-
-  if (isEnabled(process.env.NOTIFY_WHATSAPP_ENABLED)) {
-    requireEnv('META_WHATSAPP_ACCESS_TOKEN');
-    requireEnv('META_WHATSAPP_PHONE_NUMBER_ID');
-    requireEnv('META_WHATSAPP_WEBHOOK_VERIFY_TOKEN');
-    requireEnv('META_WHATSAPP_APP_SECRET');
-  }
-
-  // GST invoicing seller fields are DB-backed via StoreSettings; validated at runtime (API/workers) with alerts.
 
   if (isEnabled(process.env.OTEL_TRACING_ENABLED)) {
     requireEnv('OTEL_EXPORTER_OTLP_ENDPOINT');
-  }
-
-  const shippingProviderRaw = (process.env.SHIPPING_PROVIDER ?? '').trim().toLowerCase();
-  const shippingProvider = resolveProviderMode('SHIPPING_PROVIDER', 'delhivery');
-  if (!shippingProviderRaw) {
-    // Allow first bootstrap without provider mode set in env.
-  } else if (shippingProvider === 'delhivery') {
-    requireEnv('DELHIVERY_API_KEY');
-    if (isStrictProfile) {
-      requireEnv('DELHIVERY_WEBHOOK_TOKEN');
-    }
-  } else if (shippingProvider === 'shiprocket') {
-    requireEnv('SHIPROCKET_EMAIL');
-    requireEnv('SHIPROCKET_PASSWORD');
-    if (isStrictProfile) {
-      requireEnv('SHIPROCKET_WEBHOOK_TOKEN');
-    }
-  } else if (shippingProvider !== 'noop') {
-    throw new Error(`Unsupported SHIPPING_PROVIDER: ${shippingProvider}. Allowed: delhivery, shiprocket, noop`);
   }
 
   if (isStrictProfile) {
@@ -190,22 +157,38 @@ function validateProductionProviderSafetyEnv(): void {
   assertEnvNotPlaceholder('OPS_DB_ENCRYPTION_KEY');
 
   if (paymentProviderRaw === 'razorpay') {
-    assertEnvNotPlaceholder('RAZORPAY_KEY_ID');
-    assertEnvNotPlaceholder('RAZORPAY_KEY_SECRET');
-    assertEnvNotPlaceholder('RAZORPAY_WEBHOOK_SECRET');
-    if (process.env.RAZORPAY_WEBHOOK_SECRET_OLD?.trim()) {
-      assertEnvNotPlaceholder('RAZORPAY_WEBHOOK_SECRET_OLD');
-    }
+    assertEnvNotPlaceholderIfPresent('RAZORPAY_KEY_ID');
+    assertEnvNotPlaceholderIfPresent('RAZORPAY_KEY_SECRET');
+    assertEnvNotPlaceholderIfPresent('RAZORPAY_WEBHOOK_SECRET');
+    assertEnvNotPlaceholderIfPresent('RAZORPAY_WEBHOOK_SECRET_OLD');
   }
 
   if (shippingProviderRaw === 'delhivery') {
-    assertEnvNotPlaceholder('DELHIVERY_API_KEY');
-    assertEnvNotPlaceholder('DELHIVERY_WEBHOOK_TOKEN');
+    assertEnvNotPlaceholderIfPresent('DELHIVERY_API_KEY');
+    assertEnvNotPlaceholderIfPresent('DELHIVERY_WEBHOOK_TOKEN');
   }
   if (shippingProviderRaw === 'shiprocket') {
-    assertEnvNotPlaceholder('SHIPROCKET_EMAIL');
-    assertEnvNotPlaceholder('SHIPROCKET_PASSWORD');
-    assertEnvNotPlaceholder('SHIPROCKET_WEBHOOK_TOKEN');
+    assertEnvNotPlaceholderIfPresent('SHIPROCKET_EMAIL');
+    assertEnvNotPlaceholderIfPresent('SHIPROCKET_PASSWORD');
+    assertEnvNotPlaceholderIfPresent('SHIPROCKET_WEBHOOK_TOKEN');
+  }
+
+  if (isEnabled(process.env.NOTIFY_EMAIL_ENABLED)) {
+    assertEnvNotPlaceholderIfPresent('RESEND_API_KEY');
+    assertEnvNotPlaceholderIfPresent('RESEND_FROM');
+  }
+
+  if (isEnabled(process.env.NOTIFY_SMS_ENABLED)) {
+    assertEnvNotPlaceholderIfPresent('MSG91_AUTH_KEY');
+    assertEnvNotPlaceholderIfPresent('MSG91_SENDER_ID');
+    assertEnvNotPlaceholderIfPresent('FAST2SMS_API_KEY');
+  }
+
+  if (isEnabled(process.env.NOTIFY_WHATSAPP_ENABLED)) {
+    assertEnvNotPlaceholderIfPresent('META_WHATSAPP_ACCESS_TOKEN');
+    assertEnvNotPlaceholderIfPresent('META_WHATSAPP_PHONE_NUMBER_ID');
+    assertEnvNotPlaceholderIfPresent('META_WHATSAPP_WEBHOOK_VERIFY_TOKEN');
+    assertEnvNotPlaceholderIfPresent('META_WHATSAPP_APP_SECRET');
   }
 }
 
