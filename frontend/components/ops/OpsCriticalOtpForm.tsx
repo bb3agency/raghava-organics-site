@@ -114,6 +114,16 @@ export function OpsCriticalOtpForm({
         }, 1500);
         return;
       }
+      if (err instanceof ApiError && err.status === 409 && err.code === "CONFLICT") {
+        setError(
+          "This OTP is no longer valid for this action. Click \"Send OTP to email\" to request a fresh code, then retry.",
+        );
+        setErrorDetail(getOpsErrorDetail(err));
+        setChallengeId("");
+        setOtpCode("");
+        setExpiresAt(null);
+        return;
+      }
       setError(getApiErrorMessageWithHint(err));
       setErrorDetail(getOpsErrorDetail(err));
       // If the OTP challenge is no longer usable (already verified by a prior

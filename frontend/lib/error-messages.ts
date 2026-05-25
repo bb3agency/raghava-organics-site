@@ -137,7 +137,7 @@ export function getApiErrorMessageWithHint(error: unknown): string {
       }
       return message;
     }
-    if (isConflictErrorCode(error.code) || error.status === 409) {
+    if (error.code === "IDEMPOTENCY_CONFLICT") {
       return `${message} Do not resubmit the same idempotency key for a new user action.`;
     }
     if (isRetryableErrorCode(error.code)) {
@@ -196,7 +196,7 @@ export function isOpsOtpChallengeConsumed(error: unknown): boolean {
   // challenge is no longer usable (verifyEmailOtp is the only 409-producing
   // step before the action runs). Treat it the same way even if the backend
   // hasn't been redeployed with the new hint keys yet.
-  return error.status === 409 && (error.code === "CONFLICT" || error.code === "IDEMPOTENCY_CONFLICT");
+  return error.status === 409 && error.code === "CONFLICT";
 }
 
 export function shouldAttemptTokenRefresh(error: ApiError): boolean {
