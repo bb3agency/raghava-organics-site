@@ -109,6 +109,12 @@ export function getApiErrorMessageWithHint(error: unknown): string {
   const message = getApiErrorMessage(error);
   if (error instanceof ApiError) {
     const hintKey = readHintKey(error);
+    if (
+      hintKey === "ops_otp_challenge_not_pending" ||
+      hintKey === "ops_otp_challenge_consumed_concurrently"
+    ) {
+      return "Your OTP code has already been used or is no longer valid. Click \"Send OTP to email\" to request a new code, then retry.";
+    }
     if (hintKey === "ops_restart_queue_unavailable") {
       return "Restart queue is not available. Backend must be restarted manually (docker compose up -d backend workers) and BullMQ + Redis verified healthy before retrying.";
     }
@@ -167,6 +173,30 @@ export function getOpsErrorDetail(error: unknown): string | null {
 
 export function isAuthFailureCode(code: string): boolean {
   return AUTH_FAILURE_CODES.has(code);
+}
+
+/**
+ * Returns true if the error indicates the operator's OTP challenge can no
+ * longer be used (already verified, expired, or concurrently consumed) and
+ * the UI should clear the challenge/OTP state so the user requests a fresh
+ * code instead of resubmitting the same one.
+ */
+export function isOpsOtpChallengeConsumed(error: unknown): boolean {
+  if (!(error instanceof ApiError)) {
+    return false;
+  }
+  const hintKey = readHintKey(error);
+  if (
+    hintKey === "ops_otp_challenge_not_pending" ||
+    hintKey === "ops_otp_challenge_consumed_concurrently"
+  ) {
+    return true;
+  }
+  // Backstop: any CONFLICT 409 on an ops critical-OTP route means the
+  // challenge is no longer usable (verifyEmailOtp is the only 409-producing
+  // step before the action runs). Treat it the same way even if the backend
+  // hasn't been redeployed with the new hint keys yet.
+  return error.status === 409 && (error.code === "CONFLICT" || error.code === "IDEMPOTENCY_CONFLICT");
 }
 
 export function shouldAttemptTokenRefresh(error: ApiError): boolean {

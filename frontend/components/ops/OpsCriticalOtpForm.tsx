@@ -11,7 +11,11 @@ import {
 } from "@/components/ops/ui/ops-ui";
 import { Button } from "@/components/ui/button";
 import { ApiError } from "@/lib/api";
-import { getApiErrorMessageWithHint, getOpsErrorDetail } from "@/lib/error-messages";
+import {
+  getApiErrorMessageWithHint,
+  getOpsErrorDetail,
+  isOpsOtpChallengeConsumed,
+} from "@/lib/error-messages";
 import {
   requestOpsOtpChallenge,
   type OpsOtpActionType,
@@ -99,6 +103,8 @@ export function OpsCriticalOtpForm({
       await onExecute({ challengeId, otpCode: otpCode.trim() });
       setMessage("Action completed successfully.");
       setOtpCode("");
+      setChallengeId("");
+      setExpiresAt(null);
     } catch (err) {
       if (err instanceof ApiError && err.code === "ops_audit_chain_lock_timeout") {
         setError(getApiErrorMessageWithHint(err));
@@ -110,6 +116,15 @@ export function OpsCriticalOtpForm({
       }
       setError(getApiErrorMessageWithHint(err));
       setErrorDetail(getOpsErrorDetail(err));
+      // If the OTP challenge is no longer usable (already verified by a prior
+      // attempt, expired, or concurrently consumed), clear the OTP/challenge
+      // state so the user MUST request a fresh code. Without this, the user
+      // would re-click the same button and hit the same 409 forever.
+      if (isOpsOtpChallengeConsumed(err)) {
+        setChallengeId("");
+        setOtpCode("");
+        setExpiresAt(null);
+      }
     } finally {
       setIsLoading(false);
     }
