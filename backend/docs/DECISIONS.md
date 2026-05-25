@@ -4,6 +4,44 @@
 
 ---
 
+## [2026-05-25] Ops Config `/ops/config/stored` returns plaintext for every saved value, including real secrets — explicit override of "never show plaintext secrets in admin UI" scoped to the Ops console only
+
+**Context:** The May 2026 partial fix exposed `plaintextValue` for non-secret keys only (provider selectors, URLs, integer thresholds, public IDs, sender addresses, login emails) while keeping real cryptographic secrets (`RAZORPAY_KEY_SECRET`, `SHIPROCKET_PASSWORD`, `RESEND_API_KEY`, `MSG91_AUTH_KEY`, `META_WHATSAPP_ACCESS_TOKEN`, OPS approval tokens, etc.) masked-only with a `Stored: ****** — enter new value to replace` placeholder. Operators reported that this still didn't solve the actual workflow: editing a single field meant retyping the entire secret from memory or running a manual DB query on the VPS to verify what was last persisted. Worse, there was no way to audit which provider key was currently active without either the external vault staying in lock-step with the DB or running ad-hoc decrypt queries.
+
+**Decision — Return `plaintextValue` as a required field on every active `OpsConfigSecret` row, including real cryptographic secrets. Drop the secret/non-secret split for HTTP response shaping. Keep `isOpsConfigSecretKey()` in the contract module for frontend input-rendering only.**
+
+**Rationale:**
+
+1. **Threat model:** The Ops console is the highest-privilege backend surface — gated by ops login, fail-closed `ops:read`/`ops:write` permissions, email OTP for every critical write, tamper-evident audit chain logging, and (optionally) IP/proxy allowlist. The same authenticated backend holds `OPS_DB_ENCRYPTION_KEY` and decrypts these values for its own operation. An attacker with `ops:read` already has full disclosure capability via the running backend; masking at the HTTP boundary buys no real defense, only obscures the UI.
+2. **Scope of "admin UI" in the workspace rule:** The generic rule *"Never show plaintext secret values in admin UI — always mask"* was authored against merchant admin and customer surfaces, where the threat model includes shared logins, lower-trust staff, and third-party UI integrations. The Ops console is platform-operator-only — a single-operator agency tool, not a multi-tenant admin panel. Treating it as the same threat model as `/admin` for this rule was a category error.
+3. **Operator productivity wins decisively:** Operators rotate secrets, audit which provider key is active, and reconcile against provider dashboards routinely. Forcing them to retype every value or maintain a side-channel vault for visibility creates more risk (typos, stale vault entries, copy-paste exposure into messaging apps) than the masking saves.
+4. **Defense-in-depth retained at the boundaries that matter:**
+   - Merchant admin / customer / storefront surfaces are **unchanged** — no provider secret is or will be surfaced through those routes.
+   - Frontend renders secret-classified inputs as `<input type="password">` with an explicit eye-toggle, so the rendered DOM stays bullet-masked until the operator opts to peek (mitigates shoulder-surfing on shared screens).
+   - The endpoint remains behind ops login + cookie auth + `ops:read` permission gate. Anyone reaching the response has already passed every other defense.
+
+**Alternatives considered:**
+
+- *Keep masking for true secrets, fix the non-secret display bug only.* — Rejected. This was the May 2026 partial fix; operator feedback was that empty secret inputs are an active anti-feature (no way to verify what's saved before rotation).
+- *Add a feature flag `OPS_CONFIG_STORED_RETURN_FULL_PLAINTEXT` defaulting to `true`.* — Rejected for now. Adds env-var surface area for a policy decision that already has a clear answer for this product. A one-line revert in `getStoredConfigSecrets` provides the same rollback capability without the long-term complexity. If a future deployment needs masking back, we'll re-introduce the flag then.
+- *Require a secondary OTP challenge to view plaintext secrets.* — Rejected. Operators would re-issue OTPs continuously while iterating on config; the friction would push them back to side-channel vaults and defeat the purpose. The existing OTP gate on the `config-save` action already prevents drive-by exfiltration via session hijack (an attacker who reads stored values still can't write them back without OTP).
+- *Render secrets in plaintext only after an in-UI "Reveal" click.* — Considered. Equivalent threat model to the current `<input type="password">` + eye-toggle rendering, which already provides shoulder-surfing protection while keeping the value editable. Adding an extra reveal click on top would just add friction without adding security.
+
+**Affected files:**
+
+- `backend/src/modules/ops/ops.service.ts` — `getStoredConfigSecrets` always emits `plaintextValue`; `isOpsConfigSecretKey` import dropped.
+- `backend/src/modules/ops/ops.routes.ts` — `plaintextValue` moved from optional to required in the response schema.
+- `backend/src/modules/ops/ops.service.test.ts` — two assertions inverted (`secrets do NOT carry plaintextValue` → `secrets DO carry plaintextValue`).
+- `backend/src/modules/ops/ops-config-contract.test.ts` — comment added clarifying `isOpsConfigSecretKey` controls input-rendering only.
+- `frontend/lib/ops-client-api.ts` — `plaintextValue` typed required.
+- `frontend/lib/ops-config-fields.ts` — `storedPlaintext` wired unconditionally.
+- `frontend/components/ops/OpsConfigEditor.tsx` — `buildInitialDraft` comment rewritten; secret-input "Stored: ... — enter new value to replace" placeholder dropped.
+- Docs updated: `HARDENING_HISTORY.md`, `OPS_CONTROL_PLANE_GUIDE.md`, `ROUTE_SURFACE_COMPLETE_REFERENCE.md`, `NEXTJS_FRONTEND_INTEGRATION_GUIDE.md`, `ENV_VS_DB_CONFIG_REFERENCE.md`, `API_ENDPOINT_INDEX.md`, `BACKEND_GO_LIVE_CHECKLIST.md`, `FRONTEND_AI_GO_LIVE_CHECKLIST.md`.
+
+**Validation:** Backend typecheck → exit 0. Frontend typecheck → exit 0. Backend unit tests for `ops.service` and `ops-config-contract` → 102/102 pass.
+
+---
+
 ## [2026-05-25] System restart drains BullMQ queues with explicit pause + active-count poll + resume, in addition to PENDING_PAYMENT drain
 
 **Context:** Until this change, the `scheduled-process-restart` worker drained only `Order.status='PENDING_PAYMENT'` orders before publishing the restart pub/sub signal. Other BullMQ queues (`notifications`, `shipping`, `refunds`, `inventory-alerts`, `analytics`, `cart-cleanup`, `reconciliation`, `outbox-dispatch`) were left to natural `Worker.close()` drain on `process.exit(0)`. While at-least-once semantics ensured no work was lost (BullMQ stalled-job detection re-queues interrupted handlers on the post-restart workers), this meant:

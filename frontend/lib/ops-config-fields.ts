@@ -12,14 +12,18 @@ export interface OpsConfigFieldDefinition {
   requiresRestart: boolean;
   /** Runtime value exists in `process.env` (sourced from env file *or* DB overlay). */
   present: boolean;
-  /** Masked representation of the DB-stored value, shown for both secret + non-secret keys when set. */
+  /** Masked representation of the DB-stored value, retained for list/summary views. */
   storedMasked?: string;
   /**
-   * Plaintext DB-stored value — populated only for non-secret keys
-   * (provider selectors, base URLs, pincodes, allowlist CIDRs, boolean
-   * flags, login emails, public key IDs). Used to prefill the form field
-   * so the saved value is visible and editable without retyping. Real
-   * secrets only carry `storedMasked` and never reach the UI as plaintext.
+   * Plaintext DB-stored value — populated for **every** key with an active
+   * DB-overlay row, INCLUDING real cryptographic secrets (`_SECRET`,
+   * `_TOKEN`, `_PASSWORD`, `_API_KEY`, `_AUTH_KEY`, `_APP_SECRET`, signed
+   * approval tokens, ops cookie secret). Used to prefill the form input so
+   * the operator can see and edit what is actually saved without retyping
+   * from an external vault. Secret-classified fields still render as
+   * `<input type="password">` with an eye toggle, so the rendered DOM stays
+   * bullet-masked until the operator opts to peek. See backend
+   * `getStoredConfigSecrets` JSDoc for the full rationale.
    */
   storedPlaintext?: string;
   /**
@@ -114,9 +118,7 @@ export function buildOpsConfigFieldDefinitions(
           present: item.present,
           envLocked,
           ...(storedItem ? { storedMasked: storedItem.maskedValue } : {}),
-          ...(storedItem?.plaintextValue !== undefined
-            ? { storedPlaintext: storedItem.plaintextValue }
-            : {}),
+          ...(storedItem ? { storedPlaintext: storedItem.plaintextValue } : {}),
         };
       }),
   );

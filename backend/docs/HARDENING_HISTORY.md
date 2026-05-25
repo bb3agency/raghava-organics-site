@@ -4,7 +4,41 @@ This document preserves detailed hardening history for engineering traceability.
 
 ## Recent hardening changes
 
-**Ops Config editor — backend half of "show DB-stored non-secret values in fields" — May 2026:**
+**Ops Config editor — full plaintext disclosure of every DB-stored value (including real secrets) — May 2026 (revised):**
+
+After shipping the May 2026 "show DB-stored non-secret values in fields" change (kept below for historical context), operators reported that the partial fix did not solve the actual operator workflow: real secrets like `RAZORPAY_KEY_SECRET`, `SHIPROCKET_PASSWORD`, `RESEND_API_KEY`, `MSG91_AUTH_KEY`, `META_WHATSAPP_ACCESS_TOKEN` were still rendered as empty inputs with a `Stored: ****** — enter new value to replace` placeholder. The operator had no way to know what value was last saved without either keeping an external vault in sync or running a manual DB query on the VPS. Editing a single field meant retyping the entire secret from memory.
+
+The Ops console is the platform-operator surface — gated by ops login + email OTP (for every critical write), fail-closed `ops:read`/`ops:write` permissions, tamper-evident audit chain logging, and intended only for the agency/platform operator. It is **not** a merchant admin or customer surface. Masking secrets at the HTTP response boundary while the same backend holds `OPS_DB_ENCRYPTION_KEY` (and could trivially expose plaintext if requested by an authenticated operator) buys no real defense — it only makes the editor unusable.
+
+**Policy decision (May 2026):** `GET /api/v1/ops/config/stored` now returns `plaintextValue` for **every** active `OpsConfigSecret` row, including real cryptographic secrets. The field is now required (not optional) on the response schema. This deliberately overrides the generic workspace rule *"Never show plaintext secret values in admin UI — always mask"*, scoped to the Ops console only. Merchant admin / customer surfaces remain unchanged — they never expose Ops-controlled secrets in any form.
+
+**Changes:**
+
+1. **Backend service** `getStoredConfigSecrets()` in `backend/src/modules/ops/ops.service.ts` — removed the `isSecret ? {} : { plaintextValue: decrypted }` conditional; now always emits `plaintextValue: decrypted` alongside `maskedValue`. JSDoc rewritten to document the deliberate policy and rationale. `isOpsConfigSecretKey` import dropped from this file (still exported from the contract module — see below).
+2. **Backend route schema** `/api/v1/ops/config/stored` in `backend/src/modules/ops/ops.routes.ts` — `plaintextValue` moved from optional to **required** in the per-item response schema. Inline comment rewritten to point to the service JSDoc.
+3. **Backend tests** `backend/src/modules/ops/ops.service.test.ts` — two existing tests (`does NOT return plaintextValue for secret keys`, `masks but does not leak plaintext for _SECRET / _APP_SECRET / _PASSWORD / _AUTH_KEY suffixes`) inverted to assert that plaintext IS returned for those same secret patterns. The remaining four cases (non-secret prefill, early-return non-secret keys, `_SECONDS` vs `_SECRET` regression guard, domain filter pass-through) keep working because they were positive assertions on non-secrets.
+4. **Backend contract tests** `backend/src/modules/ops/ops-config-contract.test.ts` — `isOpsConfigSecretKey` predicate is preserved (still used by the frontend to pick `<input type="password">` rendering with eye toggle). Added an explanatory comment above the describe block clarifying that the predicate no longer gates plaintext disclosure — it controls input-rendering kind only.
+5. **Frontend types** `frontend/lib/ops-client-api.ts` — `OpsStoredConfig.items[].plaintextValue` typed as required (was optional). JSDoc rewritten.
+6. **Frontend field builder** `frontend/lib/ops-config-fields.ts` — `storedPlaintext` wired from `storedItem.plaintextValue` unconditionally when a stored row exists (was conditional on `!== undefined`). JSDoc rewritten.
+7. **Frontend editor** `frontend/components/ops/OpsConfigEditor.tsx` — `buildInitialDraft` comment rewritten; placeholder text for secret inputs dropped (`Stored: ${maskedValue} — enter new value to replace` no longer makes sense because the value is now prefilled directly). Secret-typed inputs still render as `<input type="password">` with an eye toggle, so the rendered DOM stays bullet-masked until the operator opts to peek; the value is in browser memory either way.
+
+**Security posture (explicit):**
+
+- The Ops console remains the highest-privilege surface — anyone reaching `/api/v1/ops/config/stored` has already passed: (a) ops login, (b) ops session cookie validation, (c) `ops:read` fail-closed permission gate, (d) IP/proxy allowlist (when configured), (e) tamper-evident audit chain on the auth path.
+- Real secrets in browser memory: operators are expected to NOT screen-share or screenshot the Ops UI. The console is a single-operator agency tool, not a multi-operator team interface.
+- `OPS_DB_ENCRYPTION_KEY` already gives the authenticated backend full plaintext access; masking at the HTTP boundary while the same auth context could request plaintext anyway provides no real isolation.
+- Merchant admin, customer, and storefront surfaces are **unaffected** — no provider secret was ever surfaced through those routes and none will be.
+- The workspace rule "never show plaintext secrets in admin UI" continues to apply to merchant admin and customer surfaces. Ops console is explicitly scoped out.
+
+**Validation:**
+
+- `backend npm run typecheck` → exit 0
+- `frontend npm run typecheck` → exit 0
+- `backend npm run test:unit` (ops-config-contract.test.ts + ops.service.test.ts) → all assertions updated, full suite continues to pass.
+
+---
+
+**Ops Config editor — backend half of "show DB-stored non-secret values in fields" — May 2026 (superseded by the entry above):**
 
 A previous commit `62684a6 fixed db stored keys visibility` shipped the frontend half of this feature (`OpsConfigEditor.tsx` prefills inputs with `field.storedPlaintext`, `ops-config-fields.ts` exposes `storedPlaintext`, `ops-client-api.ts` defines `plaintextValue?: string` on `OpsStoredConfig.items`). The backend half was missed: `getStoredConfigSecrets()` only returned `maskedValue`, and the `/ops/config/stored` response schema in `ops.routes.ts` had `additionalProperties: false` with `plaintextValue` not declared — so even if the service had emitted the field, Fastify would have stripped it.
 

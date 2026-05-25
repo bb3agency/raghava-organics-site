@@ -1028,7 +1028,9 @@ describe('OpsService failcase coverage', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// getStoredConfigSecrets — returns plaintextValue ONLY for non-secret keys
+// getStoredConfigSecrets — returns plaintextValue for EVERY active row
+// (including real secrets — see ops.service.ts JSDoc for the deliberate
+// operator-UX choice that overrides the generic admin-UI masking rule).
 // ─────────────────────────────────────────────────────────────────────────────
 describe('OpsService.getStoredConfigSecrets', () => {
   beforeEach(() => {
@@ -1094,9 +1096,9 @@ describe('OpsService.getStoredConfigSecrets', () => {
     });
   });
 
-  it('does NOT return plaintextValue for secret keys (passwords, tokens, API keys)', async () => {
+  it('ALSO returns plaintextValue for real secret keys (passwords, tokens, API keys) — deliberate ops-UX policy', async () => {
     const { service, mocks } = createOpsServiceHarness();
-    const secretPassword = 'super-secret-password-do-not-leak';
+    const secretPassword = 'super-secret-password-for-operator-to-see';
     const secretApiKey = 're_test_actual_api_key_value';
     const secretToken = 'shiprocket-webhook-bearer-token';
 
@@ -1112,23 +1114,20 @@ describe('OpsService.getStoredConfigSecrets', () => {
     const apiKey = items.find((i) => i.key === 'RESEND_API_KEY');
     const token = items.find((i) => i.key === 'SHIPROCKET_WEBHOOK_TOKEN');
 
-    // Secrets MUST be masked.
+    // maskedValue is still computed for every row (used by list/summary views).
     expect(password?.maskedValue).toBe(maskSecretValue(secretPassword));
     expect(apiKey?.maskedValue).toBe(maskSecretValue(secretApiKey));
     expect(token?.maskedValue).toBe(maskSecretValue(secretToken));
 
-    // Secrets MUST NOT carry plaintextValue.
-    expect(password).not.toHaveProperty('plaintextValue');
-    expect(apiKey).not.toHaveProperty('plaintextValue');
-    expect(token).not.toHaveProperty('plaintextValue');
-
-    // Belt-and-braces: the raw plaintext value MUST NOT appear anywhere in the
-    // serialised response (guards against accidental leakage via toJSON,
-    // toString, or stringification edge cases).
-    const serialised = JSON.stringify(items);
-    expect(serialised).not.toContain(secretPassword);
-    expect(serialised).not.toContain(secretApiKey);
-    expect(serialised).not.toContain(secretToken);
+    // plaintextValue is ALSO returned for secrets — this is the deliberate
+    // operator-UX policy. The Ops console is platform-operator-only behind
+    // ops login + OTP + audit chain logging; masking secrets here would only
+    // make the editor unusable without buying any real defense (anyone who
+    // can reach this response already has ops:read on a backend that holds
+    // OPS_DB_ENCRYPTION_KEY).
+    expect(password?.plaintextValue).toBe(secretPassword);
+    expect(apiKey?.plaintextValue).toBe(secretApiKey);
+    expect(token?.plaintextValue).toBe(secretToken);
   });
 
   it('returns plaintextValue for the documented early-return non-secret keys (RAZORPAY_KEY_ID, RESEND_FROM, SHIPROCKET_EMAIL)', async () => {
@@ -1152,20 +1151,28 @@ describe('OpsService.getStoredConfigSecrets', () => {
     });
   });
 
-  it('masks but does not leak plaintext for _SECRET / _APP_SECRET / _PASSWORD / _AUTH_KEY suffixes', async () => {
+  it('returns BOTH plaintextValue and maskedValue for every secret-suffix pattern (_SECRET / _APP_SECRET / _PASSWORD / _AUTH_KEY)', async () => {
     const { service, mocks } = createOpsServiceHarness();
-    mockRows(mocks.opsConfigSecretFindMany, [
-      makeRow('CORE', 'JWT_SECRET', 'jwt-signing-secret-32chars'),
-      makeRow('PAYMENTS', 'RAZORPAY_WEBHOOK_SECRET', 'razorpay-webhook-secret'),
-      makeRow('NOTIFICATIONS', 'META_WHATSAPP_APP_SECRET', 'whatsapp-app-secret'),
-      makeRow('NOTIFICATIONS', 'MSG91_AUTH_KEY', 'msg91-auth-key-12345')
-    ]);
+    const fixtures: Array<[Parameters<typeof makeRow>[0], string, string]> = [
+      ['CORE', 'JWT_SECRET', 'jwt-signing-secret-32chars'],
+      ['PAYMENTS', 'RAZORPAY_WEBHOOK_SECRET', 'razorpay-webhook-secret'],
+      ['NOTIFICATIONS', 'META_WHATSAPP_APP_SECRET', 'whatsapp-app-secret'],
+      ['NOTIFICATIONS', 'MSG91_AUTH_KEY', 'msg91-auth-key-12345']
+    ];
+    mockRows(
+      mocks.opsConfigSecretFindMany,
+      fixtures.map(([domain, key, value]) => makeRow(domain, key, value))
+    );
 
     const items = await service.getStoredConfigSecrets();
 
-    for (const item of items) {
-      expect(item).not.toHaveProperty('plaintextValue');
-      expect(item.maskedValue).not.toContain(item.key); // sanity check
+    for (const [, key, value] of fixtures) {
+      const item = items.find((i) => i.key === key);
+      expect(item).toBeDefined();
+      // Every row carries the plaintext value the operator entered.
+      expect(item?.plaintextValue).toBe(value);
+      // And the masked form alongside (used by list/summary views).
+      expect(item?.maskedValue).toBe(maskSecretValue(value));
     }
   });
 

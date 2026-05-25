@@ -266,7 +266,7 @@ Ops endpoints are platform/developer controls. Do not expose write controls in n
 | GET | `/api/v1/ops/session` | Bootstrap ops user/session |
 | GET | `/api/v1/ops/config/overview` | Runtime config overview |
 | POST | `/api/v1/ops/config/validate` | Validate config draft (ops:read) |
-| GET | `/api/v1/ops/config/stored` | DB-backed config rows. Per item: `{ domain, key, maskedValue, plaintextValue?, keyVersion, requiresRestart, updatedAt }`. `plaintextValue` is present only for non-secret keys (`isOpsConfigSecretKey()` → `false`); real secrets stay `maskedValue`-only. (ops:read) |
+| GET | `/api/v1/ops/config/stored` | DB-backed config rows. Per item: `{ domain, key, maskedValue, plaintextValue, keyVersion, requiresRestart, updatedAt }`. `plaintextValue` is **required** and returned for every active row, INCLUDING real cryptographic secrets — deliberate operator-UX policy for the Ops console (see `HARDENING_HISTORY.md` and `DECISIONS.md`). `isOpsConfigSecretKey()` predicate still drives `<input type="password">` rendering on the frontend but no longer gates plaintext disclosure. (ops:read) |
 | POST | `/api/v1/ops/config/save` | Save encrypted DB config (OTP `config-save`; `domain?` optional; `null` deactivates key) |
 | POST | `/api/v1/ops/otp/request` | Request privileged-write OTP — body `{ action }` ∈ `config-save`, `load-shed-change`, `user-deactivate`, `system-restart`, `invite-revoke` |
 | POST | `/api/v1/ops/otp/verify` | Verify privileged-write OTP |

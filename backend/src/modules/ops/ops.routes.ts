@@ -206,17 +206,21 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
                 items: {
                   type: 'object',
                   additionalProperties: false,
-                  required: ['domain', 'key', 'maskedValue', 'keyVersion', 'requiresRestart', 'updatedAt'],
+                  required: ['domain', 'key', 'maskedValue', 'plaintextValue', 'keyVersion', 'requiresRestart', 'updatedAt'],
                   properties: {
                     domain: { type: 'string', enum: ['core', 'payments', 'shipping', 'notifications', 'opsSecurity'], maxLength: 24 },
                     key: { type: 'string', maxLength: 120 },
                     maskedValue: { type: 'string', maxLength: 300 },
-                    // Optional plaintext value — present only for non-secret keys
-                    // (provider selectors, URLs, pincodes, CIDRs, boolean flags,
-                    // numeric thresholds, public IDs, sender addresses, login
-                    // emails). Real cryptographic secrets never appear here —
-                    // only `maskedValue`. Classification is performed by
-                    // `isOpsConfigSecretKey()` in `ops-config-contract.ts`.
+                    // Plaintext value — returned for every active DB-overlay
+                    // row, INCLUDING real cryptographic secrets. This is a
+                    // deliberate operator-UX choice for the Ops console (see
+                    // ops.service.ts → getStoredConfigSecrets JSDoc). The Ops
+                    // console is platform-operator-only (ops login + OTP for
+                    // writes, fail-closed ops:read/ops:write, tamper-evident
+                    // audit chain). `isOpsConfigSecretKey()` is still used by
+                    // the frontend to pick password-type rendering with an
+                    // eye-toggle, but no longer gates the plaintext disclosure
+                    // at the API boundary.
                     plaintextValue: { type: 'string', maxLength: 4096 },
                     keyVersion: { type: 'number' },
                     requiresRestart: { type: 'boolean' },

@@ -161,7 +161,16 @@ describe('ops config contract', () => {
   });
 
   describe('isOpsConfigSecretKey — secret vs non-secret classification', () => {
-    // Real cryptographic secrets — must mask, never leak plaintext.
+    // This predicate is used by the FRONTEND ops-config editor to decide
+    // whether to render an input as <input type="password"> with an eye
+    // toggle (secret) or as plain <input type="text"> (non-secret). It is
+    // NOT used to gate plaintext disclosure over the wire — the
+    // /api/v1/ops/config/stored route now returns plaintextValue for every
+    // active row, including real secrets, as a deliberate operator-UX
+    // policy for the platform-operator-only Ops console. See
+    // ops.service.ts → getStoredConfigSecrets JSDoc for the full rationale.
+    //
+    // Real cryptographic secrets — frontend renders as password-type input.
     it.each([
       ['JWT_SECRET'],
       ['JWT_REFRESH_SECRET'],

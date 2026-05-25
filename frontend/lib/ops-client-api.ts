@@ -72,12 +72,21 @@ export interface OpsStoredConfig {
     key: string;
     maskedValue: string;
     /**
-     * Present only for non-secret keys (provider selectors, base URLs,
-     * pincodes, allowlist CIDRs, boolean flags, public key IDs, sender
-     * addresses, login emails) — see backend `isOpsConfigSecretKey`. Real
-     * secrets are never returned in plaintext; only `maskedValue` is set.
+     * Plaintext stored value — returned for **every** active DB-overlay row,
+     * INCLUDING real cryptographic secrets (`_SECRET`, `_TOKEN`, `_PASSWORD`,
+     * `_API_KEY`, `_AUTH_KEY`, `_APP_SECRET`, signed approval tokens, ops
+     * cookie secret). This is a deliberate operator-UX choice for the Ops
+     * console (see `backend/src/modules/ops/ops.service.ts → getStoredConfigSecrets`
+     * JSDoc): the Ops console is platform-operator-only behind ops login +
+     * email OTP (for writes) + fail-closed `ops:read`/`ops:write` +
+     * tamper-evident audit chain logging. Returning every saved value in
+     * plaintext lets the operator see and edit what is actually stored
+     * instead of needing an external vault to know what was last persisted.
+     *
+     * The field is typed required (not optional) because the backend always
+     * returns it for active rows.
      */
-    plaintextValue?: string;
+    plaintextValue: string;
     keyVersion: number;
     requiresRestart: boolean;
     updatedAt: string;

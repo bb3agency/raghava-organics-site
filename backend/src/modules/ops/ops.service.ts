@@ -10,7 +10,6 @@ import {
   isOpsConfigBootstrapKey,
   isOpsConfigMutableKey,
   isOpsConfigRuntimeOverlayKey,
-  isOpsConfigSecretKey,
   OPS_CONFIG_OVERVIEW_GROUPS,
   OpsConfigDomain,
   resolveOpsConfigDomainForKey
@@ -506,24 +505,37 @@ export class OpsService {
     key: string;
     maskedValue: string;
     /**
-     * Plaintext stored value — present ONLY for non-secret keys (provider
-     * selectors, base URLs, pincodes, allowlist CIDRs, boolean flags, public
-     * key IDs, sender addresses, login emails, integer thresholds). Real
-     * cryptographic secrets (`_SECRET`, `_TOKEN`, `_PASSWORD`, `_API_KEY`,
-     * `_AUTH_KEY`, `_APP_SECRET`, signed approval tokens, ops cookie secret)
-     * never appear here — only `maskedValue` is set for them.
+     * Plaintext stored value — present for **every** active DB-overlay row,
+     * including real cryptographic secrets (`_SECRET`, `_TOKEN`, `_PASSWORD`,
+     * `_API_KEY`, `_AUTH_KEY`, `_APP_SECRET`, signed approval tokens, ops
+     * cookie secret).
      *
-     * Classified by `isOpsConfigSecretKey()` in ops-config-contract.ts —
-     * mirrors the frontend `isSecretKey()` predicate so the two stay aligned.
+     * SECURITY POSTURE (deliberate operator-UX choice): the Ops console is
+     * the platform-operator surface, behind ops login + email OTP for writes,
+     * with fail-closed `ops:read`/`ops:write` permissions and tamper-evident
+     * audit chain logging. It is **not** a customer or merchant-admin UI.
+     * Returning every stored value in plaintext lets the operator see and
+     * edit what is actually saved (e.g. rotate `RAZORPAY_KEY_SECRET` while
+     * verifying the current value), instead of having to keep an external
+     * vault in sync to know what was last persisted.
      *
-     * Returning plaintext for non-secrets lets the Ops Config editor prefill
-     * the input with the actual saved value (e.g. `SHIPPING_PROVIDER=shiprocket`,
-     * `SHIPROCKET_WEBHOOK_MAX_SKEW_SECONDS=300`) so the operator can verify
-     * what was saved without retyping. The same value the operator submitted
-     * via `POST /ops/config/save` is what they see back here — no DB-stored
-     * data is hidden behind a mask when there is no security justification.
+     * This intentionally overrides the generic frontend rule "never show
+     * plaintext secrets in admin UI" because that rule targets merchant
+     * admin / customer surfaces, not the platform-operator console. Anyone
+     * who can reach this response already has full encryption-key access
+     * (`OPS_DB_ENCRYPTION_KEY`) via the backend they authenticated to, so
+     * masking the value at the HTTP boundary buys no real defense — it only
+     * makes the editor unusable.
+     *
+     * `maskedValue` is still returned alongside for any consumer that wants
+     * the masked form (e.g. audit log summary, list views).
+     *
+     * `isOpsConfigSecretKey()` (in ops-config-contract.ts) is **still used**
+     * — it controls UI rendering (password-type input + eye-toggle) and may
+     * gate future audit hooks — but it no longer gates plaintext disclosure
+     * over the wire.
      */
-    plaintextValue?: string;
+    plaintextValue: string;
     keyVersion: number;
     requiresRestart: boolean;
     updatedAt: string;
@@ -554,12 +566,11 @@ export class OpsService {
       updatedAt: Date;
     }) => {
       const decrypted = decryptOpsConfigValue(row.encryptedValue);
-      const isSecret = isOpsConfigSecretKey(row.secretKey);
       return {
         domain: domainMap[row.domain] ?? 'core',
         key: row.secretKey,
         maskedValue: maskSecretValue(decrypted),
-        ...(isSecret ? {} : { plaintextValue: decrypted }),
+        plaintextValue: decrypted,
         keyVersion: row.keyVersion,
         requiresRestart: row.requiresRestart,
         updatedAt: row.updatedAt.toISOString()

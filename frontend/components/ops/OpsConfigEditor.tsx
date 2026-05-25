@@ -44,10 +44,15 @@ type DraftEntry = {
 function buildInitialDraft(fields: OpsConfigFieldDefinition[]): Record<string, DraftEntry> {
   const draft: Record<string, DraftEntry> = {};
   for (const field of fields) {
-    // Prefill non-secret keys with their currently stored value so the user
-    // can see the saved selection (e.g. SHIPPING_PROVIDER=shiprocket) without
-    // having to retype it. Secrets remain blank — the masked value is shown
-    // separately via the "Saved in DB" badge and placeholder text.
+    // Prefill every key with its currently stored plaintext value — including
+    // real secrets like RAZORPAY_KEY_SECRET, SHIPROCKET_PASSWORD, RESEND_API_KEY.
+    // The Ops console is platform-operator-only (ops login + email OTP for
+    // writes, fail-closed permissions, tamper-evident audit chain) so the
+    // operator deliberately gets full visibility into the saved values
+    // instead of having to keep an external vault in sync to know what was
+    // last persisted. Secret-typed inputs (see field.inputKind === "secret"
+    // below) still render as <input type="password"> with an eye-toggle, so
+    // the rendered DOM stays bullet-masked until the operator opts to peek.
     // `touched: false` keeps the field out of the dirty diff until the user
     // actually changes it, so re-saving is a true no-op.
     const prefill = field.storedPlaintext ?? "";
@@ -138,9 +143,7 @@ function OpsConfigFieldRow({
               placeholder={
                 entry.cleared
                   ? "Will remove stored value on save"
-                  : field.inputKind === "secret" && hasStoredValue
-                    ? `Stored: ${field.storedMasked} — enter new value to replace`
-                    : "Enter value"
+                  : "Enter value"
               }
               onChange={(event) => onChange(field.key, event.target.value)}
               className={field.inputKind === "secret" ? "pr-10 font-mono text-xs" : "font-mono text-xs"}

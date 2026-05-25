@@ -124,7 +124,7 @@ This checklist validates both:
 - [ ] API and worker processes apply the encrypted DB runtime overlay (`applyOpsConfigRuntimeOverlay`) **before** provider/notification/shipping/payment initialization, and DB values override `process.env` only for contract-allowed non-bootstrap keys.
 - [ ] `npm run ops:config-contract-drift-check` passes and is included in guardrails before release cut.
 - [ ] **DB-overlay config verification steps (run after first ops invite bootstrap):**
-  - [ ] All `dbOverlay: true` keys have entries in `OpsConfigSecret` (verify via `GET /api/v1/ops/config/stored` with ops auth — returns per-row `{ maskedValue, plaintextValue? }`; `plaintextValue` is present only for non-secret keys per `isOpsConfigSecretKey()`).
+  - [ ] All `dbOverlay: true` keys have entries in `OpsConfigSecret` (verify via `GET /api/v1/ops/config/stored` with ops auth — returns per-row `{ maskedValue, plaintextValue }`; `plaintextValue` is returned for every active row, INCLUDING real cryptographic secrets, as a deliberate operator-UX policy — see `HARDENING_HISTORY.md`). Confirm operator-only access to this endpoint by exercising 401/403 with non-ops sessions.
   - [ ] `GET /api/v1/ops/config/overview` shows no required keys with `present: false` or `isPlaceholder: true` in the `strictProfileHealth` check.
   - [ ] Backend and worker processes are restarted after saving all overlay values — `applyOpsConfigRuntimeOverlay()` is a boot-time operation.
   - [ ] Confirm provider credentials in DB overlay are functional: complete a Razorpay test payment (or shipping dry-run) after overlay is applied to confirm the overlay values actually reach provider SDK calls.
