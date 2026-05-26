@@ -579,15 +579,37 @@ normal/reduced/emergency  ──(POST /ops/load-shed mode=maintenance)──>  m
 - The older "always-200 + `X-Maintenance-Active: 0|1` header + `auth_request_set` + `if ($maintenance_active = "1") { return 503; }`" design (2026-05-25) was structurally broken — `if` inside a `location` runs in Nginx's REWRITE phase, **before** `auth_request` populates the variable in the ACCESS phase, so the `if` never fired and the storefront was never blocked. See `docs/HARDENING_HISTORY.md` "May 2026 — Maintenance gate bypass (auth_request phase ordering)" and `docs/DECISIONS.md` "[2026-05-26] Maintenance gate switches to 401 + error_page" for the full incident write-up.
 - Durable state survives Redis flushes, backend container restarts, worker restarts, and database failovers. On boot, `backend/src/main.ts` rehydrates `MaintenanceState` from Postgres into Redis so the gate keeps serving correctly even after a cold start in the middle of a maintenance window.
 
-**Read-side self-heal (silent-failure recovery):**
+**Read-side self-heal (silent-failure recovery — two-tier as of May 2026):**
 
-The cutover is asynchronous — the `maintenance-activation` BullMQ job is what flips `pending → active`. If that job is ever lost (worker container running a stale build that doesn't carry the handler, Redis flushed mid-window, worker crashed mid-cutover before the state write), the durable row would stay stuck in `pending` forever and the storefront would remain accessible indefinitely. To prevent this silent failure, `readMaintenanceState` carries a read-side promotion:
+The cutover is asynchronous — the `maintenance-activation` BullMQ job is what flips `pending → active`. If that job is ever lost (worker container running a stale build that doesn't carry the handler, Redis flushed mid-window, worker crashed mid-cutover, queue plugin failed to register at backend boot, etc.), the durable row would stay stuck in `pending` forever and the storefront would remain accessible indefinitely. To prevent this silent failure, `readMaintenanceState` carries **two layered promotions**, applied in this order on every read:
 
-- If the cache/DB returns `mode='maintenance' phase='pending'` AND `now > pendingUntil + MAINTENANCE_ACTIVATION_GRACE_MS` (default 7 minutes, env-tunable via `MAINTENANCE_ACTIVATION_GRACE_MS`), the read path promotes the in-memory record to `phase='active'` and persists the change back to Postgres + Redis so other replicas converge.
-- The grace is set just above the worst-case drain (60 s queue + 5 min payment = 6 min), so a healthy worker always wins the race and writes `active` before the fallback triggers. The fallback only fires when the worker is dead or missing the handler.
-- The promotion is idempotent (subsequent reads simply observe `active` from the DB) and works even when the DB write fails — the in-process cache + Redis cache still serve the promoted record for the rest of that process's lifetime so the local guard blocks traffic immediately.
-- Tests covering this path live in `backend/src/common/reliability/maintenance-state.test.ts` (`describe('read-side self-heal for stuck pending state')`) and `backend/src/modules/maintenance/maintenance.e2e-route-matrix.test.ts` (`it('self-heal: stuck pending past grace ...')`).
-- If you observe stuck `pending` in production, run `backend/scripts/diagnose-maintenance.sh` on the VPS to confirm which failure mode you hit (worker build mismatch, Nginx reload missing, etc.). The diagnostic prints the current DB row, the BullMQ job state, the worker logs filtered for `[maintenance-activation]` milestones, and whether the running Nginx config has the `auth_request /_maintenance_gate` directive.
+**Tier 1 — BullMQ-aware fast-promote (~15 s past `pendingUntil`):**
+
+When the read path sees `mode='maintenance' phase='pending'` AND `now > pendingUntil + MAINTENANCE_FAST_PROMOTE_GRACE_MS` (default 15 s, env-tunable), it asks BullMQ whether a `maintenance-activation` job exists in `delayed`/`active`/`completed`/`failed` for the current window (filtered by `name === 'maintenance-activation'` AND `timestamp >= setAt - 5 s`):
+
+- **Probe returns `'present'`:** worker is healthy and on it (job is delayed, currently processing, or already completed but the state write hasn't landed yet). Do **not** promote — let the worker finish. Falls through to Tier 2 long grace as the ultimate safety net.
+- **Probe returns `'missing'`:** there is no record of the activation job anywhere in BullMQ. This is the silent-failure signature (enqueue was skipped, queue evicted the delayed job, worker was offline when the delay fired). Promote immediately to `phase='active'`, write through to Postgres + Redis, every replica converges on the next read.
+- **Probe returns `'unknown'`:** Redis was slow / unreachable / the probe hit its 500 ms internal timeout. Fall through to Tier 2 — we cannot conclude anything about the worker from a failed probe.
+
+The probe is automatically wired by `readMaintenanceStateFromRequest` whenever `fastify.queues.cartCleanup` is decorated on the server. Direct `readMaintenanceState` callers without BullMQ access (the worker itself, the boot path, admin write paths) skip Tier 1 and use Tier 2 only — that's the right boundary (the worker can't usefully verify itself; the boot path doesn't have BullMQ initialized yet).
+
+**Tier 2 — Long-grace fallback (~7 min past `pendingUntil`):**
+
+If Tier 1 didn't fire (verifier unwired, probe returned `'unknown'`, or worker was correctly mid-drain), `readMaintenanceState` then checks `now > pendingUntil + MAINTENANCE_ACTIVATION_GRACE_MS` (default 7 min, env-tunable). At that point it promotes to `'active'` unconditionally — the worst-case healthy drain is 60 s queue + 300 s payment + a ~1 min cushion = 7 min, so anything past that means the worker has failed to flip the state even in the worst legitimate case. This tier is the absolute last-resort guarantee that the system **cannot** get stuck in `pending` indefinitely, even when BullMQ itself is unreachable for probes.
+
+Both tiers are idempotent (subsequent reads simply observe `active` from the DB), and both tolerate DB write failures — the in-process + Redis caches still serve the promoted record for the rest of that process's lifetime so the local guard blocks traffic immediately while the DB recovers.
+
+**Observable timeline (after the May 2026 fix):**
+
+| Failure mode | Time from "set maintenance" to "Nginx serves 503" |
+| --- | --- |
+| Worker healthy, no in-flight work | ~2 min (pending window) + ~1 s drain |
+| Worker healthy, full payment drain | ~2 min + up to 5 min drain = ~7 min |
+| Worker offline / queue plugin missing / handler not deployed | ~2 min + ~15 s fast-promote = **~2:15** (was ~9 min pre-fix) |
+| Worker offline AND Redis unreachable | ~2 min + ~7 min long grace = ~9 min (unchanged — final safety net) |
+
+- Tests covering this path live in `backend/src/common/reliability/maintenance-state.test.ts` (`describe('BullMQ-aware fast-promote (post-2026-05-26 fix)')` covers Tier 1; `describe('read-side self-heal for stuck pending state')` covers Tier 2) and `backend/src/modules/maintenance/maintenance.e2e-route-matrix.test.ts` (`it('self-heal: stuck pending past grace ...')`).
+- If you observe stuck `pending` in production for longer than ~2:30, run `backend/scripts/diagnose-maintenance.sh` on the VPS to confirm which failure mode you hit (worker build mismatch, Nginx reload missing, BullMQ plugin not registered, etc.). The diagnostic prints the current DB row, the BullMQ job state, the worker logs filtered for `[maintenance-activation]` milestones, and whether the running Nginx config has the `auth_request /_maintenance_gate` directive. Additionally search backend logs for `fastify.queues.cartCleanup is undefined` — if that line is present, the silent-enqueue bug fired and the BullMQ plugin needs investigation (Tier 1 fast-promote should have already recovered the cutover but the underlying queue layer is broken for all background work).
 
 **Worker observability:**
 
@@ -614,7 +636,8 @@ Exceptions during the cutover are caught at the handler level: the worker writes
 - `MAINTENANCE_QUEUE_DRAIN_TIMEOUT_MS` (default `120000`) — max wait for active jobs to finish before activation proceeds.
 - `MAINTENANCE_PAYMENT_DRAIN_TIMEOUT_MS` (default `300000`) — max wait for `PENDING_PAYMENT` orders to settle.
 - `MAINTENANCE_QUEUE_PAUSE_GRACE_MS` (default `1500`) — grace window after pausing `outbox-dispatch` so the in-flight publish iteration finishes.
-- `MAINTENANCE_ACTIVATION_GRACE_MS` (default `420000` = 7 min) — read-side self-heal grace past `pendingUntil` before a stuck `pending` row is auto-promoted to `active`. Set to a value larger than your `MAINTENANCE_PAYMENT_DRAIN_TIMEOUT_MS` + `MAINTENANCE_QUEUE_DRAIN_TIMEOUT_MS` sum (plus a small cushion for BullMQ delayed-job polling jitter) so the fallback never races a healthy worker.
+- `MAINTENANCE_ACTIVATION_GRACE_MS` (default `420000` = 7 min) — Tier 2 long-grace read-side self-heal past `pendingUntil` before a stuck `pending` row is auto-promoted to `active`. This is the **final safety net** when BullMQ probes fail (Redis unreachable, no queue accessor on the read path). Set to a value larger than your `MAINTENANCE_PAYMENT_DRAIN_TIMEOUT_MS` + `MAINTENANCE_QUEUE_DRAIN_TIMEOUT_MS` sum (plus a small cushion for BullMQ delayed-job polling jitter) so the fallback never races a healthy worker.
+- `MAINTENANCE_FAST_PROMOTE_GRACE_MS` (default `15000` = 15 s) — Tier 1 fast-promote grace past `pendingUntil` before the read path probes BullMQ for the activation job. When the probe reports the job is `'missing'`, promote immediately (typical case: worker is offline or never received the enqueue). When the probe reports `'present'`, fall through to the long grace (worker is healthy and on it). Lower this for staging environments that want near-instant cutover (e.g. `MAINTENANCE_FAST_PROMOTE_GRACE_MS=0` makes the fast-promote fire on the first read past `pendingUntil`). Production should keep the default to absorb BullMQ delayed-job polling jitter.
 - `DEFAULT_MAINTENANCE_PENDING_WINDOW_MS` (compile-time constant in `maintenance-state.ts`, currently `120000`) — the 2-minute warning window. Change requires a deploy.
 
 

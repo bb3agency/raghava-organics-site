@@ -1950,10 +1950,39 @@ export class OpsService {
     // after the durable write succeeds. The worker drains queues + payments
     // and then flips phase → 'active'. We use a delay equal to the warning
     // window so the worker only starts draining at the cutover moment.
+    //
+    // Why we do NOT throw if the queue is unavailable: the operator's intent
+    // is already recorded in the durable `MaintenanceState` row. Failing the
+    // request now would tell ops "your maintenance didn't take effect" when
+    // in fact it did (the row says so). Instead we log loudly + send a tech
+    // alert + let the read-side self-heal in `maintenance-state.ts` recover.
+    // The new BullMQ-aware fast-promote (post-2026-05-26 fix) makes that
+    // recovery effectively instant on the next read instead of waiting the
+    // full `MAINTENANCE_ACTIVATION_GRACE_MS` window.
     if (input.mode === 'maintenance' && nextRecord.phase === 'pending' && activationJobId) {
-      try {
-        const cartCleanupQueue = this.fastify.queues?.cartCleanup;
-        if (cartCleanupQueue) {
+      const cartCleanupQueue = this.fastify.queues?.cartCleanup;
+      if (!cartCleanupQueue) {
+        // LOUD-FAIL: queue plugin didn't register at boot but the process
+        // kept running. Previously this branch silently no-op'd and the
+        // operator only noticed when the storefront didn't cut over for
+        // ~7 minutes. Now we make the failure observable immediately.
+        this.fastify.log.error(
+          { opsUserId: input.requesterId, activationJobId },
+          '[setLoadShedModeDirect] fastify.queues.cartCleanup is undefined — maintenance-activation NOT enqueued. Read-side fast-promote will flip phase=active on the next request reaching readMaintenanceState (no 7-min wait). Investigate src/common/plugins/bullmq.plugin.ts boot path.'
+        );
+        void sendTechnicalFailureAlert({
+          prisma: this.fastify.prisma,
+          template: 'MaintenanceActivationEnqueue',
+          channel: 'UNKNOWN',
+          recipient: 'ops-maintenance',
+          errorMessage:
+            'Maintenance set successfully (durable state written) but the cart-cleanup BullMQ queue is unavailable on this backend instance. The maintenance-activation job was NOT enqueued. The read-side fast-promote path will activate the cutover on the next request, but the queue plugin should be investigated — without it, no future maintenance window will drain in-flight payments/jobs cleanly.',
+          failureStage: 'QUEUE_ENQUEUE',
+          domain: 'ops',
+          component: 'maintenance-activation'
+        });
+      } else {
+        try {
           await cartCleanupQueue.add(
             'maintenance-activation',
             {
@@ -1963,26 +1992,26 @@ export class OpsService {
             },
             { jobId: activationJobId, delay: DEFAULT_MAINTENANCE_PENDING_WINDOW_MS }
           );
+        } catch (enqueueErr) {
+          // Enqueue failure does not roll back the durable state — the read
+          // path's fast-promote will recover. We still alert ops so they know
+          // the activation has to be retried manually.
+          this.fastify.log.error(
+            { err: enqueueErr, opsUserId: input.requesterId, activationJobId },
+            '[setLoadShedModeDirect] maintenance-activation enqueue failed; read-side fast-promote will recover'
+          );
+          void sendTechnicalFailureAlert({
+            prisma: this.fastify.prisma,
+            template: 'MaintenanceActivationEnqueue',
+            channel: 'UNKNOWN',
+            recipient: input.requesterId,
+            errorMessage:
+              enqueueErr instanceof Error ? enqueueErr.message : 'Unable to enqueue maintenance-activation',
+            failureStage: 'QUEUE_ENQUEUE',
+            domain: 'ops',
+            component: 'maintenance-activation'
+          });
         }
-      } catch (enqueueErr) {
-        // Enqueue failure does not roll back the durable state — the worker
-        // can reconcile by checking the row on its next heartbeat. We still
-        // alert ops so they know the activation has to be retried manually.
-        this.fastify.log.error(
-          { err: enqueueErr, opsUserId: input.requesterId },
-          '[setLoadShedModeDirect] maintenance-activation enqueue failed'
-        );
-        void sendTechnicalFailureAlert({
-          prisma: this.fastify.prisma,
-          template: 'MaintenanceActivationEnqueue',
-          channel: 'UNKNOWN',
-          recipient: input.requesterId,
-          errorMessage:
-            enqueueErr instanceof Error ? enqueueErr.message : 'Unable to enqueue maintenance-activation',
-          failureStage: 'QUEUE_ENQUEUE',
-          domain: 'ops',
-          component: 'maintenance-activation'
-        });
       }
     }
 

@@ -4,6 +4,59 @@ This document preserves detailed hardening history for engineering traceability.
 
 ## Recent hardening changes
 
+**Stuck-pending maintenance window — BullMQ-aware fast-promote replaces the 7-minute self-heal grace — May 2026:**
+
+Operator on Raghava Organics triggered maintenance and observed the storefront banner sit on "Finalising maintenance window. Wrapping up active transactions before the site goes offline. New checkouts are paused." for the full 5–7 minutes past the 2-minute pending window — total time from "set maintenance" to "Nginx blocks the storefront" was ~9 minutes, with **zero in-flight jobs or payments** for the worker to drain. Investigating revealed two compounding defects in the cutover machinery:
+
+1. **`setLoadShedModeDirect` silently no-op'd the `maintenance-activation` enqueue when `fastify.queues?.cartCleanup` was undefined.** The `if (cartCleanupQueue) { await cartCleanupQueue.add(...) }` block at `backend/src/modules/ops/ops.service.ts` line 1955 wrapped only the enqueue in a truthiness check — there was no `else` branch logging the missed enqueue, no technical-failure alert, nothing. The durable `MaintenanceState` row was written, the operator's API call returned success, the warning banner started ticking down, and the entire system then sat with no scheduled work to flip `phase=pending → 'active'`. Compare the same file's `scheduleRestart` (line 2350) which **throws** when the queue is missing — that was the contract we should have been enforcing for maintenance, too.
+
+2. **The read-side self-heal grace (`MAINTENANCE_ACTIVATION_GRACE_MS`, default 7 min) was conservatively sized for worst-case healthy drains, with no fast path for the "worker is broken" failure mode.** The grace must be ≥ worst-case drain (60 s queue + 300 s payment + buffer = ~6:30) so a healthy worker mid-drain is never raced into double-promotion. Pre-fix, that meant the ONLY way out of a stuck-pending state was waiting the full 7 minutes — even when the BullMQ queue trivially had no record of the activation job. The system had all the information it needed to promote immediately ("queue has no matching job AND we're past `pendingUntil + small_grace`") and was throwing it away.
+
+**Changes:**
+
+1. **`backend/src/modules/ops/ops.service.ts` — loud-fail missing queue.** Converted the silent `if (cartCleanupQueue)` skip into an `if (!cartCleanupQueue) { log.error + sendTechnicalFailureAlert } else { enqueue }` pattern. The durable state write still succeeds (operator's intent is preserved; read-side fast-promote recovers the cutover) but the missing-queue case now generates a permanent paper trail: an `error`-level log line with `[setLoadShedModeDirect] fastify.queues.cartCleanup is undefined ...` and a technical-failure alert email to ops with template `MaintenanceActivationEnqueue` and `failureStage: 'QUEUE_ENQUEUE'`. Operators can no longer set maintenance "successfully" and discover hours later that the storefront never actually went down.
+
+2. **`backend/src/common/reliability/maintenance-state.ts` — BullMQ-aware fast-promote.** Introduced four new exports:
+   - `ActivationJobStatus = 'present' | 'missing' | 'unknown'` — what the BullMQ probe can return.
+   - `VerifyActivationJobExists` — the callback shape `readMaintenanceState` accepts.
+   - `DEFAULT_MAINTENANCE_FAST_PROMOTE_GRACE_MS = 15 * 1000` (overridable via `MAINTENANCE_FAST_PROMOTE_GRACE_MS` env var) — the short grace past `pendingUntil` before the read path will probe the queue.
+   - `maybeFastPromotePending` — pure helper that flips `phase: 'active'` IFF status is `'missing'` AND now is past `pendingUntil + fastPromoteGraceMs`.
+   - `buildBullMQActivationVerifier` — adapter that turns a queue with `getJobs(['delayed','active','completed','failed'])` into the `VerifyActivationJobExists` callback. Filters by `name === 'maintenance-activation'` and `timestamp >= setAt - 5_000` (so a stale job from a previous maintenance cycle doesn't mask a genuinely-missing current job).
+   - `wrapVerifierWithTimeout` — bounds the probe to 500 ms (default). On timeout or exception the wrapper returns `'unknown'`, which falls through to the long-grace path. Slow Redis can never block a storefront request.
+   
+   `readMaintenanceState` was refactored to apply both healers from a single side-effect-free `applySelfHeal` closure, with one shared `persistPromotion` write path. The fast-promote runs first (only when a verifier is wired); if it returns `'present'` or `'unknown'`, the existing long-grace fallback still runs. This preserves the "system cannot get stuck in pending" contract even when BullMQ itself is unreachable.
+
+3. **`backend/src/common/reliability/maintenance-state.ts` — `readMaintenanceStateFromRequest` auto-wires the verifier.** When `fastify.queues.cartCleanup` is available on the request server, the convenience wrapper builds the verifier + timeout wrapper transparently. Direct `readMaintenanceState` callers that don't have BullMQ access (worker, boot path, admin write paths) keep their existing semantics — they just don't get the fast-promote optimization. This is the right boundary: the storefront/Nginx hot path benefits, the worker can't usefully verify itself, the boot path can't verify a queue that's not initialized yet.
+
+4. **Tests added:** 22 new test cases covering `maybeFastPromotePending` (present/missing/unknown × inside-grace/past-grace × mode permutations), `readMaintenanceState` with each verifier outcome, `buildBullMQActivationVerifier` timestamp-filter behavior, `wrapVerifierWithTimeout` happy-path + timeout + throw, and `resolveMaintenanceFastPromoteGraceMs` env override parsing. The existing 11 long-grace tests still pass unchanged — legacy callers (without a verifier) get the legacy 7-min behavior. One regression test added in `ops.service.test.ts` to prove the loud-fail path actually logs + alerts when `fastify.queues.cartCleanup` is removed.
+
+**Expected operator-facing behavior after this fix:**
+
+| Scenario | Before this fix | After this fix |
+| --- | --- | --- |
+| Worker healthy, no in-flight work | 2 min pending + ~1 s drain = ~2 min total | unchanged (~2 min total) |
+| Worker healthy, 30 s of queue work | 2 min pending + ~30 s drain = ~2:30 total | unchanged (~2:30 total) |
+| Worker healthy, payments drain to 5 min cap | 2 min pending + 5 min drain = ~7 min total | unchanged (~7 min total; verifier returns 'present', long grace covers it) |
+| Worker offline or queue plugin missing | 2 min pending + 7 min self-heal grace = ~9 min total | 2 min pending + 15 s fast grace + ~1 ms probe = **~2:15 total** |
+| Worker offline AND Redis unreachable | 2 min pending + 7 min self-heal grace = ~9 min total | unchanged (~9 min — long grace remains the final safety net when BullMQ probe can't answer) |
+
+The new env knob `MAINTENANCE_FAST_PROMOTE_GRACE_MS` (default 15000) lets operators tune the fast-promote sensitivity. Setting it to `0` makes the fast-promote fire on the very first read past `pendingUntil` — useful for staging environments where you want maintenance to flip nearly instantaneously and don't care about pause-grace races. Production should keep the default to absorb BullMQ delayed-job polling jitter.
+
+**Why we couldn't catch this earlier:** the existing maintenance unit tests use mocked Prisma + Redis and either (a) test the worker handler directly with no enqueue gap to exercise, or (b) test `readMaintenanceState` with no verifier wired (so the long-grace fallback was the only path under test). The "enqueue missed, BullMQ-aware self-heal needed" failure mode was orthogonal to both. The new tests now cover all four `verifier × grace` quadrants, and the loud-fail test directly mutates `fastify.queues.cartCleanup = undefined` to prove the alert path fires.
+
+**Detection signature for future regressions:** if maintenance ever takes more than ~2:30 to flip the storefront to 503 again,
+
+```bash
+bash backend/scripts/diagnose-maintenance.sh
+```
+
+Now reads:
+- Step 6 (BullMQ counts) — `delayed=0 waiting=0 completed=0` for `maintenance-activation` confirms the enqueue was skipped
+- Step 7 (worker logs) — empty `[maintenance-activation]` filter confirms the worker never picked anything up
+- API logs (`docker compose logs backend`) — search for `fastify.queues.cartCleanup is undefined` to confirm the loud-fail fired
+
+If those three confirm the silent-skip pattern, the cause is the BullMQ plugin failing to register at boot — investigate `src/common/plugins/bullmq.plugin.ts` and rebuild the backend image. The storefront should now still flip to 503 within ~2:15 thanks to the fast-promote, but the underlying queue layer is broken for ALL background work and must be fixed before the next maintenance window.
+
 **Maintenance gate bypass — `if` inside `location` ran before `auth_request` populated its variable — May 2026:**
 
 Live verification on Raghava Organics surfaced the second structural bug in the maintenance gate from the same May 2026 work. After fixing the nginx template's `${CLIENT_DOMAIN}` substitution (entry below), the storefront still served `200 OK` from Next.js during active maintenance instead of `503` + `maintenance.html`. End-to-end debugging proved every component was healthy:

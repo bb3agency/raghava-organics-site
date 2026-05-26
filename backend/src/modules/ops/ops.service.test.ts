@@ -1102,6 +1102,73 @@ describe('OpsService failcase coverage', () => {
     expect(enqueueOpts.delay).toBeLessThan(125_000);
   });
 
+  it('setLoadShedModeDirect(maintenance) loud-fails (log + tech alert) when cartCleanup queue is missing', async () => {
+    // Regression: previously, a missing cartCleanup queue caused the
+    // maintenance-activation enqueue to be silently skipped. The state row
+    // was written, the operator's request returned success, but the worker
+    // never picked up the cutover and the site sat in `pending` for the
+    // full 7-min read-side self-heal grace. Now the missing-queue case
+    // emits a loud log + tech alert so ops sees it immediately, while still
+    // writing the durable state (read-side fast-promote will recover).
+    const { service, mocks, fastify } = createOpsServiceHarness();
+    mocks.opsOtpChallengeFindUnique.mockResolvedValueOnce({
+      id: 'challenge_lf',
+      opsUserId: 'ops_1',
+      action: 'load-shed-change',
+      codeHash: hashOtp('345678'),
+      status: 'PENDING',
+      expiresAt: new Date(Date.now() + 60_000),
+      failedAttempts: 0
+    });
+    mocks.opsOtpChallengeUpdateMany.mockResolvedValueOnce({ count: 1 });
+
+    // Remove the cartCleanup queue from fastify.queues to simulate a boot
+    // where the BullMQ plugin failed to register.
+    (fastify as unknown as { queues: Record<string, unknown> }).queues.cartCleanup = undefined;
+
+    const logErrorSpy = vi.spyOn(fastify.log, 'error');
+    const alertSpy = vi
+      .spyOn(alertModule, 'sendTechnicalFailureAlert')
+      .mockResolvedValue(undefined);
+
+    const mockRequest = {
+      id: 'req_lf',
+      server: { redis: { set: mocks.redisSet } }
+    } as unknown as import('fastify').FastifyRequest;
+
+    const result = await service.setLoadShedModeDirect({
+      request: mockRequest,
+      requesterId: 'ops_1',
+      mode: 'maintenance',
+      reason: 'Loud-fail regression test',
+      challengeId: 'challenge_lf',
+      otpCode: '345678',
+      requestIp: '127.0.0.1',
+      requestPath: '/api/v1/ops/load-shed',
+      method: 'POST'
+    });
+
+    // Operator's intent is still recorded — the durable state was written.
+    expect(result.mode).toBe('maintenance');
+    expect(result.phase).toBe('pending');
+    expect(result.pendingUntil).toBeTruthy();
+
+    // Loud-fail: error logged + technical alert dispatched.
+    expect(logErrorSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ opsUserId: 'ops_1' }),
+      expect.stringContaining('fastify.queues.cartCleanup is undefined')
+    );
+    expect(alertSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        failureStage: 'QUEUE_ENQUEUE',
+        template: 'MaintenanceActivationEnqueue',
+        component: 'maintenance-activation'
+      })
+    );
+
+    vi.restoreAllMocks();
+  });
+
   it('setLoadShedModeDirect(normal) exits maintenance and clears phase/pendingUntil', async () => {
     const { service, mocks, fastify } = createOpsServiceHarness();
     mocks.opsOtpChallengeFindUnique.mockResolvedValueOnce({

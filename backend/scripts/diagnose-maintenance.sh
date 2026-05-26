@@ -15,18 +15,25 @@
 #   7. Worker logs filtered for `[maintenance-activation]` milestones
 #   8. Whether the running Nginx config has the auth_request gate wired
 #
-# How to interpret the output:
+# How to interpret the output (read-side fast-promote is active as of 2026-05-26):
 #
 # • Step 3 mode=normal → maintenance was never set, or operator already exited
-# • Step 3 mode=maintenance phase=pending, setAt > 2 min ago → activation job stuck
-# • Step 3 mode=maintenance phase=pending, pendingUntil in past, setAt fresh → drain in progress (this is normal for up to ~6 min)
+# • Step 3 mode=maintenance phase=pending, setAt > 2:30 ago → fast-promote is NOT firing
+#         (either no traffic is reaching the read path, fastify.queues.cartCleanup
+#          is unwired, or the probe consistently returns 'present'). In this state
+#          the Tier 2 long grace (~7 min past pendingUntil) is the only safety net.
+# • Step 3 mode=maintenance phase=pending, pendingUntil in past, setAt very fresh → drain in
+#         progress (this is normal for up to ~6 min when the worker is healthy).
 # • Step 3 mode=maintenance phase=active → state IS active, problem is downstream (Nginx or banner)
 # • Step 4 != Step 3 → API cache stale (rare); restart backend container
 # • Step 5 header `1` but storefront still loads → Nginx config not reloaded with auth_request directive
-# • Step 6 delayed=1, waiting=0 → job exists but worker hasn't picked it up yet (timing issue)
-# • Step 6 delayed=0, waiting=0, completed has maintenance-activation → job completed without flipping state (worker code mismatch — rebuild required)
-# • Step 6 all zero, state still pending → enqueue failed silently; check API logs
-# • Step 7 empty → worker has no [maintenance-activation] log lines = worker is running old code without the handler. REBUILD WORKERS.
+# • Step 6 delayed=1, waiting=0 → job exists, worker hasn't picked it up yet
+#         (this is the 'present' verifier signal — fast-promote will NOT fire; the
+#          worker is expected to drain and write 'active' itself; if it doesn't,
+#          Tier 2 long grace fires at ~7 min past pendingUntil)
+# • Step 6 delayed=0, waiting=0, completed has maintenance-activation → job completed without flipping state (worker code mismatch — rebuild required; fast-promote will recover within ~15 s of pendingUntil)
+# • Step 6 all zero, state still pending → enqueue failed silently; check API logs for "fastify.queues.cartCleanup is undefined" (the loud-fail signature); fast-promote should have flipped phase=active within ~15 s of pendingUntil regardless
+# • Step 7 empty → worker has no [maintenance-activation] log lines = worker is running old code without the handler. REBUILD WORKERS. (Fast-promote will recover this run, but the next maintenance window won't drain in-flight payments cleanly without a working worker.)
 # • Step 8 missing auth_request → Nginx config not deployed; reload required.
 # =============================================================================
 
@@ -146,19 +153,33 @@ cat <<'EOF'
 Quick action guide based on output above:
 
 A) Step 3 shows mode=maintenance, phase=pending, AND setAt is more than
-   ~7 min ago → the read-side self-heal will auto-promote to active on the
-   very next API request. Refresh the storefront — it should now block.
+   ~2:30 min ago → the BullMQ-aware fast-promote should have already
+   flipped phase=active. If it didn't:
+     - check API logs for "fastify.queues.cartCleanup is undefined" (the
+       loud-fail signature — backend lost its queue plugin at boot)
+     - check API logs for any "verifyActivationJob" / read-path errors
+     - confirm at least one storefront request has reached the backend
+       since pendingUntil expired (fast-promote runs INSIDE the read path)
+   The Tier 2 long-grace fallback will still flip the state at ~7 min
+   past pendingUntil even if the fast-promote is broken.
 
 B) Step 7 is empty (no [maintenance-activation] log lines anywhere) → the
    worker container is running an OLD build that doesn't have the
-   maintenance handler. Rebuild and restart:
+   maintenance handler. Fast-promote will have already recovered THIS
+   cutover within ~15 s of pendingUntil, but the next maintenance window
+   will have no proper drain. Rebuild and restart:
      docker compose -p $CLIENT_ID build workers
      docker compose -p $CLIENT_ID up -d workers
-   Then click maintenance again and observe step 7 fill up.
+   Then trigger maintenance again and observe step 7 fill up.
 
-C) Step 6 shows delayed=0 but state is stuck pending → enqueue failed
-   silently. Check backend logs for "maintenance-activation enqueue
-   failed" stack traces, and verify fastify.queues.cartCleanup is wired.
+C) Step 6 shows delayed=0 but state is stuck pending past ~15 s of
+   pendingUntil → enqueue failed silently AND fast-promote didn't recover.
+   Check backend logs for "fastify.queues.cartCleanup is undefined" (loud-
+   fail signature). If present, the BullMQ plugin failed at boot — restart
+   backend with `docker compose -p $CLIENT_ID restart backend` and watch
+   the boot logs for plugin registration errors. Verify
+   `fastify.decorate('queues', ...)` is being called by checking the
+   bullmq.plugin.ts boot trace.
 
 D) Step 8 shows the auth_request directive is missing → Nginx is using
    the previous config. The state may be active correctly but Nginx isn't
