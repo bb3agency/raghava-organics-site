@@ -60,8 +60,16 @@ export async function registerMaintenanceRoutes(fastify: FastifyInstance): Promi
         }
       }
     },
-    async (request: FastifyRequest) => {
+    async (request: FastifyRequest, reply: FastifyReply) => {
       const state = await readMaintenanceStateFromRequest(request);
+      // Banner clients poll this every 5–10 s and need to observe phase
+      // transitions in near real-time. Any intermediate cache (browser,
+      // CDN, proxy) serving a stale snapshot would silently break the
+      // pending→active cutover detection on every open tab. Force
+      // bypassing every cache layer for this endpoint.
+      reply.header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+      reply.header('Pragma', 'no-cache');
+      reply.header('Expires', '0');
       return {
         mode: state.mode,
         phase: state.phase,

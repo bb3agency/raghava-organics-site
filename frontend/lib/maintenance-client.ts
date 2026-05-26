@@ -26,7 +26,16 @@ export interface MaintenanceStatus {
 }
 
 export async function fetchMaintenanceStatus(): Promise<MaintenanceStatus> {
-  return apiClient<MaintenanceStatus>("/maintenance/status");
+  // Force the browser/Next.js HTTP cache to bypass any cached snapshot of
+  // the maintenance status. Without this, polls can be served from the
+  // browser cache and the banner never sees the phase flip (pending →
+  // active) until the user manually refreshes — defeating the whole
+  // point of background polling. `cache: 'no-store'` + an explicit
+  // `Cache-Control: no-cache` request header is belt + suspenders.
+  return apiClient<MaintenanceStatus>("/maintenance/status", {
+    cache: "no-store",
+    headers: { "Cache-Control": "no-cache" },
+  });
 }
 
 /**
