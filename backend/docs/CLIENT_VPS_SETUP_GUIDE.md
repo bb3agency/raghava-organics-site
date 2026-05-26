@@ -734,6 +734,106 @@ Safety note: run `contract:admin` only against a controlled non-production targe
 | `/ops/setup` returns **401** even with `curl -u` | Basic-auth creds mismatched vs frontend runtime, or stale frontend build not reading latest env |
 | Duplicate charges / emails | Idempotency — verify Redis and worker idempotency keys (`BRD.md` AC-05) |
 | Wrong client data | Isolation breach — wrong `DATABASE_URL` or shared Redis between clients |
+| `docker compose up` prints `No such container: <sha>` every run, services start anyway | Dead-container tombstones from prior deploys (see §19.2) |
+| Maintenance mode set but storefront still accessible after countdown | (a) Workers image stale → rebuild + restart; or (b) Nginx config drift → see §19.3; or (c) wait 7 min for read-side self-heal |
+| `docker compose up` fails with `failed to bind host port 0.0.0.0:5432/tcp` | Missing prod overlay — see §19.4 |
+| Recently-pushed nginx changes not actually live | Nginx config drift — see §19.3 |
+
+### 19.2 Dead-container tombstones — two failure modes (`No such container: <sha>`)
+
+**Symptom A — noisy but services live.** Every `docker compose up -d ...` prints a noisy block like:
+
+```
+✘ Container 1b268e1da8d8       Error response from daemon: No such container: ...
+```
+
+…but `docker ps` shows backend/workers/redis running. `docker compose down --remove-orphans` reports the ghosts as "Removed" but they reappear on the next `up`.
+
+**Symptom B — deploy exits 1 with phantom-start error.** A CD deploy log shows:
+
+```
+Container raghava-organics-redis    Started
+Container f6b1a3c38046              Stopping
+Container f6b1a3c38046_raghava-organics-backend  Recreate   ← rename-as-backup pattern
+Container 1b268e1da8d8              Stopping
+Container 1b268e1da8d8_raghava-organics-workers  Recreate
+Container f6b1a3c38046              Error while Stopping
+Container f6b1a3c38046              Removed
+Container 1b268e1da8d8              Error while Stopping
+Container 1b268e1da8d8              Removed
+Container f6b1a3c38046_raghava-organics-backend  Recreated
+Container 1b268e1da8d8_raghava-organics-workers  Recreated
+Container raghava-organics-workers  Starting
+Container raghava-organics-backend  Starting
+Container raghava-organics-workers  Started
+Container 1b268e1da8d8              Starting               ← Compose tries to start the ghost ID
+Container raghava-organics-backend  Started
+Container f6b1a3c38046              Starting               ← same
+Error response from daemon: No such container: 1b268e1da8d8…
+Error: Process completed with exit code 1.
+```
+
+The new canonical containers are live and serving traffic, but Compose's bookkeeping queued a trailing `start` call against the original ghost IDs, which failed and made CD exit 1. **Both symptoms have the same root cause and the same fix.**
+
+**Why.** Earlier deploys built new backend/workers images and then ran `docker image prune`. That removed an image while a Compose container record still referenced it, marking the container `Dead`. `docker rm -f` reports "No such container" because the container is gone from Docker's runtime, but the on-disk directory at `/var/lib/docker/containers/<full-sha>/` survives — only root can delete it. Compose picks it up by label on every subsequent listing. With `--force-recreate` Compose then enters its rename-then-replace path, which queues a trailing `start` against the old ghost ID — and that's symptom B.
+
+**Recovery.** Run the standalone cleanup script as a user with sudo:
+
+```bash
+cd /var/www/<client>/backend
+bash scripts/cleanup-stale-compose-state.sh "$CLIENT_ID"
+```
+
+It lists every container labeled with this project that is in `dead`, `exited`, `created`, or `removing` state, force-removes them, deletes their on-disk tombstones (requires sudo for the `rm -rf /var/lib/docker/containers/<id>/` step), restarts the Docker daemon to refresh the container index, and waits for it to come back. Live containers come back via `restart: unless-stopped`. Once it finishes, bring up cleanly:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml -p $CLIENT_ID \
+  up -d --remove-orphans backend workers
+```
+
+(Note: no more `--force-recreate` — see "Prevention" below for why.)
+
+**Prevention — three layers.**
+
+1. **`scripts/vps-deploy.sh §1.75` (already in place).** Runs the same sweep before every CD deploy. The sweep now verifies the tombstones are gone after its destructive pass and **aborts the deploy with `Deploy aborted: Dead-container tombstones detected and could not be fully cleaned automatically.`** if any survive — so you get a clear instruction to run `cleanup-stale-compose-state.sh` rather than a misleading `No such container` trace 10 minutes later.
+2. **`scripts/vps-deploy.sh §4 explicit stop+rm+up (replaces `--force-recreate`).** The deploy script no longer uses `docker compose up --force-recreate`. Instead it runs `docker compose stop <services>`, then `docker rm -f <canonical-names>` per service, then `docker compose up -d --remove-orphans <services>`. This bypasses Compose's rename-then-replace path entirely, so even if a ghost slips through it can't trigger the symptom-B phantom-start failure. Same downtime as `--force-recreate` (3–5 s per service, covered by the Nginx maintenance page).
+3. **Optional: passwordless sudo for the CI runner.** If you grant the runner user passwordless sudo on `/usr/bin/rm -rf /var/lib/docker/containers/*` (and optionally `/usr/bin/systemctl restart docker`), §1.75 can fully self-heal in CD without ever needing the manual `cleanup-stale-compose-state.sh` step. See §22 below for the exact sudoers entries.
+
+### 19.3 Nginx config drift (storefront ignores recent template changes)
+
+**Symptom.** A change to `nginx/client.conf.template` is pulled to the VPS via `git pull`, but the storefront's actual behaviour matches the old config (e.g. a new `auth_request` directive doesn't gate traffic, a new `location` block doesn't take effect, rate limits unchanged).
+
+**Why.** The repo template is **not** the live config. Nginx reads from `/etc/nginx/sites-available/<client>.conf` (linked into `sites-enabled/`). A `git pull` updates the template but leaves the live file untouched until you explicitly sync it and reload nginx.
+
+**Recovery.**
+
+```bash
+cd /var/www/<client>/backend
+sudo cp nginx/client.conf.template /etc/nginx/sites-available/$CLIENT_ID.conf
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+If `nginx -t` fails, the previous config stays live (the `cp` is atomic on the same filesystem, but the live process only re-reads the file on `reload`). Fix the template, push, pull again, and retry.
+
+**Prevention.** Set `NGINX_AUTO_RELOAD=1` in the VPS `.env`. The CD script then diffs template vs live on every deploy and, if they differ, auto-syncs and reloads. Failure of `nginx -t` aborts the deploy so a broken config never goes live. Requires passwordless sudo for the runner user on `cp`, `nginx -t`, and `systemctl reload nginx`.
+
+### 19.4 Manual `docker compose up` fails or leaves ghosts (missing prod overlay)
+
+**Symptom.** Either:
+
+- `docker compose -p <project> up -d backend workers` prints `Error response from daemon: failed to bind host port 0.0.0.0:5432/tcp: address already in use`, OR
+- the command appears to succeed but on the next run the Dead-container ghosts from §19.2 start showing up.
+
+**Why.** Without `-f docker-compose.prod.yml` (or `COMPOSE_FILE=docker-compose.yml:docker-compose.prod.yml` in `.env`), Compose uses only the base `docker-compose.yml` which declares an in-compose `postgres` service. That service tries to bind port 5432 — colliding with the host's native Postgres — leaks a half-initialised container as a Dead tombstone, and the cycle from §19.2 begins.
+
+**Recovery + prevention.** Add both lines to `/var/www/<client>/backend/.env` (they're commented in `.env.example`):
+
+```env
+COMPOSE_FILE=docker-compose.yml:docker-compose.prod.yml
+COMPOSE_PROJECT_NAME=<your CLIENT_ID>
+```
+
+After that, plain `docker compose up -d backend workers` Just Works — no `-f` or `-p` flags needed for either CD or manual ops. The CD script also passes them explicitly so it's unaffected by your local shell env, but every other invocation (incident debugging, log tailing, `docker compose exec`) benefits.
 
 ### 19.1 API error-code triage for frontend + VPS ops
 
@@ -901,6 +1001,44 @@ sudo ./svc.sh install && sudo ./svc.sh start
 ```
 
 This is the only ongoing maintenance cost of this approach (~5 minutes per client, once or twice per year).
+
+### Optional: passwordless sudo grants for full self-healing CD
+
+The deploy script (`vps-deploy.sh`) can fully self-heal two classes of state corruption in CD — Dead-container tombstones at `/var/lib/docker/containers/` (see §19.2) and Nginx config drift (see §19.3) — but only when it can run a few specific commands as root without interactive password prompts. Without these grants the script falls back to **warn + abort** behaviour: it tells the operator exactly which command to run manually, but won't fix things on its own.
+
+If you want fully hands-off recovery, add this to `/etc/sudoers.d/<runner-user>` (e.g. `/etc/sudoers.d/deploy`). Use `visudo -f /etc/sudoers.d/deploy` so syntax errors don't lock you out:
+
+```sudoers
+# Replace <runner-user> with the username the GitHub Actions runner runs as
+# (the user that owns ~/actions-runner — usually 'deploy' or 'ubuntu')
+
+# Tombstone cleanup — required for §1.75 auto-recovery
+<runner-user> ALL=(root) NOPASSWD: /usr/bin/rm -rf /var/lib/docker/containers/*
+
+# Docker daemon restart — required only if you want fully automatic recovery
+# from corrupted Compose project state (cleanup-stale-compose-state.sh's
+# equivalent). Omit this if you prefer to do daemon restarts manually.
+<runner-user> ALL=(root) NOPASSWD: /usr/bin/systemctl restart docker
+
+# Nginx auto-sync — required only if NGINX_AUTO_RELOAD=1 is set in .env
+<runner-user> ALL=(root) NOPASSWD: /usr/bin/cp /var/www/*/backend/nginx/client.conf.template /etc/nginx/sites-available/*.conf
+<runner-user> ALL=(root) NOPASSWD: /usr/sbin/nginx -t
+<runner-user> ALL=(root) NOPASSWD: /usr/bin/systemctl reload nginx
+```
+
+Then verify:
+
+```bash
+sudo -u <runner-user> sudo -n rm -rf /var/lib/docker/containers/nonexistent-test-path
+# should exit 0 with no password prompt
+```
+
+**Security note.** These grants are scoped to specific commands with specific argument patterns — they don't give the runner user general root. The container-tombstone wildcard only matches paths under `/var/lib/docker/containers/`, which is already a directory only the runner needs to touch during the cleanup pass. The nginx grants are scoped to the project's own template path. Review the entries against your VPS user model before committing.
+
+**If you don't grant these.** Both layers stay functional, just less convenient:
+
+- §1.75 still detects tombstones and aborts the deploy with a clear "run `cleanup-stale-compose-state.sh`" message. That script needs sudo itself, so you'd run it directly as the deploy user (which has sudo via `sudo bash scripts/cleanup-stale-compose-state.sh`).
+- Nginx drift detection runs in warn-only mode by default (no `NGINX_AUTO_RELOAD=1`), printing the exact `sudo cp + nginx -t + systemctl reload` command for the operator to run.
 
 ### Rollback procedure
 

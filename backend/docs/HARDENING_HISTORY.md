@@ -4,6 +4,53 @@ This document preserves detailed hardening history for engineering traceability.
 
 ## Recent hardening changes
 
+**VPS deploy hygiene — phantom-container start failure, explicit stop+rm+up sequence, fail-fast on uncleanable tombstones — May 2026:**
+
+The previous "Dead-container sweep + `--force-recreate --remove-orphans`" hardening (entry below) caught most cases but produced a new failure mode in production: when the CI runner could not delete on-disk tombstone directories at `/var/lib/docker/containers/<id>/` (no passwordless sudo for `rm`), the sweep partially succeeded — `docker rm -f` cleared the runtime record but the on-disk directory survived and the daemon kept reporting the container as `Dead` on the next listing. The subsequent `docker compose up --force-recreate` then entered Compose v2's "rename-then-replace" path:
+
+```
+Container f6b1a3c38046  Stopping
+Container f6b1a3c38046_raghava-organics-backend  Recreate   ← rename of the ghost as a "backup"
+Container f6b1a3c38046  Error while Stopping                ← ghost can't actually stop (no runtime)
+Container f6b1a3c38046  Removed
+Container f6b1a3c38046_raghava-organics-backend  Recreated  ← new canonical container created
+…
+Container raghava-organics-backend  Started                 ← new container live and healthy
+Container f6b1a3c38046  Starting                            ← Compose tries to start the renamed-away ghost
+Error response from daemon: No such container: f6b1a3c38046…
+Error: Process completed with exit code 1.
+```
+
+The new canonical containers were live and serving traffic, but Compose's bookkeeping still queued a trailing `start` call against the original ghost ID, which failed and made CD exit 1. Three consecutive deploys aborted this way before we caught it. The hardening below replaces the broken `--force-recreate` step with an explicit sequence that bypasses Compose's rename machinery entirely, and makes §1.75 abort the deploy with explicit recovery instructions when the sweep can't fully clean tombstones (instead of silently proceeding into the broken `--force-recreate` path).
+
+**Changes:**
+
+1. **`backend/scripts/vps-deploy.sh` §1.75 verification + fail-fast.** The sweep now (a) widens its scan to include `created` and `removing` containers (not just `dead`/`exited`), (b) tries privileged tombstone removal with `sudo -n` (fails silently if the runner lacks passwordless sudo), and (c) **re-runs the same query after the destructive pass and aborts the deploy** with `fail "Deploy aborted: Dead-container tombstones detected and could not be fully cleaned automatically."` if any stale containers remain. The error message includes the exact recovery command (`bash scripts/cleanup-stale-compose-state.sh <project>` on the VPS as a sudo user) and the sudoers entries needed to make this fully automatic in future runs. We'd rather fail one deploy with a clear instruction than three deploys with a misleading `No such container` trace.
+2. **`backend/scripts/vps-deploy.sh` §4 explicit stop + rm + up.** Replaced the single `docker compose up -d --force-recreate --remove-orphans` line with three discrete steps: (i) `docker compose stop backend workers redis` (graceful shutdown by service name), (ii) a loop that runs `docker rm -f ${COMPOSE_PROJECT}-backend` etc. (force-remove by canonical container name, no-op if the name doesn't exist), and (iii) `docker compose up -d --remove-orphans <services>` (fresh create, no rename machinery involved because the names are already free). Eliminates the rename-then-replace path entirely; `--remove-orphans` is preserved on the `up` so old service definitions (e.g. in-compose `postgres` from before host-Postgres migration) are still cleaned.
+3. **`backend/docs/CLIENT_VPS_SETUP_GUIDE.md` §19.2 expanded.** The Dead-container-tombstones section now describes the phantom-start failure mode explicitly, with the abridged Compose log block above as a fingerprint operators can match against, and walks through the cleanup-script recovery + optional sudoers grant for automatic recovery.
+
+**Why we removed `--force-recreate` rather than fixing Compose:** Compose v2's rename-then-replace path is the upstream behaviour for `--force-recreate`, and we can't ship a patch to docker-compose from a client repo. The cleanest defence is to put the swap entirely in our own hands: stop, rm by name, up — three commands that each do one thing and don't depend on Compose's idea of "what was here before."
+
+**Why the explicit sequence has no extra downtime vs. `--force-recreate`:** Both paths stop the old container, remove it, and create a new one. The old `--force-recreate` did all three in one `up` invocation; the new sequence splits them into three lines but executes the same actual work. Measured downtime is unchanged (~3–5 seconds per service). The Nginx maintenance page handles the window either way.
+
+**VPS deploy hygiene — Dead-container sweep, `--force-recreate --remove-orphans`, Nginx drift detection — May 2026:**
+
+A live VPS deploy uncovered three deployment-hygiene gaps that had nothing to do with the maintenance feature itself but had let stale Docker state and unsynced Nginx config silently bypass code that was already correctly built and on the VPS:
+
+1. **Dead-container tombstones from prior deploys.** Every backend/workers rebuild replaces the underlying image. If `docker image prune` ever reaped an image while a container record still referenced it (this happens after enough consecutive deploys that pile up dangling layers), the container ends up in Docker's `Dead` state. `docker rm -f` then reports "No such container" because the container is gone from Docker's runtime, but the on-disk directory at `/var/lib/docker/containers/<id>/` survives. Compose picks it up via project labels and tries to "Recreate" the container on every subsequent `docker compose up`, printing scary `Error response from daemon: No such container: <sha>` lines and — in some Compose v2 versions — refusing to start the live services until the tombstone is gone.
+2. **Manual ops without the prod overlay.** Operators reaching for `docker compose up -d backend workers` (rather than the CD script) regularly forget the `-f docker-compose.prod.yml` flag. The base `docker-compose.yml` declares an in-compose `postgres` service with `container_name: <client>-postgres` and `ports: 5432:5432`, which immediately conflicts with the host's native Postgres on the same port. The `up` half-succeeds (backend + workers start) but the failed-to-bind `postgres` container leaks a half-initialised entry that becomes the next Dead tombstone.
+3. **Nginx config drift.** Changes to `nginx/client.conf.template` in the repo do not automatically apply on the VPS — the file at `/etc/nginx/sites-available/<client>.conf` only updates when an operator manually `cp`s it and reloads. This is how the new `auth_request /_maintenance_gate` directive (added the same week as this hardening) was missed during the first attempted maintenance-mode test in production: every other part of the system was correct, but Nginx was still using the previous config and didn't gate the storefront.
+
+**Changes:**
+
+1. **`backend/scripts/vps-deploy.sh` §1.75 Dead-container sweep.** Before building, the script enumerates every container labeled `com.docker.compose.project=<this>` with `status=dead` or `status=exited`, force-removes them, and drops their on-disk tombstone directories from `/var/lib/docker/containers/`. Safe to run on every deploy: filtered by project label, so other projects on the same VPS are unaffected; only matches containers that are already not-running, so the live backend/workers/redis are never touched.
+2. **`backend/scripts/vps-deploy.sh` §4 `--force-recreate --remove-orphans` on every `up`.** Defends against the residual container references left over after step 1 and any orphaned services from older compose-file revisions (the in-compose `postgres` from before host-Postgres migration; the `jaeger` from the optional OTEL overlay).
+3. **`backend/scripts/vps-deploy.sh` §3.5 Nginx drift detection.** After migrations and before container swap, the script diffs `nginx/client.conf.template` against the live `/etc/nginx/sites-available/<project>.conf`. In default mode it logs a clear warning if they differ. With `NGINX_AUTO_RELOAD=1` in `.env`, it syncs the template, runs `nginx -t`, and reloads — failure of the test aborts the deploy so a broken config never goes live. The auto-reload requires passwordless sudo for `cp`, `nginx -t`, and `systemctl reload nginx` on the runner user; without those grants the script stays in warn-only mode.
+4. **`backend/scripts/cleanup-stale-compose-state.sh` for manual recovery.** Standalone operator tool: lists Dead/Exited containers for a given compose project, force-removes them, deletes on-disk tombstones, restarts the Docker daemon to refresh its container index, and waits for the daemon to come back. Live containers come back via `restart: unless-stopped` in `docker-compose.yml`. Documented inline with safety guarantees (only touches labeled containers; volumes untouched).
+5. **`backend/.env.example` rewritten guidance.** The `COMPOSE_FILE=docker-compose.yml:docker-compose.prod.yml` + `COMPOSE_PROJECT_NAME=<client_id>` pair was previously commented out with vague guidance. The block is now relabelled **VPS: REQUIRED** with the two specific failure modes that occur without them, plus pointers to the cleanup script if you've already accumulated Dead containers. Also adds a documented `NGINX_AUTO_RELOAD=0` entry for the new auto-reload behaviour.
+
+**Why we don't just disable image-prune in CD:** Pruning dangling images is essential on multi-client VPS hosts (we observed ~20 GB of leftover BuildKit layers after 35 deploys in 40 hours). The right answer is to clean up containers before the prune, not stop pruning — which is exactly what step 1 above does.
+
 **Maintenance mode self-heal — read-side fallback for stuck `pending` state — May 2026:**
 
 The original maintenance mode design relied entirely on a delayed BullMQ `maintenance-activation` job to flip `pending → active` after the 2-minute warning window plus drain. In production we observed a silent-failure mode where the storefront stayed accessible indefinitely after the countdown ended: the worker container had been rebuilt before the `maintenance-activation` handler landed in its image, so BullMQ saw the job name but had no matching handler — the job was marked complete and the durable state was never flipped. From the operator's perspective the countdown hit `00:00` and nothing happened.

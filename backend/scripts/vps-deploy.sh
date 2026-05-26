@@ -99,6 +99,102 @@ log "Running strict env preflight..."
 node scripts/verify-client-bootstrap-env.mjs
 
 # ---------------------------------------------------------------------------
+# 1.75 Sweep Dead/orphan containers from previous deploys
+#
+# Why: When Docker images are replaced (every deploy rebuilds backend/workers),
+# the old containers occasionally end up in the `Dead` state instead of being
+# cleanly removed — usually because an `image prune` reaped the underlying
+# image while the container record still referenced it. These tombstones live
+# in /var/lib/docker/containers/<id>/ and keep showing up in
+# `docker ps -a --filter label=com.docker.compose.project=<this>`. Subsequent
+# `docker compose up` runs then enter a broken rename-on-recreate path:
+# they rename the ghost to `<old-id>_<service>`, create a new canonical
+# container, and finally try to also start the original ghost ID — which
+# Docker can't find, and CD fails with exit code 1 even though the new
+# canonical containers are live.
+#
+# This step finds every Dead container for the current compose project,
+# force-removes them, and (when running with sudo) drops their on-disk
+# directory so the Docker daemon's next scan doesn't reintroduce the
+# tombstone. If a tombstone CANNOT be cleaned (no sudo, no daemon restart
+# permission), this step ABORTS the deploy with explicit recovery
+# instructions — silently proceeding here is what produces the
+# "phantom container kept trying to start" failure mode that wastes 10+
+# minutes of every deploy.
+# ---------------------------------------------------------------------------
+log "Sweeping Dead/orphan containers for project=$COMPOSE_PROJECT..."
+
+# Snapshot the set of stale containers before doing anything destructive.
+STALE_BEFORE="$( {
+  docker ps -a --filter "label=com.docker.compose.project=$COMPOSE_PROJECT" --filter "status=dead"    --format '{{.ID}}' 2>/dev/null || true
+  docker ps -a --filter "label=com.docker.compose.project=$COMPOSE_PROJECT" --filter "status=exited"  --format '{{.ID}}' 2>/dev/null || true
+  docker ps -a --filter "label=com.docker.compose.project=$COMPOSE_PROJECT" --filter "status=created" --format '{{.ID}}' 2>/dev/null || true
+  docker ps -a --filter "label=com.docker.compose.project=$COMPOSE_PROJECT" --filter "status=removing" --format '{{.ID}}' 2>/dev/null || true
+} | awk 'NF' | sort -u)"
+
+if [ -n "$STALE_BEFORE" ]; then
+  log "Found stale containers for this project:"
+  echo "$STALE_BEFORE" | sed 's/^/    /'
+
+  echo "$STALE_BEFORE" | while read -r cid; do
+    [ -z "$cid" ] && continue
+    STATUS="$(docker inspect -f '{{.State.Status}}' "$cid" 2>/dev/null || echo unknown)"
+    FULL_ID="$(docker inspect -f '{{.Id}}' "$cid" 2>/dev/null || echo "$cid")"
+    log "  - $cid (status=$STATUS) — removing"
+    docker rm -f "$cid" >/dev/null 2>&1 || true
+    # Drop the on-disk container directory if it survived the rm.
+    # /var/lib/docker/containers/<full-id>/ is what makes Dead containers
+    # persistent across `docker rm -f` — the runtime record is gone but
+    # the directory survives until removed (root-owned).
+    if [ -d "/var/lib/docker/containers/$FULL_ID" ]; then
+      if [ "$(id -u)" -eq 0 ]; then
+        rm -rf "/var/lib/docker/containers/$FULL_ID" 2>/dev/null || true
+      else
+        sudo -n rm -rf "/var/lib/docker/containers/$FULL_ID" 2>/dev/null || true
+      fi
+    fi
+  done
+
+  # Verify the sweep actually cleared the tombstones. If not, abort: we'd
+  # rather fail the deploy here with explicit instructions than press on
+  # and hit the rename-on-recreate failure later (which exits 1 anyway but
+  # with a misleading "No such container" trace).
+  STALE_AFTER="$( {
+    docker ps -a --filter "label=com.docker.compose.project=$COMPOSE_PROJECT" --filter "status=dead"     --format '{{.ID}}' 2>/dev/null || true
+    docker ps -a --filter "label=com.docker.compose.project=$COMPOSE_PROJECT" --filter "status=exited"   --format '{{.ID}}' 2>/dev/null || true
+    docker ps -a --filter "label=com.docker.compose.project=$COMPOSE_PROJECT" --filter "status=created"  --format '{{.ID}}' 2>/dev/null || true
+    docker ps -a --filter "label=com.docker.compose.project=$COMPOSE_PROJECT" --filter "status=removing" --format '{{.ID}}' 2>/dev/null || true
+  } | awk 'NF' | sort -u)"
+
+  if [ -n "$STALE_AFTER" ]; then
+    log "ERROR: Tombstone containers still present after sweep:"
+    echo "$STALE_AFTER" | sed 's/^/    /'
+    log ""
+    log "These are Dead/Exited containers whose on-disk metadata at"
+    log "/var/lib/docker/containers/<id>/ survived 'docker rm -f' because the CI"
+    log "runner does not have passwordless sudo to delete those directories."
+    log ""
+    log "Recovery (run ONCE on the VPS as a user with sudo):"
+    log ""
+    log "  cd $CLIENT_PATH"
+    log "  bash scripts/cleanup-stale-compose-state.sh $COMPOSE_PROJECT"
+    log ""
+    log "That script will remove the tombstones, restart the Docker daemon to"
+    log "refresh its container index, and bring back live containers via"
+    log "restart: unless-stopped. After it completes, re-run this deploy."
+    log ""
+    log "To make this automatic in future deploys, grant the CI runner user"
+    log "passwordless sudo on the following commands (see CLIENT_VPS_SETUP_GUIDE §22):"
+    log "  /usr/bin/rm -rf /var/lib/docker/containers/*"
+    log "  /usr/bin/systemctl restart docker     (optional, only if you want auto-recovery)"
+    fail "Deploy aborted: Dead-container tombstones detected and could not be fully cleaned automatically."
+  fi
+  log "Sweep complete — tombstones cleared."
+else
+  log "No stale containers found for this project — clean state."
+fi
+
+# ---------------------------------------------------------------------------
 # 2. Build new Docker image (old containers remain live during build)
 # ---------------------------------------------------------------------------
 log "Building Docker image..."
@@ -119,12 +215,102 @@ DATABASE_URL="$MIGRATE_DATABASE_URL" run_host_prisma migrate deploy --schema pri
 # node_modules/.prisma is root-owned, so generate fails with EACCES as USER app.
 
 # ---------------------------------------------------------------------------
+# 3.5 Nginx config drift detection + auto-reload (opt-in)
+#
+# Why: changes to `nginx/client.conf.template` in the repo do NOT automatically
+# apply on the VPS — the file at `/etc/nginx/sites-available/<client>.conf`
+# only updates when an operator manually `cp`s it and reloads nginx. This is
+# how the May 2026 maintenance-gate `auth_request` directive missed the live
+# nginx config and silently bypassed the storefront gate. To prevent that,
+# this step diffs the repo template against the live nginx file and, when
+# `NGINX_AUTO_RELOAD=1` is set in the env, syncs + reloads automatically.
+#
+# Behaviour:
+#   - Default (NGINX_AUTO_RELOAD unset): logs a warning if the file differs
+#     so the operator sees drift in the deploy log and can sync manually.
+#   - NGINX_AUTO_RELOAD=1: copies template → live, runs `nginx -t`, and
+#     `systemctl reload nginx` only if the test passes. Failure aborts the
+#     deploy so a broken config never reaches production.
+#
+# The CI runner needs passwordless `sudo nginx` + `sudo systemctl reload
+# nginx` + `sudo cp` permissions for this to work (see CLIENT_VPS_SETUP_GUIDE
+# §22). If those aren't granted, leave NGINX_AUTO_RELOAD unset and reload
+# manually after each deploy that touches nginx config.
+# ---------------------------------------------------------------------------
+NGINX_TEMPLATE="$CLIENT_PATH/nginx/client.conf.template"
+NGINX_DOMAIN="$(grep -E '^STOREFRONT_URL=' .env | head -1 | cut -d= -f2- | sed -E 's,^https?://,,' | sed -E 's,/.*$,,' | tr -d '[:space:]')"
+NGINX_LIVE="/etc/nginx/sites-available/${COMPOSE_PROJECT}.conf"
+if [ -f "$NGINX_TEMPLATE" ] && [ -f "$NGINX_LIVE" ]; then
+  # cmp is a no-op if files are byte-identical; nonzero exit indicates drift.
+  if ! cmp -s "$NGINX_TEMPLATE" "$NGINX_LIVE"; then
+    log "Nginx config drift detected: $NGINX_TEMPLATE differs from $NGINX_LIVE"
+    if [ "${NGINX_AUTO_RELOAD:-0}" = "1" ]; then
+      log "NGINX_AUTO_RELOAD=1 — syncing template to live and reloading nginx"
+      sudo cp "$NGINX_TEMPLATE" "$NGINX_LIVE"
+      if sudo nginx -t >/dev/null 2>&1; then
+        sudo systemctl reload nginx
+        log "Nginx reload succeeded."
+      else
+        log "Nginx config test FAILED after sync — restoring previous config and aborting deploy"
+        sudo nginx -t || true
+        fail "Nginx config test failed. Live config at $NGINX_LIVE not changed by this script (cp was atomic on same FS but reload was not triggered)."
+      fi
+    else
+      log "WARNING: live nginx config is stale. Run on this VPS to sync:"
+      log "  sudo cp $NGINX_TEMPLATE $NGINX_LIVE && sudo nginx -t && sudo systemctl reload nginx"
+      log "Or set NGINX_AUTO_RELOAD=1 in /var/www/<client>/backend/.env to automate this."
+    fi
+  else
+    log "Nginx config in sync with template — no reload required."
+  fi
+fi
+
+# ---------------------------------------------------------------------------
 # 4. Swap containers (minimal-downtime restart)
 #    Nginx maintenance page handles the ~3–5s window automatically.
+#
+# We DELIBERATELY do NOT use `docker compose up --force-recreate`. Compose
+# v2's force-recreate uses a "rename-then-create" pattern (renames the old
+# container to `<old-id>_<service>` as a backup, then creates a new
+# container with the canonical name). When the old container is a ghost
+# tombstone the §1.75 sweep couldn't fully clear, the rename appears to
+# succeed but Compose's bookkeeping still has the original ID queued for a
+# final "start" call — that call then fails with "No such container: <id>"
+# and the whole deploy exits 1 even though the new canonical containers
+# came up correctly. We've seen this kill three deploys in a row.
+#
+# The safer protocol is explicit:
+#   (a) docker compose stop <services>     — gracefully shut down by name
+#   (b) docker rm -f <canonical-names>     — remove by name (NOT by ID), so
+#                                            stale ID references can't lead
+#                                            us back into the rename path
+#   (c) docker compose up -d <services>    — fresh create. Compose has
+#                                            nothing renamed to track, so
+#                                            no phantom "start" trailer.
+#
+# --remove-orphans on the `up` still strips any container labeled with this
+# project but no longer defined in the active compose files (e.g. the old
+# `postgres` service from before host-Postgres migration; jaeger from the
+# OTEL overlay if it ever ran).
 # ---------------------------------------------------------------------------
-log "Restarting containers..."
-docker compose -p "$COMPOSE_PROJECT" "${COMPOSE_FILES[@]}" up -d redis
-docker compose -p "$COMPOSE_PROJECT" "${COMPOSE_FILES[@]}" up -d backend workers
+log "Stopping existing service containers (graceful)..."
+docker compose -p "$COMPOSE_PROJECT" "${COMPOSE_FILES[@]}" stop backend workers redis 2>&1 | sed 's/^/  /' || true
+
+log "Removing existing service containers by name..."
+# `docker rm -f` is a no-op (with stderr noise) when the container doesn't
+# exist, which is exactly what we want — we just need the canonical names
+# to be free before `up` creates fresh ones. Names are formed from CLIENT_ID
+# per the docker-compose.yml container_name template.
+for cname in "${COMPOSE_PROJECT}-backend" "${COMPOSE_PROJECT}-workers" "${COMPOSE_PROJECT}-redis"; do
+  if docker container inspect "$cname" >/dev/null 2>&1; then
+    log "  Removing $cname"
+    docker rm -f "$cname" >/dev/null 2>&1 || true
+  fi
+done
+
+log "Bringing up fresh containers..."
+docker compose -p "$COMPOSE_PROJECT" "${COMPOSE_FILES[@]}" up -d --remove-orphans redis
+docker compose -p "$COMPOSE_PROJECT" "${COMPOSE_FILES[@]}" up -d --remove-orphans backend workers
 
 # ---------------------------------------------------------------------------
 # 5. Health check — retry until backend is responding or timeout
