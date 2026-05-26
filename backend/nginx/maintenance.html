@@ -1,113 +1,120 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta http-equiv="refresh" content="15" />
-  <title>Back in a moment</title>
+  <meta name="robots" content="noindex, nofollow" />
+  <title>We'll be back shortly</title>
   <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
+    :root {
+      color-scheme: light dark;
+      --bg: #fafaf7;
+      --fg: #1a1f17;
+      --muted: #5a6452;
+      --accent: #2f6d3a;
+      --card-bg: #ffffff;
+      --border: rgba(26, 31, 23, 0.08);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0e120c;
+        --fg: #e8ebe2;
+        --muted: #98a08e;
+        --accent: #74b97c;
+        --card-bg: #161a13;
+        --border: rgba(232, 235, 226, 0.08);
+      }
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
     body {
-      min-height: 100vh;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background: var(--bg);
+      color: var(--fg);
       display: flex;
       align-items: center;
       justify-content: center;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      background: #f8f9fa;
-      color: #212529;
-      padding: 1.5rem;
+      padding: 24px;
+      line-height: 1.55;
+      -webkit-font-smoothing: antialiased;
     }
-
     .card {
-      background: #fff;
-      border-radius: 12px;
-      box-shadow: 0 4px 24px rgba(0,0,0,0.08);
-      padding: 3rem 2.5rem;
-      max-width: 480px;
+      max-width: 520px;
       width: 100%;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 40px 32px;
       text-align: center;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.04), 0 8px 24px rgba(0,0,0,0.04);
     }
-
-    .icon {
-      width: 56px;
-      height: 56px;
-      margin: 0 auto 1.5rem;
-      background: #f1f3f5;
-      border-radius: 50%;
-      display: flex;
+    .badge {
+      display: inline-flex;
       align-items: center;
-      justify-content: center;
-    }
-
-    .icon svg {
-      width: 28px;
-      height: 28px;
-      stroke: #868e96;
-      fill: none;
-      stroke-width: 2;
-      stroke-linecap: round;
-      stroke-linejoin: round;
-    }
-
-    h1 {
-      font-size: 1.375rem;
+      gap: 8px;
+      background: color-mix(in srgb, var(--accent) 14%, transparent);
+      color: var(--accent);
+      font-size: 13px;
       font-weight: 600;
-      margin-bottom: 0.75rem;
-      color: #212529;
+      letter-spacing: 0.02em;
+      padding: 6px 12px;
+      border-radius: 999px;
+      margin-bottom: 20px;
     }
-
-    p {
-      font-size: 0.9375rem;
-      color: #6c757d;
-      line-height: 1.6;
-    }
-
-    .retry {
-      margin-top: 2rem;
-      font-size: 0.8125rem;
-      color: #adb5bd;
-    }
-
-    .dot {
+    .pulse {
       display: inline-block;
-      width: 6px;
-      height: 6px;
+      width: 8px;
+      height: 8px;
       border-radius: 50%;
-      background: #adb5bd;
-      margin: 0 2px;
-      animation: pulse 1.4s ease-in-out infinite;
+      background: var(--accent);
+      box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 60%, transparent);
+      animation: pulse 1.8s ease-in-out infinite;
     }
-    .dot:nth-child(2) { animation-delay: 0.2s; }
-    .dot:nth-child(3) { animation-delay: 0.4s; }
-
     @keyframes pulse {
-      0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); }
-      40%           { opacity: 1;   transform: scale(1);   }
+      0%   { box-shadow: 0 0 0 0   color-mix(in srgb, var(--accent) 60%, transparent); }
+      70%  { box-shadow: 0 0 0 10px transparent; }
+      100% { box-shadow: 0 0 0 0   transparent; }
     }
+    h1 {
+      font-size: 24px;
+      font-weight: 600;
+      margin: 0 0 12px;
+      letter-spacing: -0.01em;
+    }
+    p {
+      font-size: 15px;
+      color: var(--muted);
+      margin: 0 0 8px;
+    }
+    p.subtle {
+      font-size: 13px;
+      margin-top: 24px;
+      color: color-mix(in srgb, var(--muted) 70%, transparent);
+    }
+    .countdown {
+      font-variant-numeric: tabular-nums;
+      font-weight: 600;
+      color: var(--fg);
+    }
+    a {
+      color: var(--accent);
+      text-decoration: none;
+      font-weight: 500;
+    }
+    a:hover { text-decoration: underline; }
   </style>
 </head>
 <body>
-  <div class="card">
-    <div class="icon">
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <circle cx="12" cy="12" r="10"/>
-        <polyline points="12 6 12 12 16 14"/>
-      </svg>
-    </div>
-
-    <h1>We&rsquo;ll be right back</h1>
-    <p>
-      We&rsquo;re performing a brief system update.<br />
-      This usually takes less than a minute.
-    </p>
-
-    <div class="retry" aria-live="polite">
-      Checking again automatically
-      <span class="dot"></span>
-      <span class="dot"></span>
-      <span class="dot"></span>
-    </div>
-  </div>
+  <main class="card" role="main" aria-live="polite">
+    <span class="badge">
+      <span class="pulse" aria-hidden="true"></span>
+      Maintenance in progress
+    </span>
+    <h1>We&rsquo;ll be back shortly</h1>
+    <p>Our team is performing a scheduled update so we can keep things running smoothly.</p>
+    <p>This page will refresh automatically every <span class="countdown">15</span> seconds &mdash; thanks for your patience.</p>
+    <p class="subtle">If you arrived here mid-checkout, your cart is safe and any payment you completed will be processed.</p>
+  </main>
 </body>
 </html>

@@ -240,6 +240,48 @@ DATABASE_URL="$MIGRATE_DATABASE_URL" run_host_prisma migrate deploy --schema pri
 NGINX_TEMPLATE="$CLIENT_PATH/nginx/client.conf.template"
 NGINX_DOMAIN="$(grep -E '^STOREFRONT_URL=' .env | head -1 | cut -d= -f2- | sed -E 's,^https?://,,' | sed -E 's,/.*$,,' | tr -d '[:space:]')"
 NGINX_LIVE="/etc/nginx/sites-available/${COMPOSE_PROJECT}.conf"
+NGINX_MAINTENANCE_SRC="$CLIENT_PATH/nginx/maintenance.html"
+NGINX_MAINTENANCE_DST="/etc/nginx/maintenance/maintenance.html"
+
+# 3.5a Install / refresh the static maintenance.html the nginx config references.
+#
+# The nginx template has `error_page 502 503 /maintenance.html;` mapped to
+# `location = /maintenance.html { root /etc/nginx/maintenance; internal; }`,
+# so the live nginx process expects a file at /etc/nginx/maintenance/maintenance.html.
+# When that file is missing, ANY backend 5xx — including the auth_request gate
+# returning timeout — collapses to "nginx tries to serve missing maintenance.html
+# → falls back to its built-in 500 page". That's an incident-grade bug because
+# routine backend slowness now looks like a fatal site outage instead of a
+# friendly maintenance page.
+#
+# This step installs the maintenance page on every deploy. Idempotent: cp only
+# rewrites the file when content differs (cmp -s check), so a no-op deploy
+# touches nothing. Requires the same sudoers grants as the nginx auto-reload
+# below (see CLIENT_VPS_SETUP_GUIDE §22 "Optional: passwordless sudo grants").
+if [ -f "$NGINX_MAINTENANCE_SRC" ]; then
+  if [ ! -f "$NGINX_MAINTENANCE_DST" ] || ! cmp -s "$NGINX_MAINTENANCE_SRC" "$NGINX_MAINTENANCE_DST"; then
+    log "Installing maintenance page to $NGINX_MAINTENANCE_DST"
+    sudo mkdir -p "$(dirname "$NGINX_MAINTENANCE_DST")" 2>/dev/null || true
+    if sudo -n cp "$NGINX_MAINTENANCE_SRC" "$NGINX_MAINTENANCE_DST" 2>/dev/null; then
+      log "Maintenance page installed."
+    else
+      log "WARNING: could not install maintenance page (no passwordless sudo for cp)."
+      log "Without it, any backend 5xx — including transient maintenance gate timeouts —"
+      log "will surface as nginx's bare default 500 page instead of the friendly downtime page."
+      log "Run on the VPS once to fix:"
+      log "  sudo mkdir -p $(dirname "$NGINX_MAINTENANCE_DST")"
+      log "  sudo cp $NGINX_MAINTENANCE_SRC $NGINX_MAINTENANCE_DST"
+    fi
+  else
+    log "Maintenance page already in sync — no change."
+  fi
+else
+  log "WARNING: $NGINX_MAINTENANCE_SRC not found in repo. The nginx template references"
+  log "/maintenance.html via error_page — without the source file present, any 502/503 from"
+  log "the backend (including auth_request gate timeouts) will fall back to nginx's"
+  log "default 500 page. Ensure backend/nginx/maintenance.html exists in the repo."
+fi
+
 if [ -f "$NGINX_TEMPLATE" ] && [ -f "$NGINX_LIVE" ]; then
   # cmp is a no-op if files are byte-identical; nonzero exit indicates drift.
   if ! cmp -s "$NGINX_TEMPLATE" "$NGINX_LIVE"; then
