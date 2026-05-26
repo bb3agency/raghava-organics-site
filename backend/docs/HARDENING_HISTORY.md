@@ -4,6 +4,49 @@ This document preserves detailed hardening history for engineering traceability.
 
 ## Recent hardening changes
 
+**Bare nginx 503 page during maintenance — two-hop `error_page` chain didn't honour `recursive_error_pages off;` — May 2026:**
+
+Sibling bug to the file-install issue below, found while troubleshooting Raghava Organics on the same day. After the static `maintenance.html` was correctly installed at `/etc/nginx/maintenance/maintenance.html` AND all duplicate server-name conflicts were cleaned out of `sites-enabled/`, hitting the storefront during active maintenance **still** returned nginx's compiled-in bare 503 page (206 bytes) instead of the branded page or the inline fallback.
+
+The gate flow was:
+
+```
+auth_request /_maintenance_gate;            # subrequest → 401 (maintenance active)
+error_page 401 = @maintenance_block;        # nginx routes to named location
+location @maintenance_block { return 503; } # returns 503 from inside an error_page handler
+```
+
+…with the intent that the 503 would flow into the server-level `error_page 502 503 /maintenance.html;`. It didn't. Nginx's `recursive_error_pages` directive is `off` by default — meaning an error that occurs **during** error_page processing of another error does NOT trigger a second error_page lookup. So the 503 produced inside `@maintenance_block` (which itself is an error_page handler for the 401) skipped the `error_page 502 503` rule entirely and fell through to nginx's compiled-in default 503 page.
+
+Reproduction (in a 20-line nginx test config, no auth_request needed — any two-hop error_page chain shows it):
+
+```nginx
+error_page 502 503 /will-not-be-used;
+location @intermediate { internal; return 503; }
+location = /probe {
+  error_page 418 = @intermediate;
+  return 418;
+}
+# curl /probe → HTTP 503 with body length 197 (nginx default), NOT /will-not-be-used
+```
+
+The original template author intended `@maintenance_block` to centralise the 503 fan-in for "diagnostic visibility" (per template comments). But the diagnostic value was negative — it broke the very flow it was meant to make observable.
+
+**Fix:** replace each gated location's `error_page 401 = @maintenance_block;` with the single-hop `error_page 401 =503 /maintenance.html;`. The `=503` syntax simultaneously routes to `/maintenance.html` AND rewrites the response status from 401 to 503 in a single error_page operation — no recursion needed. `@maintenance_block` is deleted entirely. The `/maintenance.html` handler then runs its `try_files` (file → static styled page; missing → `@maintenance_inline` fallback) and the outer `=503` rewrite ensures the wire status is always 503 regardless of which branch wins.
+
+Verified end-to-end with an nginx Alpine container running the rendered template with an `auth_request` gate forced to 401:
+
+| Scenario | Status | Content-Length | Body |
+|---|---|---|---|
+| `/maintenance.html` missing on disk | 503 | 1812 | `@maintenance_inline` (inline branded HTML) |
+| `/maintenance.html` present on disk | 503 | 3631 | Full styled `maintenance.html` |
+
+Both responses correctly carry `Cache-Control: no-store, no-cache, must-revalidate` and `Retry-After: 15`.
+
+**Why we did not enable `recursive_error_pages on;` instead:** that flag has subtle interactions with `proxy_intercept_errors` and adds globally-applicable behavior across every location — including upstream-proxied paths. The single-hop pattern is strictly more local and strictly more predictable: one nginx error_page lookup per request, period.
+
+**Detection signature for regressions:** during active maintenance on a properly-configured stack, `curl -sI https://<domain>/` should return `Content-Length: 3631` (or `1812` if the static file was deleted). Any other size — especially the `Content-Length: 206` smoking gun — means we've reintroduced the two-hop pattern. The integration test for the maintenance gate should assert on Content-Length explicitly, not just the 503 status.
+
 **Bare nginx 503 page during maintenance — `maintenance.html` install bypassed silently — May 2026:**
 
 Operator on Raghava Organics triggered maintenance and the storefront returned the **bare Nginx 503 page** ("503 Service Temporarily Unavailable" + `nginx/1.28.3 (Ubuntu)` footer) instead of the branded "We'll be back shortly" page. The maintenance gate itself was working perfectly (auth_request 401 → `@maintenance_block` 503 → `error_page 502 503 /maintenance.html;`); the failure was one step deeper. Nginx tried to read `/etc/nginx/maintenance/maintenance.html`, found nothing on disk, and fell back to its compiled-in default page — which is the worst possible user experience for what should be a friendly downtime moment.

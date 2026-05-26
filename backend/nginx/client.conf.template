@@ -49,11 +49,27 @@ server {
   #              `ALWAYS_ALLOWED_PREFIXES`).
   #        401 — request blocked (maintenance is active for this path).
   #   3. On 401, Nginx's `auth_request` natively rejects the outer request.
-  #      The gated `location` catches it via `error_page 401 = @maintenance_block;`
-  #      (scoped to that location) which routes to the named location below
-  #      and returns 503.
-  #   4. The 503 flows into `error_page 502 503 /maintenance.html;` and the
-  #      static downtime page is served with a `Retry-After: 15` hint.
+  #      The gated `location` catches it via
+  #      `error_page 401 =503 /maintenance.html;` (scoped to that location),
+  #      which performs a SINGLE-HOP internal redirect to /maintenance.html
+  #      AND rewrites the response status from 401 to 503 via the `=503`
+  #      override. The /maintenance.html handler then serves the static
+  #      branded page (or the inline fallback if the file is missing).
+  #
+  # Why single-hop instead of routing through a `@maintenance_block` named
+  # location (the previous pattern):
+  # Nginx by default has `recursive_error_pages off;`. With that setting,
+  # if `error_page 401 = @maintenance_block;` routes to a named location
+  # that does `return 503;`, the resulting 503 does NOT trigger the
+  # server-level `error_page 502 503 /maintenance.html;` (that would
+  # require `recursive_error_pages on;`, which has subtle interactions
+  # with `proxy_intercept_errors` we deliberately avoid). The result on
+  # the wire was nginx's compiled-in bare default 503 page (206 bytes,
+  # "nginx/1.x (Ubuntu)" footer) instead of the styled maintenance page.
+  # The single-hop `error_page 401 =503 /maintenance.html;` pattern routes
+  # directly to the maintenance handler in one nginx error_page lookup —
+  # no recursion needed. See HARDENING_HISTORY.md
+  # "May 2026 — Maintenance gate served bare 503 instead of branded page".
   #
   # Why 401 + error_page (and NOT the previous 200+header+`if` pattern):
   # `if` inside a `location` runs in Nginx's REWRITE phase — BEFORE `auth_request`
@@ -112,16 +128,16 @@ server {
     return 503 '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><meta http-equiv="refresh" content="15"/><meta name="robots" content="noindex,nofollow"/><title>We will be back shortly</title><style>*{box-sizing:border-box}html,body{height:100%;margin:0}body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;background:#fafaf7;color:#1a1f17;display:flex;align-items:center;justify-content:center;padding:24px;line-height:1.55;-webkit-font-smoothing:antialiased}@media (prefers-color-scheme:dark){body{background:#0e120c;color:#e8ebe2}.card{background:#161a13!important;border-color:rgba(232,235,226,0.08)!important}.muted{color:#98a08e!important}}.card{max-width:520px;width:100%;background:#fff;border:1px solid rgba(26,31,23,0.08);border-radius:16px;padding:40px 32px;text-align:center;box-shadow:0 1px 2px rgba(0,0,0,0.04),0 8px 24px rgba(0,0,0,0.04)}.badge{display:inline-block;background:rgba(47,109,58,0.14);color:#2f6d3a;font-size:13px;font-weight:600;letter-spacing:0.02em;padding:6px 12px;border-radius:999px;margin-bottom:20px}h1{font-size:24px;font-weight:600;margin:0 0 12px;letter-spacing:-0.01em}p{font-size:15px;color:#5a6452;margin:0 0 8px}.muted{font-size:13px;margin-top:24px;color:rgba(90,100,82,0.7)}</style></head><body><main class="card" role="main" aria-live="polite"><span class="badge">Maintenance in progress</span><h1>We&rsquo;ll be back shortly</h1><p>Our team is performing a scheduled update so we can keep things running smoothly.</p><p>This page will refresh automatically every 15 seconds &mdash; thanks for your patience.</p><p class="muted">If you arrived here mid-checkout, your cart is safe and any payment you completed will be processed.</p></main></body></html>';
   }
 
-  # Named location that every gated location's `error_page 401 = @maintenance_block`
-  # redirects to. We could `return 503` directly from the error_page directive
-  # but routing through a named location keeps the 503 fan-in obvious and gives
-  # us a single place to add diagnostics (e.g. a debug header) if we ever need
-  # to confirm the path took the maintenance flow vs. a genuine 401 from
-  # `auth_request` itself.
-  location @maintenance_block {
-    internal;
-    return 503;
-  }
+  # NOTE: A previous version of this template had an extra `@maintenance_block`
+  # named location that each gated location's `error_page 401 = @maintenance_block`
+  # routed through (which then did `return 503;`). That two-hop pattern was
+  # structurally broken because nginx's default `recursive_error_pages off;`
+  # prevents the second-hop 503 from triggering the server-level
+  # `error_page 502 503 /maintenance.html;` — the result on the wire was
+  # nginx's bare default 503 page. We replaced that with the single-hop
+  # `error_page 401 =503 /maintenance.html;` pattern in each gated location
+  # (the `=503` rewrites status, the URI does the redirect — one operation).
+  # See HARDENING_HISTORY.md "May 2026 — Maintenance gate served bare 503".
 
   # ── Maintenance gate subrequest ─────────────────────────────────────────────
   # Internal-only proxy to the backend's `auth_request` endpoint. Each
@@ -190,12 +206,12 @@ server {
 
   location ~ ^/api/v1/(orders|payments/(initiate|verify)) {
     # Checkout mutations are gated by the maintenance auth_request. During
-    # `maintenance/active` the gate returns 401, which @maintenance_block
-    # converts to a 503 → maintenance.html before any request body reaches
-    # the backend, protecting customers from starting a doomed checkout
-    # during the downtime window.
+    # `maintenance/active` the gate returns 401; `error_page 401 =503 /maintenance.html`
+    # rewrites that to a 503 served from the maintenance handler before any
+    # request body reaches the backend, protecting customers from starting a
+    # doomed checkout during the downtime window.
     auth_request /_maintenance_gate;
-    error_page 401 = @maintenance_block;
+    error_page 401 =503 /maintenance.html;
     limit_req zone=api_checkout burst=12 nodelay;
 
     proxy_pass http://127.0.0.1:${BACKEND_PORT};
@@ -210,7 +226,7 @@ server {
 
   location ~ ^/api/v1/admin/ {
     auth_request /_maintenance_gate;
-    error_page 401 = @maintenance_block;
+    error_page 401 =503 /maintenance.html;
     limit_req zone=api_admin burst=15 nodelay;
 
     proxy_pass http://127.0.0.1:${BACKEND_PORT};
@@ -225,7 +241,7 @@ server {
 
   location ~ ^/api/v1/(products|reviews|shipping/track)/ {
     auth_request /_maintenance_gate;
-    error_page 401 = @maintenance_block;
+    error_page 401 =503 /maintenance.html;
     limit_req zone=api_catalog burst=40 nodelay;
 
     proxy_pass http://127.0.0.1:${BACKEND_PORT};
@@ -240,7 +256,7 @@ server {
 
   location ~ ^/api/v1/(cart|wishlist|users/me)/ {
     auth_request /_maintenance_gate;
-    error_page 401 = @maintenance_block;
+    error_page 401 =503 /maintenance.html;
     limit_req zone=api_cart burst=20 nodelay;
 
     proxy_pass http://127.0.0.1:${BACKEND_PORT};
@@ -326,7 +342,7 @@ server {
     # Catch-all API gate — everything not matched above (catalog read-only
     # endpoints, public endpoints, etc.) is still subject to maintenance.
     auth_request /_maintenance_gate;
-    error_page 401 = @maintenance_block;
+    error_page 401 =503 /maintenance.html;
     limit_req zone=api_default burst=20 nodelay;
 
     proxy_pass http://127.0.0.1:${BACKEND_PORT};
@@ -354,13 +370,14 @@ server {
 
   location / {
     # Storefront root. The maintenance gate runs first in the access phase;
-    # if it returns 401 the @maintenance_block named location returns 503,
-    # which Nginx maps to /maintenance.html via `error_page 502 503` so
-    # users never see a half-rendered React tree during the downtime.
-    # Ops console (`/ops/*`) lives in its own location above and is exempt
-    # by virtue of more specific matching.
+    # if it returns 401, the single-hop `error_page 401 =503 /maintenance.html;`
+    # rewrites the status to 503 and serves the maintenance page in one
+    # operation, so users never see a half-rendered React tree (or nginx's
+    # bare default 503 page) during the downtime. Ops console (`/ops/*`)
+    # lives in its own location above and is exempt by virtue of more
+    # specific matching.
     auth_request /_maintenance_gate;
-    error_page 401 = @maintenance_block;
+    error_page 401 =503 /maintenance.html;
 
     proxy_pass http://127.0.0.1:${STOREFRONT_PORT};
     proxy_http_version 1.1;
