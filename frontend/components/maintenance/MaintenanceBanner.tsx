@@ -9,7 +9,9 @@ import {
   type MaintenanceStatus,
 } from "@/lib/maintenance-client";
 
-const POLL_INTERVAL_NORMAL_MS = 60_000;
+// Keep normal-mode polling reasonably fast so users see the maintenance banner
+// shortly after ops schedules it (without requiring any navigation/refresh).
+const POLL_INTERVAL_NORMAL_MS = 10_000;
 const POLL_INTERVAL_PENDING_MS = 5_000;
 const COUNTDOWN_TICK_MS = 1_000;
 
@@ -68,36 +70,56 @@ export function MaintenanceBanner() {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
 
-    const poll = async () => {
+    const poll = async (forced = false) => {
       try {
         const next = await fetchMaintenanceStatus();
         if (!cancelled) {
           setStatus(next);
         }
+        if (!cancelled && !forced) {
+          const interval =
+            next.mode === "maintenance" && next.phase === "pending"
+              ? POLL_INTERVAL_PENDING_MS
+              : POLL_INTERVAL_NORMAL_MS;
+          timer = setTimeout(() => void poll(), interval);
+        }
       } catch {
         // Backend unreachable — keep last-known status. If the backend is
         // down we already render whatever we last knew (possibly nothing),
         // which is the most conservative default.
-      }
-      if (!cancelled) {
-        const interval =
-          status && status.mode === "maintenance" && status.phase === "pending"
-            ? POLL_INTERVAL_PENDING_MS
-            : POLL_INTERVAL_NORMAL_MS;
-        timer = setTimeout(poll, interval);
+        if (!cancelled && !forced) {
+          timer = setTimeout(() => void poll(), POLL_INTERVAL_NORMAL_MS);
+        }
       }
     };
 
+    const triggerImmediatePoll = () => {
+      if (cancelled) return;
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      // `forced=true` means "don't schedule from this invocation"; the next
+      // scheduled cadence is handled by the regular poll loop.
+      void poll(true);
+      // Re-arm normal cadence immediately after the forced poll so we don't
+      // accidentally pause polling due to repeated focus/visibility events.
+      timer = setTimeout(() => void poll(), POLL_INTERVAL_NORMAL_MS);
+    };
+
     void poll();
+    window.addEventListener("focus", triggerImmediatePoll);
+    window.addEventListener("online", triggerImmediatePoll);
+    document.addEventListener("visibilitychange", triggerImmediatePoll);
+
     return () => {
       cancelled = true;
       if (timer) clearTimeout(timer);
+      window.removeEventListener("focus", triggerImmediatePoll);
+      window.removeEventListener("online", triggerImmediatePoll);
+      document.removeEventListener("visibilitychange", triggerImmediatePoll);
     };
-    // We intentionally re-create the polling loop when the phase flips so
-    // the cadence adjusts. `status` is stable per phase change so this won't
-    // loop in normal mode.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpsRoute, status?.phase, status?.mode]);
+  }, [isOpsRoute]);
 
   useEffect(() => {
     if (!status || status.phase !== "pending") return;

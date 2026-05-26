@@ -49,38 +49,50 @@
 }
 
 :root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
+  /* Raghava Organics — Tasty Daily palette */
+  /* Background: warm cream #faf3ef */
+  --background: oklch(0.974 0.010 68);
+  /* Foreground: near-black #212121 */
+  --foreground: oklch(0.165 0 0);
+  /* Card: slightly lighter warm white */
+  --card: oklch(0.987 0.005 65);
+  --card-foreground: oklch(0.165 0 0);
+  --popover: oklch(0.987 0.005 65);
+  --popover-foreground: oklch(0.165 0 0);
+  /* Primary: deep forest green #23403d */
+  --primary: oklch(0.272 0.045 178);
   --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
+  /* Secondary: warm light surface */
+  --secondary: oklch(0.952 0.010 60);
+  --secondary-foreground: oklch(0.272 0.045 178);
+  /* Muted: warm gray */
+  --muted: oklch(0.952 0.010 60);
+  --muted-foreground: oklch(0.52 0.008 55);
+  /* Accent: peach/coral #ec6e55 */
+  --accent: oklch(0.64 0.155 28);
+  --accent-foreground: oklch(0.985 0 0);
   --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
+  /* Borders: warm light #efe8e4 */
+  --border: oklch(0.924 0.012 60);
+  --input: oklch(0.924 0.012 60);
+  --ring: oklch(0.272 0.045 178);
+  /* Charts */
+  --chart-1: oklch(0.272 0.045 178);
+  --chart-2: oklch(0.64 0.155 28);
+  --chart-3: oklch(0.52 0.04 160);
+  --chart-4: oklch(0.75 0.12 85);
+  --chart-5: oklch(0.85 0.06 70);
+  /* Radius: 10px to match design */
   --radius: 0.625rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
+  /* Sidebar (ops console) */
+  --sidebar: oklch(0.952 0.010 60);
+  --sidebar-foreground: oklch(0.165 0 0);
+  --sidebar-primary: oklch(0.272 0.045 178);
   --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+  --sidebar-accent: oklch(0.924 0.012 60);
+  --sidebar-accent-foreground: oklch(0.272 0.045 178);
+  --sidebar-border: oklch(0.924 0.012 60);
+  --sidebar-ring: oklch(0.272 0.045 178);
 }
 
 .dark {

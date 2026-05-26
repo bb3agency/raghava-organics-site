@@ -17,7 +17,9 @@ export function PriceDisplay({
           {formatPrice(originalPricePaise)}
         </span>
       ) : null}
-      <span className="text-base font-semibold">{formatPrice(pricePaise)}</span>
+      <span className={`text-base font-bold ${typeof originalPricePaise === "number" && originalPricePaise > pricePaise ? "text-accent" : "text-foreground"}`}>
+        {formatPrice(pricePaise)}
+      </span>
     </div>
   );
 }

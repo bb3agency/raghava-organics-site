@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ShoppingBag, User } from "lucide-react";
+import { ShoppingBag, User, Search, LogOut, LayoutDashboard } from "lucide-react";
 import { useAuthStore } from "@/stores/auth";
 import { canAccessAdmin } from "@/lib/permissions";
 import { logoutSession } from "@/lib/auth-api";
@@ -18,6 +18,8 @@ export function MainNav() {
   const accessToken = useAuthStore((s) => s.accessToken);
   const clearSession = useAuthStore((s) => s.clearSession);
   const clearCart = useCartStore((s) => s.clearCart);
+  const cartItems = useCartStore((s) => s.items);
+  const cartCount = cartItems.reduce((sum, item) => sum + item.quantity, 0);
   const isSignedIn = Boolean(user);
   const showAdmin = canAccessAdmin(user);
 
@@ -34,54 +36,77 @@ export function MainNav() {
   };
 
   return (
-    <nav
-      className="flex items-center gap-6 text-sm font-medium"
-      aria-label="Main"
-    >
-      <Link href="/products" className="hover:text-foreground/80">
-        Shop
+    <div className="flex shrink-0 items-center gap-1">
+      {/* Search */}
+      <Link
+        href="/search"
+        className="inline-flex size-9 items-center justify-center rounded-full text-foreground/70 transition-colors hover:bg-secondary hover:text-primary"
+        aria-label="Search products"
+      >
+        <Search className="size-4" aria-hidden />
       </Link>
+
+      {/* Cart */}
       <Link
         href="/cart"
-        className="inline-flex items-center gap-1 hover:text-foreground/80"
-        aria-label="Shopping cart"
+        className="relative inline-flex size-9 items-center justify-center rounded-full text-foreground/70 transition-colors hover:bg-secondary hover:text-primary"
+        aria-label={`Shopping cart${cartCount > 0 ? ` (${cartCount} items)` : ""}`}
       >
         <ShoppingBag className="size-4" aria-hidden />
-        Cart
+        {cartCount > 0 && (
+          <span className="absolute -right-0.5 -top-0.5 flex size-4 items-center justify-center rounded-full bg-accent text-[10px] font-bold leading-none text-accent-foreground">
+            {cartCount > 9 ? "9+" : cartCount}
+          </span>
+        )}
       </Link>
+
+      {/* Admin shortcut */}
       {showAdmin ? (
         <Link
           href="/admin"
-          className="hover:text-foreground/80"
+          className="inline-flex size-9 items-center justify-center rounded-full text-foreground/70 transition-colors hover:bg-secondary hover:text-primary"
           aria-label="Admin dashboard"
         >
-          Admin
+          <LayoutDashboard className="size-4" aria-hidden />
         </Link>
       ) : null}
+
+      {/* Account / Sign in */}
       {isSignedIn ? (
         <>
           <Link
             href="/dashboard"
-            className="inline-flex items-center gap-1 hover:text-foreground/80"
+            className="inline-flex size-9 items-center justify-center rounded-full text-foreground/70 transition-colors hover:bg-secondary hover:text-primary"
             aria-label="Your account"
           >
             <User className="size-4" aria-hidden />
-            Account
           </Link>
           <button
             type="button"
             onClick={onSignOut}
-            className="hover:text-foreground/80"
+            className="inline-flex size-9 items-center justify-center rounded-full text-foreground/70 transition-colors hover:bg-secondary hover:text-primary"
             aria-label="Sign out"
           >
-            Sign out
+            <LogOut className="size-4" aria-hidden />
           </button>
         </>
       ) : (
-        <Link href="/login" className="hover:text-foreground/80">
+        <Link
+          href="/login"
+          className="ml-1 inline-flex h-9 items-center justify-center rounded-full bg-primary px-4 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
+        >
           Sign in
         </Link>
       )}
-    </nav>
+
+      {/* Mobile: Shop link */}
+      <Link
+        href="/products"
+        className="ml-1 inline-flex h-9 items-center justify-center rounded-full border border-border px-4 text-sm font-medium transition-colors hover:bg-secondary md:hidden"
+        aria-label="Browse all products"
+      >
+        Shop
+      </Link>
+    </div>
   );
 }
