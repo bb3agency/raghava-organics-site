@@ -748,7 +748,8 @@ Safety note: run `contract:admin` only against a controlled non-production targe
 | Maintenance mode set but storefront still accessible after countdown | (a) Workers image stale → rebuild + restart; or (b) Nginx config drift → see §19.3; or (c) wait 7 min for read-side self-heal |
 | `docker compose up` fails with `failed to bind host port 0.0.0.0:5432/tcp` | Missing prod overlay — see §19.4 |
 | Recently-pushed nginx changes not actually live | Nginx config drift — see §19.3 |
-| Storefront shows **bare** `nginx/1.x (Ubuntu)` 500 page (not the friendly maintenance page) but `/ops` reaches the React shell | Maintenance gate auth_request failing OR `maintenance.html` not deployed — see §19.5 |
+| Storefront shows **bare** `nginx/1.x (Ubuntu)` 500/503 page (not the friendly maintenance page) but `/ops` reaches the React shell | Maintenance gate auth_request failing OR `maintenance.html` not deployed — see §19.5. Post-2026-05-26: a missing `maintenance.html` now serves a minimal inline branded page instead of nginx's default. Bare nginx page = gate subrequest itself is failing (case A). |
+| Storefront shows a **minimal "We'll be back shortly"** page during maintenance (no rich styling, no dark-mode handling) | The full styled `maintenance.html` is not on disk. Run `sudo bash scripts/install-maintenance-page.sh` on the VPS — see §19.5 Recovery. |
 
 ### 19.2 Dead-container tombstones — two failure modes (`No such container: <sha>`)
 
@@ -863,9 +864,11 @@ COMPOSE_PROJECT_NAME=<your CLIENT_ID>
 
 After that, plain `docker compose up -d backend workers` Just Works — no `-f` or `-p` flags needed for either CD or manual ops. The CD script also passes them explicitly so it's unaffected by your local shell env, but every other invocation (incident debugging, log tailing, `docker compose exec`) benefits.
 
-### 19.5 Storefront returns bare `nginx/1.x (Ubuntu)` 500 (maintenance gate / maintenance.html)
+### 19.5 Storefront returns bare `nginx/1.x (Ubuntu)` 5xx (maintenance gate / maintenance.html)
 
-**Symptom.** Hitting the storefront (`https://<domain>/`) returns the **bare Nginx default 500 page** — black on white, "500 Internal Server Error" + the Nginx version banner. The friendly maintenance page is NOT shown. Meanwhile `/ops` reaches its React shell ("Authenticating ops session…" loading state) because that location bypasses the maintenance gate.
+**Symptom (pre-2026-05-26).** Hitting the storefront (`https://<domain>/`) returns the **bare Nginx default 500/503 page** — black on white, "5xx ..." headline + the Nginx version banner. The friendly maintenance page is NOT shown. Meanwhile `/ops` reaches its React shell ("Authenticating ops session…" loading state) because that location bypasses the maintenance gate.
+
+**Symptom (post-2026-05-26 with the inline fallback).** With the inline fallback now present in `nginx/client.conf.template`, a missing `maintenance.html` no longer falls through to nginx's compiled-in page. You'll instead see a **minimal branded "We'll be back shortly"** page (`@maintenance_inline`). That's acceptable but **not the full styled experience** — for that the static file still needs to be installed on disk. Reproduce by deleting `/etc/nginx/maintenance/maintenance.html` and triggering maintenance: you should now see the inline page, not the bare nginx default.
 
 **Why this happens.** The Nginx template wires every storefront/admin/`/api/` location to a subrequest gate. As of the 2026-05-26 fix (see `docs/HARDENING_HISTORY.md` "Maintenance gate bypass"), the canonical pattern is:
 
@@ -886,12 +889,12 @@ location @maintenance_block {
 
 The previous template (pre-2026-05-26) used `auth_request_set $maintenance_active …` + `if ($maintenance_active = "1") { return 503; }`, which was structurally broken — `if` runs in Nginx's REWRITE phase before `auth_request` populates the variable in the ACCESS phase, so the `if` never fired and traffic was never blocked. If you see that pattern in any live config, it is stale — re-render `nginx/client.conf.template` via `envsubst` (see §19.3 below) and reload.
 
-Two distinct failure modes can still produce the **bare 500 page**:
+Two distinct failure modes can produce a degraded maintenance experience:
 
-| Failure | What happens | What to look for |
-|---|---|---|
-| **A. Gate subrequest itself fails** (backend `/api/v1/maintenance/gate` times out, refuses connection, or returns a 5xx that isn't 401/403) | Nginx's `auth_request` semantics: any non-2xx-other-than-401/403 from the subrequest → return 500 directly to client. `error_page 502 503` does NOT fire on a 500. | Nginx error log: `auth request unexpected status: 500` or `upstream timed out (110: Connection timed out) while reading response header from upstream, subrequest: "/_maintenance_gate"` |
-| **B. Gate succeeds with 401 (maintenance active) OR upstream returns 502/503**, but `/etc/nginx/maintenance/maintenance.html` is missing | `error_page 502 503 /maintenance.html` fires → Nginx tries to serve the missing file → falls back to its compiled-in default 500 page | Nginx error log: `open() "/etc/nginx/maintenance/maintenance.html" failed (2: No such file or directory)` |
+| Failure | What happens (pre-2026-05-26) | What happens (post-2026-05-26 with `@maintenance_inline`) | What to look for |
+|---|---|---|---|
+| **A. Gate subrequest itself fails** (backend `/api/v1/maintenance/gate` times out, refuses connection, or returns a 5xx that isn't 401/403) | Nginx's `auth_request` semantics: any non-2xx-other-than-401/403 from the subrequest → return 500 directly to client. `error_page 502 503` does NOT fire on a 500. | Same — `error_page 502 503` still does not fire on a 500. The inline fallback only catches 502/503. | Nginx error log: `auth request unexpected status: 500` or `upstream timed out (110: Connection timed out) while reading response header from upstream, subrequest: "/_maintenance_gate"` |
+| **B. Gate succeeds with 401 (maintenance active) OR upstream returns 502/503**, but `/etc/nginx/maintenance/maintenance.html` is missing | `error_page 502 503 /maintenance.html` fires → Nginx tries to serve the missing file → falls back to its compiled-in default 500 page. **Bare nginx 5xx page shown.** | `try_files $uri @maintenance_inline` inside `location = /maintenance.html` catches the missing file and routes to the inline fallback. **Minimal branded page shown — never the bare nginx default.** | Nginx error log: `open() "/etc/nginx/maintenance/maintenance.html" failed (2: No such file or directory)` (still emitted because nginx attempts the static file first; this is normal under the inline-fallback design). |
 
 `/ops` works (loads HTML) because the `location ^~ /ops` block in the template doesn't call `auth_request` — it proxies directly to the Next.js frontend port. `/ops` then fetches `/api/v1/ops/session`, which also bypasses the gate via `location ~ ^/api/v1/ops/`. If the backend itself is slow or unhealthy, that fetch hangs and the React shell stays on "Authenticating ops session…" — same root cause, different presentation.
 
@@ -949,12 +952,17 @@ docker logs raghava-organics-backend --tail 200 2>&1 | grep -iE 'maintenance|gat
 **Recovery.**
 
 ```bash
-# 1. Install the static maintenance page so error_page → /maintenance.html resolves.
-#    This is what the CD script now does automatically on every deploy; doing it
-#    manually fixes an existing live install.
+# 1. Install the static maintenance page so error_page → /maintenance.html resolves
+#    to the FULL styled experience (instead of the minimal inline fallback).
+#    Use the helper script — it validates source, creates the directory, copies
+#    with the right permissions, and verifies the live nginx config references
+#    the page. Idempotent.
 cd /var/www/raghava-organics/backend
-sudo mkdir -p /etc/nginx/maintenance
-sudo cp nginx/maintenance.html /etc/nginx/maintenance/maintenance.html
+sudo bash scripts/install-maintenance-page.sh
+
+# Or, equivalently, the underlying two commands the script wraps:
+#   sudo mkdir -p /etc/nginx/maintenance
+#   sudo cp nginx/maintenance.html /etc/nginx/maintenance/maintenance.html
 
 # 2. If you're stuck in maintenance mode (step 3 above returned HTTP/1.1 401),
 #    exit via the ops UI: POST /api/v1/ops/load-shed with mode='normal'. The ops

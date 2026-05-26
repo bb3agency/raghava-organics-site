@@ -272,28 +272,41 @@ NGINX_BACKEND_PORT="${NGINX_BACKEND_PORT:-3001}"
 # rewrites the file when content differs (cmp -s check), so a no-op deploy
 # touches nothing. Requires the same sudoers grants as the nginx auto-reload
 # below (see CLIENT_VPS_SETUP_GUIDE §22 "Optional: passwordless sudo grants").
+#
+# DEPLOY_MAINTENANCE_PAGE_STATUS is captured here and re-emitted in the
+# deploy summary at the end of this script so a missed warning earlier in
+# the log cannot hide a broken maintenance page experience. As of the
+# 2026-05-26 hardening, the nginx template also includes an inline fallback
+# (@maintenance_inline) so users never see the bare nginx default 503 page,
+# but the static file is still the preferred (full styled) experience.
+DEPLOY_MAINTENANCE_PAGE_STATUS="unknown"
 if [ -f "$NGINX_MAINTENANCE_SRC" ]; then
   if [ ! -f "$NGINX_MAINTENANCE_DST" ] || ! cmp -s "$NGINX_MAINTENANCE_SRC" "$NGINX_MAINTENANCE_DST"; then
     log "Installing maintenance page to $NGINX_MAINTENANCE_DST"
     sudo mkdir -p "$(dirname "$NGINX_MAINTENANCE_DST")" 2>/dev/null || true
     if sudo -n cp "$NGINX_MAINTENANCE_SRC" "$NGINX_MAINTENANCE_DST" 2>/dev/null; then
+      sudo -n chmod 644 "$NGINX_MAINTENANCE_DST" 2>/dev/null || true
       log "Maintenance page installed."
+      DEPLOY_MAINTENANCE_PAGE_STATUS="installed"
     else
       log "WARNING: could not install maintenance page (no passwordless sudo for cp)."
-      log "Without it, any backend 5xx — including transient maintenance gate timeouts —"
-      log "will surface as nginx's bare default 500 page instead of the friendly downtime page."
-      log "Run on the VPS once to fix:"
+      log "Without it, the storefront falls back to nginx's inline maintenance page"
+      log "(branded but minimal). For the FULL styled experience, run on the VPS once:"
+      log "  sudo bash $CLIENT_PATH/scripts/install-maintenance-page.sh"
+      log "Or directly:"
       log "  sudo mkdir -p $(dirname "$NGINX_MAINTENANCE_DST")"
       log "  sudo cp $NGINX_MAINTENANCE_SRC $NGINX_MAINTENANCE_DST"
+      DEPLOY_MAINTENANCE_PAGE_STATUS="missing_no_sudo"
     fi
   else
     log "Maintenance page already in sync — no change."
+    DEPLOY_MAINTENANCE_PAGE_STATUS="in_sync"
   fi
 else
   log "WARNING: $NGINX_MAINTENANCE_SRC not found in repo. The nginx template references"
-  log "/maintenance.html via error_page — without the source file present, any 502/503 from"
-  log "the backend (including auth_request gate timeouts) will fall back to nginx's"
-  log "default 500 page. Ensure backend/nginx/maintenance.html exists in the repo."
+  log "/maintenance.html via error_page — without the source file the inline fallback"
+  log "in client.conf.template still serves a minimal branded page (no bare nginx default)."
+  DEPLOY_MAINTENANCE_PAGE_STATUS="source_missing"
 fi
 
 if [ -f "$NGINX_TEMPLATE" ]; then
@@ -485,5 +498,40 @@ docker image prune -f >/dev/null 2>&1 || true
 
 log "Trimming BuildKit cache (keep last 3GB of reusable layers)..."
 docker buildx prune --force --keep-storage 3GB >/dev/null 2>&1 || true
+
+# ---------------------------------------------------------------------------
+# Deploy summary — re-emit any non-fatal warnings here so they cannot get
+# buried in earlier log lines. Operators reading the bottom of CI output
+# should see at a glance whether anything needs manual follow-up.
+# ---------------------------------------------------------------------------
+case "${DEPLOY_MAINTENANCE_PAGE_STATUS:-unknown}" in
+  installed|in_sync)
+    log "Maintenance page status: ${DEPLOY_MAINTENANCE_PAGE_STATUS} (full branded page will be served on 503)."
+    ;;
+  missing_no_sudo)
+    log "════════════════════════════════════════════════════════════════════"
+    log "  POST-DEPLOY ACTION REQUIRED — maintenance page is NOT installed."
+    log ""
+    log "  Symptom: the storefront returns a MINIMAL inline page during"
+    log "  maintenance (acceptable but not the full styled experience)."
+    log ""
+    log "  Fix (run once on the VPS as a user with sudo):"
+    log "    sudo bash $CLIENT_PATH/scripts/install-maintenance-page.sh"
+    log ""
+    log "  To make this self-heal on future deploys, add the sudoers grants"
+    log "  from CLIENT_VPS_SETUP_GUIDE §22 'Maintenance page install' to"
+    log "  /etc/sudoers.d/<runner-user>."
+    log "════════════════════════════════════════════════════════════════════"
+    ;;
+  source_missing)
+    log "════════════════════════════════════════════════════════════════════"
+    log "  WARNING — nginx/maintenance.html missing from repo."
+    log "  The nginx config's inline fallback (@maintenance_inline) will"
+    log "  serve a minimal branded page, but the full styled page is gone."
+    log "  Restore nginx/maintenance.html from git history if this was"
+    log "  accidental."
+    log "════════════════════════════════════════════════════════════════════"
+    ;;
+esac
 
 log "Deploy complete. SHA=$CURRENT_SHA Port=$BACKEND_PORT"

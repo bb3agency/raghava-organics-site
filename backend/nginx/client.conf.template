@@ -71,12 +71,45 @@ server {
   # passes through to the client unaffected.
   #
   # Deploy: copy nginx/maintenance.html → /etc/nginx/maintenance/maintenance.html
+  # (the `vps-deploy.sh §3.5a` step does this automatically on every CD deploy
+  # when sudoers grants are configured; otherwise install manually with the
+  # `scripts/install-maintenance-page.sh` helper).
+  #
+  # Defense in depth — if the static file is missing on disk (fresh VPS, no
+  # passwordless sudo for the runner, manual deploy without the install step),
+  # we MUST NOT fall back to Nginx's compiled-in 500/503 page (the bare
+  # "nginx/1.x (Ubuntu)" page). Two layers protect us:
+  #   1. `location = /maintenance.html` tries the static file first via try_files.
+  #   2. If the file is missing, try_files internally redirects to
+  #      `@maintenance_inline` which returns a minimal but branded HTML
+  #      page directly from the nginx config (no disk dependency).
+  # See CLIENT_VPS_SETUP_GUIDE §19.5 case B for why this matters.
   error_page 502 503 /maintenance.html;
   location = /maintenance.html {
     root /etc/nginx/maintenance;
     internal;
     add_header Cache-Control "no-store, no-cache, must-revalidate" always;
     add_header Retry-After "15" always;
+    # try_files probes the static file (resolved via `root` above). If the
+    # file exists, nginx serves it with the add_header directives applied.
+    # If not, nginx routes to @maintenance_inline (the safety net below).
+    # This is more reliable than `error_page 404 = @...` because the latter
+    # requires `recursive_error_pages on;` to chain through a server-level
+    # error_page → location error_page hop, and accidentally enabling that
+    # globally has subtle interactions with proxy_intercept_errors.
+    try_files $uri @maintenance_inline;
+  }
+
+  # Inline fallback served only when /etc/nginx/maintenance/maintenance.html
+  # is missing. Keep the markup small (a few KB max) so it stays parseable as
+  # a single Nginx `return 503 '...'` directive. The static file (referenced
+  # above) is the preferred experience — this is the safety net.
+  location @maintenance_inline {
+    internal;
+    default_type text/html;
+    add_header Cache-Control "no-store, no-cache, must-revalidate" always;
+    add_header Retry-After "15" always;
+    return 503 '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><meta http-equiv="refresh" content="15"/><meta name="robots" content="noindex,nofollow"/><title>We will be back shortly</title><style>*{box-sizing:border-box}html,body{height:100%;margin:0}body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;background:#fafaf7;color:#1a1f17;display:flex;align-items:center;justify-content:center;padding:24px;line-height:1.55;-webkit-font-smoothing:antialiased}@media (prefers-color-scheme:dark){body{background:#0e120c;color:#e8ebe2}.card{background:#161a13!important;border-color:rgba(232,235,226,0.08)!important}.muted{color:#98a08e!important}}.card{max-width:520px;width:100%;background:#fff;border:1px solid rgba(26,31,23,0.08);border-radius:16px;padding:40px 32px;text-align:center;box-shadow:0 1px 2px rgba(0,0,0,0.04),0 8px 24px rgba(0,0,0,0.04)}.badge{display:inline-block;background:rgba(47,109,58,0.14);color:#2f6d3a;font-size:13px;font-weight:600;letter-spacing:0.02em;padding:6px 12px;border-radius:999px;margin-bottom:20px}h1{font-size:24px;font-weight:600;margin:0 0 12px;letter-spacing:-0.01em}p{font-size:15px;color:#5a6452;margin:0 0 8px}.muted{font-size:13px;margin-top:24px;color:rgba(90,100,82,0.7)}</style></head><body><main class="card" role="main" aria-live="polite"><span class="badge">Maintenance in progress</span><h1>We&rsquo;ll be back shortly</h1><p>Our team is performing a scheduled update so we can keep things running smoothly.</p><p>This page will refresh automatically every 15 seconds &mdash; thanks for your patience.</p><p class="muted">If you arrived here mid-checkout, your cart is safe and any payment you completed will be processed.</p></main></body></html>';
   }
 
   # Named location that every gated location's `error_page 401 = @maintenance_block`

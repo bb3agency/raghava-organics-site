@@ -4,6 +4,38 @@ This document preserves detailed hardening history for engineering traceability.
 
 ## Recent hardening changes
 
+**Bare nginx 503 page during maintenance — `maintenance.html` install bypassed silently — May 2026:**
+
+Operator on Raghava Organics triggered maintenance and the storefront returned the **bare Nginx 503 page** ("503 Service Temporarily Unavailable" + `nginx/1.28.3 (Ubuntu)` footer) instead of the branded "We'll be back shortly" page. The maintenance gate itself was working perfectly (auth_request 401 → `@maintenance_block` 503 → `error_page 502 503 /maintenance.html;`); the failure was one step deeper. Nginx tried to read `/etc/nginx/maintenance/maintenance.html`, found nothing on disk, and fell back to its compiled-in default page — which is the worst possible user experience for what should be a friendly downtime moment.
+
+The root cause was a silent skip in `backend/scripts/vps-deploy.sh §3.5a`: the install step uses `sudo -n cp` (non-interactive sudo) so a CI runner without the matching sudoers grant prints a warning and continues. The warning was buried somewhere in a long deploy log and went unnoticed. On a fresh VPS where `/etc/nginx/maintenance/` had never existed, the file was just missing forever after.
+
+**Changes:**
+
+1. **`backend/nginx/client.conf.template` — inline fallback for missing `maintenance.html`.** Added a `@maintenance_inline` named location that returns a single-string `<!DOCTYPE html>...</html>` payload styled to match the brand. Modified `location = /maintenance.html` to use `try_files $uri @maintenance_inline;` so nginx serves the full static page when present and routes to the inline fallback when the file is missing. Picked `try_files` over `error_page 404 = @...` because chaining error_pages requires `recursive_error_pages on;` globally, which has subtle interactions with `proxy_intercept_errors`. The inline page is intentionally minimal (~3 KB) so it stays parseable as a single nginx directive while still delivering a branded experience (badge, headline, copy, color tokens, dark-mode media query).
+
+2. **`backend/scripts/vps-deploy.sh §3.5a — explicit summary at deploy end.** Captured the install outcome into `DEPLOY_MAINTENANCE_PAGE_STATUS` (one of `installed`/`in_sync`/`missing_no_sudo`/`source_missing`) and re-emitted a multi-line, banner-delimited warning at the end of the deploy when the status is anything other than installed/in_sync. The banner can't be buried mid-log; the bottom of every CI run is now where operators look for "did this deploy need follow-up?".
+
+3. **`backend/scripts/install-maintenance-page.sh` — new standalone helper.** Idempotent script that an operator can run any time with `sudo bash scripts/install-maintenance-page.sh`. Validates the source path, creates `/etc/nginx/maintenance/`, copies with 644 perms, and as a sanity check also verifies the live nginx config (in `/etc/nginx/sites-{enabled,available}/<client>.conf`) actually contains the `error_page 502 503 /maintenance.html;` directive (so the operator doesn't install a file that no live config references — that's a separate, equally silent class of bug).
+
+4. **`backend/docs/CLIENT_VPS_SETUP_GUIDE.md §19.5 — updated for the new defense-in-depth.** Symptom table now lists two failure modes (bare nginx page vs. minimal inline page) and which one indicates which underlying problem. Triage steps updated to reference `install-maintenance-page.sh`. Added a top-of-doc quick-symptom row for "minimal inline page" so operators recognise it as "static file missing, run the install script" rather than thinking the inline page is the intended experience.
+
+**Why three layers instead of "just fix the deploy script":**
+
+| Layer | What it guarantees | Failure mode it absorbs |
+|---|---|---|
+| Static `maintenance.html` at `/etc/nginx/maintenance/` | Full styled experience | — (preferred path) |
+| Inline `@maintenance_inline` fallback in nginx config | Branded minimal page (never bare nginx) | Static file missing on disk |
+| Deploy-script summary warning | Operator is told to install the file | Static file ALSO missing AND the operator doesn't notice the minimal page |
+
+Pre-2026-05-26 we had only layer 1. A single missed `sudo cp` in a fresh deploy → bare nginx page in front of real customers for the entire maintenance window. Post-2026-05-26 the same missed `sudo cp` is invisible to customers (layer 2) AND is visibly flagged to the operator at the bottom of the deploy log (layer 3).
+
+**Detection signature for future regressions:**
+
+- Customer-visible: storefront returns the bare `nginx/1.x (Ubuntu)` 503 → layer 2 is broken (someone edited the template and dropped `@maintenance_inline`, OR a different `error_page` is masking it).
+- Customer-visible: storefront returns the minimal inline page → layer 1 is broken (run `install-maintenance-page.sh`).
+- CI log tail shows the `POST-DEPLOY ACTION REQUIRED` banner → layer 1 will be broken on the next maintenance window unless the operator runs the install script.
+
 **Stuck-pending maintenance window — BullMQ-aware fast-promote replaces the 7-minute self-heal grace — May 2026:**
 
 Operator on Raghava Organics triggered maintenance and observed the storefront banner sit on "Finalising maintenance window. Wrapping up active transactions before the site goes offline. New checkouts are paused." for the full 5–7 minutes past the 2-minute pending window — total time from "set maintenance" to "Nginx blocks the storefront" was ~9 minutes, with **zero in-flight jobs or payments** for the worker to drain. Investigating revealed two compounding defects in the cutover machinery:
