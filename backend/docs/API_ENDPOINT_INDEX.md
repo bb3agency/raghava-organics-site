@@ -30,7 +30,7 @@ Canonical low-noise index of backend HTTP endpoints. Route files and schemas rem
 | GET | `/api/v1/products/:slug` | Product detail by slug | `products.routes.ts` |
 | GET | `/api/v1/reviews/product/:slug` | Public product reviews | `reviews.routes.ts` |
 | GET | `/api/v1/maintenance/status` | Maintenance snapshot for storefront banner — `{ mode, phase, pendingUntil, activatedAt, serverTime }`. Always reachable, even during `maintenance/active`. Polled every ~30 s normally, ~5 s during `pending` | `maintenance.routes.ts` |
-| GET | `/api/v1/maintenance/gate` | Internal Nginx `auth_request` gate. Always returns `200`; carries decision in `X-Maintenance-Active: 0|1` response header based on `X-Original-URI`. Not for direct client use | `maintenance.routes.ts` |
+| GET | `/api/v1/maintenance/gate` | Internal Nginx `auth_request` gate. Returns `200 { allowed: true }` when the request must pass through (normal/pending, or path in `ALWAYS_ALLOWED_PREFIXES`) or `401 { allowed: false }` when maintenance is `active` and the path is blocked. Nginx catches the 401 via `error_page 401 = @maintenance_block;` on the gated location → `return 503` → `maintenance.html`. The `X-Maintenance-Active: 0|1` response header is set on both shapes for backward compat but is no longer the deciding signal. Not for direct client use | `maintenance.routes.ts` |
 
 ---
 

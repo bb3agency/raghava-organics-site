@@ -575,7 +575,8 @@ normal/reduced/emergency  ──(POST /ops/load-shed mode=maintenance)──>  m
 
 **Phase 3 — `active`:**
 
-- Nginx subrequests `/_maintenance_gate → /api/v1/maintenance/gate`; the backend returns 200 with header `X-Maintenance-Active: 1` for routes outside `ALWAYS_ALLOWED_PREFIXES`, and the Nginx guarded location converts that to a `503` → `error_page 503 /maintenance.html`. Ops, health, auth, and provider-webhook locations explicitly skip the gate.
+- Nginx subrequests `/_maintenance_gate → /api/v1/maintenance/gate`. For routes outside `ALWAYS_ALLOWED_PREFIXES` the backend returns **`401 Unauthorized`** with `{ allowed: false }` (and the legacy `X-Maintenance-Active: 1` header for backward compat). The gated Nginx `location` catches this via `error_page 401 = @maintenance_block;`, the named location returns `503`, and `error_page 502 503 /maintenance.html` serves the friendly downtime page with `Retry-After: 15`. For paths inside `ALWAYS_ALLOWED_PREFIXES` (ops, health, auth, provider webhooks, the maintenance routes themselves) the gate returns `200 { allowed: true }` and the request proceeds to upstream unchanged.
+- The older "always-200 + `X-Maintenance-Active: 0|1` header + `auth_request_set` + `if ($maintenance_active = "1") { return 503; }`" design (2026-05-25) was structurally broken — `if` inside a `location` runs in Nginx's REWRITE phase, **before** `auth_request` populates the variable in the ACCESS phase, so the `if` never fired and the storefront was never blocked. See `docs/HARDENING_HISTORY.md` "May 2026 — Maintenance gate bypass (auth_request phase ordering)" and `docs/DECISIONS.md` "[2026-05-26] Maintenance gate switches to 401 + error_page" for the full incident write-up.
 - Durable state survives Redis flushes, backend container restarts, worker restarts, and database failovers. On boot, `backend/src/main.ts` rehydrates `MaintenanceState` from Postgres into Redis so the gate keeps serving correctly even after a cold start in the middle of a maintenance window.
 
 **Read-side self-heal (silent-failure recovery):**
@@ -606,7 +607,7 @@ Exceptions during the cutover are caught at the handler level: the worker writes
 **Exiting maintenance:**
 
 - Ops POSTs `mode: 'normal' | 'reduced' | 'emergency'` to `/api/v1/ops/load-shed` (OTP required).
-- The writer (`setLoadShedModeDirect`) updates the durable row and unconditionally clears `phase`/`pendingUntil`/`activatedAt` (so any stale activation job that fires after the exit is a no-op via its re-check of the durable state). The Nginx `auth_request` gate sees `mode !== 'maintenance'` on its next subrequest and starts returning `X-Maintenance-Active: 0` immediately — traffic flows again on the next request. There is no separate "deactivation" job because the activation handler already resumed every paused queue when it completed the cutover.
+- The writer (`setLoadShedModeDirect`) updates the durable row and unconditionally clears `phase`/`pendingUntil`/`activatedAt` (so any stale activation job that fires after the exit is a no-op via its re-check of the durable state). The Nginx `auth_request` gate sees `mode !== 'maintenance'` on its next subrequest and starts returning `200 { allowed: true }` (with `X-Maintenance-Active: 0` for backward compat) immediately — traffic flows again on the next request. There is no separate "deactivation" job because the activation handler already resumed every paused queue when it completed the cutover.
 
 **Operational tunables (workers `.env`):**
 

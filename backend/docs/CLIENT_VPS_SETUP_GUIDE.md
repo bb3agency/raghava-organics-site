@@ -867,23 +867,31 @@ After that, plain `docker compose up -d backend workers` Just Works — no `-f` 
 
 **Symptom.** Hitting the storefront (`https://<domain>/`) returns the **bare Nginx default 500 page** — black on white, "500 Internal Server Error" + the Nginx version banner. The friendly maintenance page is NOT shown. Meanwhile `/ops` reaches its React shell ("Authenticating ops session…" loading state) because that location bypasses the maintenance gate.
 
-**Why this happens.** The Nginx template wires every storefront/admin/`/api/` location to a subrequest gate:
+**Why this happens.** The Nginx template wires every storefront/admin/`/api/` location to a subrequest gate. As of the 2026-05-26 fix (see `docs/HARDENING_HISTORY.md` "Maintenance gate bypass"), the canonical pattern is:
 
 ```nginx
 location / {
   auth_request /_maintenance_gate;
-  auth_request_set $maintenance_active $upstream_http_x_maintenance_active;
-  if ($maintenance_active = "1") { return 503; }
+  error_page 401 = @maintenance_block;
   proxy_pass http://127.0.0.1:3101;
+}
+
+# server-level — converts the auth_request 401 into a 503 that flows into
+# `error_page 502 503 /maintenance.html;`
+location @maintenance_block {
+  internal;
+  return 503;
 }
 ```
 
-Two distinct failure modes produce the **same bare 500 page**:
+The previous template (pre-2026-05-26) used `auth_request_set $maintenance_active …` + `if ($maintenance_active = "1") { return 503; }`, which was structurally broken — `if` runs in Nginx's REWRITE phase before `auth_request` populates the variable in the ACCESS phase, so the `if` never fired and traffic was never blocked. If you see that pattern in any live config, it is stale — re-render `nginx/client.conf.template` via `envsubst` (see §19.3 below) and reload.
+
+Two distinct failure modes can still produce the **bare 500 page**:
 
 | Failure | What happens | What to look for |
 |---|---|---|
-| **A. Gate subrequest itself fails** (backend `/api/v1/maintenance/gate` times out, returns 5xx, or refuses connection) | Nginx's `auth_request` semantics: any non-2xx (other than 401/403) from the subrequest → return 500 directly to client. `error_page` does NOT fire (only triggers on 502/503/504, not on 500). | Nginx error log: `auth request unexpected status: 500` or `upstream timed out (110: Connection timed out) while reading response header from upstream, subrequest: "/_maintenance_gate"` |
-| **B. Gate succeeds with maintenance=1 OR upstream returns 502/503**, but `/etc/nginx/maintenance/maintenance.html` is missing | `error_page 502 503 /maintenance.html` fires → Nginx tries to serve the missing file → falls back to its compiled-in default 500 page | Nginx error log: `open() "/etc/nginx/maintenance/maintenance.html" failed (2: No such file or directory)` |
+| **A. Gate subrequest itself fails** (backend `/api/v1/maintenance/gate` times out, refuses connection, or returns a 5xx that isn't 401/403) | Nginx's `auth_request` semantics: any non-2xx-other-than-401/403 from the subrequest → return 500 directly to client. `error_page 502 503` does NOT fire on a 500. | Nginx error log: `auth request unexpected status: 500` or `upstream timed out (110: Connection timed out) while reading response header from upstream, subrequest: "/_maintenance_gate"` |
+| **B. Gate succeeds with 401 (maintenance active) OR upstream returns 502/503**, but `/etc/nginx/maintenance/maintenance.html` is missing | `error_page 502 503 /maintenance.html` fires → Nginx tries to serve the missing file → falls back to its compiled-in default 500 page | Nginx error log: `open() "/etc/nginx/maintenance/maintenance.html" failed (2: No such file or directory)` |
 
 `/ops` works (loads HTML) because the `location ^~ /ops` block in the template doesn't call `auth_request` — it proxies directly to the Next.js frontend port. `/ops` then fetches `/api/v1/ops/session`, which also bypasses the gate via `location ~ ^/api/v1/ops/`. If the backend itself is slow or unhealthy, that fetch hangs and the React shell stays on "Authenticating ops session…" — same root cause, different presentation.
 
@@ -902,7 +910,7 @@ echo "=== 2. Backend health (bypasses Nginx + gate) ==="
 curl -sS -m 5 http://127.0.0.1:3001/api/v1/health | head -200 || echo "BACKEND UNREACHABLE on :3001"
 
 echo
-echo "=== 3. Maintenance gate direct (X-Maintenance-Active header is the answer) ==="
+echo "=== 3. Maintenance gate direct (HTTP status is the answer; 401 = blocked, 200 = allowed) ==="
 curl -sS -m 5 -D - -o /dev/null -H "X-Original-URI: /" \
   http://127.0.0.1:3001/api/v1/maintenance/gate \
   | grep -iE '^(HTTP|X-Maintenance-Active|date)'
@@ -932,8 +940,9 @@ docker logs raghava-organics-backend --tail 200 2>&1 | grep -iE 'maintenance|gat
 **Interpreting the output:**
 
 - **Step 2 fails / step 7 shows backend crashlooping** → backend is unhealthy. Look at the full `docker logs raghava-organics-backend` for the actual error (env mismatch, DB unreachable, migration not deployed, etc.). The gate route fails because the backend itself is failing. **Recovery:** fix the underlying issue; you may also need to `docker compose -p raghava-organics -f docker-compose.yml -f docker-compose.prod.yml restart backend`.
-- **Step 3 returns `HTTP/1.1 200` with `X-Maintenance-Active: 1`** → maintenance mode is active. The 500 is symptom B (missing `maintenance.html`). **Recovery:** install the maintenance page (see §19.5 Recovery below), and decide whether to exit maintenance mode via `POST /api/v1/ops/load-shed` with `mode: 'normal'`.
+- **Step 3 returns `HTTP/1.1 401`** (with `X-Maintenance-Active: 1` for backward compat) → maintenance mode is active and Nginx **should** be serving the maintenance page. If the storefront still returns a bare 500, the cause is symptom B (missing `maintenance.html`) — install it (see §19.5 Recovery below). To exit maintenance mode, use the ops console: `POST /api/v1/ops/load-shed` with `mode: 'normal'` (OTP required).
 - **Step 3 returns `HTTP/1.1 200` with `X-Maintenance-Active: 0`** → gate is healthy, maintenance is OFF, yet storefront still 500. Look harder at step 5 (Nginx error log) — likely an `upstream timed out` on the proxy to port 3101 (frontend), or a missing upstream entirely. Check `docker ps` for the frontend / PM2 process and whether `STOREFRONT_PORT` matches the nginx `proxy_pass` port.
+- **Step 3 returns `HTTP/1.1 200` with `X-Maintenance-Active: 1`** → stale backend. This was the old gate contract (always 200) that we superseded on 2026-05-26. The running backend container is on a pre-fix image — rebuild with `docker compose -p raghava-organics build backend && docker compose -p raghava-organics up -d --force-recreate backend`. Until then Nginx will silently let traffic through during active maintenance.
 - **Step 3 returns 5xx or times out** → backend's gate handler itself is broken. Symptom A. Check step 7 for the actual error in the backend logs.
 - **Step 4 shows `ls: cannot access`** → `maintenance.html` is not installed on disk. Even if the gate is healthy right now, *any* future backend hiccup will surface as a bare 500 instead of the friendly page. **Install it now** (see Recovery below) — this is the fix that prevents this whole symptom from being incident-grade.
 
@@ -947,26 +956,34 @@ cd /var/www/raghava-organics/backend
 sudo mkdir -p /etc/nginx/maintenance
 sudo cp nginx/maintenance.html /etc/nginx/maintenance/maintenance.html
 
-# 2. If you're stuck in maintenance mode (step 3 above showed X-Maintenance-Active: 1),
+# 2. If you're stuck in maintenance mode (step 3 above returned HTTP/1.1 401),
 #    exit via the ops UI: POST /api/v1/ops/load-shed with mode='normal'. The ops
 #    console at https://<domain>/ops/load-shed has the form for this. (You can
 #    only do this from the ops console because the API requires OTP.)
 
 # 3. If the backend is unhealthy and you want the storefront back NOW while you
 #    debug the backend, you can temporarily DISABLE the maintenance gate by
-#    commenting out the three auth_request lines in the live nginx config:
+#    commenting out the auth_request + error_page directives in the live nginx
+#    config. The current canonical pattern (post-2026-05-26) has two lines per
+#    gated location:
 #
 #      sudo sed -i.bak \
 #        -e 's,^\(\s*auth_request\s*/_maintenance_gate;\),# &,' \
-#        -e 's,^\(\s*auth_request_set\s*\$maintenance_active.*\),# &,' \
-#        -e 's,^\(\s*if (\$maintenance_active = "1") { return 503; }\),# &,' \
+#        -e 's,^\(\s*error_page\s*401\s*=\s*@maintenance_block;\),# &,' \
 #        /etc/nginx/sites-available/raghava-organics.conf
 #      sudo nginx -t && sudo systemctl reload nginx
+#
+#    Pre-2026-05-26 configs used auth_request_set + if instead — if you find
+#    those, also comment them out (they were never doing anything useful, but
+#    leaving them in is confusing):
+#      -e 's,^\(\s*auth_request_set\s*\$maintenance_active.*\),# &,' \
+#      -e 's,^\(\s*if (\$maintenance_active = "1") { return 503; }\),# &,' \
 #
 #    To restore: `sudo cp /etc/nginx/sites-available/raghava-organics.conf.bak /etc/nginx/sites-available/raghava-organics.conf && sudo systemctl reload nginx`
 #    NOTE: with the gate disabled the storefront will NOT serve the maintenance
 #    page even if maintenance mode is active in the DB. Re-enable as soon as the
-#    backend is healthy.
+#    backend is healthy. Better: re-render client.conf.template via envsubst
+#    (see §19.3) — that gives you a known-good config without any manual sed.
 
 # 4. Reload nginx after any nginx config change
 sudo nginx -t && sudo systemctl reload nginx

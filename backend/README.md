@@ -408,7 +408,7 @@ On every push to `main` that passes the Reliability CI workflow, `.github/workfl
 
 | Job | What it does |
 |-----|-------------|
-| `deploy-backend` | Runs `vps-deploy.sh` — Docker Compose rebuild, Prisma migrations, container swap |
+| `deploy-backend` | Runs `vps-deploy.sh` — Docker Compose rebuild, Prisma migrations, container swap, nginx config re-render + reload, BuildKit cache trim, health check |
 | `deploy-frontend` | Runs `vps-frontend-deploy.sh` — `git pull`, change detection, `npm ci`, `npm run build`, `pm2 reload` (zero-downtime) |
 
 **Required GitHub repo configuration per client:**
@@ -424,6 +424,19 @@ On every push to `main` that passes the Reliability CI workflow, `.github/workfl
 **Setup guide:** [`docs/GITHUB_CD_SELF_HOSTED_RUNNER_GUIDE.md`](docs/GITHUB_CD_SELF_HOSTED_RUNNER_GUIDE.md) (full checklist) · [`docs/CLIENT_VPS_SETUP_GUIDE.md`](docs/CLIENT_VPS_SETUP_GUIDE.md) §22 (summary)
 
 **Monorepo client repos** (e.g. `backend/` + `frontend/` at root): workflows must live at **repository root** `.github/workflows/reliability-ci.yml` and `deploy.yml`. Backend-only repos use `backend/.github/workflows/`.
+
+#### Manual deploy (incidents, hotfixes, runner offline)
+
+The auto-deploy path above is the default — every `git push origin main` that passes CI re-deploys the VPS without anyone touching SSH. When you need to bypass that path (debugging the deploy script itself, the self-hosted runner is offline, or you need to ship a hotfix without going through CI), invoke the **same script** manually on the VPS as your normal user (not `sudo` — the script `sudo`s internally for the steps that need it):
+
+```bash
+cd /var/www/<client-id>/backend
+bash scripts/vps-deploy.sh /var/www/<client-id>/backend "$(git rev-parse HEAD)"
+```
+
+The script is identical to what the runner executes — it pulls latest `main`, rebuilds containers, runs Prisma migrations, re-renders `nginx/client.conf.template` via `envsubst` and reloads nginx if drift is detected, prunes Docker images, trims BuildKit cache, and reports readiness. The only thing the manual path doesn't give you is the CI gate (typecheck + unit + e2e + security + reliability gates must pass before auto-deploy fires; manual deploy will happily ship whatever HEAD points at). For that reason, **prefer push-to-main auto-deploy as the default**; manual deploy is the escape hatch.
+
+If `git pull` inside the script prompts for credentials, your VPS user's git credential helper isn't configured. GitHub deprecated password auth in 2021 — use a Personal Access Token (PAT) stored via `git config --global credential.helper store` or switch the remote to SSH with a deploy key (`docs/CLIENT_VPS_SETUP_GUIDE.md §22` covers both).
 
 ### Quality Pipeline
 
