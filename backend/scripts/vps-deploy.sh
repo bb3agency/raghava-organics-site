@@ -243,6 +243,20 @@ NGINX_LIVE="/etc/nginx/sites-available/${COMPOSE_PROJECT}.conf"
 NGINX_MAINTENANCE_SRC="$CLIENT_PATH/nginx/maintenance.html"
 NGINX_MAINTENANCE_DST="/etc/nginx/maintenance/maintenance.html"
 
+# The nginx template uses ${CLIENT_DOMAIN}, ${STOREFRONT_PORT}, and ${BACKEND_PORT}
+# placeholders so it can be reused across clients. Resolve those here so
+# `envsubst` in §3.5b can render a deployable file (without these the live
+# nginx config would have literal `${CLIENT_DOMAIN}` strings and fail nginx -t).
+#
+# CLIENT_DOMAIN  — derived from STOREFRONT_URL in .env (already in NGINX_DOMAIN above).
+# STOREFRONT_PORT — required in .env; PM2 starts Next.js on this port.
+# BACKEND_PORT    — defaults to 3001 because the docker-compose mapping
+#                   `0.0.0.0:3001->3000/tcp` is stable across clients.
+NGINX_CLIENT_DOMAIN="$NGINX_DOMAIN"
+NGINX_STOREFRONT_PORT="$(grep -E '^STOREFRONT_PORT=' .env | head -1 | cut -d= -f2- | tr -d '[:space:]')"
+NGINX_BACKEND_PORT="$(grep -E '^BACKEND_PORT=' .env | head -1 | cut -d= -f2- | tr -d '[:space:]')"
+NGINX_BACKEND_PORT="${NGINX_BACKEND_PORT:-3001}"
+
 # 3.5a Install / refresh the static maintenance.html the nginx config references.
 #
 # The nginx template has `error_page 502 503 /maintenance.html;` mapped to
@@ -282,28 +296,76 @@ else
   log "default 500 page. Ensure backend/nginx/maintenance.html exists in the repo."
 fi
 
-if [ -f "$NGINX_TEMPLATE" ] && [ -f "$NGINX_LIVE" ]; then
-  # cmp is a no-op if files are byte-identical; nonzero exit indicates drift.
-  if ! cmp -s "$NGINX_TEMPLATE" "$NGINX_LIVE"; then
-    log "Nginx config drift detected: $NGINX_TEMPLATE differs from $NGINX_LIVE"
-    if [ "${NGINX_AUTO_RELOAD:-0}" = "1" ]; then
-      log "NGINX_AUTO_RELOAD=1 — syncing template to live and reloading nginx"
-      sudo cp "$NGINX_TEMPLATE" "$NGINX_LIVE"
-      if sudo nginx -t >/dev/null 2>&1; then
-        sudo systemctl reload nginx
-        log "Nginx reload succeeded."
+if [ -f "$NGINX_TEMPLATE" ]; then
+  # Validate that all placeholder variables are present before rendering. Missing
+  # any of these would yield a config with literal ${VAR} strings → nginx -t
+  # would fail with "cannot load certificate /etc/letsencrypt/live/${CLIENT_DOMAIN}/..."
+  # which is exactly the production incident (May 2026) that motivated parameterising
+  # this template.
+  if [ -z "$NGINX_CLIENT_DOMAIN" ] || [ -z "$NGINX_STOREFRONT_PORT" ]; then
+    log "WARNING: cannot render nginx template — missing required env vars:"
+    log "  CLIENT_DOMAIN (derived from STOREFRONT_URL): '${NGINX_CLIENT_DOMAIN}'"
+    log "  STOREFRONT_PORT: '${NGINX_STOREFRONT_PORT}'"
+    log "  BACKEND_PORT (defaults to 3001): '${NGINX_BACKEND_PORT}'"
+    log "Set these in $CLIENT_PATH/.env and re-run, or sync nginx manually."
+  else
+    # Render the template into a tmpfile with envsubst, then diff against live.
+    NGINX_RENDERED="$(mktemp --suffix=.nginx.conf)"
+    # shellcheck disable=SC2016
+    CLIENT_DOMAIN="$NGINX_CLIENT_DOMAIN" \
+      STOREFRONT_PORT="$NGINX_STOREFRONT_PORT" \
+      BACKEND_PORT="$NGINX_BACKEND_PORT" \
+      envsubst '${CLIENT_DOMAIN} ${STOREFRONT_PORT} ${BACKEND_PORT}' \
+      < "$NGINX_TEMPLATE" > "$NGINX_RENDERED"
+
+    # Sanity check: rendered file must not contain any unsubstituted ${...}
+    # placeholders. If it does, the env var lookup failed silently.
+    if grep -qE '\$\{[A-Z_]+\}' "$NGINX_RENDERED"; then
+      log "ERROR: rendered nginx config still contains unsubstituted placeholders:"
+      grep -nE '\$\{[A-Z_]+\}' "$NGINX_RENDERED" | head -5 | while IFS= read -r line; do log "  $line"; done
+      rm -f "$NGINX_RENDERED"
+      fail "Nginx template rendering produced an invalid config. Fix .env variables and re-run."
+    fi
+
+    if [ ! -f "$NGINX_LIVE" ]; then
+      log "Nginx live config $NGINX_LIVE does not exist yet (first deploy?)."
+      if [ "${NGINX_AUTO_RELOAD:-0}" = "1" ]; then
+        log "NGINX_AUTO_RELOAD=1 — installing initial rendered config"
+        sudo cp "$NGINX_RENDERED" "$NGINX_LIVE"
+        if sudo nginx -t >/dev/null 2>&1; then
+          sudo systemctl reload nginx && log "Nginx reload succeeded."
+        else
+          sudo nginx -t || true
+          rm -f "$NGINX_RENDERED"
+          fail "Nginx config test failed after installing rendered template."
+        fi
       else
-        log "Nginx config test FAILED after sync — restoring previous config and aborting deploy"
-        sudo nginx -t || true
-        fail "Nginx config test failed. Live config at $NGINX_LIVE not changed by this script (cp was atomic on same FS but reload was not triggered)."
+        log "Leaving rendered file at $NGINX_RENDERED for manual install:"
+        log "  sudo cp $NGINX_RENDERED $NGINX_LIVE && sudo nginx -t && sudo systemctl reload nginx"
+      fi
+    elif ! cmp -s "$NGINX_RENDERED" "$NGINX_LIVE"; then
+      log "Nginx config drift detected: rendered template differs from $NGINX_LIVE"
+      if [ "${NGINX_AUTO_RELOAD:-0}" = "1" ]; then
+        log "NGINX_AUTO_RELOAD=1 — syncing rendered template to live and reloading nginx"
+        sudo cp "$NGINX_RENDERED" "$NGINX_LIVE"
+        if sudo nginx -t >/dev/null 2>&1; then
+          sudo systemctl reload nginx
+          log "Nginx reload succeeded."
+        else
+          log "Nginx config test FAILED after sync — investigate before next deploy"
+          sudo nginx -t || true
+          rm -f "$NGINX_RENDERED"
+          fail "Nginx config test failed. Live config at $NGINX_LIVE was overwritten but nginx not reloaded — restore from .bak if needed."
+        fi
+      else
+        log "WARNING: live nginx config is stale. Run on this VPS to sync:"
+        log "  sudo cp $NGINX_RENDERED $NGINX_LIVE && sudo nginx -t && sudo systemctl reload nginx"
+        log "Or set NGINX_AUTO_RELOAD=1 in $CLIENT_PATH/.env to automate this."
       fi
     else
-      log "WARNING: live nginx config is stale. Run on this VPS to sync:"
-      log "  sudo cp $NGINX_TEMPLATE $NGINX_LIVE && sudo nginx -t && sudo systemctl reload nginx"
-      log "Or set NGINX_AUTO_RELOAD=1 in /var/www/<client>/backend/.env to automate this."
+      log "Nginx config in sync with rendered template — no reload required."
+      rm -f "$NGINX_RENDERED"
     fi
-  else
-    log "Nginx config in sync with template — no reload required."
   fi
 fi
 

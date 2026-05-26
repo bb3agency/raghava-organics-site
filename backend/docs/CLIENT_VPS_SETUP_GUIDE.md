@@ -506,6 +506,16 @@ bash docs/clients/<client-id>/scripts/phase7.5-nginx-tls-preflight.sh
 
 ### 11.1 Per-client Nginx + TLS steps
 
+> **Important (May 2026):** `nginx/client.conf.template` is **not byte-installable** — it contains `${CLIENT_DOMAIN}`, `${STOREFRONT_PORT}`, and `${BACKEND_PORT}` placeholders that must be rendered with `envsubst` before installing. Copying the raw template verbatim will fail `nginx -t` with `cannot load certificate /etc/letsencrypt/live/${CLIENT_DOMAIN}/fullchain.pem`. The CD script (`backend/scripts/vps-deploy.sh` §3.5b) renders automatically on every deploy when `NGINX_AUTO_RELOAD=1`. For manual installs, render with:
+>
+> ```bash
+> export CLIENT_DOMAIN=<your-domain.com> STOREFRONT_PORT=3101 BACKEND_PORT=3001
+> envsubst '${CLIENT_DOMAIN} ${STOREFRONT_PORT} ${BACKEND_PORT}' \
+>   < nginx/client.conf.template \
+>   | sudo tee /etc/nginx/sites-available/${CLIENT_DOMAIN} >/dev/null
+> sudo nginx -t && sudo systemctl reload nginx
+> ```
+
 1. Start from repo **`nginx/client.conf.template`** — it encodes **`TRD.md` §3.5** edge limits:
    - HTTP → HTTPS **301**
    - **TLSv1.2** and **TLSv1.3** only, `ssl_prefer_server_ciphers on`
@@ -520,7 +530,7 @@ bash docs/clients/<client-id>/scripts/phase7.5-nginx-tls-preflight.sh
      sudo cp nginx/maintenance.html /etc/nginx/maintenance/maintenance.html
      ```
      The page auto-refreshes every 15 s and includes a `Retry-After: 15` header. It is served during the ~3–5 s restart window when a process restart is scheduled via `POST /api/v1/ops/system/restart`.
-2. Replace **`server_name`**, certificate paths, **`proxy_pass`** backend port (`127.0.0.1:<BACKEND_PORT>`), and storefront upstream (e.g. `3101`).
+2. The template uses placeholders for everything that varies per client: `${CLIENT_DOMAIN}` for `server_name` + certificate paths, `${STOREFRONT_PORT}` for the Next.js upstream (typically `3101`), and `${BACKEND_PORT}` for the Fastify upstream (defaults to `3001`). Render with `envsubst` (see top of this section). Webhook paths must proxy to the same backend without stripping body (next step).
 3. **Webhook paths** must proxy to the **same** backend without stripping body: `location /api/` → backend. Webhook URLs for provider dashboards:
    - `https://<customer-domain>/api/v1/payments/webhook`
    - `https://<customer-domain>/api/v1/shipping/webhook`
@@ -810,13 +820,30 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml -p $CLIENT_ID \
 
 ```bash
 cd /var/www/<client>/backend
-sudo cp nginx/client.conf.template /etc/nginx/sites-available/$CLIENT_ID.conf
+
+# Resolve placeholder values from .env (or set them explicitly).
+export CLIENT_DOMAIN="$(grep -E '^STOREFRONT_URL=' .env | head -1 | cut -d= -f2- | sed -E 's,^https?://,,;s,/.*$,,')"
+export STOREFRONT_PORT="$(grep -E '^STOREFRONT_PORT=' .env | head -1 | cut -d= -f2-)"
+export BACKEND_PORT="$(grep -E '^BACKEND_PORT=' .env | head -1 | cut -d= -f2- || echo 3001)"
+
+# Render the template with substituted values, then install:
+envsubst '${CLIENT_DOMAIN} ${STOREFRONT_PORT} ${BACKEND_PORT}' \
+  < nginx/client.conf.template \
+  | sudo tee /etc/nginx/sites-available/${CLIENT_ID}.conf >/dev/null
+
+# Sanity check: rendered config must not contain unsubstituted ${...} placeholders.
+sudo grep -nE '\$\{[A-Z_]+\}' /etc/nginx/sites-available/${CLIENT_ID}.conf && \
+  echo "FAIL: placeholders still unsubstituted — set the missing env vars and retry" || \
+  echo "OK: all placeholders substituted"
+
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
-If `nginx -t` fails, the previous config stays live (the `cp` is atomic on the same filesystem, but the live process only re-reads the file on `reload`). Fix the template, push, pull again, and retry.
+If `nginx -t` fails, the previous config stays live (the `tee` overwrote the file but the running nginx process only re-reads on `reload`). Common causes: SSL certs at the rendered path don't exist (`certbot certonly` first), or `STOREFRONT_PORT` not set (rendered file has `127.0.0.1:` with empty port). Fix and retry.
 
-**Prevention.** Set `NGINX_AUTO_RELOAD=1` in the VPS `.env`. The CD script then diffs template vs live on every deploy and, if they differ, auto-syncs and reloads. Failure of `nginx -t` aborts the deploy so a broken config never goes live. Requires passwordless sudo for the runner user on `cp`, `nginx -t`, and `systemctl reload nginx`.
+**Why not just `cp template live` directly?** Doing that installs a file with literal `${CLIENT_DOMAIN}` strings, which fail nginx -t with `cannot load certificate /etc/letsencrypt/live/${CLIENT_DOMAIN}/fullchain.pem`. This was the May 2026 production incident behind parameterising the template — see HARDENING_HISTORY.md.
+
+**Prevention.** Set `NGINX_AUTO_RELOAD=1` in the VPS `.env`. The CD script then renders the template via `envsubst`, diffs the rendered output against live, and auto-syncs + reloads on every deploy when they differ. The script also validates that the rendered file has no remaining `${...}` placeholders and aborts the deploy if it does (so a config with a missing env var never reaches nginx). Requires passwordless sudo for the runner user on `cp`, `nginx -t`, and `systemctl reload nginx`.
 
 ### 19.4 Manual `docker compose up` fails or leaves ghosts (missing prod overlay)
 
@@ -1140,8 +1167,13 @@ If you want fully hands-off recovery, add this to `/etc/sudoers.d/<runner-user>`
 <runner-user> ALL=(root) NOPASSWD: /usr/bin/mkdir -p /etc/nginx/maintenance
 <runner-user> ALL=(root) NOPASSWD: /usr/bin/cp /var/www/*/backend/nginx/maintenance.html /etc/nginx/maintenance/maintenance.html
 
-# Nginx auto-sync — required only if NGINX_AUTO_RELOAD=1 is set in .env
-<runner-user> ALL=(root) NOPASSWD: /usr/bin/cp /var/www/*/backend/nginx/client.conf.template /etc/nginx/sites-available/*.conf
+# Nginx auto-sync — required only if NGINX_AUTO_RELOAD=1 is set in .env.
+# vps-deploy.sh renders client.conf.template into a tmpfile under /tmp via envsubst,
+# then copies the tmpfile to /etc/nginx/sites-available/*.conf (not the template directly),
+# so the cp source pattern below intentionally matches /tmp/*.nginx.conf.
+<runner-user> ALL=(root) NOPASSWD: /usr/bin/cp /tmp/*.nginx.conf /etc/nginx/sites-available/*.conf
+# Also allow installing the rendered config on first deploy (initial install path).
+<runner-user> ALL=(root) NOPASSWD: /usr/bin/cp /tmp/tmp.* /etc/nginx/sites-available/*.conf
 <runner-user> ALL=(root) NOPASSWD: /usr/sbin/nginx -t
 <runner-user> ALL=(root) NOPASSWD: /usr/bin/systemctl reload nginx
 ```
