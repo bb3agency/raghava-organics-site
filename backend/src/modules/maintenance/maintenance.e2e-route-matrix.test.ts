@@ -321,4 +321,86 @@ describe('Maintenance mode end-to-end route matrix', () => {
 
     await app.close();
   });
+
+  it('self-heal: stuck `pending` past grace auto-promotes to `active` on the next request', async () => {
+    // Simulates the failure mode the operator hit on 2026-05-26: maintenance
+    // was set, the worker container ran an old build without the
+    // `maintenance-activation` handler, so the BullMQ job silently completed
+    // without flipping the state. Without self-heal the storefront stays
+    // accessible indefinitely; with self-heal it converges to `active`
+    // automatically after `MAINTENANCE_ACTIVATION_GRACE_MS` past
+    // `pendingUntil`.
+    const longAgo = new Date(Date.now() - 60 * 60 * 1000); // pendingUntil was an hour ago
+    await setState(store, {
+      mode: 'maintenance',
+      phase: 'pending',
+      pendingUntil: longAgo.toISOString(),
+      activatedAt: null,
+      reason: 'simulated worker failure',
+      setByOpsUserId: 'ops_1',
+      setAt: new Date(longAgo.getTime() - 2 * 60 * 1000).toISOString()
+    });
+
+    // The very first request after the read-side detects the overdue
+    // pending must return 503 (active behaviour), and the row must have
+    // been promoted in Postgres so other replicas observe `active` too.
+    const blocked = await app.inject({ method: 'POST', url: '/api/v1/orders/checkout' });
+    expect(blocked.statusCode).toBe(503);
+
+    const row = store.getRow();
+    expect(row?.mode).toBe('maintenance');
+    expect(row?.phase).toBe('active');
+    expect(row?.activatedAt).not.toBeNull();
+
+    // The Nginx gate must agree with the promoted state — the storefront
+    // is now blocked at the edge too.
+    const gateAfter = await app.inject({
+      method: 'GET',
+      url: '/api/v1/maintenance/gate',
+      headers: { 'x-original-uri': '/' }
+    });
+    expect(gateAfter.headers['x-maintenance-active']).toBe('1');
+
+    // And the public status endpoint reflects the promotion so the
+    // storefront banner switches from countdown to "we'll be back".
+    const status = await app.inject({ method: 'GET', url: '/api/v1/maintenance/status' });
+    expect(status.json().phase).toBe('active');
+
+    await app.close();
+  });
+
+  it('self-heal: respects grace window — fresh `pending` is NOT auto-promoted prematurely', async () => {
+    // Operator just set maintenance and the worker is healthy and draining.
+    // The read path must NOT race the worker by promoting too early — that
+    // would cut off the payment drain window we promised customers.
+    const justNow = new Date();
+    await setState(store, {
+      mode: 'maintenance',
+      phase: 'pending',
+      pendingUntil: new Date(justNow.getTime() + 2 * 60 * 1000).toISOString(),
+      activatedAt: null,
+      reason: 'fresh maintenance, worker draining',
+      setByOpsUserId: 'ops_1',
+      setAt: justNow.toISOString()
+    });
+
+    // Storefront mutation blocked (pending blocks new checkouts) but
+    // payment-drain helper still works.
+    expect((await app.inject({ method: 'POST', url: '/api/v1/orders/checkout' })).statusCode).toBe(503);
+    expect((await app.inject({ method: 'POST', url: '/api/v1/payments/verify' })).statusCode).toBe(200);
+
+    // State row is still pending — no premature promotion.
+    expect(store.getRow()?.phase).toBe('pending');
+
+    // The Nginx gate also reflects pending → header=0 → site still
+    // accessible (the banner is the only UX signal during pending).
+    const gate = await app.inject({
+      method: 'GET',
+      url: '/api/v1/maintenance/gate',
+      headers: { 'x-original-uri': '/' }
+    });
+    expect(gate.headers['x-maintenance-active']).toBe('0');
+
+    await app.close();
+  });
 });

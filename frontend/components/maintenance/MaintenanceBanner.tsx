@@ -100,7 +100,13 @@ export function MaintenanceBanner() {
   if (!status) return null;
 
   const isPending = status.phase === "pending";
-  const tone = isPending
+  // Three visual states:
+  //   1. pending + countdown > 0  → "Starting soon" with countdown
+  //   2. pending + countdown = 0  → "Finalising — wrapping up active transactions"
+  //                                  (worker is draining queues + payments)
+  //   3. active                   → "Site is in maintenance mode"
+  const isDraining = isPending && secondsRemaining === 0;
+  const tone = isPending && !isDraining
     ? "bg-amber-50 text-amber-900 border-amber-300"
     : "bg-rose-50 text-rose-900 border-rose-300";
 
@@ -120,7 +126,12 @@ export function MaintenanceBanner() {
             !
           </span>
           <div className="text-sm leading-snug">
-            {isPending ? (
+            {isDraining ? (
+              <>
+                <strong className="font-semibold">Finalising maintenance window.</strong>{" "}
+                Wrapping up active transactions before the site goes offline. New checkouts are paused.
+              </>
+            ) : isPending ? (
               <>
                 <strong className="font-semibold">Scheduled maintenance starting soon.</strong>{" "}
                 The site will be temporarily unavailable while we finish a planned update. Please complete any active checkout or save your cart now.
@@ -133,7 +144,7 @@ export function MaintenanceBanner() {
             )}
           </div>
         </div>
-        {isPending ? (
+        {isPending && !isDraining ? (
           <div className="flex items-center gap-2 self-start sm:self-auto" aria-label={`Maintenance starts in ${countdownLabel}`}>
             <span className="text-xs uppercase tracking-wide opacity-80">Starts in</span>
             <span className="rounded-md bg-white/70 px-2 py-1 font-mono text-base font-semibold tabular-nums">

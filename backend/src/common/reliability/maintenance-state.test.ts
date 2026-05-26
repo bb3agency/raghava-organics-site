@@ -1,12 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  DEFAULT_MAINTENANCE_ACTIVATION_GRACE_MS,
   invalidateMaintenanceProcessCache,
   isMaintenanceActive,
   isMaintenancePendingOrActive,
   MAINTENANCE_STATE_REDIS_KEY,
   MAINTENANCE_STATE_SINGLETON_KEY,
+  maybePromoteOverduePending,
   parseMaintenanceStateRecord,
   readMaintenanceState,
+  resolveMaintenanceActivationGraceMs,
   writeMaintenanceState,
   type MaintenanceStatePrismaLike,
   type MaintenanceStateRecord,
@@ -304,6 +307,205 @@ describe('maintenance-state helpers', () => {
     await readMaintenanceState({ prisma: p.prisma, redis: r.redis });
     expect(p.findUnique).toHaveBeenCalledWith({
       where: { singletonKey: MAINTENANCE_STATE_SINGLETON_KEY }
+    });
+  });
+
+  // ── Self-heal / read-side promotion ─────────────────────────────────────
+  // These tests cover the silent-failure recovery path: if the
+  // `maintenance-activation` worker job fails to flip `pending` → `active`
+  // (because the worker container ran an old build, the job was lost on a
+  // Redis flush, or the cutover threw), the next read of the state must
+  // self-heal so the storefront isn't left accessible indefinitely.
+  describe('read-side self-heal for stuck pending state', () => {
+    const baseRecord: MaintenanceStateRecord = {
+      mode: 'maintenance',
+      phase: 'pending',
+      pendingUntil: '2030-01-01T00:02:00Z',
+      activatedAt: null,
+      reason: 'planned',
+      setByOpsUserId: 'ops-1',
+      setAt: '2030-01-01T00:00:00Z',
+      updatedAt: '2030-01-01T00:00:00Z'
+    };
+
+    it('maybePromoteOverduePending leaves record alone when still inside grace window', () => {
+      const pendingUntilMs = Date.parse(baseRecord.pendingUntil!);
+      const insideGrace = pendingUntilMs + DEFAULT_MAINTENANCE_ACTIVATION_GRACE_MS - 1;
+      const result = maybePromoteOverduePending(baseRecord, insideGrace);
+      expect(result).toBe(baseRecord);
+      expect(result.phase).toBe('pending');
+    });
+
+    it('maybePromoteOverduePending promotes to active when past grace boundary', () => {
+      const pendingUntilMs = Date.parse(baseRecord.pendingUntil!);
+      const pastGrace = pendingUntilMs + DEFAULT_MAINTENANCE_ACTIVATION_GRACE_MS + 1;
+      const result = maybePromoteOverduePending(baseRecord, pastGrace);
+      expect(result).not.toBe(baseRecord);
+      expect(result.phase).toBe('active');
+      expect(result.activatedAt).toBe(new Date(pastGrace).toISOString());
+    });
+
+    it('maybePromoteOverduePending preserves existing activatedAt if already set', () => {
+      const pendingUntilMs = Date.parse(baseRecord.pendingUntil!);
+      const recordWithActivatedAt = { ...baseRecord, activatedAt: '2030-01-01T00:05:00Z' };
+      const pastGrace = pendingUntilMs + DEFAULT_MAINTENANCE_ACTIVATION_GRACE_MS + 1;
+      const result = maybePromoteOverduePending(recordWithActivatedAt, pastGrace);
+      expect(result.phase).toBe('active');
+      expect(result.activatedAt).toBe('2030-01-01T00:05:00Z');
+    });
+
+    it('maybePromoteOverduePending is a no-op when mode is not maintenance', () => {
+      const normalRecord: MaintenanceStateRecord = { ...baseRecord, mode: 'normal', phase: null };
+      const future = Date.now() + 24 * 60 * 60 * 1000;
+      expect(maybePromoteOverduePending(normalRecord, future)).toBe(normalRecord);
+    });
+
+    it('maybePromoteOverduePending is a no-op when phase is already active', () => {
+      const activeRecord: MaintenanceStateRecord = { ...baseRecord, phase: 'active', activatedAt: '2030-01-01T00:01:00Z' };
+      const future = Date.now() + 24 * 60 * 60 * 1000;
+      expect(maybePromoteOverduePending(activeRecord, future)).toBe(activeRecord);
+    });
+
+    it('maybePromoteOverduePending is a no-op when pendingUntil is missing or malformed', () => {
+      const malformed: MaintenanceStateRecord = { ...baseRecord, pendingUntil: 'not-a-date' };
+      const future = Date.now() + 24 * 60 * 60 * 1000;
+      expect(maybePromoteOverduePending(malformed, future)).toBe(malformed);
+
+      const nullPending: MaintenanceStateRecord = { ...baseRecord, pendingUntil: null };
+      expect(maybePromoteOverduePending(nullPending, future)).toBe(nullPending);
+    });
+
+    it('readMaintenanceState auto-promotes stuck pending row from DB and persists the change', async () => {
+      const pendingUntilDate = new Date('2030-01-01T00:02:00Z');
+      const p = buildPrisma({
+        mode: 'maintenance',
+        phase: 'pending',
+        pendingUntil: pendingUntilDate,
+        activatedAt: null,
+        reason: 'planned',
+        setByOpsUserId: 'ops-1',
+        setAt: new Date('2030-01-01T00:00:00Z'),
+        updatedAt: new Date('2030-01-01T00:00:00Z')
+      });
+      const r = buildRedis(null);
+      const farPast = pendingUntilDate.getTime() + DEFAULT_MAINTENANCE_ACTIVATION_GRACE_MS + 60_000;
+      const state = await readMaintenanceState({
+        prisma: p.prisma,
+        redis: r.redis,
+        now: () => farPast
+      });
+      expect(state.mode).toBe('maintenance');
+      expect(state.phase).toBe('active');
+      // Source-of-truth write happened so other replicas see active too.
+      expect(p.upsert).toHaveBeenCalledTimes(1);
+      const upsertedRow = p.getRow();
+      expect(upsertedRow?.phase).toBe('active');
+      // Redis cache reflects the promotion.
+      expect(r.getValue()).toContain('"phase":"active"');
+    });
+
+    it('readMaintenanceState auto-promotes stuck pending row from Redis cache', async () => {
+      const pendingUntilIso = '2030-01-01T00:02:00Z';
+      const cached: MaintenanceStateRecord = {
+        ...baseRecord,
+        pendingUntil: pendingUntilIso
+      };
+      const p = buildPrisma(null);
+      const r = buildRedis(JSON.stringify(cached));
+      const farPast = Date.parse(pendingUntilIso) + DEFAULT_MAINTENANCE_ACTIVATION_GRACE_MS + 60_000;
+      const state = await readMaintenanceState({
+        prisma: p.prisma,
+        redis: r.redis,
+        now: () => farPast
+      });
+      expect(state.phase).toBe('active');
+      expect(state.activatedAt).toBe(new Date(farPast).toISOString());
+    });
+
+    it('readMaintenanceState does NOT promote when within grace window', async () => {
+      const pendingUntilDate = new Date('2030-01-01T00:02:00Z');
+      const p = buildPrisma({
+        mode: 'maintenance',
+        phase: 'pending',
+        pendingUntil: pendingUntilDate,
+        activatedAt: null,
+        reason: null,
+        setByOpsUserId: 'ops-1',
+        setAt: new Date('2030-01-01T00:00:00Z'),
+        updatedAt: new Date('2030-01-01T00:00:00Z')
+      });
+      const r = buildRedis(null);
+      // 30 seconds past pendingUntil — well inside the grace.
+      const insideGrace = pendingUntilDate.getTime() + 30_000;
+      const state = await readMaintenanceState({
+        prisma: p.prisma,
+        redis: r.redis,
+        now: () => insideGrace
+      });
+      expect(state.phase).toBe('pending');
+      expect(p.upsert).not.toHaveBeenCalled();
+    });
+
+    it('readMaintenanceState falls back to cache write when DB upsert during self-heal fails', async () => {
+      const pendingUntilIso = '2030-01-01T00:02:00Z';
+      const cached: MaintenanceStateRecord = {
+        ...baseRecord,
+        pendingUntil: pendingUntilIso
+      };
+      const failingUpsert = vi.fn(async () => {
+        throw new Error('DB temporarily unavailable');
+      });
+      const findUnique = vi.fn(async () => null);
+      const prisma = {
+        maintenanceState: { findUnique, upsert: failingUpsert }
+      } as unknown as MaintenanceStatePrismaLike;
+      const r = buildRedis(JSON.stringify(cached));
+      const farPast = Date.parse(pendingUntilIso) + DEFAULT_MAINTENANCE_ACTIVATION_GRACE_MS + 60_000;
+      const state = await readMaintenanceState({
+        prisma,
+        redis: r.redis,
+        now: () => farPast
+      });
+      // Even with DB write failure the returned record is promoted, so the
+      // local guard immediately blocks traffic instead of waiting for DB.
+      expect(state.phase).toBe('active');
+      // Cache still gets the new value as a fallback so subsequent reads
+      // converge on active too.
+      expect(r.getValue()).toContain('"phase":"active"');
+    });
+  });
+
+  describe('resolveMaintenanceActivationGraceMs', () => {
+    const savedEnv = process.env['MAINTENANCE_ACTIVATION_GRACE_MS'];
+
+    afterEach(() => {
+      if (savedEnv === undefined) {
+        delete process.env['MAINTENANCE_ACTIVATION_GRACE_MS'];
+      } else {
+        process.env['MAINTENANCE_ACTIVATION_GRACE_MS'] = savedEnv;
+      }
+    });
+
+    it('returns default when env var is unset', () => {
+      delete process.env['MAINTENANCE_ACTIVATION_GRACE_MS'];
+      expect(resolveMaintenanceActivationGraceMs()).toBe(DEFAULT_MAINTENANCE_ACTIVATION_GRACE_MS);
+    });
+
+    it('honours a positive numeric override', () => {
+      process.env['MAINTENANCE_ACTIVATION_GRACE_MS'] = '60000';
+      expect(resolveMaintenanceActivationGraceMs()).toBe(60_000);
+    });
+
+    it('falls back to default for non-numeric or negative values', () => {
+      process.env['MAINTENANCE_ACTIVATION_GRACE_MS'] = 'abc';
+      expect(resolveMaintenanceActivationGraceMs()).toBe(DEFAULT_MAINTENANCE_ACTIVATION_GRACE_MS);
+      process.env['MAINTENANCE_ACTIVATION_GRACE_MS'] = '-100';
+      expect(resolveMaintenanceActivationGraceMs()).toBe(DEFAULT_MAINTENANCE_ACTIVATION_GRACE_MS);
+    });
+
+    it('accepts 0 as a valid override (immediate promotion)', () => {
+      process.env['MAINTENANCE_ACTIVATION_GRACE_MS'] = '0';
+      expect(resolveMaintenanceActivationGraceMs()).toBe(0);
     });
   });
 });

@@ -578,6 +578,31 @@ normal/reduced/emergency  ──(POST /ops/load-shed mode=maintenance)──>  m
 - Nginx subrequests `/_maintenance_gate → /api/v1/maintenance/gate`; the backend returns 200 with header `X-Maintenance-Active: 1` for routes outside `ALWAYS_ALLOWED_PREFIXES`, and the Nginx guarded location converts that to a `503` → `error_page 503 /maintenance.html`. Ops, health, auth, and provider-webhook locations explicitly skip the gate.
 - Durable state survives Redis flushes, backend container restarts, worker restarts, and database failovers. On boot, `backend/src/main.ts` rehydrates `MaintenanceState` from Postgres into Redis so the gate keeps serving correctly even after a cold start in the middle of a maintenance window.
 
+**Read-side self-heal (silent-failure recovery):**
+
+The cutover is asynchronous — the `maintenance-activation` BullMQ job is what flips `pending → active`. If that job is ever lost (worker container running a stale build that doesn't carry the handler, Redis flushed mid-window, worker crashed mid-cutover before the state write), the durable row would stay stuck in `pending` forever and the storefront would remain accessible indefinitely. To prevent this silent failure, `readMaintenanceState` carries a read-side promotion:
+
+- If the cache/DB returns `mode='maintenance' phase='pending'` AND `now > pendingUntil + MAINTENANCE_ACTIVATION_GRACE_MS` (default 7 minutes, env-tunable via `MAINTENANCE_ACTIVATION_GRACE_MS`), the read path promotes the in-memory record to `phase='active'` and persists the change back to Postgres + Redis so other replicas converge.
+- The grace is set just above the worst-case drain (60 s queue + 5 min payment = 6 min), so a healthy worker always wins the race and writes `active` before the fallback triggers. The fallback only fires when the worker is dead or missing the handler.
+- The promotion is idempotent (subsequent reads simply observe `active` from the DB) and works even when the DB write fails — the in-process cache + Redis cache still serve the promoted record for the rest of that process's lifetime so the local guard blocks traffic immediately.
+- Tests covering this path live in `backend/src/common/reliability/maintenance-state.test.ts` (`describe('read-side self-heal for stuck pending state')`) and `backend/src/modules/maintenance/maintenance.e2e-route-matrix.test.ts` (`it('self-heal: stuck pending past grace ...')`).
+- If you observe stuck `pending` in production, run `backend/scripts/diagnose-maintenance.sh` on the VPS to confirm which failure mode you hit (worker build mismatch, Nginx reload missing, etc.). The diagnostic prints the current DB row, the BullMQ job state, the worker logs filtered for `[maintenance-activation]` milestones, and whether the running Nginx config has the `auth_request /_maintenance_gate` directive.
+
+**Worker observability:**
+
+Every step of the `maintenance-activation` handler emits a structured pino log line at the worker level so any cutover can be traced in `docker compose logs workers`:
+
+```
+{"level":"info","msg":"[maintenance-activation] job picked up","jobId":"..."}
+{"level":"info","msg":"[maintenance-activation] state confirmed pending; beginning drain","pendingUntil":"..."}
+{"level":"info","msg":"[maintenance-activation] state flipped to active; storefront now gated by Nginx + load-shed guard","activatedAt":"...","elapsedMs":1234}
+{"level":"info","msg":"[maintenance-activation] background queues resumed for post-cutover processing"}
+```
+
+If `grep '[maintenance-activation]' docker compose logs workers --tail 500` is empty after you set maintenance mode, the worker container is running an old build without the handler — rebuild with `docker compose -p $CLIENT_ID build workers && docker compose -p $CLIENT_ID up -d workers`. The read-side self-heal will eventually recover the state automatically (within `MAINTENANCE_ACTIVATION_GRACE_MS`), but you must rebuild the workers for the next cutover to honour the drain protocol.
+
+Exceptions during the cutover are caught at the handler level: the worker writes a `MaintenanceActivationCutoverFailed` technical-failure alert (so ops gets emailed), logs the error stack, and lets BullMQ mark the job as failed (no retries — the read-side self-heal owns the recovery from here).
+
 **Exiting maintenance:**
 
 - Ops POSTs `mode: 'normal' | 'reduced' | 'emergency'` to `/api/v1/ops/load-shed` (OTP required).
@@ -588,6 +613,7 @@ normal/reduced/emergency  ──(POST /ops/load-shed mode=maintenance)──>  m
 - `MAINTENANCE_QUEUE_DRAIN_TIMEOUT_MS` (default `120000`) — max wait for active jobs to finish before activation proceeds.
 - `MAINTENANCE_PAYMENT_DRAIN_TIMEOUT_MS` (default `300000`) — max wait for `PENDING_PAYMENT` orders to settle.
 - `MAINTENANCE_QUEUE_PAUSE_GRACE_MS` (default `1500`) — grace window after pausing `outbox-dispatch` so the in-flight publish iteration finishes.
+- `MAINTENANCE_ACTIVATION_GRACE_MS` (default `420000` = 7 min) — read-side self-heal grace past `pendingUntil` before a stuck `pending` row is auto-promoted to `active`. Set to a value larger than your `MAINTENANCE_PAYMENT_DRAIN_TIMEOUT_MS` + `MAINTENANCE_QUEUE_DRAIN_TIMEOUT_MS` sum (plus a small cushion for BullMQ delayed-job polling jitter) so the fallback never races a healthy worker.
 - `DEFAULT_MAINTENANCE_PENDING_WINDOW_MS` (compile-time constant in `maintenance-state.ts`, currently `120000`) — the 2-minute warning window. Change requires a deploy.
 
 

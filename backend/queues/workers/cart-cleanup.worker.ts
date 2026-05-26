@@ -1,6 +1,7 @@
 import { Worker, type ConnectionOptions, type Queue } from 'bullmq';
 import { PrismaClient as RealPrismaClient } from '@prisma/client';
 import IORedis from 'ioredis';
+import pino from 'pino';
 import { sendProcessRestartAlert, sendTechnicalFailureAlert } from '@modules/notifications/notification-failure-alert';
 import { publishRestartSignal, SYSTEM_RESTART_CHANNEL, type RestartPublisherLike } from '@common/restart/system-restart';
 import { LOAD_SHED_MODE_KEY } from '@common/reliability/load-shed.guard';
@@ -11,6 +12,15 @@ import {
   type MaintenanceStateRedisLike
 } from '@common/reliability/maintenance-state';
 import { createQueueRegistry as createRealQueueRegistry, type QueueRegistry } from '@queues/queue-registry';
+
+/**
+ * Module-level logger for the cart-cleanup worker. `attachWorkerLogging` covers
+ * generic BullMQ lifecycle events (active/completed/failed) via the worker
+ * bootstrap; this logger is for handler-internal milestones — primarily the
+ * maintenance-activation cutover, where the operator must be able to trace
+ * each step (pick up → drain → flip → resume) in plain `docker compose logs`.
+ */
+const log = pino({ name: 'cart-cleanup-worker' });
 
 /**
  * Maximum time (ms) to wait for in-flight PENDING_PAYMENT orders to reach
@@ -263,6 +273,10 @@ export function createCartCleanupWorker(
         //      gated at Nginx, but background jobs (notifications, refunds,
         //      etc.) continue to run normally for whoever can still write
         //      via ops/webhook routes.
+        const activationStartMs = Date.now();
+        const activationJobId = String(job.id ?? 'unknown');
+        log.info({ jobId: activationJobId, jobName: job.name }, '[maintenance-activation] job picked up');
+
         const prismaState = prisma as unknown as MaintenanceStatePrismaLike;
         let redisForState: MaintenanceStateRedisLike | null = null;
         try {
@@ -270,7 +284,8 @@ export function createCartCleanupWorker(
           if (redisUrl) {
             redisForState = new IORedis(redisUrl, { maxRetriesPerRequest: null, family: 4 }) as unknown as MaintenanceStateRedisLike;
           }
-        } catch {
+        } catch (redisErr) {
+          log.warn({ err: redisErr, jobId: activationJobId }, '[maintenance-activation] failed to construct local Redis client; proceeding without cache write');
           redisForState = null;
         }
 
@@ -279,8 +294,13 @@ export function createCartCleanupWorker(
           if (current.mode !== 'maintenance' || current.phase !== 'pending') {
             // Operator already exited maintenance (or it's already active).
             // Nothing to do — the durable row is the source of truth.
+            log.info(
+              { jobId: activationJobId, mode: current.mode, phase: current.phase },
+              '[maintenance-activation] no-op: state already moved out of pending'
+            );
             return;
           }
+          log.info({ jobId: activationJobId, pendingUntil: current.pendingUntil }, '[maintenance-activation] state confirmed pending; beginning drain');
 
           // Pause queues to stop the influx.
           let registry: QueueRegistry | null = null;
@@ -398,6 +418,14 @@ export function createCartCleanupWorker(
               setAt: activatedAtIso
             }
           });
+          log.info(
+            {
+              jobId: activationJobId,
+              activatedAt: activatedAtIso,
+              elapsedMs: Date.now() - activationStartMs
+            },
+            '[maintenance-activation] state flipped to active; storefront now gated by Nginx + load-shed guard'
+          );
 
           // Resume queues so internal background work (notifications, refunds)
           // can continue while the storefront is gated. Best-effort — if a
@@ -409,15 +437,46 @@ export function createCartCleanupWorker(
                   try {
                     const q = registry![key as keyof QueueRegistry] as Queue;
                     await q.resume();
-                  } catch {
-                    // Best-effort.
+                  } catch (resumeErr) {
+                    log.warn(
+                      { err: resumeErr, jobId: activationJobId, queue: key },
+                      '[maintenance-activation] queue resume failed (best-effort)'
+                    );
                   }
                 })
               );
+              log.info({ jobId: activationJobId }, '[maintenance-activation] background queues resumed for post-cutover processing');
             } finally {
               await Promise.allSettled(Object.values(registry).map((q) => (q as Queue).close()));
             }
           }
+        } catch (cutoverErr) {
+          // Any unexpected exception in the cutover path. Without this catch,
+          // an error here would propagate to BullMQ as a job failure → the
+          // job stays in the queue and retries, which is the wrong behaviour
+          // for a cutover step where partial progress (paused queues + DB
+          // state still pending) leaves the system in a weird middle. We log
+          // the error AND escalate as a technical failure alert so ops sees
+          // the activation needs manual intervention.
+          log.error(
+            { err: cutoverErr, jobId: activationJobId, elapsedMs: Date.now() - activationStartMs },
+            '[maintenance-activation] cutover failed before state flip; read-side self-heal will promote pending→active once grace expires'
+          );
+          await sendTechnicalFailureAlert({
+            prisma,
+            template: 'MaintenanceActivationCutoverFailed',
+            channel: 'UNKNOWN',
+            recipient: 'ops-maintenance',
+            errorMessage:
+              cutoverErr instanceof Error
+                ? `Maintenance cutover failed: ${cutoverErr.message}. The state row is still in pending. The read-side self-heal (default 7-min grace past pendingUntil) will promote it to active automatically, but verify the worker container is healthy.`
+                : 'Maintenance cutover failed (unknown error).',
+            failureStage: 'CORE_LOGIC',
+            domain: 'ops',
+            component: 'maintenance-activation',
+            jobId: activationJobId,
+            terminalFailure: true
+          });
         } finally {
           // Always close the local Redis client created for state writes.
           if (redisForState && typeof (redisForState as { quit?: () => Promise<unknown> }).quit === 'function') {

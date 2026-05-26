@@ -46,6 +46,49 @@ export const MAINTENANCE_STATE_SINGLETON_KEY = 'singleton';
  */
 export const DEFAULT_MAINTENANCE_PENDING_WINDOW_MS = 2 * 60 * 1000;
 
+/**
+ * Grace window applied on top of `pendingUntil` before the read path will
+ * self-heal a stuck `pending` state by auto-promoting it to `active`.
+ *
+ * The healthy path is: worker picks up the `maintenance-activation` BullMQ
+ * job exactly at `pendingUntil`, drains the queues + payments, and writes
+ * `phase = 'active'`. The drain has its own timeouts
+ * (`RESTART_QUEUE_DRAIN_TIMEOUT_MS` + `RESTART_PAYMENT_DRAIN_TIMEOUT_MS`,
+ * worst case 1 min queue + 5 min payments = 6 min), so within ~6.5 min of
+ * `pendingUntil` the worker will have written `active` itself.
+ *
+ * The fallback fires only if the worker is unhealthy: image not rebuilt
+ * after pulling the maintenance code, worker container in a crash loop,
+ * BullMQ Redis lost the job, or the operator hand-edited the row. After
+ * `pendingUntil + GRACE`, every read of the state auto-promotes it to
+ * `active` and persists the new row, so Nginx + the API guard can finally
+ * start blocking traffic. This is the "system cannot get stuck in pending"
+ * contract that the design promises to ops.
+ *
+ * The grace must be larger than the worst-case healthy drain so we don't
+ * race the worker, but small enough that a misbehaving worker doesn't keep
+ * the storefront accessible for an unbounded time. 7 min covers the worst
+ * case (6 min: 60s queue drain + 5 min payment drain) plus a ~1 min cushion
+ * for Redis hiccups and BullMQ delayed-job polling jitter. Override via
+ * `MAINTENANCE_ACTIVATION_GRACE_MS` env var if your tenant runs custom
+ * drain timeouts.
+ */
+export const DEFAULT_MAINTENANCE_ACTIVATION_GRACE_MS = 7 * 60 * 1000;
+
+/**
+ * Resolves the activation grace from the env var or falls back to the
+ * default. Called per-read so config changes don't require a restart.
+ */
+export function resolveMaintenanceActivationGraceMs(): number {
+  const raw = process.env['MAINTENANCE_ACTIVATION_GRACE_MS'];
+  if (!raw) return DEFAULT_MAINTENANCE_ACTIVATION_GRACE_MS;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return DEFAULT_MAINTENANCE_ACTIVATION_GRACE_MS;
+  }
+  return parsed;
+}
+
 export interface MaintenanceStateRecord {
   mode: LoadShedModeWithMaintenance;
   phase: MaintenancePhase | null;
@@ -224,6 +267,32 @@ export function invalidateMaintenanceProcessCache(): void {
 }
 
 /**
+ * Returns the same record with `phase` promoted to `active` if the state is
+ * a stuck `pending` past its grace window. Pure / no side effects — callers
+ * decide whether to persist the change. Exposed for tests and the read path.
+ */
+export function maybePromoteOverduePending(
+  record: MaintenanceStateRecord,
+  nowMs: number,
+  graceMs: number = DEFAULT_MAINTENANCE_ACTIVATION_GRACE_MS
+): MaintenanceStateRecord {
+  if (record.mode !== 'maintenance') return record;
+  if (record.phase !== 'pending') return record;
+  if (!record.pendingUntil) return record;
+  const pendingUntilMs = Date.parse(record.pendingUntil);
+  if (!Number.isFinite(pendingUntilMs)) return record;
+  if (nowMs < pendingUntilMs + graceMs) return record;
+  const promotedAtIso = new Date(nowMs).toISOString();
+  return {
+    ...record,
+    phase: 'active',
+    activatedAt: record.activatedAt ?? promotedAtIso,
+    setAt: promotedAtIso,
+    updatedAt: promotedAtIso
+  };
+}
+
+/**
  * Reads the durable state. Resolution order:
  *   1. In-process memo (5s TTL) — keeps load-shed guard's hot path off the
  *      network in steady state.
@@ -231,19 +300,87 @@ export function invalidateMaintenanceProcessCache(): void {
  *   3. Postgres `MaintenanceState` singleton row. On miss the default
  *      'normal' state is returned without writing to DB (avoids creating
  *      rows from health-check probes).
+ *
+ * After resolving the record from cache/DB, applies a self-heal that
+ * promotes a stuck `pending` state to `active` once
+ * `pendingUntil + DEFAULT_MAINTENANCE_ACTIVATION_GRACE_MS` has elapsed. The
+ * promoted record is persisted back to Redis (and to Postgres when a
+ * client is available) so subsequent readers across the cluster see the
+ * same active state without each having to re-evaluate the grace window.
  */
 export async function readMaintenanceState(opts: {
   prisma: MaintenanceStatePrismaLike;
   redis: MaintenanceStateRedisLike | null;
   now?: () => number;
+  activationGraceMs?: number;
 }): Promise<MaintenanceStateRecord> {
   const now = opts.now ? opts.now() : Date.now();
+  const graceMs = opts.activationGraceMs ?? resolveMaintenanceActivationGraceMs();
   if (processCache && now - processCache.storedAt < PROCESS_CACHE_TTL_MS) {
+    // Still apply self-heal to the memoized record — the memo can be stale
+    // across the grace boundary if the operator set pending right before
+    // the cache landed. Pure check, no side effects on the fast path.
+    const healed = maybePromoteOverduePending(processCache.value, now, graceMs);
+    if (healed !== processCache.value) {
+      processCache = { value: healed, storedAt: now };
+      // Fire-and-forget persist so other replicas converge. We do NOT await
+      // here to keep the hot path read-only.
+      void (async () => {
+        try {
+          await writeMaintenanceState({
+            prisma: opts.prisma,
+            redis: opts.redis,
+            record: {
+              mode: healed.mode,
+              phase: healed.phase,
+              pendingUntil: healed.pendingUntil,
+              activatedAt: healed.activatedAt,
+              reason: healed.reason,
+              setByOpsUserId: healed.setByOpsUserId,
+              setAt: healed.setAt
+            },
+            now: () => now
+          });
+        } catch {
+          // Best-effort persistence — see comment on the cache-hit branch.
+        }
+      })();
+      return healed;
+    }
     return processCache.value;
   }
 
   const fromCache = await readCache(opts.redis);
   if (fromCache) {
+    const healed = maybePromoteOverduePending(fromCache, now, graceMs);
+    if (healed !== fromCache) {
+      // Persist the promotion so other replicas (and the Nginx gate) pick
+      // up `active` on their next read instead of each one independently
+      // re-deriving the same fallback. Best-effort: DB or Redis failure
+      // should not crash the guard.
+      try {
+        await writeMaintenanceState({
+          prisma: opts.prisma,
+          redis: opts.redis,
+          record: {
+            mode: healed.mode,
+            phase: healed.phase,
+            pendingUntil: healed.pendingUntil,
+            activatedAt: healed.activatedAt,
+            reason: healed.reason,
+            setByOpsUserId: healed.setByOpsUserId,
+            setAt: healed.setAt
+          },
+          now: () => now
+        });
+      } catch {
+        // Soft fail — the in-process memo + cache write below still ensures
+        // this process serves `active` for the remainder of the TTL.
+        await writeCache(opts.redis, healed);
+      }
+      processCache = { value: healed, storedAt: now };
+      return healed;
+    }
     processCache = { value: fromCache, storedAt: now };
     return fromCache;
   }
@@ -260,6 +397,30 @@ export async function readMaintenanceState(opts: {
     // Treat DB read failure as "no row" — fall back to defaults so the guard
     // never crashes the request. The next successful read will repopulate.
     fromDb = DEFAULT_STATE;
+  }
+
+  const healed = maybePromoteOverduePending(fromDb, now, graceMs);
+  if (healed !== fromDb) {
+    try {
+      await writeMaintenanceState({
+        prisma: opts.prisma,
+        redis: opts.redis,
+        record: {
+          mode: healed.mode,
+          phase: healed.phase,
+          pendingUntil: healed.pendingUntil,
+          activatedAt: healed.activatedAt,
+          reason: healed.reason,
+          setByOpsUserId: healed.setByOpsUserId,
+          setAt: healed.setAt
+        },
+        now: () => now
+      });
+    } catch {
+      await writeCache(opts.redis, healed);
+    }
+    processCache = { value: healed, storedAt: now };
+    return healed;
   }
 
   await writeCache(opts.redis, fromDb);
