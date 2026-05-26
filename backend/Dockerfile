@@ -31,6 +31,10 @@ COPY --from=builder /app/tsconfig.production.json ./tsconfig.production.json
 COPY --from=builder /app/bootstrap-backend.js ./bootstrap-backend.js
 COPY --from=builder /app/bootstrap-workers.js ./bootstrap-workers.js
 COPY --from=builder /app/scripts/lib ./scripts/lib
+# Operational recovery scripts that must be available in the production image
+# (invoked via `docker exec <container> node scripts/<name>.js` during incidents).
+# Keep this list short — these are NOT for everyday use, only for break-glass.
+COPY --from=builder /app/scripts/resume-paused-queues.js ./scripts/resume-paused-queues.js
 
 RUN addgroup -S app && adduser -S app -G app \
   && chown -R app:app /app
