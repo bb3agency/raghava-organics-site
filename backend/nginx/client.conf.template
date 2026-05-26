@@ -178,10 +178,18 @@ server {
   }
 
   # Maintenance API surface — always reachable. The status route powers the
-  # storefront banner; the gate route is hit internally by `auth_request`.
-  # NOT guarded by `auth_request` itself (would cause infinite recursion).
+  # storefront banner; the gate route is hit internally by `auth_request`
+  # (which uses the `/_maintenance_gate` internal location above and so
+  # bypasses every limit_req zone — it never reaches this location). NOT
+  # guarded by `auth_request` itself (would cause infinite recursion).
+  #
+  # Uses the same `api_default` zone + burst=20 as the catch-all `/api/`
+  # block below so the edge-policy drift checker stays clean. Per-IP rate
+  # is 90 req/min from the zone definition in nginx/rate-zones.conf.template,
+  # which is ample for the 5s/60s storefront poll cadence even with multiple
+  # tabs from the same household.
   location ~ ^/api/v1/maintenance/ {
-    limit_req zone=api_default burst=40 nodelay;
+    limit_req zone=api_default burst=20 nodelay;
 
     proxy_pass http://127.0.0.1:3001;
     proxy_http_version 1.1;
