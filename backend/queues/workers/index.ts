@@ -227,6 +227,104 @@ async function bootstrapWorkers(): Promise<void> {
   const redis = new IORedis(redisUrl, workerRedisOptions);
   const workerRedis = redis.duplicate();
 
+  // --- Auto-resume queues left paused by a prior worker exit (R4 — May 26, 2026) ---
+  //
+  // The scheduled-process-restart and maintenance-activation flows in
+  // cart-cleanup.worker.ts pause every DRAINABLE queue (plus outbox-dispatch),
+  // drain in-flight work, then call Queue.resume() before publishing the restart
+  // signal and exiting. If the resume step fails, races with process.exit, or
+  // the alert it would normally send is itself enqueued onto the now-paused
+  // notifications queue, the operator silently ends up with a paused queue
+  // post-restart. Symptom: workers are "up" but new jobs land in
+  // bull:<queue>:paused and never get processed. OTP emails, order
+  // confirmations, refund alerts, etc. all stop arriving with no visible error.
+  //
+  // Recovery without this block requires running scripts/resume-paused-queues.js.
+  // With this block, every worker boot re-asserts the queues as resumed, so the
+  // worst-case after any abnormal exit is "delayed until next deploy" instead
+  // of "silent indefinite outage". This is safe because the only code paths
+  // that pause queues are the two drain protocols above, both of which intend
+  // for the pause to last only seconds. An operator who manually pauses a queue
+  // via Bull Board and then restarts the worker container is opting into a
+  // re-resume — that's an acceptable trade-off versus the silent outage mode.
+  try {
+    const recoveryRegistry: Record<string, Queue> = {
+      'order-processing': new Queue('order-processing', { connection: workerRedis }),
+      notifications: new Queue('notifications', { connection: workerRedis }),
+      shipping: new Queue('shipping', { connection: workerRedis }),
+      'inventory-alerts': new Queue('inventory-alerts', { connection: workerRedis }),
+      refunds: new Queue('refunds', { connection: workerRedis }),
+      analytics: new Queue('analytics', { connection: workerRedis }),
+      'cart-cleanup': new Queue('cart-cleanup', { connection: workerRedis }),
+      'outbox-dispatch': new Queue('outbox-dispatch', { connection: workerRedis }),
+      reconciliation: new Queue('reconciliation', { connection: workerRedis })
+      // dead-letter is intentionally excluded — the drain protocol never pauses
+      // it, and we don't want to mask a deliberate operator pause there.
+    };
+
+    const resumed: string[] = [];
+    const resumeFailed: string[] = [];
+    await Promise.all(
+      Object.entries(recoveryRegistry).map(async ([name, q]) => {
+        try {
+          const paused = await q.isPaused();
+          if (paused) {
+            await q.resume();
+            const stillPaused = await q.isPaused();
+            if (stillPaused) {
+              resumeFailed.push(name);
+            } else {
+              resumed.push(name);
+            }
+          }
+        } catch (err) {
+          resumeFailed.push(`${name}(${err instanceof Error ? err.message : String(err)})`);
+        } finally {
+          await q.close().catch(() => undefined);
+        }
+      })
+    );
+
+    if (resumed.length > 0 || resumeFailed.length > 0) {
+      logger.warn(
+        { resumed, resumeFailed },
+        'Detected queues paused at boot — likely incomplete drain from a prior restart. Auto-resumed.'
+      );
+    }
+    if (resumeFailed.length > 0) {
+      void sendTechnicalFailureAlert({
+        prisma: prismaClient,
+        template: 'WorkerBootQueueResumeFailed',
+        channel: 'UNKNOWN',
+        recipient: 'worker-runtime',
+        errorMessage: `Workers booted with queue(s) still paused after auto-resume attempt: ${resumeFailed.join(
+          ', '
+        )}. New jobs on these queues will not be processed. Operator must manually resume via scripts/resume-paused-queues.js or Bull Board.`,
+        failureStage: 'CORE_LOGIC',
+        domain: 'workers',
+        component: 'worker-boot-queue-recovery',
+        terminalFailure: true
+      });
+    }
+  } catch (recoveryErr) {
+    logger.error(
+      { err: recoveryErr instanceof Error ? recoveryErr.message : String(recoveryErr) },
+      'Worker boot queue auto-resume recovery failed — workers will start but paused queues may still be paused'
+    );
+    void sendTechnicalFailureAlert({
+      prisma: prismaClient,
+      template: 'WorkerBootQueueRecoveryFailed',
+      channel: 'UNKNOWN',
+      recipient: 'worker-runtime',
+      errorMessage: `Worker boot auto-resume recovery failed: ${
+        recoveryErr instanceof Error ? recoveryErr.message : String(recoveryErr)
+      }. Run scripts/resume-paused-queues.js manually to check queue state.`,
+      failureStage: 'CORE_LOGIC',
+      domain: 'workers',
+      component: 'worker-boot-queue-recovery'
+    });
+  }
+
   // Error listeners prevent unhandled 'error' events from crashing the worker process
   redis.on('error', (err) => {
     logger.error({ err: err.message }, 'Worker Redis client error (primary)');

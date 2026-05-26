@@ -4,6 +4,55 @@ This document preserves detailed hardening history for engineering traceability.
 
 ## Recent hardening changes
 
+**OTP emails (and every other notification) silently stop after a system restart — `notifications` queue left paused by drain protocol, no recovery on worker boot — May 26, 2026:**
+
+Reported by an operator on the Raghava Organics VPS: after a routine ops `system-restart` action verified earlier in the day, every subsequent OTP request returned HTTP 200 from `POST /api/v1/ops/otp/request`, the `OpsOtpChallenge` row was created in Postgres with status `PENDING`, but no email ever arrived. SMS and other notification templates were equally affected. Workers were "up", health endpoint reported `db` and `redis` both `connected`, `RESEND_API_KEY` was present in both `raghava-organics-backend` and `raghava-organics-workers` envs (loaded from `.env` since this client has not migrated it into the Ops DB overlay), and there were zero error/warn log lines anywhere.
+
+The smoking gun was in the Redis state for the `notifications` queue:
+
+```
+bull:notifications:wait      list len = 0
+bull:notifications:active    list len = 0
+bull:notifications:paused    list len = 3   ← three OTP jobs stuck in paused list
+bull:notifications:completed zset = 31      ← jobs that completed earlier in the day
+bull:notifications:meta      paused = 1     ← queue is flagged as paused
+```
+
+The three jobs in `bull:notifications:paused` mapped one-to-one with three `OpsOtpChallenge` rows whose status remained `PENDING` (operator could not enter the OTP because the email never arrived). The most recent two `VERIFIED` challenges — older by a few minutes — confirmed the system had been delivering OTPs perfectly until a specific point in time.
+
+Tracing the timeline against `cart-cleanup.worker.ts`:
+
+1. Operator verified a `system-restart` OTP at T-5min and confirmed restart.
+2. The `scheduled-process-restart` BullMQ job fired ~5 minutes later in the workers container.
+3. That job's drain protocol called `Queue.pause()` on every queue in `DRAINABLE_QUEUE_KEYS` (`order-processing`, `notifications`, `shipping`, `inventory-alerts`, `refunds`, `analytics`, `cart-cleanup`, `reconciliation`) plus `outbox-dispatch` — by design, to stop the influx during the payment drain.
+4. It then drained, attempted to call `Queue.resume()` on each queue (`queues/workers/cart-cleanup.worker.ts` lines 670–695), and immediately published the restart signal followed by `process.exit(0)`.
+5. The new worker container booted (its log shows only `Ops DB runtime config overlay applied for workers` and `All background workers started successfully and are listening for jobs.` — no resume call, no recovery step).
+6. The `notifications` queue was still flagged as paused in Redis. Every subsequent `Queue.add(...)` call from the API (ops OTP, customer OTP via outbox, admin notifications) landed jobs in `bull:notifications:paused` instead of `bull:notifications:wait`. The workers correctly refused to claim from the paused list. Result: silent indefinite outage of every notification channel.
+
+Why the resume step failed without leaving any trace is genuinely uncertain. The most likely causes are:
+
+- The resume promise resolved at the application layer but the Redis write was clipped by `process.exit(0)` racing the round-trip flush of the BullMQ Lua script that toggles the `paused` field on `bull:<q>:meta`.
+- The resume threw and triggered `sendTechnicalFailureAlert` — but that alert helper enqueues to the `notifications` queue, which at that exact moment is still paused. The alert vanished into the same paused list as the OTPs.
+- In the `maintenance-activation` flow (not this incident's flow but the same pattern), the resume catch handler is a `log.warn` and not even an alert (`cart-cleanup.worker.ts` line 441), which would have hidden a failure even more completely.
+
+Fix is three-layered:
+
+1. **`backend/queues/workers/index.ts` — auto-resume on boot (R4):** the workers process now opens a temporary `Queue` handle for each known queue immediately after constructing the worker Redis connection, calls `isPaused()` on each, and if paused calls `resume()` and re-verifies. Any queue that stays paused triggers a terminal `WorkerBootQueueResumeFailed` technical alert AND a structured warning log. The dead-letter queue is deliberately excluded — the drain protocol never touches it and we don't want to mask a deliberate operator pause there. This makes the workers self-healing on every container boot: after any abnormal exit (the deploy-restart cycle on the VPS, OOM kill, kernel panic), the worst case is "delayed until next deploy" instead of "silent indefinite outage". An operator who manually pauses a queue via Bull Board and then restarts the container is opting into a re-resume — an acceptable trade-off versus the silent outage mode.
+
+2. **`backend/scripts/resume-paused-queues.js` — manual recovery tool:** standalone Node script that does the same thing as the boot recovery, but on demand. Two modes:
+   - `node scripts/resume-paused-queues.js --dry-run` — reports which queues are paused without touching them.
+   - `node scripts/resume-paused-queues.js` — calls `Queue.resume()` on every paused queue, re-verifies, and prints a summary. Use this if the workers container itself cannot restart, or to confirm queue state after any restart/maintenance cycle. Reads `.env` from the parent directory if `REDIS_URL` is not already set, so it works both from inside the workers container and from a bare shell on the VPS host.
+
+3. **`backend/scripts/diagnose-paused-queues.sh` (call-site documented in this entry but not yet shipped as a separate file):** a 5-line one-liner the operator can paste — for queue in notifications order-processing shipping ...; do docker exec raghava-organics-redis sh -lc "redis-cli -a \$REDIS_PASSWORD --no-auth-warning HGET bull:$queue:meta paused"; done. Outputs `1` for paused queues, empty for healthy ones.
+
+Detection signature for regressions:
+
+- `bull:<any>:meta` has `paused = 1` after a worker container is fully booted (the `All background workers started successfully` log line has appeared at least 5 seconds ago).
+- Jobs accumulate in `bull:<queue>:paused` (list) while `bull:<queue>:wait` and `bull:<queue>:active` stay at 0.
+- The bootstrap log emits `Detected queues paused at boot — likely incomplete drain from a prior restart. Auto-resumed.` with `resumed` and `resumeFailed` arrays — this is now an observable signal every time the self-heal fires, even if successful.
+
+**Why we did not just write a Redis Lua patch directly on `bull:<queue>:meta paused`:** the BullMQ pause/resume Lua scripts also move jobs between the `paused` and `wait` lists atomically. Manually `HDEL`ing the `meta.paused` field leaves jobs in the wrong list and the next worker fetch never sees them. Always go through `Queue.resume()`.
+
 **Bare nginx 503 page during maintenance — two-hop `error_page` chain didn't honour `recursive_error_pages off;` — May 2026:**
 
 Sibling bug to the file-install issue below, found while troubleshooting Raghava Organics on the same day. After the static `maintenance.html` was correctly installed at `/etc/nginx/maintenance/maintenance.html` AND all duplicate server-name conflicts were cleaned out of `sites-enabled/`, hitting the storefront during active maintenance **still** returned nginx's compiled-in bare 503 page (206 bytes) instead of the branded page or the inline fallback.
