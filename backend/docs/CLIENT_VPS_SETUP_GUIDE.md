@@ -750,6 +750,7 @@ Safety note: run `contract:admin` only against a controlled non-production targe
 | Recently-pushed nginx changes not actually live | Nginx config drift — see §19.3 |
 | Storefront shows **bare** `nginx/1.x (Ubuntu)` 500/503 page (not the friendly maintenance page) but `/ops` reaches the React shell | Maintenance gate auth_request failing OR `maintenance.html` not deployed — see §19.5. Post-2026-05-26: a missing `maintenance.html` now serves a minimal inline branded page instead of nginx's default. Bare nginx page = gate subrequest itself is failing (case A). |
 | Storefront shows a **minimal "We'll be back shortly"** page during maintenance (no rich styling, no dark-mode handling) | The full styled `maintenance.html` is not on disk. Run `sudo bash scripts/install-maintenance-page.sh` on the VPS — see §19.5 Recovery. |
+| **OTP/notification emails silently stop arriving** even though backend health is `db: connected, redis: connected`, `RESEND_API_KEY` is loaded, and `OpsOtpChallenge` rows are created in `PENDING` state with no error logs anywhere | The `notifications` queue (possibly also `outbox-dispatch` or others) is paused in Redis from an incomplete drain protocol exit on a prior `scheduled-process-restart` or `maintenance-activation`. See §19.6 Recovery. |
 
 ### 19.2 Dead-container tombstones — two failure modes (`No such container: <sha>`)
 
@@ -998,6 +999,48 @@ sudo nginx -t && sudo systemctl reload nginx
 ```
 
 **Prevention.** The CD deploy script (§3.5 in `vps-deploy.sh`) now installs `maintenance.html` automatically on every deploy. As long as you grant the runner user the sudoers entries from §22 ("Maintenance page install" block), the file stays in sync with the repo and this symptom can't recur.
+
+### 19.6 OTP/notification emails silently stop arriving (paused BullMQ queue)
+
+**Symptom.** Operators stop receiving OTP emails (or admin/customer OTPs, order confirmations, refund alerts, technical failure emails) even though:
+- `curl http://127.0.0.1:<BACKEND_PORT>/api/v1/health` reports `db: connected, redis: connected`
+- `RESEND_API_KEY` and `RESEND_FROM` are present in both `backend` and `workers` container env (`docker exec <client-id>-backend env | grep RESEND_`)
+- `OpsOtpChallenge` rows are being created in Postgres with status `PENDING`
+- No error/warn lines appear in `docker logs <client-id>-backend` or `docker logs <client-id>-workers`
+
+**Diagnose.** This is the queue-paused failure mode. Confirm with one shell loop:
+
+```bash
+for q in notifications order-processing shipping inventory-alerts refunds analytics cart-cleanup outbox-dispatch reconciliation dead-letter; do
+  RESULT=$(docker exec <client-id>-redis sh -lc \
+    "redis-cli -a \"\$REDIS_PASSWORD\" --no-auth-warning HGET bull:$q:meta paused" 2>/dev/null)
+  if [ "$RESULT" = "1" ]; then echo "  $q: PAUSED"; else echo "  $q: ok"; fi
+done
+```
+
+Any queue printed as `PAUSED` is the problem. The notifications queue is by far the most operationally painful one — the failure mode is silent because the alert path itself routes through the paused queue.
+
+**Recover (immediate, no rebuild required).** Run the manual recovery script that ships inside the workers image:
+
+```bash
+docker exec <client-id>-workers node scripts/resume-paused-queues.js
+```
+
+The script calls BullMQ's `Queue.resume()` on every paused queue (which atomically clears `meta.paused` AND moves jobs from `bull:<q>:paused` back to `bull:<q>:wait`). Output reports `resumed`, `already running`, and `failed` per queue. Within seconds of the resume, any stuck OTP jobs will be processed and emails will start arriving — **note that the `OpsOtpChallenge` row has a 10-minute TTL, so any challenge older than 10 minutes has expired and the operator must request a fresh OTP from the ops console.** The script supports `--dry-run` (inspect state without resuming) and `--queues=a,b` (restrict to specific queue names).
+
+**Self-heal (automatic, since May 26, 2026).** Every time the `workers` container starts, `bootstrapWorkers()` re-checks every drainable queue and auto-resumes any that are still paused before any `Worker` begins polling. Look for this log line on container boot:
+
+```
+Detected queues paused at boot — likely incomplete drain from a prior restart. Auto-resumed.
+```
+
+If you see that line right after starting workers, the previous restart left a queue paused and the worker has already recovered — no operator action required. If the auto-resume itself fails on any queue, the worker fires a terminal `WorkerBootQueueResumeFailed` technical alert (which CAN reach operators at that moment in the boot sequence because the alert is generated before the notifications Worker starts processing the queue).
+
+**Root cause (for context).** The `scheduled-process-restart` and `maintenance-activation` flows in `cart-cleanup.worker.ts` both pause queues for drain, then resume them before exiting. If the application-layer `await q.resume()` resolves but the Redis Lua flush is clipped by `process.exit(0)` racing the round-trip, or if the resume-failure alert is itself enqueued onto the now-paused notifications queue and orphaned, the queue stays paused indefinitely. The new worker container boots but `bull:<queue>:meta paused = 1` is still set in Redis. Every subsequent `Queue.add(...)` lands jobs in `bull:<queue>:paused` instead of `bull:<queue>:wait`, and the workers correctly refuse to claim from the paused list.
+
+**Forbidden.** **Never** "fix" a paused queue by running `HDEL bull:<queue>:meta paused` in `redis-cli` directly. That clears the `paused` flag in the meta hash but does NOT move jobs from `bull:<queue>:paused` back to `bull:<queue>:wait`. Workers will then poll `wait` (empty) while the parked jobs sit forever in `paused`. Always use `Queue.resume()` via the recovery script or Bull Board.
+
+Full operator runbook lives in `OPS_CONTROL_PLANE_GUIDE.md` §9.2; architectural decision log in `DECISIONS.md` (`[2026-05-26] Worker boot self-heals paused queues`); incident write-up in `HARDENING_HISTORY.md`.
 
 ### 19.1 API error-code triage for frontend + VPS ops
 

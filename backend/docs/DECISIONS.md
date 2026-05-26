@@ -4,6 +4,39 @@
 
 ---
 
+## [2026-05-26] Worker boot self-heals paused queues to recover from incomplete drain protocol exits
+
+**Context:** The May 26, 2026 Raghava Organics incident showed that the `scheduled-process-restart` and `maintenance-activation` drain protocols in `cart-cleanup.worker.ts` can leave queues paused in Redis indefinitely if the resume step at the end of the protocol fails after the application-layer `await` completes but before the Redis Lua flush lands (process exit race), or if the resume-failure technical alert is itself routed through the now-paused notifications queue and orphaned. The failure mode is silent: workers boot cleanly into the next container, no error is logged anywhere, but every subsequent `Queue.add(...)` for the affected queue lands jobs in `bull:<queue>:paused` instead of `bull:<queue>:wait`, and the workers correctly refuse to claim from the paused list. For the notifications queue specifically, this is a catastrophic failure mode — every email/SMS/WhatsApp notification stops arriving (OTP, order confirmations, refund alerts, technical failure alerts), the alert path itself joins the orphans on the paused list, and the outage is invisible until a human notices.
+
+**Decision — Workers auto-resume any paused queue on boot, plus ship a manual recovery script for explicit operator control.**
+
+1. **Bootstrap self-heal (primary defence):** Immediately after constructing the Redis connection and **before** any `Worker` starts polling, `bootstrapWorkers()` in `queues/workers/index.ts` opens a temporary `Queue` handle for every drainable queue (`order-processing`, `notifications`, `shipping`, `inventory-alerts`, `refunds`, `analytics`, `cart-cleanup`, `outbox-dispatch`, `reconciliation`), calls `isPaused()`, and for any queue that returns `true` calls `resume()` then re-verifies with `isPaused()`. Queues that auto-resumed emit a structured `Detected queues paused at boot — likely incomplete drain from a prior restart. Auto-resumed.` warn log. Queues that stay paused after auto-resume fire a terminal `WorkerBootQueueResumeFailed` technical alert (which now CAN reach operators because at that moment in the boot sequence the email path no longer depends on the notifications queue being healthy — the alert is generated before the notifications Worker starts processing the queue). `dead-letter` is deliberately excluded — the drain protocol never pauses it, so any pause there is a deliberate operator action via Bull Board.
+2. **Manual recovery script (secondary defence):** `backend/scripts/resume-paused-queues.js` provides an explicit operator entry point for the same recovery during incidents. It uses BullMQ's `Queue.resume()` (which atomically clears `meta.paused` AND moves jobs from `bull:<q>:paused` back to `bull:<q>:wait`) — never a raw `HDEL bull:<q>:meta paused`, which would orphan the jobs in the paused list. Supports `--dry-run` (inspect state without modifying) and `--queues=a,b` (restrict to specific queues). Shipped inside the production image via `Dockerfile` (`COPY scripts/resume-paused-queues.js`) and `.dockerignore` (`!scripts/resume-paused-queues.js` whitelist). Invocation: `docker exec <client-id>-workers node scripts/resume-paused-queues.js`.
+
+**Rationale:**
+
+- The drain protocols' existing resume failure handling is structurally insufficient: the `maintenance-activation` path only logs a `warn` (not even a technical alert), and the `scheduled-process-restart` path's terminal alert depends on the notifications queue being healthy at that moment. Both are necessary but neither is sufficient — a layered safety net at worker boot covers the residual silent-failure surface.
+- Auto-resuming at boot is safe because the only code paths that pause queues are the two drain protocols in `cart-cleanup.worker.ts`, both designed for the pause to last seconds. An operator who manually pauses a queue via Bull Board and then restarts the container is opting into a re-resume — an acceptable trade-off versus the silent outage mode.
+- The manual script is redundant with the boot self-heal in the happy path but pays for itself the first time someone needs to recover at 2am without a container rebuild: `docker exec <workers> node scripts/resume-paused-queues.js` is materially less stressful than reconstructing a 25-line inline `node -e` script under pressure.
+
+**Alternatives considered:**
+
+- *Add a Bull Board admin route that lists paused queues and offers a one-click resume.* Rejected for now — Bull Board is admin-permission-gated and adding the route requires admin UI work. The boot self-heal handles the failure mode without operator intervention; the script provides break-glass for incidents. A Bull Board addition can be a future enhancement.
+- *Make the maintenance-activation resume failure terminal (technical alert) to match `scheduled-process-restart`.* Accepted in spirit but doesn't fix the root cause: the alert itself enqueues to the notifications queue, which is exactly the queue most likely to be the failed-resume target. Even with a terminal alert, the alert would be orphaned. The boot self-heal is the durable answer; tightening the alert path is a follow-up improvement.
+- *Persist queue pause state in Postgres instead of Redis, with a separate reconciliation loop.* Rejected. BullMQ stores pause state in Redis by design and the queue libraries assume this. Mirroring to Postgres adds two failure modes (DB write fails, mirror drift) for negligible benefit over the boot self-heal.
+
+**Affected files:**
+
+- `backend/queues/workers/index.ts` — added auto-resume block after Redis connection construction, before worker creation. Emits `Detected queues paused at boot — likely incomplete drain from a prior restart. Auto-resumed.` warn log on recovery, `WorkerBootQueueResumeFailed` terminal alert on persistent failure, `WorkerBootQueueRecoveryFailed` non-terminal alert if the recovery block itself throws.
+- `backend/scripts/resume-paused-queues.js` — new standalone recovery script with `--dry-run` and `--queues=a,b` flags.
+- `backend/Dockerfile` — added `COPY --from=builder /app/scripts/resume-paused-queues.js ./scripts/resume-paused-queues.js` to the production stage so the script is available via `docker exec`.
+- `backend/.dockerignore` — added `!scripts/resume-paused-queues.js` whitelist (the existing `scripts/*` exclusion would otherwise filter the new file out of the build context).
+- `backend/docs/HARDENING_HISTORY.md` — full incident write-up with timeline, detection signature, and rationale for not using raw Redis patches.
+- `backend/docs/OPS_CONTROL_PLANE_GUIDE.md` §9.2 — operator-facing runbook for the failure mode and recovery.
+- `backend/docs/ROUTE_SURFACE_COMPLETE_REFERENCE.md` §19 — step 7 added to the system-restart drain protocol explaining the boot safety net.
+
+---
+
 ## [2026-05-26] Maintenance gate switches to 401 + `error_page 401 = @maintenance_block` (supersedes the 200 + `X-Maintenance-Active` + `if` design from 2026-05-25)
 
 **Context:** Live verification on Raghava Organics after the durable maintenance mode was deployed showed the storefront was never actually blocked during the `active` phase. The backend correctly wrote `MaintenanceState.phase = 'active'`, the gate route correctly returned `200 OK` with `X-Maintenance-Active: 1`, the Nginx config correctly contained the `auth_request_set` + `if` block, and the worker correctly cut over — yet `curl` against the storefront still returned `200 OK` from Next.js. A temporary `add_header X-Debug-Maintenance "value=[$maintenance_active]" always;` showed `value=[1]` in the response — the variable WAS being captured by `auth_request_set` — but `if ($maintenance_active = "1") { return 503; }` never fired.

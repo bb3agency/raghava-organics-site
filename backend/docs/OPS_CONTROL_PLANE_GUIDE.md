@@ -571,7 +571,7 @@ normal/reduced/emergency  ──(POST /ops/load-shed mode=maintenance)──>  m
 - Polls `Queue.getActiveCount()` on every paused queue until the sum reaches 0 or `MAINTENANCE_QUEUE_DRAIN_TIMEOUT_MS` (default 120 s) elapses. Drain timeout emits a `MaintenanceQueueDrainTimeout` alert and the activation proceeds (BullMQ at-least-once semantics handle the stragglers when queues resume after the maintenance window).
 - Polls `prisma.order.count({ where: { status: 'PENDING_PAYMENT' } })` every 5 s until it reaches 0 or `MAINTENANCE_PAYMENT_DRAIN_TIMEOUT_MS` (default 5 min) elapses. Drain timeout emits a `MaintenancePaymentDrainTimeout` alert and the activation proceeds.
 - Writes `phase = active`, `activatedAt = now()` to `MaintenanceState` and Redis cache.
-- **Resumes every paused queue at the end of the activation handler.** Background jobs (notifications, refunds, outbox dispatch) keep running while the storefront is gated at Nginx, because internal work has to keep flowing for the operator to finish whatever the maintenance window was scheduled for. Customer traffic is what is blocked — by Nginx, not by paused queues.
+- **Resumes every paused queue at the end of the activation handler.** Background jobs (notifications, refunds, outbox dispatch) keep running while the storefront is gated at Nginx, because internal work has to keep flowing for the operator to finish whatever the maintenance window was scheduled for. Customer traffic is what is blocked — by Nginx, not by paused queues. **Resume failure on this path historically only logged a `warn` (no technical alert), so a failed resume could leave the notifications queue paused indefinitely without operator visibility — this is the exact failure pattern that triggered the May 26, 2026 OTP outage on Raghava Organics.** The defence-in-depth fix is the worker boot self-heal: every `workers` container start re-asserts every drainable queue as resumed and emits a `Detected queues paused at boot` warn log if any queue had to be recovered. See §9.2 for full recovery procedure and the manual `scripts/resume-paused-queues.js` tool.
 
 **Phase 3 — `active`:**
 
@@ -699,7 +699,7 @@ Response: `{ jobId, scheduledFor }` — ISO-8601 timestamp of when the restart w
    - Disable the protocol entirely (emergency rollback) by setting `RESTART_PAUSE_AND_DRAIN_QUEUES_ENABLED=false` in the workers `.env`. The legacy `PENDING_PAYMENT`-only behaviour resumes.
    - **No storefront impact:** `Queue.pause()` only stops *workers* from picking new jobs. `Queue.add()` calls from API request handlers still succeed and land jobs in waiting state, which get processed by the post-restart workers. Storefront browsing, cart operations, product reads, login, and outbox writes are completely unaffected. The only HTTP traffic blocked during the window is what load-shed `emergency` already blocks (non-critical admin + checkout mutations).
 3. **Payment-safe drain:** Worker polls `prisma.order.count({ where: { status: 'PENDING_PAYMENT' } })` every 5 s until the count reaches 0 or the drain timeout elapses (default 5 min; override via `RESTART_PAYMENT_DRAIN_TIMEOUT_MS`). If orders are still pending when the timeout fires, a `ProcessRestartPaymentDrainTimeout` alert is sent to all ops/admin recipients and the restart proceeds — the system is never blocked indefinitely.
-4. **Resume all paused queues** before publishing the restart signal. This ensures the new worker containers boot with queues in resumed state and immediately start processing the backlog accumulated during the pause window. Resume failure on any queue emits `ProcessRestartQueueResumeFailed` (`terminalFailure: true`) — the operator must manually `queue.resume()` that queue via Bull Board or a one-off script, otherwise jobs accumulate in waiting state forever.
+4. **Resume all paused queues** before publishing the restart signal. This ensures the new worker containers boot with queues in resumed state and immediately start processing the backlog accumulated during the pause window. Resume failure on any queue emits `ProcessRestartQueueResumeFailed` (`terminalFailure: true`). **Belt-and-suspenders safety net (added May 26, 2026):** if a resume fails silently — for example because the alert it would emit also enqueues to the now-paused notifications queue and joins the orphaned jobs — the new worker process self-heals on boot. Immediately after constructing the Redis connection and before any `Worker` starts polling, `bootstrapWorkers()` in `queues/workers/index.ts` opens a temporary `Queue` handle for every drainable queue, calls `isPaused()`, and if true calls `resume()` and re-verifies. Any queue that auto-resumed emits a structured `Detected queues paused at boot — likely incomplete drain from a prior restart. Auto-resumed.` warn log. Any queue that stays paused after auto-resume fires a terminal `WorkerBootQueueResumeFailed` technical alert. Operators can also run the manual recovery tool `node scripts/resume-paused-queues.js` inside the workers container at any time (supports `--dry-run` to inspect state without modifying it).
 5. Worker calls `sendProcessRestartAlert()` — best-effort pre-exit email to all active ops users and verified admin users. Wrapped in its own `try/catch` so a failed send never blocks step 6.
 6. **Load-shed reset to `normal`** — best-effort `redis.set(ops:load_shed:mode, 'normal')` before publishing the restart signal, so both containers come back up in full-serving mode. Failure here is swallowed and does not block the restart.
 7. Worker creates a short-lived Redis publisher connection and calls `publishRestartSignal()` on the `system:restart` pub/sub channel. If the publish call throws (e.g. Redis unreachable), a `ProcessRestartPublishFailed` alert is sent (`terminalFailure: true`) warning that the API container will **not** restart automatically.
@@ -929,6 +929,46 @@ WHERE "secretKey" IN ('PAYMENT_PROVIDER','SHIPPING_PROVIDER') AND "isActive" = t
 ```
 
 Then `docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml up -d backend workers` (or bare `docker compose up -d backend workers` if `COMPOSE_FILE` is set in the VPS `.env` per §6.10). After the site is back, save the remaining provider secrets via Ops UI and restart again. This is incident-only; the boot-tolerance fix is the long-term answer.
+
+### 9.2 OTP/notification emails silently stop arriving — `notifications` queue stuck paused
+
+**Symptom:** OTP emails (ops login, ops critical-action, admin/customer auth) stop arriving even though:
+- `GET /api/v1/health` returns `{ db: 'connected', redis: 'connected' }`
+- `RESEND_API_KEY` and `RESEND_FROM` are present in both `backend` and `workers` container env
+- `OpsOtpChallenge` rows are being created in Postgres with status `PENDING`
+- No error/warn log lines appear in either container
+
+**Root cause:** A previous `scheduled-process-restart` or `maintenance-activation` cycle paused queues via `Queue.pause()` during the drain step but the matching `Queue.resume()` call failed silently (process exit raced the Redis Lua flush, or the resume-failure alert itself enqueued to the paused notifications queue and was orphaned). The new worker container starts, but `bull:notifications:meta paused = 1` is still set in Redis, so all subsequent `Queue.add(...)` calls land jobs in `bull:notifications:paused` instead of `bull:notifications:wait`. Workers are "up" but idle.
+
+**Detect:** Run on the VPS — flags every queue currently paused:
+
+```bash
+for q in notifications order-processing shipping inventory-alerts refunds analytics cart-cleanup outbox-dispatch reconciliation dead-letter; do
+  RESULT=$(docker exec <client-id>-redis sh -lc \
+    "redis-cli -a \"\$REDIS_PASSWORD\" --no-auth-warning HGET bull:$q:meta paused" 2>/dev/null)
+  if [ "$RESULT" = "1" ]; then echo "  $q: PAUSED"; else echo "  $q: ok"; fi
+done
+```
+
+**Recover (immediate, no rebuild required):**
+
+```bash
+docker exec <client-id>-workers node scripts/resume-paused-queues.js
+```
+
+The script calls BullMQ's `Queue.resume()` (which atomically clears `meta.paused` AND moves jobs from `bull:<q>:paused` back to `bull:<q>:wait` — a raw `HDEL bull:<q>:meta paused` would orphan the jobs). It supports `--dry-run` (inspect state without modifying) and `--queues=a,b` (restrict to specific queues). Output reports `resumed`, `already running`, and `failed` per queue. Within seconds of the resume, any stuck OTP jobs will be processed and emails will start arriving (note: OTP challenges have a 10-minute TTL — if more than 10 minutes elapsed since the original request, those challenges have expired and the user must request fresh ones).
+
+**Self-heal (automatic, built into worker boot since May 26, 2026):** Every time the `workers` container starts, `bootstrapWorkers()` in `queues/workers/index.ts` checks every drainable queue immediately after constructing the Redis connection. Any queue still flagged as paused is auto-resumed before the workers start polling. Look for this log line in `docker logs <client-id>-workers --tail 50`:
+
+```
+Detected queues paused at boot — likely incomplete drain from a prior restart. Auto-resumed.
+```
+
+If you see that line at boot, the previous restart left at least one queue paused and the worker has already recovered it — no operator action required. If auto-resume itself fails on any queue, the worker emits a terminal `WorkerBootQueueResumeFailed` technical alert (which, because the email path no longer depends on the broken queue at that moment in the boot sequence, will reach all active ops + verified admin users).
+
+**Why this matters:** without the self-heal, a single silent resume failure during one drain cycle causes an indefinite silent outage of every notification channel (email, SMS, WhatsApp) — no alerts fire because the alert path itself goes through the paused notifications queue. The combination of (a) the boot-time self-heal in `queues/workers/index.ts`, (b) the manual recovery script `scripts/resume-paused-queues.js`, and (c) the documented `HGET bull:<q>:meta paused` triage above is the defence-in-depth pattern for this class of failure.
+
+**Forbidden:** **Never** "fix" a paused queue by directly running `HDEL bull:<queue>:meta paused` in `redis-cli`. That clears the `paused` flag in the queue metadata hash but does NOT move jobs from `bull:<queue>:paused` back to `bull:<queue>:wait`. Workers will then poll `wait` (empty) while the parked jobs sit forever in `paused`. Always use `Queue.resume()` via the script or via Bull Board.
 
 ---
 

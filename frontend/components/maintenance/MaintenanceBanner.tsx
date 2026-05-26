@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
 import {
   fetchMaintenanceStatus,
@@ -31,19 +31,35 @@ const COUNTDOWN_TICK_MS = 1_000;
  *      degrade gracefully without a global UX takeover.
  *
  * Behaviour during the two maintenance phases:
- *   - `pending`: shows a countdown like "Scheduled maintenance in 01:42 —
- *                please complete checkout now". Encourages users to wrap
- *                up active work before the storefront goes dark.
- *   - `active` : shows "Site is in maintenance mode. We'll be back soon".
- *                Acts as the rare fallback for tabs that loaded before the
- *                cutover and are still trying to render the storefront —
- *                Nginx will have started serving the static page for new
- *                navigations.
+ *   - `pending`: shows a fixed "Maintenance starting in a moment" message
+ *                and a live countdown badge so users can finish active
+ *                work before the storefront goes dark. The 2-minute window
+ *                covers both the announced warning AND the worker drain
+ *                step — the copy stays the same throughout, including the
+ *                final seconds when the worker is finishing the queue drain
+ *                (we deliberately do NOT surface "queue draining" or other
+ *                infrastructure detail to end users).
+ *   - `active` : **the tab force-reloads itself once**. After the reload,
+ *                Nginx's maintenance gate intercepts the request and serves
+ *                the static `maintenance.html` page directly — operators
+ *                get the same branded full-page UX whether they opened a
+ *                fresh tab during the window or had one already loaded
+ *                when the cutover fired. The reload is guarded by a ref so
+ *                a slow follow-up poll cannot trigger a second reload.
+ *                The `/ops/*` console is exempt (operators need to keep
+ *                using the console to exit maintenance).
  */
 export function MaintenanceBanner() {
   const pathname = usePathname() ?? "";
   const [status, setStatus] = useState<MaintenanceStatus | null>(null);
   const [tick, setTick] = useState(0);
+
+  // Tracks whether we have already initiated a force-reload for the current
+  // pending→active cutover. Without this guard a 5-second poll that keeps
+  // returning `active` would call window.location.reload() on every fetch,
+  // which a sufficiently slow nginx → static-page redirect could turn into
+  // a reload loop on flaky networks.
+  const reloadInitiatedRef = useRef(false);
 
   const isOpsRoute = pathname.startsWith("/ops");
 
@@ -89,6 +105,21 @@ export function MaintenanceBanner() {
     return () => clearInterval(interval);
   }, [status?.phase, status]);
 
+  // Force-reload as soon as we observe phase=active. Nginx will short-circuit
+  // the next request via its maintenance gate (`auth_request` → 401 →
+  // `error_page 401 =503 /maintenance.html`) and serve the static page,
+  // replacing this stale React tree with the branded downtime UX.
+  // Skipped on `/ops/*` so operators retain access to the console.
+  useEffect(() => {
+    if (isOpsRoute) return;
+    if (typeof window === "undefined") return;
+    if (!status) return;
+    if (status.mode !== "maintenance" || status.phase !== "active") return;
+    if (reloadInitiatedRef.current) return;
+    reloadInitiatedRef.current = true;
+    window.location.reload();
+  }, [isOpsRoute, status?.mode, status?.phase, status]);
+
   const secondsRemaining = useMemo(() => {
     if (!status || status.phase !== "pending") return 0;
     const base = secondsUntilMaintenance(status);
@@ -99,16 +130,10 @@ export function MaintenanceBanner() {
   if (!shouldShowMaintenanceBanner(status)) return null;
   if (!status) return null;
 
-  const isPending = status.phase === "pending";
-  // Three visual states:
-  //   1. pending + countdown > 0  → "Starting soon" with countdown
-  //   2. pending + countdown = 0  → "Finalising — wrapping up active transactions"
-  //                                  (worker is draining queues + payments)
-  //   3. active                   → "Site is in maintenance mode"
-  const isDraining = isPending && secondsRemaining === 0;
-  const tone = isPending && !isDraining
-    ? "bg-amber-50 text-amber-900 border-amber-300"
-    : "bg-rose-50 text-rose-900 border-rose-300";
+  // Active phase: the reload effect above is in flight. Render nothing so we
+  // don't briefly flash an inline "site is in maintenance" banner over a
+  // stale storefront tree — nginx is about to take over with the static page.
+  if (status.phase === "active") return null;
 
   const mm = Math.floor(secondsRemaining / 60);
   const ss = secondsRemaining % 60;
@@ -118,7 +143,7 @@ export function MaintenanceBanner() {
     <div
       role="status"
       aria-live="polite"
-      className={`sticky top-0 z-50 w-full border-b ${tone}`}
+      className="sticky top-0 z-50 w-full border-b border-amber-300 bg-amber-50 text-amber-900"
     >
       <div className="mx-auto flex max-w-6xl flex-col gap-1 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-start gap-3 sm:items-center">
@@ -126,32 +151,16 @@ export function MaintenanceBanner() {
             !
           </span>
           <div className="text-sm leading-snug">
-            {isDraining ? (
-              <>
-                <strong className="font-semibold">Finalising maintenance window.</strong>{" "}
-                Wrapping up active transactions before the site goes offline. New checkouts are paused.
-              </>
-            ) : isPending ? (
-              <>
-                <strong className="font-semibold">Scheduled maintenance starting soon.</strong>{" "}
-                The site will be temporarily unavailable while we finish a planned update. Please complete any active checkout or save your cart now.
-              </>
-            ) : (
-              <>
-                <strong className="font-semibold">Site is in maintenance mode.</strong>{" "}
-                We&rsquo;ll be back online shortly. Thanks for your patience.
-              </>
-            )}
+            <strong className="font-semibold">Maintenance starting in a moment.</strong>{" "}
+            Please complete any active checkout or save your cart now.
           </div>
         </div>
-        {isPending && !isDraining ? (
-          <div className="flex items-center gap-2 self-start sm:self-auto" aria-label={`Maintenance starts in ${countdownLabel}`}>
-            <span className="text-xs uppercase tracking-wide opacity-80">Starts in</span>
-            <span className="rounded-md bg-white/70 px-2 py-1 font-mono text-base font-semibold tabular-nums">
-              {countdownLabel}
-            </span>
-          </div>
-        ) : null}
+        <div className="flex items-center gap-2 self-start sm:self-auto" aria-label={`Maintenance starts in ${countdownLabel}`}>
+          <span className="text-xs uppercase tracking-wide opacity-80">Starts in</span>
+          <span className="rounded-md bg-white/70 px-2 py-1 font-mono text-base font-semibold tabular-nums">
+            {countdownLabel}
+          </span>
+        </div>
       </div>
     </div>
   );

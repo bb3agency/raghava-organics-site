@@ -229,6 +229,7 @@ If `db` or `redis` shows `disconnected`:
 | `POSTGRES_DB` and `DATABASE_URL` DB name don't match | Both must be identical. Mismatch means migrations run against a different DB than the one Postgres initialized. Fix both and `docker compose down -v`. |
 | `DATABASE_URL is not set` in scripts | Scripts auto-load from `.env` now; or set explicitly: `set DATABASE_URL=postgresql://...` |
 | `Variant not found` in flash-sale tests | Run: `node scripts/seed-flash-sale-fixtures.js` |
+| OTP/notification emails silently stop arriving despite healthy `db: connected, redis: connected` and `RESEND_API_KEY` loaded | A `notifications`/`outbox-dispatch` queue is paused in Redis after an incomplete `system-restart` or `maintenance-activation` drain. Verify with `docker exec <client-id>-redis sh -lc 'redis-cli -a "$REDIS_PASSWORD" --no-auth-warning HGET bull:notifications:meta paused'` (returns `1` if paused). Recover with `docker exec <client-id>-workers node scripts/resume-paused-queues.js`. Workers also self-heal on every boot since May 26, 2026 — see `docs/CLIENT_VPS_SETUP_GUIDE.md` §19.6 and `docs/OPS_CONTROL_PLANE_GUIDE.md` §9.2 for the full runbook. |
 
 **See `docs/MASTER_DEPLOYMENT_PLAYBOOK.md` Appendix H for full troubleshooting guide.**
 
