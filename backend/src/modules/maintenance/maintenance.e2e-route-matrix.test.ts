@@ -230,7 +230,10 @@ describe('Maintenance mode end-to-end route matrix', () => {
       url: '/api/v1/maintenance/gate',
       headers: { 'x-original-uri': '/api/v1/orders/checkout' }
     });
-    expect(blockedGate.statusCode).toBe(200);
+    // 401 (not 200) so Nginx auth_request rejects and triggers
+    // `error_page 401 = @maintenance_block` on the gated location.
+    // See HARDENING_HISTORY.md "May 2026 — Maintenance gate bypass".
+    expect(blockedGate.statusCode).toBe(401);
     expect(blockedGate.headers['x-maintenance-active']).toBe('1');
 
     // Nginx auth_request gate: allowed path (ops) returns header=0.
@@ -353,12 +356,16 @@ describe('Maintenance mode end-to-end route matrix', () => {
     expect(row?.activatedAt).not.toBeNull();
 
     // The Nginx gate must agree with the promoted state — the storefront
-    // is now blocked at the edge too.
+    // is now blocked at the edge too. Status is 401 (not 200) so the
+    // Nginx auth_request directive natively rejects the outer request and
+    // triggers `error_page 401 = @maintenance_block`. The header stays for
+    // backward-compat with any direct API caller.
     const gateAfter = await app.inject({
       method: 'GET',
       url: '/api/v1/maintenance/gate',
       headers: { 'x-original-uri': '/' }
     });
+    expect(gateAfter.statusCode).toBe(401);
     expect(gateAfter.headers['x-maintenance-active']).toBe('1');
 
     // And the public status endpoint reflects the promotion so the
@@ -392,13 +399,14 @@ describe('Maintenance mode end-to-end route matrix', () => {
     // State row is still pending — no premature promotion.
     expect(store.getRow()?.phase).toBe('pending');
 
-    // The Nginx gate also reflects pending → header=0 → site still
+    // The Nginx gate also reflects pending → 200 + header=0 → site still
     // accessible (the banner is the only UX signal during pending).
     const gate = await app.inject({
       method: 'GET',
       url: '/api/v1/maintenance/gate',
       headers: { 'x-original-uri': '/' }
     });
+    expect(gate.statusCode).toBe(200);
     expect(gate.headers['x-maintenance-active']).toBe('0');
 
     await app.close();

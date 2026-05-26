@@ -139,7 +139,7 @@ describe('maintenance routes', () => {
       expect(res.headers['x-maintenance-active']).toBe('0');
     });
 
-    it('returns 200 + X-Maintenance-Active=1 for storefront paths during active', async () => {
+    it('returns 401 + X-Maintenance-Active=1 for storefront paths during active', async () => {
       app = buildFastify(ACTIVE_STATE);
       await registerMaintenanceRoutes(app);
       await app.ready();
@@ -149,7 +149,7 @@ describe('maintenance routes', () => {
         url: '/api/v1/maintenance/gate',
         headers: { 'x-original-uri': '/products/list' }
       });
-      expect(res.statusCode).toBe(200);
+      expect(res.statusCode).toBe(401);
       expect(res.headers['x-maintenance-active']).toBe('1');
       const body = res.json();
       expect(body.allowed).toBe(false);
