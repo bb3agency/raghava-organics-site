@@ -65,27 +65,56 @@ fi
 
 log "Installed: $DST"
 
-# Verify the live nginx config references /maintenance.html. If a stale config
-# doesn't have the directive, copying the file alone won't fix the symptom —
-# the operator still needs to re-render and reload client.conf.template.
+# Verify the live nginx config references /maintenance.html and the maintenance
+# gate single-hop mapping. If a stale config doesn't have these directives,
+# copying the file alone won't fix the symptom — the operator still needs to
+# re-render and reload client.conf.template.
 if command -v nginx >/dev/null 2>&1; then
   CLIENT_ID="${CLIENT_ID:-}"
+  STOREFRONT_DOMAIN=""
   if [ -z "$CLIENT_ID" ] && [ -f "$BACKEND_DIR/.env" ]; then
     CLIENT_ID="$(grep -E '^CLIENT_ID=' "$BACKEND_DIR/.env" | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'" | xargs || true)"
   fi
-  if [ -n "$CLIENT_ID" ]; then
-    CONF="/etc/nginx/sites-enabled/${CLIENT_ID}.conf"
-    [ -f "$CONF" ] || CONF="/etc/nginx/sites-available/${CLIENT_ID}.conf"
-    if [ -f "$CONF" ]; then
-      if grep -qE 'error_page[[:space:]]+502[[:space:]]+503[[:space:]]+/maintenance\.html' "$CONF"; then
-        log "Live nginx config ($CONF) references /maintenance.html — good."
-      else
-        log "WARNING: live nginx config ($CONF) does NOT contain the"
-        log "  'error_page 502 503 /maintenance.html;' directive. Even with the file"
-        log "  installed, the maintenance page won't be served until you re-render"
-        log "  the client.conf.template and reload nginx. See CLIENT_VPS_SETUP_GUIDE §19.3."
-      fi
+  if [ -f "$BACKEND_DIR/.env" ]; then
+    STOREFRONT_DOMAIN="$(grep -E '^STOREFRONT_URL=' "$BACKEND_DIR/.env" | head -1 | cut -d= -f2- | sed -E 's,^https?://,,' | sed -E 's,/.*$,,' | tr -d '[:space:]' || true)"
+  fi
+
+  CONF=""
+  for candidate in \
+    "/etc/nginx/sites-enabled/${CLIENT_ID}.conf" \
+    "/etc/nginx/sites-available/${CLIENT_ID}.conf" \
+    "/etc/nginx/sites-enabled/${STOREFRONT_DOMAIN}.conf" \
+    "/etc/nginx/sites-available/${STOREFRONT_DOMAIN}.conf"; do
+    if [ -n "$candidate" ] && [ -f "$candidate" ]; then
+      CONF="$candidate"
+      break
     fi
+  done
+  if [ -z "$CONF" ] && [ -n "$STOREFRONT_DOMAIN" ]; then
+    CONF="$(grep -lE "server_name[[:space:]].*\\b${STOREFRONT_DOMAIN}\\b" /etc/nginx/sites-enabled/*.conf 2>/dev/null | head -1 || true)"
+  fi
+  if [ -z "$CONF" ] && [ -n "$STOREFRONT_DOMAIN" ]; then
+    CONF="$(grep -lE "server_name[[:space:]].*\\b${STOREFRONT_DOMAIN}\\b" /etc/nginx/sites-available/*.conf 2>/dev/null | head -1 || true)"
+  fi
+
+  if [ -n "$CONF" ] && [ -f "$CONF" ]; then
+    HAS_MAINTENANCE_ERROR_PAGE=0
+    HAS_SINGLE_HOP_GATE=0
+    grep -qE 'error_page[[:space:]]+502[[:space:]]+503[[:space:]]+/maintenance\.html' "$CONF" && HAS_MAINTENANCE_ERROR_PAGE=1
+    grep -qE 'error_page[[:space:]]+401[[:space:]]+=503[[:space:]]+/maintenance\.html' "$CONF" && HAS_SINGLE_HOP_GATE=1
+
+    if [ "$HAS_MAINTENANCE_ERROR_PAGE" -eq 1 ] && [ "$HAS_SINGLE_HOP_GATE" -eq 1 ]; then
+      log "Live nginx config ($CONF) has maintenance mapping + single-hop gate directives — good."
+    else
+      log "WARNING: live nginx config ($CONF) is stale/incomplete for maintenance gating."
+      [ "$HAS_MAINTENANCE_ERROR_PAGE" -eq 0 ] && log "  Missing: error_page 502 503 /maintenance.html;"
+      [ "$HAS_SINGLE_HOP_GATE" -eq 0 ] && log "  Missing: error_page 401 =503 /maintenance.html;"
+      log "  Even with the file installed, users may still see bare nginx 503."
+      log "  Re-render and reload from backend/nginx/client.conf.template."
+    fi
+  else
+    log "WARNING: Could not locate active nginx vhost config file to validate directives."
+    log "  Checked client-id and domain naming conventions plus server_name lookup."
   fi
 fi
 

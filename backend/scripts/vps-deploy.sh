@@ -218,7 +218,7 @@ DATABASE_URL="$MIGRATE_DATABASE_URL" run_host_prisma migrate deploy --schema pri
 # 3.5 Nginx config drift detection + auto-reload (opt-in)
 #
 # Why: changes to `nginx/client.conf.template` in the repo do NOT automatically
-# apply on the VPS — the file at `/etc/nginx/sites-available/<client>.conf`
+# apply on the VPS — the active vhost file in `/etc/nginx/sites-available/*.conf`
 # only updates when an operator manually `cp`s it and reloads nginx. This is
 # how the May 2026 maintenance-gate `auth_request` directive missed the live
 # nginx config and silently bypassed the storefront gate. To prevent that,
@@ -239,9 +239,52 @@ DATABASE_URL="$MIGRATE_DATABASE_URL" run_host_prisma migrate deploy --schema pri
 # ---------------------------------------------------------------------------
 NGINX_TEMPLATE="$CLIENT_PATH/nginx/client.conf.template"
 NGINX_DOMAIN="$(grep -E '^STOREFRONT_URL=' .env | head -1 | cut -d= -f2- | sed -E 's,^https?://,,' | sed -E 's,/.*$,,' | tr -d '[:space:]')"
-NGINX_LIVE="/etc/nginx/sites-available/${COMPOSE_PROJECT}.conf"
 NGINX_MAINTENANCE_SRC="$CLIENT_PATH/nginx/maintenance.html"
 NGINX_MAINTENANCE_DST="/etc/nginx/maintenance/maintenance.html"
+
+# Resolve the live nginx vhost config file that actually serves this domain.
+# Historical VPS setups used both naming styles:
+#   - /etc/nginx/sites-available/<client-id>.conf
+#   - /etc/nginx/sites-available/<domain>.conf
+# If we sync the rendered template to the wrong filename, nginx keeps serving
+# the stale active file and maintenance-mode fixes never go live (exactly the
+# "still seeing bare nginx 503 page" failure mode).
+resolve_nginx_live_conf() {
+  local domain="$1"
+  local project="$2"
+  local file=""
+
+  # Fast path: check explicit expected filenames first.
+  for candidate in \
+    "/etc/nginx/sites-enabled/${project}.conf" \
+    "/etc/nginx/sites-available/${project}.conf" \
+    "/etc/nginx/sites-enabled/${domain}.conf" \
+    "/etc/nginx/sites-available/${domain}.conf"; do
+    if [ -f "$candidate" ]; then
+      echo "$candidate"
+      return 0
+    fi
+  done
+
+  # Fallback: discover by server_name in enabled configs first (authoritative),
+  # then in available configs.
+  file="$(grep -lE "server_name[[:space:]].*\\b${domain}\\b" /etc/nginx/sites-enabled/*.conf 2>/dev/null | head -1 || true)"
+  if [ -n "$file" ] && [ -f "$file" ]; then
+    echo "$file"
+    return 0
+  fi
+  file="$(grep -lE "server_name[[:space:]].*\\b${domain}\\b" /etc/nginx/sites-available/*.conf 2>/dev/null | head -1 || true)"
+  if [ -n "$file" ] && [ -f "$file" ]; then
+    echo "$file"
+    return 0
+  fi
+
+  # First deploy / unknown layout: default to a deterministic domain-based path.
+  echo "/etc/nginx/sites-available/${domain}.conf"
+}
+NGINX_LIVE="$(resolve_nginx_live_conf "$NGINX_DOMAIN" "$COMPOSE_PROJECT")"
+NGINX_LIVE_BASENAME="$(basename "$NGINX_LIVE")"
+log "Resolved nginx live config target: $NGINX_LIVE (domain=$NGINX_DOMAIN, project=$COMPOSE_PROJECT)"
 
 # The nginx template uses ${CLIENT_DOMAIN}, ${STOREFRONT_PORT}, and ${BACKEND_PORT}
 # placeholders so it can be reused across clients. Resolve those here so
@@ -345,6 +388,11 @@ if [ -f "$NGINX_TEMPLATE" ]; then
       if [ "${NGINX_AUTO_RELOAD:-0}" = "1" ]; then
         log "NGINX_AUTO_RELOAD=1 — installing initial rendered config"
         sudo cp "$NGINX_RENDERED" "$NGINX_LIVE"
+        # Ensure the new config is enabled when we created a new
+        # /sites-available file on first deploy.
+        if [[ "$NGINX_LIVE" == /etc/nginx/sites-available/* ]]; then
+          sudo ln -sfn "$NGINX_LIVE" "/etc/nginx/sites-enabled/$NGINX_LIVE_BASENAME"
+        fi
         if sudo nginx -t >/dev/null 2>&1; then
           sudo systemctl reload nginx && log "Nginx reload succeeded."
         else

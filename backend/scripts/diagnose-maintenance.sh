@@ -129,22 +129,54 @@ docker compose "${COMPOSE_ARGS[@]}" logs workers --tail 500 2>&1 \
   | grep -iE "(maintenance-activation|maintenance_active|MaintenanceState|MaintenanceActivation)" | tail -n 80 \
   || echo "(no matching log lines — worker is missing the maintenance-activation handler. Rebuild required.)"
 
-section "8. Nginx config — verify auth_request /_maintenance_gate is present"
-NGINX_CONF="/etc/nginx/sites-enabled/${CLIENT_ID}.conf"
-if [ -f "$NGINX_CONF" ]; then
-  if grep -qE "auth_request[[:space:]]+/_maintenance_gate" "$NGINX_CONF"; then
-    echo "✓ auth_request /_maintenance_gate FOUND in $NGINX_CONF"
+section "8. Nginx config — verify auth_request and single-hop maintenance mapping"
+STOREFRONT_DOMAIN="$(grep -E '^STOREFRONT_URL=' .env | head -1 | cut -d= -f2- | sed -E 's,^https?://,,' | sed -E 's,/.*$,,' | tr -d '[:space:]' || true)"
+NGINX_CONF=""
+for candidate in \
+  "/etc/nginx/sites-enabled/${CLIENT_ID}.conf" \
+  "/etc/nginx/sites-available/${CLIENT_ID}.conf" \
+  "/etc/nginx/sites-enabled/${STOREFRONT_DOMAIN}.conf" \
+  "/etc/nginx/sites-available/${STOREFRONT_DOMAIN}.conf"; do
+  if [ -f "$candidate" ]; then
+    NGINX_CONF="$candidate"
+    break
+  fi
+done
+if [ -z "$NGINX_CONF" ] && [ -n "$STOREFRONT_DOMAIN" ]; then
+  NGINX_CONF="$(grep -lE "server_name[[:space:]].*\\b${STOREFRONT_DOMAIN}\\b" /etc/nginx/sites-enabled/*.conf 2>/dev/null | head -1 || true)"
+fi
+if [ -z "$NGINX_CONF" ] && [ -n "$STOREFRONT_DOMAIN" ]; then
+  NGINX_CONF="$(grep -lE "server_name[[:space:]].*\\b${STOREFRONT_DOMAIN}\\b" /etc/nginx/sites-available/*.conf 2>/dev/null | head -1 || true)"
+fi
+
+if [ -n "$NGINX_CONF" ] && [ -f "$NGINX_CONF" ]; then
+  echo "Resolved active nginx config: $NGINX_CONF"
+  HAS_AUTH_REQUEST=0
+  HAS_SINGLE_HOP=0
+  HAS_MAINTENANCE_PAGE=0
+  grep -qE "auth_request[[:space:]]+/_maintenance_gate" "$NGINX_CONF" && HAS_AUTH_REQUEST=1
+  grep -qE "error_page[[:space:]]+401[[:space:]]+=503[[:space:]]+/maintenance\\.html" "$NGINX_CONF" && HAS_SINGLE_HOP=1
+  grep -qE "error_page[[:space:]]+502[[:space:]]+503[[:space:]]+/maintenance\\.html" "$NGINX_CONF" && HAS_MAINTENANCE_PAGE=1
+
+  if [ "$HAS_AUTH_REQUEST" -eq 1 ]; then
+    echo "✓ auth_request /_maintenance_gate FOUND"
     grep -nE "auth_request[[:space:]]+/_maintenance_gate" "$NGINX_CONF" | head -10
   else
-    echo "✗ auth_request /_maintenance_gate NOT FOUND in $NGINX_CONF"
-    echo "  → Nginx is using an OLDER config without the maintenance gate."
-    echo "  → Redeploy backend/nginx/client.conf.template and reload nginx:"
-    echo "      sudo cp backend/nginx/client.conf.template /etc/nginx/sites-available/${CLIENT_ID}.conf"
-    echo "      sudo nginx -t && sudo systemctl reload nginx"
+    echo "✗ auth_request /_maintenance_gate NOT FOUND"
+  fi
+  [ "$HAS_SINGLE_HOP" -eq 1 ] && echo "✓ single-hop mapping found: error_page 401 =503 /maintenance.html;" || echo "✗ single-hop mapping missing: error_page 401 =503 /maintenance.html;"
+  [ "$HAS_MAINTENANCE_PAGE" -eq 1 ] && echo "✓ maintenance page mapping found: error_page 502 503 /maintenance.html;" || echo "✗ maintenance page mapping missing: error_page 502 503 /maintenance.html;"
+
+  if [ "$HAS_AUTH_REQUEST" -eq 0 ] || [ "$HAS_SINGLE_HOP" -eq 0 ] || [ "$HAS_MAINTENANCE_PAGE" -eq 0 ]; then
+    echo "  → Active nginx config is stale/incomplete for maintenance gating."
+    echo "  → Re-render from backend/nginx/client.conf.template (envsubst) and reload nginx."
+    echo "  → Recommended one-shot fix:"
+    echo "      NGINX_AUTO_RELOAD=1 bash scripts/vps-deploy.sh $BACKEND_DIR \$(git rev-parse HEAD)"
+    echo "    (or manually render + sudo cp + nginx -t + systemctl reload nginx)"
   fi
 else
-  echo "(no nginx config at $NGINX_CONF — check /etc/nginx/sites-enabled/ for the actual file)"
-  ls -la /etc/nginx/sites-enabled/ 2>&1 | head -10 || true
+  echo "(could not resolve active nginx config file by client-id/domain/server_name)"
+  ls -la /etc/nginx/sites-enabled/ 2>&1 | head -20 || true
 fi
 
 section "Diagnostic complete"
