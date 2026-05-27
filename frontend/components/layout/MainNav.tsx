@@ -2,13 +2,14 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ShoppingBag, User, Search, LogOut, LayoutDashboard } from "lucide-react";
+import { User, LogOut, LayoutDashboard, ShoppingCart } from "lucide-react";
 import { useAuthStore } from "@/stores/auth";
 import { canAccessAdmin } from "@/lib/permissions";
 import { logoutSession } from "@/lib/auth-api";
 import { useCartStore } from "@/stores/cart";
 import { useCartSync } from "@/hooks/use-cart-sync";
 import { useSessionBootstrap } from "@/hooks/use-session-bootstrap";
+import { PriceDisplay } from "@/components/shared/PriceDisplay";
 
 export function MainNav() {
   useSessionBootstrap();
@@ -18,8 +19,11 @@ export function MainNav() {
   const accessToken = useAuthStore((s) => s.accessToken);
   const clearSession = useAuthStore((s) => s.clearSession);
   const clearCart = useCartStore((s) => s.clearCart);
+  
   const cartItems = useCartStore((s) => s.items);
   const cartCount = cartItems.reduce((sum, item) => sum + item.quantity, 0);
+  const cartTotal = cartItems.reduce((sum, item) => sum + item.lineTotal, 0);
+  
   const isSignedIn = Boolean(user);
   const showAdmin = canAccessAdmin(user);
 
@@ -36,76 +40,73 @@ export function MainNav() {
   };
 
   return (
-    <div className="flex shrink-0 items-center gap-1">
-      {/* Search */}
-      <Link
-        href="/search"
-        className="inline-flex size-9 items-center justify-center rounded-full text-foreground/70 transition-colors hover:bg-secondary hover:text-primary"
-        aria-label="Search products"
-      >
-        <Search className="size-4" aria-hidden />
-      </Link>
+    <div className="flex shrink-0 items-center gap-6">
+      {/* Account Menu */}
+      <div className="group relative flex items-center gap-2 cursor-pointer">
+        <div className="flex size-11 items-center justify-center rounded-full bg-[#eff5ee] text-[#23403d] transition-colors group-hover:bg-[#ec6e55] group-hover:text-white">
+          <User className="size-5" />
+        </div>
+        
+        <div className="hidden flex-col lg:flex">
+          {isSignedIn ? (
+            <>
+              <span className="text-xs font-bold text-[#767676]">Hello, {user?.name?.split(' ')[0] || 'User'}</span>
+              <span className="text-sm font-bold text-[#23403d]">My Account</span>
+            </>
+          ) : (
+            <>
+              <span className="text-xs font-bold text-[#767676]">Welcome</span>
+              <span className="text-sm font-bold text-[#23403d]">Sign In / Register</span>
+            </>
+          )}
+        </div>
 
-      {/* Cart */}
-      <Link
-        href="/cart"
-        className="relative inline-flex size-9 items-center justify-center rounded-full text-foreground/70 transition-colors hover:bg-secondary hover:text-primary"
-        aria-label={`Shopping cart${cartCount > 0 ? ` (${cartCount} items)` : ""}`}
-      >
-        <ShoppingBag className="size-4" aria-hidden />
-        {cartCount > 0 && (
-          <span className="absolute -right-0.5 -top-0.5 flex size-4 items-center justify-center rounded-full bg-accent text-[10px] font-bold leading-none text-accent-foreground">
-            {cartCount > 9 ? "9+" : cartCount}
+        {/* Dropdown Menu */}
+        <div className="absolute right-0 top-full pt-4 opacity-0 invisible transition-all group-hover:opacity-100 group-hover:visible z-50">
+          <div className="flex w-48 flex-col overflow-hidden rounded-xl border border-[#efe8e4] bg-white shadow-xl">
+            {showAdmin && (
+              <Link href="/admin" className="flex items-center gap-3 px-5 py-3 text-sm font-bold text-[#23403d] hover:bg-[#faf3ef] hover:text-[#ec6e55]">
+                <LayoutDashboard className="size-4" /> Admin Panel
+              </Link>
+            )}
+            {isSignedIn ? (
+              <>
+                <Link href="/dashboard" className="flex items-center gap-3 px-5 py-3 text-sm font-bold text-[#23403d] hover:bg-[#faf3ef] hover:text-[#ec6e55]">
+                  <User className="size-4" /> Dashboard
+                </Link>
+                <button onClick={onSignOut} className="flex items-center gap-3 px-5 py-3 text-left text-sm font-bold text-[#23403d] hover:bg-[#faf3ef] hover:text-[#ec6e55]">
+                  <LogOut className="size-4" /> Sign Out
+                </button>
+              </>
+            ) : (
+              <>
+                <Link href="/login" className="flex items-center gap-3 px-5 py-3 text-sm font-bold text-[#23403d] hover:bg-[#faf3ef] hover:text-[#ec6e55]">
+                  <LogOut className="size-4" /> Sign In
+                </Link>
+                <Link href="/register" className="flex items-center gap-3 px-5 py-3 text-sm font-bold text-[#23403d] hover:bg-[#faf3ef] hover:text-[#ec6e55]">
+                  <User className="size-4" /> Register
+                </Link>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Mini Cart Trigger */}
+      <Link href="/cart" className="group flex items-center gap-3">
+        <div className="relative flex size-11 items-center justify-center rounded-full bg-[#eff5ee] text-[#23403d] transition-colors group-hover:bg-[#ec6e55] group-hover:text-white">
+          <ShoppingCart className="size-5" />
+          <span className="absolute -right-1 -top-1 flex size-[18px] items-center justify-center rounded-full bg-[#ec6e55] text-[10px] font-bold leading-none text-white shadow-sm ring-2 ring-white transition-colors group-hover:bg-[#23403d]">
+            {cartCount > 99 ? "99+" : cartCount}
           </span>
-        )}
-      </Link>
-
-      {/* Admin shortcut */}
-      {showAdmin ? (
-        <Link
-          href="/admin"
-          className="inline-flex size-9 items-center justify-center rounded-full text-foreground/70 transition-colors hover:bg-secondary hover:text-primary"
-          aria-label="Admin dashboard"
-        >
-          <LayoutDashboard className="size-4" aria-hidden />
-        </Link>
-      ) : null}
-
-      {/* Account / Sign in */}
-      {isSignedIn ? (
-        <>
-          <Link
-            href="/dashboard"
-            className="inline-flex size-9 items-center justify-center rounded-full text-foreground/70 transition-colors hover:bg-secondary hover:text-primary"
-            aria-label="Your account"
-          >
-            <User className="size-4" aria-hidden />
-          </Link>
-          <button
-            type="button"
-            onClick={onSignOut}
-            className="inline-flex size-9 items-center justify-center rounded-full text-foreground/70 transition-colors hover:bg-secondary hover:text-primary"
-            aria-label="Sign out"
-          >
-            <LogOut className="size-4" aria-hidden />
-          </button>
-        </>
-      ) : (
-        <Link
-          href="/login"
-          className="ml-1 inline-flex h-9 items-center justify-center rounded-full bg-primary px-4 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
-        >
-          Sign in
-        </Link>
-      )}
-
-      {/* Mobile: Shop link */}
-      <Link
-        href="/products"
-        className="ml-1 inline-flex h-9 items-center justify-center rounded-full border border-border px-4 text-sm font-medium transition-colors hover:bg-secondary md:hidden"
-        aria-label="Browse all products"
-      >
-        Shop
+        </div>
+        
+        <div className="hidden flex-col lg:flex">
+          <span className="text-xs font-bold text-[#767676]">Your Cart</span>
+          <span className="text-sm font-bold text-[#ec6e55]">
+             <PriceDisplay pricePaise={cartTotal} />
+          </span>
+        </div>
       </Link>
     </div>
   );

@@ -38,35 +38,35 @@ export function EmailLoginForm({ onSuccess }: EmailLoginFormProps) {
   });
 
   return (
-    <form onSubmit={handleSubmit} className="grid gap-4">
-      <div className="grid gap-1">
-        <label htmlFor="email" className="text-sm font-medium">
+    <form onSubmit={handleSubmit} className="grid gap-5">
+      <div className="grid gap-1.5">
+        <label htmlFor="email" className="text-sm font-bold text-[#23403d]">
           Email
         </label>
         <input
           id="email"
           type="email"
           autoComplete="email"
-          className="h-11 rounded-md border border-border bg-background px-3 text-sm"
+          className="h-12 w-full rounded-full border border-[#efe8e4] bg-[#faf3ef] px-4 text-sm font-medium text-[#23403d] placeholder:text-[#767676] focus:border-[#23403d] focus:outline-none focus:ring-1 focus:ring-[#23403d]"
           {...form.register("email")}
         />
-        <p className="text-xs text-destructive">
+        <p className="text-xs font-bold text-red-500">
           {form.formState.errors.email?.message}
         </p>
       </div>
 
-      <div className="grid gap-1">
-        <label htmlFor="password" className="text-sm font-medium">
+      <div className="grid gap-1.5">
+        <label htmlFor="password" className="text-sm font-bold text-[#23403d]">
           Password
         </label>
         <input
           id="password"
           type="password"
           autoComplete="current-password"
-          className="h-11 rounded-md border border-border bg-background px-3 text-sm"
+          className="h-12 w-full rounded-full border border-[#efe8e4] bg-[#faf3ef] px-4 text-sm font-medium text-[#23403d] placeholder:text-[#767676] focus:border-[#23403d] focus:outline-none focus:ring-1 focus:ring-[#23403d]"
           {...form.register("password")}
         />
-        <p className="text-xs text-destructive">
+        <p className="text-xs font-bold text-red-500">
           {form.formState.errors.password?.message}
         </p>
       </div>
@@ -75,7 +75,7 @@ export function EmailLoginForm({ onSuccess }: EmailLoginFormProps) {
 
       <button
         type="submit"
-        className="h-11 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground disabled:opacity-60"
+        className="mt-2 h-12 w-full rounded-full bg-[#23403d] px-8 text-sm font-bold text-white transition-transform hover:-translate-y-1 hover:bg-[#ec6e55] hover:shadow-lg disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0"
         disabled={form.formState.isSubmitting}
       >
         {form.formState.isSubmitting ? "Signing in..." : "Sign in with email"}

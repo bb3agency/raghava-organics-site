@@ -30,7 +30,7 @@ export function PlpSortSelect({ current }: PlpSortSelectProps) {
     <select
       value={current}
       onChange={handleChange}
-      className="h-9 rounded-full border border-border bg-card px-3 pr-8 text-sm font-medium text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
+      className="h-10 cursor-pointer rounded-full border border-[#efe8e4] bg-white px-4 pr-10 text-sm font-bold text-[#23403d] shadow-sm focus:border-[#23403d] focus:outline-none focus:ring-1 focus:ring-[#23403d]"
       aria-label="Sort products"
     >
       {SORT_OPTIONS.map((opt) => (

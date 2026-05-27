@@ -4,54 +4,53 @@ import { APP_NAME } from "@/lib/constants";
 
 export function Footer() {
   return (
-    <footer className="border-t border-border bg-primary text-primary-foreground">
-      <div className="mx-auto max-w-7xl px-4 py-14 lg:px-6">
-        <div className="grid gap-10 sm:grid-cols-2 lg:grid-cols-4">
+    <footer className="border-t border-[#efe8e4] bg-[#faf3ef] text-[#23403d]">
+      <div className="mx-auto w-full max-w-[1440px] px-4 py-16 lg:px-8">
+        <div className="grid gap-12 sm:grid-cols-2 lg:grid-cols-4 lg:gap-8">
           {/* Brand column */}
-          <div className="flex flex-col gap-4">
+          <div className="flex flex-col gap-6">
             <Link
               href="/"
-              className="flex items-center gap-2 font-heading text-lg font-bold"
+              className="flex items-center gap-2 font-heading text-2xl font-bold tracking-tight text-[#23403d]"
               aria-label={`${APP_NAME} home`}
             >
-              <Leaf className="size-5 text-accent" aria-hidden />
+              <Leaf className="size-6 text-[#ec6e55]" aria-hidden />
               {APP_NAME}
             </Link>
-            <p className="text-sm leading-relaxed text-primary-foreground/70">
+            <p className="text-sm font-medium leading-relaxed text-[#767676]">
               Farm-fresh organic produce delivered to your door. Trusted by
               families across India for quality and purity.
             </p>
             <div className="flex gap-3">
-              {["Facebook", "Instagram", "Twitter"].map((name) => (
-                <a
-                  key={name}
-                  href="#"
-                  className="inline-flex size-8 items-center justify-center rounded-full border border-primary-foreground/20 text-xs text-primary-foreground/70 transition-colors hover:border-accent hover:text-accent"
-                  aria-label={name}
-                >
-                  {name[0]}
-                </a>
-              ))}
+              <a href="https://facebook.com" className="flex size-10 items-center justify-center rounded-full bg-white text-sm font-bold text-[#23403d] shadow-sm transition-colors hover:bg-[#ec6e55] hover:text-white" aria-label="Facebook">
+                F
+              </a>
+              <a href="https://instagram.com" className="flex size-10 items-center justify-center rounded-full bg-white text-sm font-bold text-[#23403d] shadow-sm transition-colors hover:bg-[#ec6e55] hover:text-white" aria-label="Instagram">
+                I
+              </a>
+              <a href="https://twitter.com" className="flex size-10 items-center justify-center rounded-full bg-white text-sm font-bold text-[#23403d] shadow-sm transition-colors hover:bg-[#ec6e55] hover:text-white" aria-label="Twitter">
+                T
+              </a>
             </div>
           </div>
 
           {/* Quick links */}
           <div>
-            <h3 className="mb-4 text-sm font-semibold uppercase tracking-wider text-primary-foreground/50">
+            <h3 className="mb-6 font-heading text-lg font-bold text-[#23403d]">
               Quick Links
             </h3>
-            <ul className="space-y-2 text-sm text-primary-foreground/70">
+            <ul className="space-y-4 text-sm font-bold text-[#767676]">
               {[
                 { label: "Shop All", href: "/products" },
-                { label: "Fresh Produce", href: "/categories/fresh" },
-                { label: "Staples & Grains", href: "/categories/staples" },
-                { label: "Offers", href: "/products?sort=featured" },
+                { label: "Fresh Vegetables", href: "/categories/fresh-vegetables" },
+                { label: "Fresh Fruits", href: "/categories/fruits" },
+                { label: "Special Offers", href: "/products?sort=featured" },
                 { label: "My Account", href: "/dashboard" },
               ].map((link) => (
                 <li key={link.href}>
                   <Link
                     href={link.href}
-                    className="transition-colors hover:text-accent"
+                    className="transition-colors hover:text-[#ec6e55]"
                   >
                     {link.label}
                   </Link>
@@ -62,10 +61,10 @@ export function Footer() {
 
           {/* Policies */}
           <div>
-            <h3 className="mb-4 text-sm font-semibold uppercase tracking-wider text-primary-foreground/50">
+            <h3 className="mb-6 font-heading text-lg font-bold text-[#23403d]">
               Policies
             </h3>
-            <ul className="space-y-2 text-sm text-primary-foreground/70">
+            <ul className="space-y-4 text-sm font-bold text-[#767676]">
               {[
                 { label: "About Us", href: "/about" },
                 { label: "Privacy Policy", href: "/privacy" },
@@ -76,7 +75,7 @@ export function Footer() {
                 <li key={link.href}>
                   <Link
                     href={link.href}
-                    className="transition-colors hover:text-accent"
+                    className="transition-colors hover:text-[#ec6e55]"
                   >
                     {link.label}
                   </Link>
@@ -87,23 +86,23 @@ export function Footer() {
 
           {/* Contact */}
           <div>
-            <h3 className="mb-4 text-sm font-semibold uppercase tracking-wider text-primary-foreground/50">
+            <h3 className="mb-6 font-heading text-lg font-bold text-[#23403d]">
               Contact Us
             </h3>
-            <ul className="space-y-3 text-sm text-primary-foreground/70">
-              <li className="flex items-start gap-2">
-                <MapPin className="mt-0.5 size-4 shrink-0 text-accent" aria-hidden />
+            <ul className="space-y-4 text-sm font-bold text-[#767676]">
+              <li className="flex items-start gap-3">
+                <MapPin className="mt-0.5 size-5 shrink-0 text-[#ec6e55]" aria-hidden />
                 <span>Raghava Organics, Hyderabad, Telangana, India</span>
               </li>
-              <li className="flex items-center gap-2">
-                <Phone className="size-4 shrink-0 text-accent" aria-hidden />
-                <a href="tel:+919000000000" className="transition-colors hover:text-accent">
+              <li className="flex items-center gap-3">
+                <Phone className="size-5 shrink-0 text-[#ec6e55]" aria-hidden />
+                <a href="tel:+919000000000" className="transition-colors hover:text-[#ec6e55]">
                   +91 90000 00000
                 </a>
               </li>
-              <li className="flex items-center gap-2">
-                <Mail className="size-4 shrink-0 text-accent" aria-hidden />
-                <a href="mailto:hello@raghavaorganics.com" className="transition-colors hover:text-accent">
+              <li className="flex items-center gap-3">
+                <Mail className="size-5 shrink-0 text-[#ec6e55]" aria-hidden />
+                <a href="mailto:hello@raghavaorganics.com" className="transition-colors hover:text-[#ec6e55]">
                   hello@raghavaorganics.com
                 </a>
               </li>
@@ -112,9 +111,15 @@ export function Footer() {
         </div>
 
         {/* Bottom bar */}
-        <div className="mt-10 flex flex-col items-center justify-between gap-3 border-t border-primary-foreground/10 pt-6 text-xs text-primary-foreground/40 sm:flex-row">
+        <div className="mt-16 flex flex-col items-center justify-between gap-4 border-t border-[#efe8e4] pt-8 text-sm font-medium text-[#767676] sm:flex-row">
           <p>&copy; {new Date().getFullYear()} {APP_NAME}. All rights reserved.</p>
-          <p>Certified Organic &bull; Pesticide Free &bull; Farm to Table</p>
+          <div className="flex items-center gap-2">
+            <span className="flex items-center gap-1"><Leaf className="size-3 text-[#ec6e55]" /> Certified Organic</span>
+            <span className="hidden sm:inline">&bull;</span>
+            <span className="hidden sm:flex items-center gap-1">Pesticide Free</span>
+            <span className="hidden sm:inline">&bull;</span>
+            <span className="hidden sm:flex items-center gap-1">Farm to Table</span>
+          </div>
         </div>
       </div>
     </footer>

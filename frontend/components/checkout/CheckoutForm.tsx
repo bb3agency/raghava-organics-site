@@ -158,116 +158,124 @@ export function CheckoutForm({ isCodEnabled }: CheckoutFormProps) {
   });
 
   return (
-    <form onSubmit={submit} className="grid gap-4 rounded-lg border border-border p-4">
-      <div className="grid gap-1">
-        <label className="text-sm font-medium" htmlFor="email">
-          Email
-        </label>
-        <input
-          id="email"
-          className="h-11 rounded-md border border-border px-3 text-sm"
-          {...form.register("email")}
-        />
+    <form onSubmit={submit} className="grid gap-6 rounded-[20px] bg-white p-6 shadow-sm lg:p-8">
+      <h2 className="font-heading text-xl font-bold text-[#23403d]">Billing Details</h2>
+      <div className="grid gap-4 md:grid-cols-2">
+        <div className="grid gap-1.5">
+          <label className="text-sm font-bold text-[#23403d]" htmlFor="email">
+            Email
+          </label>
+          <input
+            id="email"
+            className="h-12 w-full rounded-full border border-[#efe8e4] bg-[#faf3ef] px-4 text-sm font-medium text-[#23403d] placeholder:text-[#767676] focus:border-[#23403d] focus:outline-none focus:ring-1 focus:ring-[#23403d]"
+            {...form.register("email")}
+          />
+        </div>
+        <div className="grid gap-1.5">
+          <label className="text-sm font-bold text-[#23403d]" htmlFor="phone">
+            Phone
+          </label>
+          <input
+            id="phone"
+            className="h-12 w-full rounded-full border border-[#efe8e4] bg-[#faf3ef] px-4 text-sm font-medium text-[#23403d] placeholder:text-[#767676] focus:border-[#23403d] focus:outline-none focus:ring-1 focus:ring-[#23403d]"
+            {...form.register("phone")}
+          />
+        </div>
       </div>
-      <div className="grid gap-1">
-        <label className="text-sm font-medium" htmlFor="phone">
-          Phone
-        </label>
-        <input
-          id="phone"
-          className="h-11 rounded-md border border-border px-3 text-sm"
-          {...form.register("phone")}
-        />
-      </div>
-      <div className="grid gap-1">
-        <label className="text-sm font-medium" htmlFor="address">
-          Address
+      <div className="grid gap-1.5">
+        <label className="text-sm font-bold text-[#23403d]" htmlFor="address">
+          Street Address
         </label>
         <textarea
           id="address"
-          className="min-h-20 rounded-md border border-border px-3 py-2 text-sm"
+          className="min-h-24 w-full rounded-[20px] border border-[#efe8e4] bg-[#faf3ef] px-4 py-3 text-sm font-medium text-[#23403d] placeholder:text-[#767676] focus:border-[#23403d] focus:outline-none focus:ring-1 focus:ring-[#23403d]"
           {...form.register("address")}
         />
       </div>
-      <div className="grid gap-1">
-        <label className="text-sm font-medium" htmlFor="city">
-          City
-        </label>
-        <input
-          id="city"
-          className="h-11 rounded-md border border-border px-3 text-sm"
-          {...form.register("city")}
-        />
+      <div className="grid gap-4 md:grid-cols-3">
+        <div className="grid gap-1.5">
+          <label className="text-sm font-bold text-[#23403d]" htmlFor="city">
+            City
+          </label>
+          <input
+            id="city"
+            className="h-12 w-full rounded-full border border-[#efe8e4] bg-[#faf3ef] px-4 text-sm font-medium text-[#23403d] placeholder:text-[#767676] focus:border-[#23403d] focus:outline-none focus:ring-1 focus:ring-[#23403d]"
+            {...form.register("city")}
+          />
+        </div>
+        <div className="grid gap-1.5">
+          <label className="text-sm font-bold text-[#23403d]" htmlFor="state">
+            State
+          </label>
+          <input
+            id="state"
+            className="h-12 w-full rounded-full border border-[#efe8e4] bg-[#faf3ef] px-4 text-sm font-medium text-[#23403d] placeholder:text-[#767676] focus:border-[#23403d] focus:outline-none focus:ring-1 focus:ring-[#23403d]"
+            {...form.register("state")}
+          />
+        </div>
+        <div className="grid gap-1.5">
+          <label className="text-sm font-bold text-[#23403d]" htmlFor="pincode">
+            Pincode
+          </label>
+          <input
+            id="pincode"
+            className="h-12 w-full rounded-full border border-[#efe8e4] bg-[#faf3ef] px-4 text-sm font-medium text-[#23403d] placeholder:text-[#767676] focus:border-[#23403d] focus:outline-none focus:ring-1 focus:ring-[#23403d]"
+            {...form.register("pincode")}
+          />
+        </div>
       </div>
-      <div className="grid gap-1">
-        <label className="text-sm font-medium" htmlFor="state">
-          State
-        </label>
-        <input
-          id="state"
-          className="h-11 rounded-md border border-border px-3 text-sm"
-          {...form.register("state")}
-        />
-      </div>
-      <div className="grid gap-1">
-        <label className="text-sm font-medium" htmlFor="pincode">
-          Pincode
-        </label>
-        <input
-          id="pincode"
-          className="h-11 rounded-md border border-border px-3 text-sm"
-          {...form.register("pincode")}
-        />
-      </div>
-      <fieldset className="grid gap-2">
-        <legend className="text-sm font-medium">Payment mode</legend>
-        <label className="flex items-center gap-2 text-sm">
-          <input type="radio" value="PREPAID" {...form.register("paymentMode")} />
+      
+      <fieldset className="grid gap-3 pt-4 border-t border-[#efe8e4]">
+        <legend className="text-lg font-bold text-[#23403d] mb-2">Payment Mode</legend>
+        <label className="flex items-center gap-3 text-sm font-bold text-[#23403d] cursor-pointer">
+          <input type="radio" value="PREPAID" className="size-4 text-[#ec6e55] focus:ring-[#ec6e55]" {...form.register("paymentMode")} />
           Pay online (Razorpay)
         </label>
         {isCodEnabled ? (
-          <label className="flex items-center gap-2 text-sm">
-            <input type="radio" value="COD" {...form.register("paymentMode")} />
+          <label className="flex items-center gap-3 text-sm font-bold text-[#23403d] cursor-pointer">
+            <input type="radio" value="COD" className="size-4 text-[#ec6e55] focus:ring-[#ec6e55]" {...form.register("paymentMode")} />
             Cash on delivery
           </label>
         ) : (
-          <p className="text-xs text-muted-foreground">
+          <p className="text-xs font-bold text-[#767676]">
             COD is currently disabled by store settings.
           </p>
         )}
       </fieldset>
-      <div className="grid gap-1">
-        <label className="text-sm font-medium" htmlFor="notes">
-          Notes (optional)
+
+      <div className="grid gap-1.5 border-t border-[#efe8e4] pt-4">
+        <label className="text-sm font-bold text-[#23403d]" htmlFor="notes">
+          Order Notes (optional)
         </label>
         <textarea
           id="notes"
-          className="min-h-16 rounded-md border border-border px-3 py-2 text-sm"
+          className="min-h-24 w-full rounded-[20px] border border-[#efe8e4] bg-[#faf3ef] px-4 py-3 text-sm font-medium text-[#23403d] placeholder:text-[#767676] focus:border-[#23403d] focus:outline-none focus:ring-1 focus:ring-[#23403d]"
+          placeholder="Notes about your order, e.g. special notes for delivery."
           {...form.register("notes")}
         />
       </div>
 
       <button
         type="submit"
-        className="h-11 rounded-md bg-primary text-sm font-medium text-primary-foreground disabled:opacity-60"
+        className="mt-4 h-14 w-full rounded-full bg-[#23403d] text-sm font-bold text-white transition-transform hover:-translate-y-1 hover:bg-[#ec6e55] hover:shadow-lg disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0"
         disabled={form.formState.isSubmitting}
       >
         {form.formState.isSubmitting ? "Processing..." : "Place order"}
       </button>
 
       {error ? (
-        <p className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
+        <p className="rounded-[10px] bg-red-50 px-4 py-3 text-sm font-bold text-red-600">
           {error}
         </p>
       ) : null}
 
       {statusMessage ? (
-        <p className="rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300">
+        <p className="rounded-[10px] bg-[#eff5ee] px-4 py-3 text-sm font-bold text-[#00aa63]">
           {statusMessage}
         </p>
       ) : null}
       {createdOrderId ? (
-        <p className="text-xs text-muted-foreground">Order ID: {createdOrderId}</p>
+        <p className="text-center text-xs font-bold text-[#767676]">Order ID: {createdOrderId}</p>
       ) : null}
     </form>
   );

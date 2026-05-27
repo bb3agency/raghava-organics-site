@@ -4,24 +4,49 @@ import { Leaf, Truck, RotateCcw, ShieldCheck, Star, ArrowRight, Timer } from "lu
 import { apiClient } from "@/lib/api";
 import { mapProductListResponse } from "@/lib/product-adapters";
 import { ProductCard } from "@/components/product/ProductCard";
+import { ProductCardSkeleton } from "@/components/product/ProductCardSkeleton";
 import { NewsletterForm } from "@/components/shared/NewsletterForm";
 import type { Product } from "@/types/product";
 
 async function getFeaturedProducts(): Promise<Product[]> {
   try {
-    const payload = await apiClient<unknown>("/products?limit=8&sort=featured");
+    const payload = await apiClient<unknown>("/products?limit=10&sort=featured");
     return mapProductListResponse(payload);
   } catch {
     return [];
   }
 }
 
+async function FeaturedProducts() {
+  const featured = await getFeaturedProducts();
+  
+  if (featured.length === 0) {
+    return (
+      <div className="flex flex-col items-center gap-4 py-16 text-center text-[#767676]">
+        <Leaf className="size-12 opacity-30" aria-hidden />
+        <p className="font-bold text-[#23403d]">Products coming soon</p>
+        <p className="text-sm">We&apos;re stocking up. Check back shortly!</p>
+      </div>
+    );
+  }
+  
+  return (
+    <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
+      {featured.map((product, i) => (
+        <div key={product.id} className="rounded-[20px] bg-white p-4 shadow-sm transition-shadow hover:shadow-md">
+          <ProductCard product={product} priority={i < 4} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 const CATEGORIES = [
   { label: "Fresh Vegetables", slug: "fresh-vegetables", emoji: "🥦", color: "bg-[#e8f5e9] text-[#2e7d32]" },
   { label: "Fresh Fruits", slug: "fruits", emoji: "🍎", color: "bg-[#ffebee] text-[#c62828]" },
   { label: "Dairy & Eggs", slug: "dairy-eggs", emoji: "🥚", color: "bg-[#fff8e1] text-[#c62828]" },
-  { label: "Bakery", slug: "bakery", emoji: "�", color: "bg-[#fff3e0] text-[#f57f17]" },
-  { label: "Meat & Seafood", slug: "meat", emoji: "�", color: "bg-[#fce4ec] text-[#c2185b]" },
+  { label: "Bakery", slug: "bakery", emoji: "🥖", color: "bg-[#fff3e0] text-[#f57f17]" },
+  { label: "Meat & Seafood", slug: "meat", emoji: "🥩", color: "bg-[#fce4ec] text-[#c2185b]" },
   { label: "Drinks", slug: "drinks", emoji: "🧃", color: "bg-[#e3f2fd] text-[#1565c0]" },
 ];
 
@@ -32,9 +57,7 @@ const TRUST_ITEMS = [
   { icon: Star, title: "Best Quality", desc: "Organic certified products" },
 ];
 
-export default async function HomePage() {
-  const featured = await getFeaturedProducts();
-
+export default function HomePage() {
   return (
     <div className="flex flex-col bg-[#eff5ee]">
       {/* ── Hero Grid (Tasty Daily Style) ──────────────────────────────────────────── */}
@@ -172,14 +195,15 @@ export default async function HomePage() {
 
       {/* ── Trending Products ─────────────────────────────── */}
       <section className="mx-auto w-full max-w-[1440px] px-4 py-8 pb-16 lg:px-8">
-        <div className="mb-8 flex items-end justify-between border-b border-border pb-4">
+        <div className="mb-8 flex flex-col items-start justify-between gap-4 border-b border-border pb-4 sm:flex-row sm:items-end">
           <h2 className="font-heading text-2xl font-bold text-[#23403d] md:text-3xl">
             Trending Products
           </h2>
-          <div className="hidden gap-6 sm:flex">
-            <button className="text-sm font-bold text-[#ec6e55] underline decoration-2 underline-offset-8">All Products</button>
-            <button className="text-sm font-bold text-[#767676] hover:text-[#23403d]">Fruits</button>
-            <button className="text-sm font-bold text-[#767676] hover:text-[#23403d]">Vegetables</button>
+          <div className="flex w-full gap-6 overflow-x-auto pb-2 sm:w-auto sm:pb-0 scrollbar-hide">
+            <Link href="/products" className="shrink-0 text-sm font-bold text-[#ec6e55] underline decoration-2 underline-offset-8">All Products</Link>
+            <Link href="/categories/fruits" className="shrink-0 text-sm font-bold text-[#767676] transition-colors hover:text-[#23403d]">Fruits</Link>
+            <Link href="/categories/fresh-vegetables" className="shrink-0 text-sm font-bold text-[#767676] transition-colors hover:text-[#23403d]">Vegetables</Link>
+            <Link href="/categories/dairy-eggs" className="shrink-0 text-sm font-bold text-[#767676] transition-colors hover:text-[#23403d]">Dairy & Eggs</Link>
           </div>
         </div>
 
@@ -187,26 +211,12 @@ export default async function HomePage() {
           fallback={
             <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
               {Array.from({ length: 10 }).map((_, i) => (
-                <div key={i} className="h-[340px] animate-pulse rounded-[20px] bg-white shadow-sm" aria-hidden />
+                <ProductCardSkeleton key={i} />
               ))}
             </div>
           }
         >
-          {featured.length > 0 ? (
-            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
-              {featured.map((product, i) => (
-                <div key={product.id} className="rounded-[20px] bg-white p-4 shadow-sm transition-shadow hover:shadow-md">
-                  <ProductCard product={product} priority={i < 4} />
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="flex flex-col items-center gap-4 py-16 text-center text-[#767676]">
-              <Leaf className="size-12 opacity-30" aria-hidden />
-              <p className="font-bold text-[#23403d]">Products coming soon</p>
-              <p className="text-sm">We're stocking up. Check back shortly!</p>
-            </div>
-          )}
+          <FeaturedProducts />
         </Suspense>
       </section>
 

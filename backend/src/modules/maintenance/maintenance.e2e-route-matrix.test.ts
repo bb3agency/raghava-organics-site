@@ -95,10 +95,12 @@ async function buildApp(store: ReturnType<typeof buildInMemoryStore>): Promise<F
   // concrete PrismaClient + ioredis types from the project's type
   // augmentation; our in-memory test doubles intentionally implement only
   // the surface the maintenance helpers use, so we cast through `unknown`.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  app.decorate('prisma', store.prisma as any);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  app.decorate('redis', store.redis as any);
+  // 
+  // @ts-expect-error test double
+  app.decorate('prisma', store.prisma);
+  // 
+  // @ts-expect-error test double
+  app.decorate('redis', store.redis);
 
   // Register the real maintenance routes (status + gate) so they share the
   // same in-memory store with the guard.

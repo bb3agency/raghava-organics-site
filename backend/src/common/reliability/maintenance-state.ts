@@ -240,7 +240,7 @@ export interface MaintenanceStatePrismaLike {
  */
 export interface MaintenanceStateRedisLike {
   get: (key: string) => Promise<string | null>;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // 
   set: (key: string, value: string, ...args: any[]) => Promise<unknown>;
   del?: (key: string) => Promise<unknown>;
 }

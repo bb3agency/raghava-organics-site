@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 let failedHandler: ((job: unknown, error: Error) => void) | undefined;
 
@@ -51,9 +51,11 @@ function MockPrismaClient() {
 }
 
 import { createOrderProcessingWorker } from './order-processing.worker';
+import { featureFlags } from '../../src/config/feature-flags';
 
 describe('order-processing worker error and retry behavior', () => {
   const mockConnection = {} as Parameters<typeof createOrderProcessingWorker>[0];
+  let originalGstFlag: boolean;
   type QueueArg = Parameters<typeof createOrderProcessingWorker>[1];
   type InvoiceStorageArg = Parameters<typeof createOrderProcessingWorker>[3];
   type WorkerDeps = NonNullable<Parameters<typeof createOrderProcessingWorker>[6]>;
@@ -74,6 +76,8 @@ describe('order-processing worker error and retry behavior', () => {
     );
 
   beforeEach(() => {
+    originalGstFlag = featureFlags.gstInvoicing;
+    featureFlags.gstInvoicing = true;
     failedHandler = undefined;
     sendTechnicalFailureAlert.mockReset();
     state.processor = undefined;
@@ -95,6 +99,10 @@ describe('order-processing worker error and retry behavior', () => {
     state.tx.$queryRaw.mockResolvedValue([{ nextval: 1n }]);
     vi.unstubAllEnvs();
     vi.stubEnv('INVOICE_STORAGE_ROOT', 'tmp/invoices');
+  });
+
+  afterEach(() => {
+    featureFlags.gstInvoicing = originalGstFlag;
   });
 
   it('returns without changes when payment is missing', async () => {

@@ -4,6 +4,29 @@
 
 ---
 
+## [2026-05-27] Strict Typing and Mocks in Vitest without `any` 
+
+**Context:** During the final production readiness checks, several backend tests (`inventory.routes.test.ts`, `cart-cleanup.worker.test.ts`, `notifications.worker.test.ts`) were failing ESLint checks due to `@typescript-eslint/no-unsafe-call`. Tests were casting mocked objects like `app.prisma as any` or directly calling `mockResolvedValue` on raw mocked functions which broke type safety boundaries. Additionally, the `FEATURE_GST_INVOICING_ENABLED` feature flag being overridden locally caused invoice generation tests to fail, exposing that tests weren't fully isolating environment-derived feature flags.
+
+**Decision — Remove all usage of `as any` in test mocks. Cast mocked Prisma and third-party dependency methods explicitly to `import('vitest').Mock` or strictly defined types. Use `@ts-expect-error test double` when overriding `app.decorate`. Mutate and restore `featureFlags` explicitly in `beforeEach`/`afterEach` blocks instead of relying on env vars.**
+
+**Rationale:**
+1. **Linting Safety**: The codebase strictly enforces `no-unsafe-call` and zero `any` usage (`strict: true`). Allowing exceptions in tests weakens the test suite's reliability and hides potential real typing issues in API contracts or Prisma models.
+2. **Deterministic Feature Flags**: Testing environment-variable-derived boolean flags by altering `process.env` during test runs is flaky in Vitest (depending on thread pooling and cache). Directly mutating the exported `featureFlags` object ensures synchronous, reliable mocking that resets cleanly between runs.
+
+**Alternatives considered:**
+- *Globally disable `@typescript-eslint/no-unsafe-call` in `**/*.test.ts` files.* Rejected. Fastify route tests and BullMQ worker tests benefit immensely from strict type checking to ensure schemas perfectly match test assertions.
+- *Use `vi.stubEnv` for feature flags.* Partially effective, but `config/feature-flags.ts` resolves values on import. Resolving on demand or using `vi.mock` creates more boilerplate than just exporting a mutable object for tests to overwrite.
+
+**Affected files:**
+- `backend/src/modules/inventory/inventory.routes.test.ts`
+- `backend/queues/workers/cart-cleanup.worker.test.ts`
+- `backend/queues/workers/notifications.worker.test.ts`
+- `backend/queues/workers/order-processing.worker.test.ts`
+- `backend/src/common/reliability/maintenance-state.ts` (removed unused directive)
+
+---
+
 ## [2026-05-26] Worker boot self-heals paused queues to recover from incomplete drain protocol exits
 
 **Context:** The May 26, 2026 Raghava Organics incident showed that the `scheduled-process-restart` and `maintenance-activation` drain protocols in `cart-cleanup.worker.ts` can leave queues paused in Redis indefinitely if the resume step at the end of the protocol fails after the application-layer `await` completes but before the Redis Lua flush lands (process exit race), or if the resume-failure technical alert is itself routed through the now-paused notifications queue and orphaned. The failure mode is silent: workers boot cleanly into the next container, no error is logged anywhere, but every subsequent `Queue.add(...)` for the affected queue lands jobs in `bull:<queue>:paused` instead of `bull:<queue>:wait`, and the workers correctly refuse to claim from the paused list. For the notifications queue specifically, this is a catastrophic failure mode — every email/SMS/WhatsApp notification stops arriving (OTP, order confirmations, refund alerts, technical failure alerts), the alert path itself joins the orphans on the paused list, and the outage is invisible until a human notices.

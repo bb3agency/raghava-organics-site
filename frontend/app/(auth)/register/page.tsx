@@ -24,20 +24,24 @@ export default function RegisterPage() {
   };
 
   return (
-    <div className="flex flex-col gap-6 rounded-lg border border-border p-8">
-      <div>
-        <h1 className="font-heading text-2xl font-semibold">Create account</h1>
-        <p className="mt-2 text-sm text-muted-foreground">
-          Send OTP via SMS, WhatsApp, or Email and verify to create your account.
+    <div className="flex flex-col gap-8 p-8 lg:p-12">
+      <div className="text-center">
+        <h1 className="font-heading text-3xl font-bold text-[#23403d]">Create Account</h1>
+        <p className="mt-3 text-sm font-medium text-[#767676]">
+          Send OTP via SMS, WhatsApp, or Email to instantly create your account.
         </p>
       </div>
+
       <SignupPhoneForm onSuccess={handleSuccess} />
-      <Link
-        href="/login"
-        className="text-center text-sm font-medium text-primary underline-offset-4 hover:underline"
-      >
-        Already have an account? Sign in
-      </Link>
+
+      <div className="border-t border-[#efe8e4] pt-6">
+        <Link
+          href="/login"
+          className="block text-center text-sm font-bold text-[#23403d] transition-colors hover:text-[#ec6e55]"
+        >
+          Already have an account? Sign in
+        </Link>
+      </div>
     </div>
   );
 }

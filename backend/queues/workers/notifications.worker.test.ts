@@ -85,7 +85,7 @@ describe('notifications worker', () => {
       Worker: MockWorker as unknown as NotificationsWorkerType,
       PrismaClient: MockPrismaClient as unknown as NotificationsPrismaType
     });
-    sendEmailSpy.mockResolvedValue({ messageId: 'email_primary_1', providerPayload: {} });
+    (sendEmailSpy as import('vitest').Mock).mockResolvedValue({ messageId: 'email_primary_1', providerPayload: {} });
 
     await processor?.({
       name: 'send-primary',
@@ -115,7 +115,7 @@ describe('notifications worker', () => {
       Worker: MockWorker as unknown as NotificationsWorkerType,
       PrismaClient: MockPrismaClient as unknown as NotificationsPrismaType
     });
-    sendEmailSpy.mockResolvedValue({ messageId: 'email_1', providerPayload: {} });
+    (sendEmailSpy as import('vitest').Mock).mockResolvedValue({ messageId: 'email_1', providerPayload: {} });
 
     await processor?.({
       name: 'send-email',
@@ -140,7 +140,7 @@ describe('notifications worker', () => {
       Worker: MockWorker as unknown as NotificationsWorkerType,
       PrismaClient: MockPrismaClient as unknown as NotificationsPrismaType
     });
-    sendSmsSpy.mockRejectedValue(new Error('provider timeout'));
+    (sendSmsSpy as import('vitest').Mock).mockRejectedValue(new Error('provider timeout'));
 
     await expect(
       processor?.({
@@ -199,7 +199,7 @@ describe('notifications worker', () => {
       Worker: MockWorker as unknown as NotificationsWorkerType,
       PrismaClient: MockPrismaClient as unknown as NotificationsPrismaType
     });
-    sendWhatsappSpy.mockResolvedValue({ messageId: 'wa_1', providerPayload: {} });
+    (sendWhatsappSpy as import('vitest').Mock).mockResolvedValue({ messageId: 'wa_1', providerPayload: {} });
 
     await processor?.({
       name: 'send-whatsapp',

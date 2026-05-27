@@ -38,9 +38,22 @@ export function OpsUsersPanel() {
   }
 
   useEffect(() => {
-    void reload()
-      .catch((err) => setError(getApiErrorMessageWithHint(err)))
-      .finally(() => setLoading(false));
+    let active = true;
+
+    async function loadUsers() {
+      try {
+        const result = await listOpsUsersClient({ limit: 50 });
+        if (active) setUsers(result.items);
+      } catch (err) {
+        if (active) setError(getApiErrorMessageWithHint(err));
+      } finally {
+        if (active) setLoading(false);
+      }
+    }
+
+    void loadUsers();
+
+    return () => { active = false; };
   }, []);
 
   if (loading) {

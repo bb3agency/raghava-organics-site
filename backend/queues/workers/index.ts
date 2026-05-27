@@ -578,6 +578,8 @@ async function bootstrapWorkers(): Promise<void> {
     if (err) {
       logger.warn({ err: err.message }, 'Failed to subscribe to restart channel');
     }
+  }).catch((err) => {
+    logger.warn({ err: err.message }, 'Failed to subscribe to restart channel');
   });
   restartSubscriber.on('message', (channel: string) => {
     if (channel !== SYSTEM_RESTART_CHANNEL) return;

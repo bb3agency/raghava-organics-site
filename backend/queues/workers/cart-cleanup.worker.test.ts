@@ -370,7 +370,7 @@ describe('cart-cleanup worker — scheduled-process-restart', () => {
   it('sends pre-exit ProcessRestartAlert before publishing', async () => {
     orderCount.mockResolvedValue(0);
     let alertCalledBeforePublish = false;
-    sendProcessRestartAlertSpy.mockImplementation(async () => {
+    (sendProcessRestartAlertSpy as import('vitest').Mock).mockImplementation(async () => {
       alertCalledBeforePublish = true;
     });
     publishMock.mockImplementation(async () => {
@@ -459,7 +459,7 @@ describe('cart-cleanup worker — scheduled-process-restart', () => {
 
   it('calls process.exit(0) regardless of alert or publish outcomes', async () => {
     orderCount.mockResolvedValue(0);
-    sendProcessRestartAlertSpy.mockRejectedValueOnce(new Error('email down'));
+    (sendProcessRestartAlertSpy as import('vitest').Mock).mockRejectedValueOnce(new Error('email down'));
     publishMock.mockRejectedValueOnce(new Error('redis down'));
     createCartCleanupWorker({}, baseWorkerDeps());
 

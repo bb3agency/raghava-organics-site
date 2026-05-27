@@ -97,7 +97,7 @@ describe('inventory routes', () => {
 
   it('serves bulk-update route and returns updated/failed counts', async () => {
     const app = createApp();
-    const prisma = app.prisma as any;
+    const prisma = app.prisma as unknown as { inventory: { findMany: import('vitest').Mock, findUnique: import('vitest').Mock }, $transaction: import('vitest').Mock };
     prisma.inventory.findMany.mockResolvedValue([{ variantId: 'v1' }]);
     prisma.$transaction.mockResolvedValue([{}]);
 
@@ -134,7 +134,7 @@ describe('inventory routes', () => {
 
   it('serves low-stock route and returns array', async () => {
     const app = createApp();
-    const prisma = app.prisma as any;
+    const prisma = app.prisma as unknown as { inventory: { findMany: import('vitest').Mock }, cartReservation: { groupBy: import('vitest').Mock } };
     prisma.inventory.findMany.mockResolvedValue([]);
     prisma.cartReservation.groupBy.mockResolvedValue([]);
 
@@ -154,7 +154,7 @@ describe('inventory routes', () => {
 
   it('serves history/:variantId route and returns paginated result', async () => {
     const app = createApp();
-    const prisma = app.prisma as any;
+    const prisma = app.prisma as unknown as { inventory: { findUnique: import('vitest').Mock }, $transaction: import('vitest').Mock };
     prisma.inventory.findUnique.mockResolvedValue({ variantId: 'v1' });
     prisma.$transaction.mockResolvedValue([[], 0]);
 

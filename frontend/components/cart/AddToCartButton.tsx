@@ -14,6 +14,7 @@ interface AddToCartButtonProps {
   quantity?: number;
   redirectTo?: string;
   className?: string;
+  icon?: React.ReactNode;
 }
 
 export function AddToCartButton({
@@ -22,6 +23,7 @@ export function AddToCartButton({
   quantity = 1,
   redirectTo,
   className,
+  icon,
 }: AddToCartButtonProps) {
   const router = useRouter();
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -60,7 +62,7 @@ export function AddToCartButton({
           "inline-flex h-10 items-center justify-center gap-2 rounded-md bg-primary text-sm font-medium text-primary-foreground disabled:opacity-60"
         }
       >
-        <ShoppingCart className="size-4" aria-hidden />
+        {icon ?? <ShoppingCart className="size-4" aria-hidden />}
         {isSubmitting ? "Adding..." : label}
       </button>
       {error ? (

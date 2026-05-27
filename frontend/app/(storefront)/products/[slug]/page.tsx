@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { Leaf, ShieldCheck, Truck, RotateCcw, Package } from "lucide-react";
+import { Leaf, ShieldCheck, Truck, RotateCcw, Package, ChevronRight } from "lucide-react";
 import { apiClient } from "@/lib/api";
 import { mapProduct } from "@/lib/product-adapters";
 import { ProductGallery } from "@/components/product/ProductGallery";
@@ -49,149 +49,160 @@ export default async function ProductDetailPage({ params }: ProductDetailPagePro
     activeVariant.compareAtPrice > activeVariant.price;
 
   return (
-    <div className="mx-auto max-w-7xl px-4 py-10 lg:px-6">
-      {/* Breadcrumb */}
-      <nav className="mb-6 flex items-center gap-1.5 text-xs text-muted-foreground" aria-label="Breadcrumb">
-        <Link href="/" className="hover:text-primary">Home</Link>
-        <span>/</span>
-        <Link href="/products" className="hover:text-primary">Shop</Link>
-        <span>/</span>
-        <Link href={`/categories/${product.category.slug}`} className="hover:text-primary">
-          {product.category.name}
-        </Link>
-        <span>/</span>
-        <span className="truncate font-medium text-foreground">{product.name}</span>
-      </nav>
-
-      {/* Main grid */}
-      <div className="grid gap-10 lg:grid-cols-[55%_45%]">
-        {/* Gallery */}
-        <ProductGallery images={product.images} productName={product.name} />
-
-        {/* Info panel */}
-        <section className="flex flex-col gap-5">
-          {/* Category */}
-          <p className="text-xs font-semibold uppercase tracking-widest text-accent">
+    <div className="bg-[#eff5ee] min-h-screen pb-16">
+      <div className="mx-auto max-w-[1440px] px-4 py-8 lg:px-8">
+        {/* Breadcrumb */}
+        <nav className="mb-8 flex flex-wrap items-center gap-2 text-sm font-bold text-[#767676]" aria-label="Breadcrumb">
+          <Link href="/" className="hover:text-[#ec6e55] transition-colors">Home</Link>
+          <ChevronRight className="size-3" />
+          <Link href="/products" className="hover:text-[#ec6e55] transition-colors">Shop</Link>
+          <ChevronRight className="size-3" />
+          <Link href={`/categories/${product.category.slug}`} className="hover:text-[#ec6e55] transition-colors">
             {product.category.name}
-          </p>
+          </Link>
+          <ChevronRight className="size-3" />
+          <span className="truncate text-[#ec6e55]">{product.name}</span>
+        </nav>
 
-          {/* Title */}
-          <h1 className="font-heading text-3xl font-bold leading-tight text-foreground md:text-4xl">
-            {product.name}
-          </h1>
-
-          {/* Rating */}
-          <Rating rating={product.rating} reviewCount={product.reviewCount} />
-
-          {/* Price */}
-          <div className="flex items-center gap-3">
-            <PriceDisplay
-              pricePaise={activeVariant?.price ?? 0}
-              originalPricePaise={hasDiscount ? (activeVariant?.compareAtPrice ?? undefined) : undefined}
-            />
-            {hasDiscount && activeVariant?.compareAtPrice && (
-              <span className="rounded-full bg-accent/15 px-2.5 py-0.5 text-xs font-bold text-accent">
-                Save {Math.round((1 - activeVariant.price / activeVariant.compareAtPrice) * 100)}%
-              </span>
-            )}
+        {/* Main grid */}
+        <div className="grid gap-12 rounded-[20px] bg-white p-6 shadow-sm lg:grid-cols-[55%_45%] lg:p-12">
+          {/* Gallery */}
+          <div className="rounded-[20px] bg-[#faf3ef] p-4 lg:p-8">
+            <ProductGallery images={product.images} productName={product.name} />
           </div>
 
-          {/* Description */}
-          {product.description ? (
-            <p className="text-sm leading-relaxed text-muted-foreground">
-              {product.description}
-            </p>
-          ) : null}
-
-          {/* Stock indicator */}
-          <div className="flex items-center gap-1.5 text-sm">
-            {product.inStock ? (
-              <>
-                <span className="inline-block size-2 rounded-full bg-green-500" aria-hidden />
-                <span className="font-medium text-green-700">In stock, ready to ship</span>
-              </>
-            ) : (
-              <>
-                <span className="inline-block size-2 rounded-full bg-muted-foreground/40" aria-hidden />
-                <span className="text-muted-foreground">Out of stock</span>
-              </>
-            )}
-          </div>
-
-          {/* Variants (if multiple) */}
-          {product.variants.length > 1 && (
-            <div className="flex flex-col gap-2">
-              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                Pack size
+          {/* Info panel */}
+          <section className="flex flex-col gap-6">
+            {/* Category & Title */}
+            <div>
+              <p className="mb-2 text-xs font-bold uppercase tracking-widest text-[#767676]">
+                {product.category.name}
               </p>
-              <div className="flex flex-wrap gap-2">
-                {product.variants.map((v) => (
+              <h1 className="mb-4 font-heading text-3xl font-bold leading-tight text-[#23403d] md:text-4xl">
+                {product.name}
+              </h1>
+              <div className="flex items-center gap-4">
+                <Rating rating={product.rating} reviewCount={product.reviewCount} />
+                <span className="text-sm font-bold text-[#767676]">({product.reviewCount} reviews)</span>
+              </div>
+            </div>
+
+            <hr className="border-[#efe8e4]" />
+
+            {/* Price */}
+            <div className="flex items-center gap-4">
+              <div className="text-2xl">
+                <PriceDisplay
+                  pricePaise={activeVariant?.price ?? 0}
+                  originalPricePaise={hasDiscount ? (activeVariant?.compareAtPrice ?? undefined) : undefined}
+                />
+              </div>
+              {hasDiscount && activeVariant?.compareAtPrice && (
+                <span className="rounded-full bg-[#ec6e55] px-3 py-1 text-xs font-bold text-white uppercase tracking-wider">
+                  Save {Math.round((1 - activeVariant.price / activeVariant.compareAtPrice) * 100)}%
+                </span>
+              )}
+            </div>
+
+            {/* Description */}
+            {product.description ? (
+              <p className="text-sm font-medium leading-relaxed text-[#767676]">
+                {product.description}
+              </p>
+            ) : null}
+
+            {/* Stock indicator */}
+            <div className="flex items-center gap-2 text-sm font-bold">
+              {product.inStock ? (
+                <>
+                  <span className="inline-block size-2 rounded-full bg-[#00aa63]" aria-hidden />
+                  <span className="text-[#00aa63]">In stock, ready to ship</span>
+                </>
+              ) : (
+                <>
+                  <span className="inline-block size-2 rounded-full bg-[#ec6e55]" aria-hidden />
+                  <span className="text-[#ec6e55]">Out of stock</span>
+                </>
+              )}
+            </div>
+
+            {/* Variants (if multiple) */}
+            {product.variants.length > 1 && (
+              <div className="flex flex-col gap-3 pt-2">
+                <p className="text-xs font-bold uppercase tracking-wider text-[#23403d]">
+                  Select Size
+                </p>
+                <div className="flex flex-wrap gap-3">
+                  {product.variants.map((v) => (
+                    <span
+                      key={v.id}
+                      className={`cursor-pointer rounded-full border-2 px-5 py-2 text-sm font-bold transition-all ${
+                        v.id === activeVariant?.id
+                          ? "border-[#23403d] bg-[#23403d] text-white"
+                          : "border-[#efe8e4] text-[#767676] hover:border-[#23403d] hover:text-[#23403d]"
+                      }`}
+                    >
+                      {v.name}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <hr className="border-[#efe8e4]" />
+
+            {/* CTAs */}
+            {product.inStock && activeVariant ? (
+              <div className="flex flex-col gap-4 sm:flex-row pt-2">
+                <AddToCartButton
+                  variantId={activeVariant.id}
+                  className="flex h-14 flex-1 items-center justify-center rounded-full bg-[#eff5ee] text-sm font-bold text-[#23403d] transition-colors hover:bg-[#c5dac2]"
+                  label="Add to cart"
+                />
+                <AddToCartButton
+                  variantId={activeVariant.id}
+                  className="flex h-14 flex-1 items-center justify-center rounded-full bg-[#23403d] text-sm font-bold text-white transition-colors hover:bg-[#ec6e55]"
+                  label="Buy now"
+                  redirectTo="/checkout"
+                />
+              </div>
+            ) : (
+              <p className="rounded-full bg-[#faf3ef] py-4 text-center text-sm font-bold text-[#767676]">
+                Currently out of stock
+              </p>
+            )}
+
+            {/* Trust signals */}
+            <div className="mt-4 grid grid-cols-2 gap-4 rounded-[20px] bg-[#faf3ef] p-6">
+              {[
+                { icon: Leaf, text: "100% Organic" },
+                { icon: Truck, text: "Free Delivery" },
+                { icon: RotateCcw, text: "Easy Returns" },
+                { icon: ShieldCheck, text: "Secure Pay" },
+              ].map(({ icon: Icon, text }) => (
+                <div key={text} className="flex items-center gap-3">
+                  <Icon className="size-5 shrink-0 text-[#ec6e55]" aria-hidden />
+                  <span className="text-sm font-bold text-[#23403d]">{text}</span>
+                </div>
+              ))}
+            </div>
+
+            {/* Tags */}
+            {product.tags.length > 0 && (
+              <div className="mt-2 flex flex-wrap gap-2">
+                {product.tags.map((tag) => (
                   <span
-                    key={v.id}
-                    className={`rounded-full border px-3 py-1 text-xs font-semibold transition-colors ${
-                      v.id === activeVariant?.id
-                        ? "border-primary bg-primary text-primary-foreground"
-                        : "border-border text-foreground hover:border-primary"
-                    }`}
+                    key={tag}
+                    className="inline-flex items-center gap-1.5 rounded-full bg-[#eff5ee] px-3 py-1 text-xs font-bold text-[#767676] transition-colors hover:bg-[#ec6e55] hover:text-white"
                   >
-                    {v.name}
+                    <Package className="size-3" aria-hidden />
+                    {tag}
                   </span>
                 ))}
               </div>
-            </div>
-          )}
-
-          {/* CTAs */}
-          {product.inStock && activeVariant ? (
-            <div className="flex flex-col gap-3 sm:flex-row">
-              <AddToCartButton
-                variantId={activeVariant.id}
-                className="flex h-12 flex-1 items-center justify-center rounded-full bg-primary text-sm font-bold text-primary-foreground transition-colors hover:bg-primary/90"
-                label="Add to cart"
-              />
-              <AddToCartButton
-                variantId={activeVariant.id}
-                className="flex h-12 flex-1 items-center justify-center rounded-full bg-accent text-sm font-bold text-accent-foreground transition-colors hover:bg-accent/90"
-                label="Buy now"
-                redirectTo="/checkout"
-              />
-            </div>
-          ) : (
-            <p className="rounded-full border border-border px-4 py-3 text-center text-sm font-medium text-muted-foreground">
-              Currently out of stock
-            </p>
-          )}
-
-          {/* Trust signals */}
-          <div className="grid grid-cols-2 gap-3 rounded-2xl border border-border bg-secondary/40 p-4">
-            {[
-              { icon: Leaf, text: "100% Organic & Certified" },
-              { icon: Truck, text: "Free delivery above ₹499" },
-              { icon: RotateCcw, text: "7-day hassle-free returns" },
-              { icon: ShieldCheck, text: "Secure checkout" },
-            ].map(({ icon: Icon, text }) => (
-              <div key={text} className="flex items-center gap-2">
-                <Icon className="size-4 shrink-0 text-primary" aria-hidden />
-                <span className="text-xs text-muted-foreground">{text}</span>
-              </div>
-            ))}
-          </div>
-
-          {/* Tags */}
-          {product.tags.length > 0 && (
-            <div className="flex flex-wrap gap-1.5">
-              {product.tags.map((tag) => (
-                <span
-                  key={tag}
-                  className="inline-flex items-center gap-1 rounded-full border border-border px-2.5 py-0.5 text-[11px] text-muted-foreground"
-                >
-                  <Package className="size-3" aria-hidden />
-                  {tag}
-                </span>
-              ))}
-            </div>
-          )}
-        </section>
+            )}
+          </section>
+        </div>
       </div>
     </div>
   );

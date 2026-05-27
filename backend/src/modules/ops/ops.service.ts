@@ -2058,7 +2058,7 @@ export class OpsService {
 
   async listAuditLogs(query: {
     actionStatus?: OpsActionStatusValue;
-    actionType?: OpsActionTypeValue | string;
+    actionType?: OpsActionTypeValue;
     opsUserId?: string;
     page?: number;
     limit?: number;

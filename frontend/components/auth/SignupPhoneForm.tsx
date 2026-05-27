@@ -73,16 +73,16 @@ export function SignupPhoneForm({ onSuccess }: SignupPhoneFormProps) {
   });
 
   return (
-    <form onSubmit={submit} className="grid gap-4">
-      <div className="grid gap-1">
-        <label htmlFor="signup-otp-channel" className="text-sm font-medium">
+    <form onSubmit={submit} className="grid gap-5">
+      <div className="grid gap-1.5">
+        <label htmlFor="signup-otp-channel" className="text-sm font-bold text-[#23403d]">
           Receive OTP via
         </label>
         <select
           id="signup-otp-channel"
           value={channel}
           onChange={(event) => setChannel(event.target.value as OtpChannel)}
-          className="h-11 rounded-md border border-border bg-background px-3 text-sm"
+          className="h-12 w-full cursor-pointer rounded-full border border-[#efe8e4] bg-[#faf3ef] px-4 text-sm font-medium text-[#23403d] focus:border-[#23403d] focus:outline-none focus:ring-1 focus:ring-[#23403d]"
         >
           <option value="sms">SMS</option>
           <option value="whatsapp">WhatsApp</option>
@@ -90,23 +90,23 @@ export function SignupPhoneForm({ onSuccess }: SignupPhoneFormProps) {
         </select>
       </div>
 
-      <div className="grid gap-1">
-        <label htmlFor="phone" className="text-sm font-medium">
+      <div className="grid gap-1.5">
+        <label htmlFor="phone" className="text-sm font-bold text-[#23403d]">
           Phone
         </label>
         <input
           id="phone"
           type="tel"
-          className="h-11 rounded-md border border-border bg-background px-3 text-sm"
+          className="h-12 w-full rounded-full border border-[#efe8e4] bg-[#faf3ef] px-4 text-sm font-medium text-[#23403d] placeholder:text-[#767676] focus:border-[#23403d] focus:outline-none focus:ring-1 focus:ring-[#23403d]"
           {...form.register("phone")}
         />
-        <p className="text-xs text-destructive">
+        <p className="text-xs font-bold text-red-500">
           {form.formState.errors.phone?.message}
         </p>
       </div>
 
-      <div className="grid gap-1">
-        <label htmlFor="otp" className="text-sm font-medium">
+      <div className="grid gap-1.5">
+        <label htmlFor="otp" className="text-sm font-bold text-[#23403d]">
           OTP
         </label>
         <input
@@ -114,59 +114,59 @@ export function SignupPhoneForm({ onSuccess }: SignupPhoneFormProps) {
           type="text"
           inputMode="numeric"
           maxLength={6}
-          className="h-11 rounded-md border border-border bg-background px-3 text-sm tracking-[0.25em]"
+          className="h-12 w-full rounded-full border border-[#efe8e4] bg-[#faf3ef] px-4 text-center text-lg font-bold tracking-[0.5em] text-[#23403d] focus:border-[#23403d] focus:outline-none focus:ring-1 focus:ring-[#23403d]"
           {...form.register("otp")}
         />
-        <p className="text-xs text-destructive">
+        <p className="text-xs font-bold text-red-500">
           {form.formState.errors.otp?.message}
         </p>
       </div>
 
-      <div className="grid gap-1 md:grid-cols-2 md:gap-2">
+      <div className="grid gap-4 md:grid-cols-2">
         <input
           type="text"
           placeholder="First name"
-          className="h-11 rounded-md border border-border bg-background px-3 text-sm"
+          className="h-12 w-full rounded-full border border-[#efe8e4] bg-[#faf3ef] px-4 text-sm font-medium text-[#23403d] placeholder:text-[#767676] focus:border-[#23403d] focus:outline-none focus:ring-1 focus:ring-[#23403d]"
           {...form.register("firstName")}
         />
         <input
           type="text"
           placeholder="Last name"
-          className="h-11 rounded-md border border-border bg-background px-3 text-sm"
+          className="h-12 w-full rounded-full border border-[#efe8e4] bg-[#faf3ef] px-4 text-sm font-medium text-[#23403d] placeholder:text-[#767676] focus:border-[#23403d] focus:outline-none focus:ring-1 focus:ring-[#23403d]"
           {...form.register("lastName")}
         />
       </div>
 
-      <div className="grid gap-1">
-        <label htmlFor="email" className="text-sm font-medium">
-          Email {channel === "email" ? "(required for OTP)" : "(optional)"}
+      <div className="grid gap-1.5">
+        <label htmlFor="email" className="text-sm font-bold text-[#23403d]">
+          Email <span className="text-[#767676] font-medium">{channel === "email" ? "(required for OTP)" : "(optional)"}</span>
         </label>
         <input
           id="email"
           type="email"
-          className="h-11 rounded-md border border-border bg-background px-3 text-sm"
+          className="h-12 w-full rounded-full border border-[#efe8e4] bg-[#faf3ef] px-4 text-sm font-medium text-[#23403d] placeholder:text-[#767676] focus:border-[#23403d] focus:outline-none focus:ring-1 focus:ring-[#23403d]"
           {...form.register("email")}
           required={channel === "email"}
         />
-        <p className="text-xs text-destructive">
+        <p className="text-xs font-bold text-red-500">
           {form.formState.errors.email?.message}
         </p>
       </div>
 
       <button
         type="button"
-        className="h-11 rounded-md border border-border px-4 text-sm font-medium disabled:opacity-60"
+        className="h-12 w-full rounded-full border-2 border-[#efe8e4] bg-white px-6 text-sm font-bold text-[#23403d] transition-colors hover:border-[#23403d] disabled:cursor-not-allowed disabled:opacity-60"
         onClick={() => void send()}
         disabled={form.formState.isSubmitting}
       >
         Send OTP
       </button>
 
-      {otpInfo ? <p className="text-xs text-muted-foreground">{otpInfo}</p> : null}
+      {otpInfo ? <p className="text-xs font-bold text-[#00aa63]">{otpInfo}</p> : null}
       <AuthErrorBanner message={error} />
       <button
         type="submit"
-        className="h-11 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground disabled:opacity-60"
+        className="mt-2 h-12 w-full rounded-full bg-[#23403d] px-8 text-sm font-bold text-white transition-transform hover:-translate-y-1 hover:bg-[#ec6e55] hover:shadow-lg disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0"
         disabled={form.formState.isSubmitting}
       >
         {form.formState.isSubmitting ? "Creating account..." : "Create account"}

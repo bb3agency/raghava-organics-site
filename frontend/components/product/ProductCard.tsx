@@ -1,5 +1,6 @@
 import Image from "next/image";
 import Link from "next/link";
+import { Eye, Heart, ShoppingBag } from "lucide-react";
 import type { Product } from "@/types/product";
 import { Rating } from "@/components/shared/Rating";
 import { PriceDisplay } from "@/components/shared/PriceDisplay";
@@ -25,70 +26,103 @@ export function ProductCard({ product, priority = false }: ProductCardProps) {
       : 0;
 
   return (
-    <article className="group flex flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-sm transition-shadow duration-300 hover:shadow-md">
-      {/* Image */}
-      <Link href={`/products/${product.slug}`} className="relative block aspect-[4/3] overflow-hidden bg-secondary">
-        <Image
-          src={image?.url ?? "/next.svg"}
-          alt={image?.altText ?? product.name}
-          fill
-          priority={priority}
-          className="object-cover transition-transform duration-500 group-hover:scale-105"
-          sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 25vw"
-        />
+    <article className="group relative flex flex-col rounded-[20px] bg-white transition-all duration-300 hover:-translate-y-1 hover:shadow-[0_10px_40px_-10px_rgba(35,64,61,0.1)]">
+      {/* Image Wrap */}
+      <div className="relative aspect-square overflow-hidden rounded-t-[20px] p-6">
+        <Link href={`/products/${product.slug}`} className="relative block h-full w-full">
+          <Image
+            src={image?.url ?? "/next.svg"}
+            alt={image?.altText ?? product.name}
+            fill
+            priority={priority}
+            className="object-contain transition-transform duration-500 group-hover:scale-110"
+            sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 25vw"
+          />
+        </Link>
+
+        {/* Hover Actions (Tasty Daily style overlay buttons) */}
+        <div className="absolute right-4 top-4 flex flex-col gap-2 opacity-0 transition-all duration-300 group-hover:opacity-100 lg:translate-x-4 lg:group-hover:translate-x-0">
+          <button 
+            className="flex size-9 items-center justify-center rounded-full bg-white text-[#23403d] shadow-sm transition-colors hover:bg-[#ec6e55] hover:text-white" 
+            aria-label="Add to wishlist"
+            onClick={(e) => {
+              e.preventDefault();
+              alert("Wishlist feature coming soon!");
+            }}
+          >
+            <Heart className="size-4" />
+          </button>
+          <Link 
+            href={`/products/${product.slug}`}
+            className="flex size-9 items-center justify-center rounded-full bg-white text-[#23403d] shadow-sm transition-colors hover:bg-[#ec6e55] hover:text-white" 
+            aria-label="Quick view"
+          >
+            <Eye className="size-4" />
+          </Link>
+        </div>
+
         {/* Badges */}
-        <div className="absolute left-2 top-2 flex flex-col gap-1">
+        <div className="absolute left-4 top-4 flex flex-col gap-1.5">
           {product.isFeatured && (
-            <span className="rounded-full bg-primary px-2.5 py-0.5 text-[11px] font-semibold text-primary-foreground">
-              Featured
+            <span className="rounded-full bg-[#ec6e55] px-2.5 py-1 text-[11px] font-bold tracking-wide text-white uppercase">
+              Hot
             </span>
           )}
           {hasDiscount && discountPct > 0 && (
-            <span className="rounded-full bg-accent px-2.5 py-0.5 text-[11px] font-semibold text-accent-foreground">
+            <span className="rounded-full bg-[#23403d] px-2.5 py-1 text-[11px] font-bold tracking-wide text-white uppercase">
               -{discountPct}%
             </span>
           )}
         </div>
+        
         {/* Out of stock overlay */}
         {!product.inStock && (
-          <div className="absolute inset-0 flex items-center justify-center bg-background/60">
-            <span className="rounded-full bg-card px-3 py-1 text-xs font-semibold text-muted-foreground">
+          <div className="absolute inset-0 flex items-center justify-center bg-white/60 backdrop-blur-[2px]">
+            <span className="rounded-full bg-[#23403d] px-4 py-1.5 text-xs font-bold text-white uppercase tracking-wider shadow-md">
               Out of stock
             </span>
           </div>
         )}
-      </Link>
+      </div>
 
       {/* Content */}
-      <div className="flex flex-1 flex-col gap-2 p-3">
-        <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+      <div className="flex flex-1 flex-col items-center p-4 text-center">
+        <Link href={`/categories/${product.category.slug}`} className="mb-1 text-[11px] font-bold uppercase tracking-wider text-[#767676] hover:text-[#ec6e55]">
           {product.category.name}
-        </p>
-        <Link href={`/products/${product.slug}`}>
-          <h3 className="line-clamp-2 text-sm font-semibold leading-snug text-foreground transition-colors hover:text-primary">
+        </Link>
+        <Link href={`/products/${product.slug}`} className="mb-2">
+          <h3 className="line-clamp-2 text-sm font-bold leading-snug text-[#23403d] transition-colors hover:text-[#ec6e55]">
             {product.name}
           </h3>
         </Link>
 
-        <div className="flex items-center justify-between gap-2">
+        {product.rating > 0 && (
+          <div className="mb-2">
+             <Rating rating={product.rating} reviewCount={0} /> {/* Suppress text for cleaner look */}
+          </div>
+        )}
+
+        <div className="mb-4">
           <PriceDisplay
             pricePaise={activeVariant?.price ?? 0}
             originalPricePaise={
               hasDiscount ? (activeVariant?.compareAtPrice ?? undefined) : undefined
             }
           />
-          <Rating rating={product.rating} reviewCount={product.reviewCount} />
         </div>
 
         {/* CTA */}
         {product.inStock && activeVariant ? (
           <AddToCartButton
             variantId={activeVariant.id}
-            className="mt-auto inline-flex h-9 w-full items-center justify-center gap-2 rounded-full bg-primary text-sm font-semibold text-primary-foreground transition-colors hover:bg-accent"
+            className="mt-auto inline-flex h-10 w-[85%] items-center justify-center gap-2 rounded-full border border-[#efe8e4] bg-white text-sm font-bold text-[#23403d] transition-all hover:border-[#23403d] hover:bg-[#23403d] hover:text-white"
             label="Add to cart"
+            icon={<ShoppingBag className="size-4" />}
           />
         ) : (
-          <p className="mt-auto text-xs text-muted-foreground">Unavailable</p>
+          <button disabled className="mt-auto inline-flex h-10 w-[85%] items-center justify-center rounded-full bg-[#efe8e4] text-sm font-bold text-[#767676] cursor-not-allowed">
+            Unavailable
+          </button>
         )}
       </div>
     </article>

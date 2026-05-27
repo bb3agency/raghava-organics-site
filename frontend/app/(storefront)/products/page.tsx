@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { Suspense } from "react";
-import { Leaf, SlidersHorizontal } from "lucide-react";
+import { Leaf, SlidersHorizontal, ChevronRight } from "lucide-react";
 import { apiClient } from "@/lib/api";
 import { ProductGrid } from "@/components/product/ProductGrid";
 import { PlpSortSelect } from "@/components/product/PlpSortSelect";
@@ -25,7 +25,7 @@ export const metadata = {
 export default async function ProductsPage({ searchParams }: ProductsPageProps) {
   const params = await searchParams;
   const page = params.page ?? "1";
-  const limit = params.limit ?? "12";
+  const limit = params.limit ?? "16"; // Changed to 16 to fit 4x4 grid perfectly
   const sort = params.sort ?? "newest";
   const q = params.q ?? "";
   const category = params.category ?? "";
@@ -39,58 +39,69 @@ export default async function ProductsPage({ searchParams }: ProductsPageProps) 
     products = [];
   }
 
+  const title = q ? `Results for "${q}"` : category ? category.replace('-', ' ') : "Shop All Products";
+
   return (
-    <div className="mx-auto max-w-7xl px-4 py-10 lg:px-6">
-      {/* Page header */}
-      <div className="mb-8">
-        <nav className="mb-3 flex items-center gap-1.5 text-xs text-muted-foreground" aria-label="Breadcrumb">
-          <Link href="/" className="hover:text-primary">Home</Link>
-          <span>/</span>
-          <span className="text-foreground font-medium">Shop</span>
-        </nav>
-        <div className="flex flex-wrap items-end justify-between gap-4">
-          <div>
-            <h1 className="font-heading text-3xl font-bold text-foreground">
-              {q ? `Results for "${q}"` : category ? `${category}` : "All Products"}
-            </h1>
-            <p className="mt-1 text-sm text-muted-foreground">
-              {products.length > 0
-                ? `Showing ${products.length} organic product${products.length !== 1 ? "s" : ""}`
-                : "No products found"}
-            </p>
-          </div>
+    <div className="flex flex-col bg-[#eff5ee] min-h-screen pb-16">
+      {/* ── Page Header Banner ──────────────────────────────────────────── */}
+      <section className="relative overflow-hidden bg-[#dbe8d8] py-12 md:py-20">
+        <div className="mx-auto flex w-full max-w-[1440px] flex-col items-center justify-center px-4 text-center lg:px-8">
+          <h1 className="mb-4 font-heading text-4xl font-bold capitalize text-[#23403d] md:text-5xl">
+            {title}
+          </h1>
+          <nav className="flex items-center gap-2 text-sm font-bold text-[#767676]" aria-label="Breadcrumb">
+            <Link href="/" className="hover:text-[#ec6e55] transition-colors">Home</Link>
+            <ChevronRight className="size-3" />
+            <span className="text-[#ec6e55] capitalize">{q ? 'Search' : category ? category.replace('-', ' ') : 'Shop'}</span>
+          </nav>
+        </div>
+        {/* Decorative elements */}
+        <div className="absolute -bottom-16 -right-16 size-64 rounded-full bg-[#c5dac2] opacity-40 blur-3xl" aria-hidden />
+        <div className="absolute -left-16 top-0 size-48 rounded-full bg-white opacity-40 blur-3xl" aria-hidden />
+      </section>
+
+      {/* ── Main Content ──────────────────────────────────────────────── */}
+      <section className="mx-auto w-full max-w-[1440px] px-4 pt-12 lg:px-8">
+        <div className="mb-8 flex flex-col justify-between gap-4 rounded-[20px] bg-white p-4 shadow-sm sm:flex-row sm:items-center lg:p-6">
+          <p className="text-sm font-bold text-[#767676]">
+            {products.length > 0
+              ? `Showing ${products.length} product${products.length !== 1 ? "s" : ""}`
+              : "No products found"}
+          </p>
           <div className="flex items-center gap-3">
-            <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              <SlidersHorizontal className="size-3.5" aria-hidden />
+            <span className="flex items-center gap-2 text-sm font-bold text-[#23403d]">
+              <SlidersHorizontal className="size-4 text-[#ec6e55]" aria-hidden />
               Sort by
             </span>
-            <Suspense fallback={null}>
+            <Suspense fallback={<div className="h-10 w-40 animate-pulse rounded-full bg-[#efe8e4]" />}>
               <PlpSortSelect current={sort} />
             </Suspense>
           </div>
         </div>
-      </div>
 
-      {/* Product grid or empty state */}
-      {products.length > 0 ? (
-        <ProductGrid products={products} />
-      ) : (
-        <div className="flex flex-col items-center gap-4 py-24 text-center text-muted-foreground">
-          <Leaf className="size-14 opacity-25" aria-hidden />
-          <p className="font-heading text-xl font-semibold text-foreground">
-            {q ? "No products matched your search" : "No products yet"}
-          </p>
-          <p className="text-sm">
-            {q ? "Try a different search term or browse all products." : "We're stocking up. Check back soon!"}
-          </p>
-          <Link
-            href="/products"
-            className="mt-2 inline-flex h-10 items-center justify-center rounded-full bg-primary px-6 text-sm font-semibold text-primary-foreground transition-colors hover:bg-accent"
-          >
-            Browse all products
-          </Link>
-        </div>
-      )}
+        {/* Product grid or empty state */}
+        {products.length > 0 ? (
+          <ProductGrid products={products} />
+        ) : (
+          <div className="flex flex-col items-center justify-center rounded-[20px] bg-white px-4 py-24 text-center shadow-sm">
+            <div className="mb-6 flex size-20 items-center justify-center rounded-full bg-[#eff5ee]">
+              <Leaf className="size-10 text-[#ec6e55]" aria-hidden />
+            </div>
+            <h2 className="mb-2 font-heading text-2xl font-bold text-[#23403d]">
+              {q ? "No products matched your search" : "No products yet"}
+            </h2>
+            <p className="mb-8 text-sm font-medium text-[#767676] max-w-md">
+              {q ? "Try checking your spelling or use more general terms." : "We're currently stocking up on fresh items. Please check back soon!"}
+            </p>
+            <Link
+              href="/products"
+              className="inline-flex h-12 items-center justify-center rounded-full bg-[#23403d] px-8 text-sm font-bold text-white transition-transform hover:-translate-y-1 hover:bg-[#ec6e55] hover:shadow-lg"
+            >
+              Browse All Products
+            </Link>
+          </div>
+        )}
+      </section>
     </div>
   );
 }

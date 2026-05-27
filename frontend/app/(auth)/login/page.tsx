@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { APP_NAME } from "@/lib/constants";
 import type { AuthSession } from "@/types/user";
@@ -20,10 +20,6 @@ export default function LoginPage() {
   const clearPendingMerge = useCartStore((s) => s.clearPendingMerge);
   const [mode, setMode] = useState<LoginMode>("otp");
 
-  const modeLabel = useMemo(() => {
-    return mode === "otp" ? "Phone OTP login (SMS, WhatsApp, or Email)" : "Email password login";
-  }, [mode]);
-
   const handleSuccess = async (session: AuthSession) => {
     setSession(session.accessToken, session.user);
     if (pendingMerge) {
@@ -34,17 +30,17 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="flex flex-col gap-6 rounded-lg border border-border p-8">
-      <div>
-        <h1 className="font-heading text-2xl font-semibold">Sign in</h1>
-        <p className="mt-2 text-sm text-muted-foreground">
-          Continue to {APP_NAME} using OTP (SMS/WhatsApp/Email) or email + password.
+    <div className="flex flex-col gap-8 p-8 lg:p-12">
+      <div className="text-center">
+        <h1 className="font-heading text-3xl font-bold text-[#23403d]">Welcome Back</h1>
+        <p className="mt-3 text-sm font-medium text-[#767676]">
+          Sign in to your {APP_NAME} account using OTP or email.
         </p>
       </div>
 
-      <div className="grid gap-3">
+      <div className="grid gap-6">
         <div
-          className="grid grid-cols-2 gap-2 rounded-md border border-border p-1"
+          className="flex gap-2 rounded-full border border-[#efe8e4] bg-[#faf3ef] p-1.5"
           role="tablist"
           aria-label="Login method"
         >
@@ -52,31 +48,27 @@ export default function LoginPage() {
             type="button"
             role="tab"
             aria-selected={mode === "otp"}
-            className={`h-10 rounded-sm text-sm font-medium ${
-              mode === "otp" ? "bg-primary text-primary-foreground" : "text-muted-foreground"
+            className={`flex-1 h-10 rounded-full text-sm font-bold transition-colors ${
+              mode === "otp" ? "bg-[#23403d] text-white shadow-sm" : "text-[#767676] hover:text-[#23403d]"
             }`}
             onClick={() => setMode("otp")}
           >
-            OTP
+            OTP Login
           </button>
           <button
             type="button"
             role="tab"
             aria-selected={mode === "email"}
-            className={`h-10 rounded-sm text-sm font-medium ${
+            className={`flex-1 h-10 rounded-full text-sm font-bold transition-colors ${
               mode === "email"
-                ? "bg-primary text-primary-foreground"
-                : "text-muted-foreground"
+                ? "bg-[#23403d] text-white shadow-sm"
+                : "text-[#767676] hover:text-[#23403d]"
             }`}
             onClick={() => setMode("email")}
           >
-            Email
+            Email Login
           </button>
         </div>
-
-        <p className="text-xs text-muted-foreground" aria-live="polite">
-          {modeLabel}
-        </p>
 
         {mode === "otp" ? (
           <OtpLoginForm onSuccess={handleSuccess} />
@@ -85,27 +77,29 @@ export default function LoginPage() {
         )}
       </div>
 
-      <div className="grid gap-2 text-center text-sm">
+      <div className="grid gap-4 text-center">
         <Link
           href="/register"
-          className="font-medium text-primary underline-offset-4 hover:underline"
+          className="text-sm font-bold text-[#ec6e55] transition-colors hover:text-[#23403d]"
         >
-          New customer? Create account
+          New customer? Create an account
         </Link>
         <Link
           href="/forgot-password"
-          className="text-muted-foreground underline-offset-4 hover:underline"
+          className="text-sm font-bold text-[#767676] transition-colors hover:text-[#23403d]"
         >
-          Forgot password
+          Forgot password?
         </Link>
       </div>
 
-      <Link
-        href="/"
-        className="text-center text-sm font-medium text-primary underline-offset-4 hover:underline"
-      >
-        Back to store
-      </Link>
+      <div className="border-t border-[#efe8e4] pt-6">
+        <Link
+          href="/"
+          className="block text-center text-sm font-bold text-[#23403d] transition-colors hover:text-[#ec6e55]"
+        >
+          &larr; Back to store
+        </Link>
+      </div>
     </div>
   );
 }
