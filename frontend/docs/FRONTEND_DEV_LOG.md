@@ -336,7 +336,7 @@ NEXT_PUBLIC_RAZORPAY_KEY_ID=(pending)
 **Backend Integrations & Fixes:**
 - Fixed tests that failed because the `FEATURE_GST_INVOICING_ENABLED` flag was locally appended to `.env` as `false`, causing test divergence. Applied dynamic mock restoration for `featureFlags.gstInvoicing = true` directly in the test lifecycle (`cart-cleanup.worker.test.ts`, `order-processing.worker.test.ts`) rather than relying on environment variable polling during Vitest runs.
 - Resolved multiple strict TypeScript linting errors (`@typescript-eslint/no-unsafe-call`) in `inventory.routes.test.ts`, `cart-cleanup.worker.test.ts`, and `notifications.worker.test.ts` by asserting proper `import('vitest').Mock` types on dependencies and Prisma queries, instead of unsafe `any` casts.
-- Cleaned redundant union strings in `ops.service.ts` log models.
+- Cleaned redundant union strings in `ops.service.ts` log models and resolved `ops.routes.ts` `actionType` typemismatch by explicitly casting query params to `Parameters<typeof opsService.listAuditLogs>[0]`.
 - Addressed floating promise rejections in the background `restartSubscriber.subscribe()` logic inside `index.ts`.
 - **Result**: `npm run typecheck`, `npm run lint`, `npm run test:unit`, and `npm run ci:reliability-gates` all pass.
 

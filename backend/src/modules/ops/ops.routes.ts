@@ -1115,7 +1115,7 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
         page?: number;
         limit?: number;
       };
-      return opsService.listAuditLogs(query);
+      return opsService.listAuditLogs(query as Parameters<typeof opsService.listAuditLogs>[0]);
     }
   );
 
