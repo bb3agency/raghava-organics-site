@@ -212,3 +212,7 @@ export function shouldForceLogin(error: ApiError): boolean {
     (error.code === "UNAUTHORISED" || error.code === "INVALID_CREDENTIALS")
   );
 }
+
+export function isApiErrorWithCode(error: unknown, code: string): boolean {
+  return error instanceof ApiError && error.code === code;
+}

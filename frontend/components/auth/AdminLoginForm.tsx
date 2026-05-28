@@ -9,7 +9,7 @@ import {
   requestAdminLoginOtp,
   verifyAdminLoginOtp,
 } from "@/lib/admin-auth-api";
-import { getApiErrorMessage } from "@/lib/error-messages";
+import { getApiErrorMessage, isApiErrorWithCode } from "@/lib/error-messages";
 import { emailSchema, otpSchema, passwordSchema } from "@/lib/validators";
 import { AuthErrorBanner } from "@/components/auth/AuthErrorBanner";
 import { Eye, EyeOff, Loader2, Send } from "lucide-react";
@@ -144,7 +144,15 @@ export function AdminLoginForm({ onSuccess, enrollmentHint }: AdminLoginFormProp
       const session = await verifyAdminLoginOtp(parsed.data);
       await onSuccess(session);
     } catch (err) {
-      setError(getApiErrorMessage(err));
+      if (isApiErrorWithCode(err, "UNAUTHORISED")) {
+        setStep("credentials");
+        setOtp("");
+        setError(
+          "This account has been deactivated. Contact your administrator if you believe this is an error."
+        );
+      } else {
+        setError(getApiErrorMessage(err));
+      }
     }
   }
 
