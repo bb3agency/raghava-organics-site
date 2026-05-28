@@ -56,7 +56,7 @@ All subsequent requests:
 - ❌ No key issuance in invite consumption
 - ✅ Browser session is the only authentication mechanism
 
-### 2.2 Privileged Operations Require OTP (5 Endpoints)
+### 2.2 Privileged Operations Require OTP (6 Endpoints)
 
 All critical mutations require a **secondary OTP challenge** (email-based 2FA):
 
@@ -66,6 +66,7 @@ All critical mutations require a **secondary OTP challenge** (email-based 2FA):
 | `POST /api/v1/ops/load-shed` | load-shed-change | `challengeId`, `otpCode` |
 | `POST /api/v1/ops/system/restart` | system-restart | `challengeId`, `otpCode` |
 | `POST /api/v1/ops/users/:id/deactivate` | user-deactivate | `challengeId`, `otpCode` |
+| `POST /api/v1/ops/admin-users/:id/deactivate` | admin-user-deactivate | `challengeId`, `otpCode`, `reason` |
 | `POST /api/v1/ops/invites/:id/revoke` | invite-revoke | `challengeId`, `otpCode` |
 
 **OTP Challenge Pattern:**
@@ -95,6 +96,7 @@ await api.post('/api/v1/ops/system/restart', {
 | `load-shed-change` | `POST /api/v1/ops/load-shed` |
 | `system-restart` | `POST /api/v1/ops/system/restart` |
 | `user-deactivate` | `POST /api/v1/ops/users/:opsUserId/deactivate` |
+| `admin-user-deactivate` | `POST /api/v1/ops/admin-users/:adminUserId/deactivate` |
 | `invite-revoke` | `POST /api/v1/ops/invites/:inviteId/revoke` |
 
 Requests with any other `action` string return `400 VALIDATION_ERROR`. On commit, each critical endpoint passes `expectedAction` into `verifyEmailOtp()` — a challenge issued for `config-save` cannot be used to restart the system (`403 FORBIDDEN` action mismatch).

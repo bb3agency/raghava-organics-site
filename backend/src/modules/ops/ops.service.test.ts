@@ -29,6 +29,24 @@ function createOpsServiceHarness() {
   const opsUserInviteFindMany = vi.fn();
 
   const userFindUnique = vi.fn();
+  type MerchantAdminUserRow = {
+    id: string;
+    email: string;
+    firstName: string;
+    lastName: string;
+    phone: string | null;
+    isBanned: boolean;
+    isVerified: boolean;
+    bannedAt: Date | null;
+    bannedReason: string | null;
+    createdAt: Date;
+    adminPermissionGrants: Array<{ permission: string }>;
+  };
+  const userFindMany = vi.fn(async (): Promise<MerchantAdminUserRow[]> => []);
+  const userCount = vi.fn(async () => 0);
+  const userUpdateMany = vi.fn(async () => ({ count: 1 }));
+
+  const refreshTokenUpdateMany = vi.fn(async () => ({ count: 0 }));
 
   const opsUserFindUnique = vi.fn();
   const opsUserFindFirst = vi.fn(async () => null);
@@ -49,7 +67,13 @@ function createOpsServiceHarness() {
   const fastify = {
     prisma: {
       user: {
-        findUnique: userFindUnique
+        findUnique: userFindUnique,
+        findMany: userFindMany,
+        count: userCount,
+        updateMany: userUpdateMany
+      },
+      refreshToken: {
+        updateMany: refreshTokenUpdateMany
       },
       opsUserInvite: {
         findUnique: opsUserInviteFindUnique,
@@ -147,6 +171,10 @@ function createOpsServiceHarness() {
       opsUserFindUnique,
       opsUserUpdateMany,
       userFindUnique,
+      userFindMany,
+      userCount,
+      userUpdateMany,
+      refreshTokenUpdateMany,
       opsUserFindFirst,
       opsUserCreate,
       opsOtpChallengeFindUnique,
@@ -630,6 +658,76 @@ describe('OpsService failcase coverage', () => {
     expect(mocks.opsAuditLogCreate).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ actionType: 'USER_DEACTIVATED' })
+      })
+    );
+  });
+
+  it('listMerchantAdminUsers returns paginated merchant admins', async () => {
+    const { service, mocks } = createOpsServiceHarness();
+    mocks.userFindMany.mockResolvedValueOnce([{
+      id: 'admin_1',
+      email: 'merchant@example.com',
+      firstName: 'Merchant',
+      lastName: 'Admin',
+      phone: null,
+      isBanned: false,
+      isVerified: true,
+      bannedAt: null,
+      bannedReason: null,
+      createdAt: new Date('2024-01-01'),
+      adminPermissionGrants: [{ permission: 'orders:read' }]
+    }]);
+    mocks.userCount.mockResolvedValueOnce(1);
+
+    const result = await service.listMerchantAdminUsers({ page: 1, limit: 10 });
+
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]!.email).toBe('merchant@example.com');
+    expect(result.items[0]!.isActive).toBe(true);
+    expect(result.items[0]!.permissions).toEqual(['orders:read']);
+  });
+
+  it('deactivateMerchantAdminUser deactivates admin and revokes refresh tokens', async () => {
+    const { service, mocks } = createOpsServiceHarness();
+    mocks.opsOtpChallengeFindUnique.mockResolvedValueOnce({
+      id: 'challenge_1',
+      opsUserId: 'ops_requestor',
+      action: 'admin-user-deactivate',
+      codeHash: hashOtp('123456'),
+      status: 'PENDING',
+      expiresAt: new Date(Date.now() + 60000),
+      failedAttempts: 0
+    });
+    mocks.opsOtpChallengeUpdateMany.mockResolvedValueOnce({ count: 1 });
+    mocks.userFindUnique.mockResolvedValueOnce({
+      id: 'admin_target',
+      email: 'merchant@example.com',
+      role: 'ADMIN',
+      isBanned: false,
+      firstName: 'Merchant',
+      lastName: 'Admin'
+    });
+
+    const result = await service.deactivateMerchantAdminUser({
+      targetAdminUserId: 'admin_target',
+      requestorOpsUserId: 'ops_requestor',
+      reason: 'Offboarding contractor',
+      challengeId: 'challenge_1',
+      otpCode: '123456',
+      requestIp: '127.0.0.1',
+      requestPath: '/api/v1/ops/admin-users/admin_target/deactivate',
+      method: 'POST'
+    });
+
+    expect(result).toEqual({ adminUserId: 'admin_target', deactivated: true });
+    expect(mocks.userUpdateMany).toHaveBeenCalled();
+    expect(mocks.refreshTokenUpdateMany).toHaveBeenCalled();
+    expect(mocks.opsAuditLogCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          actionType: 'USER_DEACTIVATED',
+          summary: expect.objectContaining({ targetType: 'merchant_admin' })
+        })
       })
     );
   });

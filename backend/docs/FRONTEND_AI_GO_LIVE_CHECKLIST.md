@@ -51,6 +51,31 @@ Pair this with `docs/BACKEND_GO_LIVE_CHECKLIST.md` for final go-live sign-off. T
 - [ ] Access token handling is ephemeral (memory/state), not long-term browser storage.
 - [ ] 401 flow is implemented: refresh -> retry original request -> logout if refresh fails.
 
+### 3.0) Admin Session Lifecycle (Critical)
+
+**Session restoration on page refresh:**
+- [ ] `AdminGuard` attempts `POST /api/v1/auth/refresh` silently when `accessToken` is null (page reload).
+- [ ] On refresh success: parse JWT claims to reconstruct `User` (`sub`, `role`, `permissions`), call `setSession()`, render admin console.
+- [ ] On refresh failure: call `clearSession()`, redirect to `/admin/login`.
+- [ ] A loading state (`AdminLoadingBlock` labelled "Restoring admin session…") is shown during the refresh attempt.
+- [ ] Non-admin tokens (e.g. CUSTOMER role refresh succeeds but role check fails) redirect to `/dashboard`, not `/admin/login`.
+
+**Session expiry warning (`AdminSessionWarning`):**
+- [ ] Warning banner renders when `accessToken` is within 2 minutes of expiry.
+- [ ] "Extend session" button calls `refreshAccessToken()` and updates store via `setAccessToken()` — no page reload.
+- [ ] Button shows `Loader2` spinner during the network call.
+- [ ] Error state shown if refresh fails ("Session is no longer valid for admin access.").
+- [ ] "Sign in again" button calls `clearSession()` + redirects to `/admin/login`.
+
+**Idle timeout (`AdminIdleTimeoutModal` inside `AdminConsoleShell`):**
+- [ ] Warning modal fires after 25 minutes of inactivity (no mouse, keyboard, touch, scroll, or click events).
+- [ ] Modal shows countdown timer from 5:00 to 0:00, decrementing every second.
+- [ ] "Stay signed in" calls `refreshAccessToken()` and dismisses the modal.
+- [ ] "Sign out now" calls `clearSession()` + redirects to `/admin/login`.
+- [ ] Auto-logout triggers when countdown reaches 0.
+- [ ] User activity while modal is open (any tracked event) dismisses it without logging out.
+- [ ] Idle tracking is disabled when `accessToken` is null (no timers running on the login page).
+
 ### 3.1) Ops Control Plane Security (Critical)
 
 **Browser-Session-Only Authentication:**
@@ -59,12 +84,13 @@ Pair this with `docs/BACKEND_GO_LIVE_CHECKLIST.md` for final go-live sign-off. T
 - [ ] No `x-ops-key-id` or `x-ops-api-key` headers in any ops requests
 - [ ] Logout clears session via `POST /ops/auth/logout`
 
-**Critical Ops Operations Require OTP (5 Endpoints):**
-- [ ] `POST /ops/config/save` implements OTP modal flow
-- [ ] `POST /ops/load-shed` implements OTP modal flow
-- [ ] `POST /ops/system/restart` implements OTP modal flow
-- [ ] `POST /ops/users/:id/deactivate` implements OTP modal flow
-- [ ] `POST /ops/invites/:id/revoke` implements OTP modal flow
+**Critical Ops Operations Require OTP (6 Endpoints):**
+- [ ] `POST /ops/config/save` implements OTP modal flow (action: `config-save`)
+- [ ] `POST /ops/load-shed` implements OTP modal flow (action: `load-shed-change`)
+- [ ] `POST /ops/system/restart` implements OTP modal flow (action: `system-restart`)
+- [ ] `POST /ops/users/:id/deactivate` implements OTP modal flow (action: `user-deactivate`)
+- [ ] `POST /ops/admin-users/:id/deactivate` implements OTP modal flow (action: `admin-user-deactivate`)
+- [ ] `POST /ops/invites/:id/revoke` implements OTP modal flow (action: `invite-revoke`)
 
 **OTP Challenge Implementation:**
 - [ ] Step 1: Call `POST /ops/otp/request` with `{ action }` (not `actionType`) → get `challengeId`

@@ -857,6 +857,11 @@ export class AuthService {
       return { message: genericMessage };
     }
 
+    if (user.isBanned) {
+      await this.registerFailedAuthAttempt(input.email, clientIp, 'admin');
+      return { message: genericMessage };
+    }
+
     const otpConfig = await this.getAdminOtpChannelConfig();
     const otp = generateOtp();
     const otpHash = hashOtp(otp);
@@ -970,6 +975,9 @@ export class AuthService {
     if (!user || user.role !== Role.ADMIN) {
       throw new AppError(ERROR_CODES.UNAUTHORISED, 'Admin account not found or inactive', 401);
     }
+    if (user.isBanned) {
+      throw new AppError(ERROR_CODES.UNAUTHORISED, 'Admin account not found or inactive', 401);
+    }
 
     await this.clearFailedAuthAttempts(input.email, input.clientIp, 'admin');
     return this.issueTokensForUser(user, this.deriveTokenIssueContext({ clientIp: input.clientIp, audience: 'admin' }));
@@ -1032,6 +1040,9 @@ export class AuthService {
     if (!user) {
       throw new AppError(ERROR_CODES.UNAUTHORISED, 'User not found', 401);
     }
+    if (user.role === Role.ADMIN && user.isBanned) {
+      throw new AppError(ERROR_CODES.UNAUTHORISED, 'Admin account not found or inactive', 401);
+    }
 
     const issued = await this.issueTokensForUser(user, {
       sessionId: payload.sid,
@@ -1078,6 +1089,10 @@ export class AuthService {
   }
 
   private async issueTokensForUser(user: User, tokenContext: TokenIssueContext): Promise<AuthResult> {
+    if (user.role === Role.ADMIN && user.isBanned) {
+      throw new AppError(ERROR_CODES.UNAUTHORISED, 'Admin account not found or inactive', 401);
+    }
+
     // PERMISSION SNAPSHOT CAVEAT: admin permissions are resolved from the DB at token issuance and
     // embedded in the JWT payload.  The access token is valid for ACCESS_TOKEN_TTL (15 m) from this
     // point.  If an AdminPermissionGrant row is added, modified, or removed during that window the

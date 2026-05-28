@@ -96,6 +96,8 @@ const opsServiceState = vi.hoisted(() => ({
     createdAt: new Date().toISOString()
   })),
   deactivateOpsUser: vi.fn(async () => ({ opsUserId: 'ops_2', deactivated: true })),
+  listMerchantAdminUsers: vi.fn(async () => ({ items: [], page: 1, limit: 20, total: 0 })),
+  deactivateMerchantAdminUser: vi.fn(async () => ({ adminUserId: 'admin_2', deactivated: true })),
   listPendingOtpChallenges: vi.fn(async () => ({ items: [] })),
   requestLoginOtp: vi.fn(async () => ({ message: 'If a registered ops account exists for this email, an OTP has been sent.' })),
   verifyLoginOtp: vi.fn(async () => ({
@@ -133,6 +135,8 @@ vi.mock('./ops.service', () => {
     listOpsUsers = opsServiceState.listOpsUsers;
     getOpsUserById = opsServiceState.getOpsUserById;
     deactivateOpsUser = opsServiceState.deactivateOpsUser;
+    listMerchantAdminUsers = opsServiceState.listMerchantAdminUsers;
+    deactivateMerchantAdminUser = opsServiceState.deactivateMerchantAdminUser;
     listPendingOtpChallenges = opsServiceState.listPendingOtpChallenges;
     requestLoginOtp = opsServiceState.requestLoginOtp;
     verifyLoginOtp = opsServiceState.verifyLoginOtp;
@@ -163,6 +167,8 @@ vi.mock('./ops.service.js', () => {
     listOpsUsers = opsServiceState.listOpsUsers;
     getOpsUserById = opsServiceState.getOpsUserById;
     deactivateOpsUser = opsServiceState.deactivateOpsUser;
+    listMerchantAdminUsers = opsServiceState.listMerchantAdminUsers;
+    deactivateMerchantAdminUser = opsServiceState.deactivateMerchantAdminUser;
     listPendingOtpChallenges = opsServiceState.listPendingOtpChallenges;
     requestLoginOtp = opsServiceState.requestLoginOtp;
     verifyLoginOtp = opsServiceState.verifyLoginOtp;
@@ -193,6 +199,8 @@ vi.mock('./ops.service.ts', () => {
     listOpsUsers = opsServiceState.listOpsUsers;
     getOpsUserById = opsServiceState.getOpsUserById;
     deactivateOpsUser = opsServiceState.deactivateOpsUser;
+    listMerchantAdminUsers = opsServiceState.listMerchantAdminUsers;
+    deactivateMerchantAdminUser = opsServiceState.deactivateMerchantAdminUser;
     listPendingOtpChallenges = opsServiceState.listPendingOtpChallenges;
     requestLoginOtp = opsServiceState.requestLoginOtp;
     verifyLoginOtp = opsServiceState.verifyLoginOtp;
@@ -448,6 +456,24 @@ describe('ops routes schema and handlers', () => {
     expect(deactivateSchema.body?.properties?.challengeId).toBeDefined();
     expect(deactivateSchema.body?.properties?.otpCode).toBeDefined();
     expect(deactivateSchema.response?.[200]).toBeDefined();
+
+    const listAdminUsersRoute = routes.find((entry) => entry.url === '/api/v1/ops/admin-users' && entry.method === 'GET');
+    expect(listAdminUsersRoute).toBeDefined();
+    const listAdminUsersSchema = listAdminUsersRoute?.schema as { response?: Record<number, unknown> };
+    expect(listAdminUsersSchema.response?.[200]).toBeDefined();
+
+    const deactivateAdminRoute = routes.find(
+      (entry) => entry.url === '/api/v1/ops/admin-users/:adminUserId/deactivate' && entry.method === 'POST'
+    );
+    expect(deactivateAdminRoute).toBeDefined();
+    const deactivateAdminSchema = deactivateAdminRoute?.schema as {
+      body?: { required?: string[]; properties?: Record<string, unknown> };
+      response?: Record<number, unknown>;
+    };
+    expect(deactivateAdminSchema.body?.required).toContain('reason');
+    expect(deactivateAdminSchema.body?.required).toContain('challengeId');
+    expect(deactivateAdminSchema.body?.required).toContain('otpCode');
+    expect(deactivateAdminSchema.response?.[200]).toBeDefined();
 
     const pendingOtpRoute = routes.find((entry) => entry.url === '/api/v1/ops/otp/pending' && entry.method === 'GET');
     expect(pendingOtpRoute).toBeDefined();

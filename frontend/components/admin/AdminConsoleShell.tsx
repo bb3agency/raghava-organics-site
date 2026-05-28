@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 import { LogOut, Menu, X, Settings2 } from "lucide-react";
 import { ADMIN_NAV_ITEMS, isAdminNavActive } from "@/components/admin/admin-nav-config";
 import { AdminSessionProvider } from "@/components/admin/AdminSessionProvider";
+import { AdminIdleTimeoutModal } from "@/components/auth/AdminIdleTimeoutModal";
 import { AdminLoadingBlock } from "@/components/admin/ui/admin-ui";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -220,6 +221,8 @@ export function AdminConsoleShell({ children }: AdminConsoleShellProps) {
             <div className="mx-auto max-w-6xl">{children}</div>
           </main>
         </div>
+
+        <AdminIdleTimeoutModal />
       </div>
     </AdminSessionProvider>
   );

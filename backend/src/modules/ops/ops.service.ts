@@ -86,6 +86,7 @@ export const OPS_CRITICAL_OTP_ACTIONS = [
   'config-save',
   'load-shed-change',
   'user-deactivate',
+  'admin-user-deactivate',
   'system-restart',
   'invite-revoke'
 ] as const;
@@ -172,7 +173,54 @@ type OpsOtpChallengeRecord = {
   failedAttempts: number;
 };
 
+type MerchantAdminUserListRecord = {
+  id: string;
+  email: string | null;
+  firstName: string | null;
+  lastName: string | null;
+  phone: string | null;
+  isBanned: boolean;
+  isVerified: boolean;
+  bannedAt: Date | null;
+  bannedReason: string | null;
+  createdAt: Date;
+  adminPermissionGrants: Array<{ permission: string }>;
+};
+
+type MerchantAdminUserTargetRecord = {
+  id: string;
+  email: string | null;
+  role: string;
+  isBanned: boolean;
+  firstName: string | null;
+  lastName: string | null;
+};
+
 type OpsPrismaLike = {
+  user: {
+    findMany(args: {
+      where: { role: 'ADMIN'; isBanned?: boolean };
+      orderBy?: { createdAt: 'asc' | 'desc' };
+      skip?: number;
+      take?: number;
+      select?: Record<string, unknown>;
+    }): Promise<MerchantAdminUserListRecord[]>;
+    count(args: { where: { role: 'ADMIN'; isBanned?: boolean } }): Promise<number>;
+    findUnique(args: {
+      where: { id: string };
+      select?: Record<string, unknown>;
+    }): Promise<MerchantAdminUserTargetRecord | null>;
+    updateMany(args: {
+      where: { id: string; role: 'ADMIN'; isBanned: boolean };
+      data: { isBanned: boolean; bannedAt: Date; bannedReason: string };
+    }): Promise<{ count: number }>;
+  };
+  refreshToken: {
+    updateMany(args: {
+      where: { userId: string; revokedAt: null };
+      data: { revokedAt: Date };
+    }): Promise<{ count: number }>;
+  };
   opsUser: {
     findUnique(args: {
       where: { id?: string; email?: string };
@@ -1819,6 +1867,169 @@ export class OpsService {
     });
 
     return { opsUserId: input.targetOpsUserId, deactivated: true };
+  }
+
+  /**
+   * Lists merchant admin accounts (User.role = ADMIN) for the ops control plane.
+   * @param query - Optional active filter (maps to !isBanned) and pagination.
+   */
+  async listMerchantAdminUsers(query: {
+    isActive?: boolean;
+    page?: number;
+    limit?: number;
+  }): Promise<{
+    items: Array<{
+      id: string;
+      email: string;
+      name: string;
+      permissions: string[];
+      isActive: boolean;
+      isVerified: boolean;
+      phone: string | null;
+      createdAt: string;
+      deactivatedAt: string | null;
+      deactivatedReason: string | null;
+    }>;
+    page: number;
+    limit: number;
+    total: number;
+  }> {
+    const page = Math.max(1, query.page ?? 1);
+    const limit = Math.min(100, Math.max(1, query.limit ?? 20));
+    const skip = (page - 1) * limit;
+    const where: { role: 'ADMIN'; isBanned?: boolean } = { role: 'ADMIN' };
+    if (query.isActive !== undefined) {
+      where.isBanned = !query.isActive;
+    }
+
+    const [items, total] = await Promise.all([
+      this.prisma().user.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+        select: {
+          id: true,
+          email: true,
+          firstName: true,
+          lastName: true,
+          phone: true,
+          isBanned: true,
+          isVerified: true,
+          bannedAt: true,
+          bannedReason: true,
+          createdAt: true,
+          adminPermissionGrants: {
+            select: { permission: true }
+          }
+        }
+      }),
+      this.prisma().user.count({ where })
+    ]);
+
+    return {
+      items: items.map((user) => {
+        const nameParts = [user.firstName, user.lastName].filter((part): part is string => Boolean(part?.trim()));
+        const name = nameParts.join(' ').trim() || user.email || 'Merchant admin';
+        return {
+          id: user.id,
+          email: user.email ?? '',
+          name,
+          permissions: user.adminPermissionGrants.map((grant) => grant.permission),
+          isActive: !user.isBanned,
+          isVerified: user.isVerified,
+          phone: user.phone,
+          createdAt: user.createdAt.toISOString(),
+          deactivatedAt: user.bannedAt ? user.bannedAt.toISOString() : null,
+          deactivatedReason: user.bannedReason
+        };
+      }),
+      page,
+      limit,
+      total
+    };
+  }
+
+  /**
+   * Deactivates a merchant admin (sets isBanned, revokes refresh sessions).
+   * Login and token refresh fail closed while deactivated. Re-onboard via new invite only.
+   */
+  async deactivateMerchantAdminUser(input: {
+    targetAdminUserId: string;
+    requestorOpsUserId: string;
+    reason: string;
+    challengeId: string;
+    otpCode: string;
+    requestIp: string;
+    requestPath: string;
+    method: string;
+  }): Promise<{ adminUserId: string; deactivated: true }> {
+    await this.verifyEmailOtp({
+      opsUserId: input.requestorOpsUserId,
+      challengeId: input.challengeId,
+      code: input.otpCode,
+      expectedAction: 'admin-user-deactivate',
+      requestIp: input.requestIp,
+      requestPath: input.requestPath,
+      method: input.method
+    });
+
+    const target = await this.prisma().user.findUnique({
+      where: { id: input.targetAdminUserId },
+      select: {
+        id: true,
+        email: true,
+        role: true,
+        isBanned: true,
+        firstName: true,
+        lastName: true
+      }
+    });
+    if (!target || target.role !== 'ADMIN') {
+      throw new AppError(ERROR_CODES.NOT_FOUND, 'Merchant admin user not found', 404);
+    }
+    if (target.isBanned) {
+      throw new AppError(ERROR_CODES.CONFLICT, 'Merchant admin is already deactivated', 409);
+    }
+
+    const deactivateResult = await this.prisma().user.updateMany({
+      where: { id: input.targetAdminUserId, role: 'ADMIN', isBanned: false },
+      data: {
+        isBanned: true,
+        bannedAt: new Date(),
+        bannedReason: `[ops:deactivate] ${input.reason.trim()}`
+      }
+    });
+    if (deactivateResult.count === 0) {
+      throw new AppError(ERROR_CODES.CONFLICT, 'Merchant admin was concurrently deactivated', 409);
+    }
+
+    await this.prisma().refreshToken.updateMany({
+      where: { userId: input.targetAdminUserId, revokedAt: null },
+      data: { revokedAt: new Date() }
+    });
+
+    const nameParts = [target.firstName, target.lastName].filter((part): part is string => Boolean(part?.trim()));
+    const displayName = nameParts.join(' ').trim() || target.email || 'Merchant admin';
+
+    await this.appendAuditLog({
+      opsUserId: input.requestorOpsUserId,
+      actionType: 'USER_DEACTIVATED',
+      actionStatus: 'EXECUTED',
+      requestId: `admin-user-deactivate:${input.targetAdminUserId}:${crypto.randomUUID()}`,
+      requestIp: input.requestIp,
+      requestPath: input.requestPath,
+      method: input.method,
+      summary: {
+        targetType: 'merchant_admin',
+        targetAdminUserId: input.targetAdminUserId,
+        targetEmail: target.email,
+        targetName: displayName,
+        reason: input.reason
+      }
+    });
+
+    return { adminUserId: input.targetAdminUserId, deactivated: true };
   }
 
   /**

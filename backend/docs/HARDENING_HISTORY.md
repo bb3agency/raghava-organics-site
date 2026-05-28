@@ -4,6 +4,44 @@ This document preserves detailed hardening history for engineering traceability.
 
 ## Recent hardening changes
 
+**Admin session persistence, idle timeout, and login/setup UX hardening — May 28, 2026:**
+
+Root cause: `AdminGuard` redirected to `/admin/login` whenever `accessToken` was `null` in the Zustand store — which is always on a cold page load/refresh since Zustand is in-memory only. This meant a valid refresh token cookie was completely ignored on page reload, requiring the admin to re-authenticate every time they refreshed the browser tab. Additionally, the session warning component offered only a page-reload fallback rather than a real token extension, and there was no idle timeout mechanism to auto-logout inactive sessions.
+
+Changes applied:
+
+1. **`AdminGuard` — silent token restoration on page refresh:** On mount, if `accessToken` is absent, the guard attempts `POST /api/v1/auth/refresh` before redirecting. On success, claims (`sub`, `role`, `permissions`) are parsed from the JWT to reconstruct a minimal `User` object via `parseAccessTokenClaims`, `setSession` is called to hydrate the Zustand store, and the admin console renders normally. On failure (expired/absent cookie), the guard redirects to `/admin/login`. This restores the JWT+httpOnly-cookie session model to its intended behavior.
+
+2. **`AdminSessionWarning` — real "Extend session" button:** Replaced the page-reload fallback with a `refreshAccessToken()` call that rotates the refresh cookie server-side and updates the in-memory access token via `setAccessToken`. A `Loader2` spinner shows during the network call. An error state is surfaced if the refresh fails (session is no longer valid for admin access) with a "Sign in again" fallback.
+
+3. **`useIdleTimeout` hook (new file `hooks/use-idle-timeout.ts`):** Tracks `mousedown`, `mousemove`, `keydown`, `touchstart`, `wheel`, `scroll`, `click` events. Fires `onWarning` callback after 25 min of inactivity, then `onLogout` callback 5 minutes later. Timers reschedule on each activity event. Designed to be enabled/disabled via prop so it only runs when an admin is authenticated.
+
+4. **`AdminIdleTimeoutModal` (new component):** Modal overlay using `useIdleTimeout`. Shows a countdown timer from 5:00 to 0:00 when warning fires. "Stay signed in" calls `refreshAccessToken()` (same pattern as session warning); "Sign out now" calls `clearSession` + redirect. If the countdown reaches zero, `handleLogout` fires automatically. Modal dismisses on any user activity that arrives while it is open (`onActive` callback hides it). Rendered inside `AdminConsoleShell` so it covers the full console area.
+
+5. **`AdminLoginForm` — UX parity with industry standard admin dashboards:**
+   - Password visibility toggle (`Eye`/`EyeOff` icon, `tabIndex={-1}` so it doesn't break form tab order)
+   - OTP expiry countdown timer shown inline (`Expires in M:SS` in amber, `Expired` in red when zero)
+   - "Resend code" button with 60s cooldown — re-submits credentials to `POST .../request-otp` and restarts both the resend cooldown and the expiry countdown
+   - Submit button shows `Loader2` spinner + "Sending code…" during form submission
+   - "Verify and sign in" button disabled until OTP is exactly 6 digits
+
+6. **`AdminSetupForm` — UX parity with industry standard onboarding flows:**
+   - 2-step progress bar (step 1: Account details → step 2: Verify OTP) with fill animation and checkmark on completion
+   - Password visibility toggle on step 1
+   - OTP expiry countdown and resend with 60s cooldown on step 2
+   - "Back to details" link on step 2 (allows editing name/phone/password before resending)
+   - `Loader2` spinner on both "Send OTP" and "Complete setup" buttons
+   - Error banner changed from amber warning style to red error style
+   - Input placeholders and brand colours (`#23403d`, `#769b97`, `#efe8e4`) applied throughout
+
+Security principles codified:
+- **Access token lives only in memory (Zustand).** Refresh cookie is the durable credential — never replicate it to storage.
+- **On page refresh, always try `POST /api/v1/auth/refresh` before redirecting to login.** An HTTP-only cookie survives page refresh; ignoring it is UX regression, not a security improvement.
+- **Idle timeout is complementary to token expiry** — token expiry handles absolute session length; idle timeout handles inactive-but-still-valid sessions.
+- **OTP resend must restart the expiry countdown** — showing a stale timer after resend would confuse users about when the new OTP expires.
+
+---
+
 **Ops-gated admin invite routes moved to `/api/v1/ops/` namespace — May 28, 2026:**
 
 Root cause: The ops session cookie was scoped to `path: '/api/v1/ops'`. Routes `GET/POST /api/v1/admin/invites*` (ops:read/write guarded) sat outside this path, so the browser never sent the cookie to them — every request from the Ops Invites UI returned 401 ("Please sign in to continue"). The naive fix of widening the cookie to `path: '/api/v1'` was evaluated but rejected as a deviation from least-privilege, even though it would have been functionally safe (httpOnly + sameSite:strict).

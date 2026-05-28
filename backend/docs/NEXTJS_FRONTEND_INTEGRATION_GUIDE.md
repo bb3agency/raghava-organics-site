@@ -670,21 +670,48 @@ Analytics/chart implementation should match TRD expectations (Recharts primitive
 
 **Frontend Requirements:**
 - Never store tokens in `localStorage` or `sessionStorage`
-- Access tokens stay in memory (Zustand/Redux store) — lost on page refresh
+- Access tokens stay in memory (Zustand/Redux store) — lost on page refresh by design
+- **On page refresh:** `AdminGuard` must attempt `POST /api/v1/auth/refresh` before redirecting to login. The refresh token cookie survives page reload; ignoring it causes unnecessary re-authentication on every browser reload.
 - Refresh happens automatically via httpOnly cookie
 - For ops UI: cookie handling is automatic, no manual token management needed
 
+**Admin session lifecycle (required implementation):**
+
+```
+1. Page load / refresh:
+   AdminGuard checks accessToken in Zustand store
+   → null? → call POST /api/v1/auth/refresh silently
+     → success: parse JWT claims (sub, role, permissions) → setSession() → render console
+     → failure: clearSession() → router.replace('/admin/login')
+   → present? → validate canAccessAdmin(user) → render console
+
+2. Session expiry warning (AdminSessionWarning):
+   - Shows when accessToken is within 2 minutes of expiry
+   - "Extend session" button: calls refreshAccessToken(), updates store via setAccessToken()
+   - "Sign in again" button: clearSession() + redirect to /admin/login
+
+3. Idle timeout (AdminIdleTimeoutModal inside AdminConsoleShell):
+   - Warning fires after 25 minutes of no user activity
+   - Modal shows 5:00 countdown, decrements every second
+   - "Stay signed in": calls refreshAccessToken(), dismisses modal
+   - "Sign out now": clearSession() + redirect
+   - Auto-logout when countdown reaches 0
+   - Any user activity (mouse/keyboard/touch/scroll) while warning is showing: dismiss modal
+   - Hook disabled when accessToken is null (no-op for unauthenticated state)
+```
+
 ### 10.3 OTP challenge implementation
 
-**Critical operations requiring OTP (5 endpoints):**
+**Critical operations requiring OTP (6 endpoints):**
 
-| Endpoint | When to Request OTP |
-|----------|---------------------|
-| `POST /ops/config/save` | Before saving any config change |
-| `POST /ops/load-shed` | Before changing load-shed mode |
-| `POST /ops/system/restart` | Before scheduling restart |
-| `POST /ops/users/:id/deactivate` | Before deactivating ops user |
-| `POST /ops/invites/:id/revoke` | Before revoking invite |
+| Endpoint | When to Request OTP | OTP action value |
+|----------|---------------------|------------------|
+| `POST /ops/config/save` | Before saving any config change | `config-save` |
+| `POST /ops/load-shed` | Before changing load-shed mode | `load-shed-change` |
+| `POST /ops/system/restart` | Before scheduling restart | `system-restart` |
+| `POST /ops/users/:id/deactivate` | Before deactivating ops user | `user-deactivate` |
+| `POST /ops/admin-users/:id/deactivate` | Before deactivating merchant admin | `admin-user-deactivate` |
+| `POST /ops/invites/:id/revoke` | Before revoking invite | `invite-revoke` |
 
 **OTP Request Pattern:**
 ```typescript

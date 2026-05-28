@@ -8,6 +8,7 @@ import {
   ScrollText,
   ServerCog,
   Settings,
+  Shield,
   Users,
 } from "lucide-react";
 
@@ -54,6 +55,12 @@ export const OPS_NAV_ITEMS: OpsNavItem[] = [
     label: "Operators",
     description: "Active ops accounts",
     icon: Users,
+  },
+  {
+    href: "/ops/admin-users",
+    label: "Merchant admins",
+    description: "Merchant admin accounts",
+    icon: Shield,
   },
   {
     href: "/ops/queues",

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
@@ -12,6 +12,7 @@ import {
 import { getApiErrorMessage } from "@/lib/error-messages";
 import { emailSchema, otpSchema, passwordSchema } from "@/lib/validators";
 import { AuthErrorBanner } from "@/components/auth/AuthErrorBanner";
+import { Eye, EyeOff, Loader2, Send } from "lucide-react";
 import type { AuthSession } from "@/types/user";
 
 const credentialsSchema = z.object({
@@ -31,12 +32,17 @@ interface AdminLoginFormProps {
   enrollmentHint?: boolean;
 }
 
+const RESEND_COOLDOWN_SEC = 60;
+
 export function AdminLoginForm({ onSuccess, enrollmentHint }: AdminLoginFormProps) {
   const [step, setStep] = useState<"credentials" | "otp">("credentials");
   const [error, setError] = useState<string | null>(null);
   const [expiresAt, setExpiresAt] = useState<string | null>(null);
   const [otpChannel, setOtpChannel] = useState<"sms" | "whatsapp" | "email">("email");
   const [loadingChannel, setLoadingChannel] = useState(true);
+  const [showPassword, setShowPassword] = useState(false);
+  const [resendCooldown, setResendCooldown] = useState(0);
+  const [otpRemainingSec, setOtpRemainingSec] = useState(0);
   const credentialsForm = useForm<CredentialsValues>({
     resolver: zodResolver(credentialsSchema),
     defaultValues: { email: "", password: "" },
@@ -66,16 +72,63 @@ export function AdminLoginForm({ onSuccess, enrollmentHint }: AdminLoginFormProp
     };
   }, []);
 
+  const startResendCooldown = useCallback(() => {
+    setResendCooldown(RESEND_COOLDOWN_SEC);
+    const interval = window.setInterval(() => {
+      setResendCooldown((prev) => {
+        if (prev <= 1) {
+          window.clearInterval(interval);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+  }, []);
+
+  const startOtpCountdown = useCallback((expiryIso: string) => {
+    const expiryMs = new Date(expiryIso).getTime();
+    const nowMs = Date.now();
+    const remaining = Math.max(0, Math.ceil((expiryMs - nowMs) / 1000));
+    setOtpRemainingSec(remaining);
+
+    const interval = window.setInterval(() => {
+      setOtpRemainingSec((prev) => {
+        if (prev <= 1) {
+          window.clearInterval(interval);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+  }, []);
+
   const handleRequestOtp = credentialsForm.handleSubmit(async (values) => {
     try {
       setError(null);
       const response = await requestAdminLoginOtp(values);
       setExpiresAt(response.expiresAt);
       setStep("otp");
+      startResendCooldown();
+      startOtpCountdown(response.expiresAt);
     } catch (err) {
       setError(getApiErrorMessage(err));
     }
   });
+
+  async function handleResendOtp() {
+    if (resendCooldown > 0) return;
+    const email = credentialsForm.getValues("email");
+    const password = credentialsForm.getValues("password");
+    try {
+      setError(null);
+      const response = await requestAdminLoginOtp({ email, password });
+      setExpiresAt(response.expiresAt);
+      startResendCooldown();
+      startOtpCountdown(response.expiresAt);
+    } catch (err) {
+      setError(getApiErrorMessage(err));
+    }
+  }
 
   async function handleVerifyOtp(event: React.FormEvent) {
     event.preventDefault();
@@ -122,24 +175,45 @@ export function AdminLoginForm({ onSuccess, enrollmentHint }: AdminLoginFormProp
             <label htmlFor="admin-password" className="text-sm font-medium">
               Password
             </label>
-            <input
-              id="admin-password"
-              type="password"
-              autoComplete="current-password"
-              className="h-11 rounded-md border border-border bg-background px-3 text-sm"
-              {...credentialsForm.register("password")}
-            />
+            <div className="relative">
+              <input
+                id="admin-password"
+                type={showPassword ? "text" : "password"}
+                autoComplete="current-password"
+                className="h-11 w-full rounded-md border border-border bg-background px-3 pr-10 text-sm"
+                {...credentialsForm.register("password")}
+              />
+              <button
+                type="button"
+                tabIndex={-1}
+                onClick={() => setShowPassword((v) => !v)}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                aria-label={showPassword ? "Hide password" : "Show password"}
+              >
+                {showPassword ? (
+                  <EyeOff className="h-4 w-4" />
+                ) : (
+                  <Eye className="h-4 w-4" />
+                )}
+              </button>
+            </div>
           </div>
           <button
             type="submit"
-            className="h-11 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground disabled:opacity-60"
+            className="inline-flex h-11 items-center justify-center gap-2 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground disabled:opacity-60"
             disabled={credentialsForm.formState.isSubmitting || loadingChannel}
           >
-            {loadingChannel
-              ? "Loading login method..."
-              : credentialsForm.formState.isSubmitting
-                ? "Sending code..."
-                : "Send login code"}
+            {credentialsForm.formState.isSubmitting ? (
+              <>
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Sending code…
+              </>
+            ) : (
+              <>
+                <Send className="h-4 w-4" />
+                Send login code
+              </>
+            )}
           </button>
         </form>
       ) : (
@@ -147,8 +221,15 @@ export function AdminLoginForm({ onSuccess, enrollmentHint }: AdminLoginFormProp
           <p className="text-sm text-muted-foreground">
             Enter the 6-digit code sent via{" "}
             {otpChannel === "sms" ? "SMS" : otpChannel === "whatsapp" ? "WhatsApp" : "email"} to{" "}
-            {otpChannel === "email" ? credentialsForm.getValues("email") : "your registered phone"}
-            {expiresAt ? ` (expires ${new Date(expiresAt).toLocaleTimeString()})` : ""}.
+            {otpChannel === "email" ? credentialsForm.getValues("email") : "your registered phone"}.
+            {otpRemainingSec > 0 ? (
+              <span className="ml-1 text-amber-600">
+                Expires in {Math.floor(otpRemainingSec / 60)}:
+                {(otpRemainingSec % 60).toString().padStart(2, "0")}
+              </span>
+            ) : expiresAt ? (
+              <span className="ml-1 text-red-600">Expired</span>
+            ) : null}
           </p>
           <label className="grid gap-1 text-sm" htmlFor="admin-otp">
             Login code
@@ -159,19 +240,33 @@ export function AdminLoginForm({ onSuccess, enrollmentHint }: AdminLoginFormProp
               inputMode="numeric"
               autoComplete="one-time-code"
               maxLength={6}
-              className="h-11 rounded-md border border-border bg-background px-3 text-sm tracking-widest"
+              placeholder="000000"
+              className="h-11 rounded-md border border-border bg-background px-3 text-center text-sm tracking-[0.3em]"
             />
           </label>
-          <button
-            type="button"
-            className="text-left text-sm text-muted-foreground underline-offset-4 hover:underline"
-            onClick={() => setStep("credentials")}
-          >
-            Use different email
-          </button>
+          <div className="flex items-center justify-between">
+            <button
+              type="button"
+              className="text-sm text-muted-foreground underline-offset-4 hover:underline"
+              onClick={() => setStep("credentials")}
+            >
+              Use different email
+            </button>
+            <button
+              type="button"
+              disabled={resendCooldown > 0}
+              onClick={() => void handleResendOtp()}
+              className="text-sm text-primary underline-offset-4 hover:underline disabled:text-muted-foreground disabled:no-underline"
+            >
+              {resendCooldown > 0
+                ? `Resend in ${resendCooldown}s`
+                : "Resend code"}
+            </button>
+          </div>
           <button
             type="submit"
-            className="h-11 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground"
+            className="inline-flex h-11 items-center justify-center gap-2 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground disabled:opacity-60"
+            disabled={otp.length !== 6}
           >
             Verify and sign in
           </button>

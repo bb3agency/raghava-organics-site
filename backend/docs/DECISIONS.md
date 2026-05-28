@@ -4,6 +4,51 @@
 
 ---
 
+## [2026-05-28] Admin session — silent refresh on page reload, idle timeout, and login/setup UX
+
+**Context:** `AdminGuard` checked only the in-memory Zustand `accessToken`; on page refresh the store is always empty (Zustand is not persisted), so admins were immediately redirected to login despite having a valid HTTP-only refresh token cookie. The session warning banner offered only a page reload, which would again lose the session. There was no idle timeout. The `AdminLoginForm` and `AdminSetupForm` lacked standard security-UX primitives (password reveal, OTP countdown, resend cooldown) that reduce accidental lockout and phishing exposure.
+
+**Decision — implement industry-standard admin session lifecycle:**
+1. `AdminGuard`: on mount with no `accessToken`, call `POST /api/v1/auth/refresh` silently. Parse JWT claims to reconstruct minimal `User` from `sub`/`role`/`permissions`. Only redirect to `/admin/login` if this call fails.
+2. `AdminSessionWarning`: "Extend session" calls `refreshAccessToken()` and updates the store via `setAccessToken`. No page reload.
+3. `useIdleTimeout` hook + `AdminIdleTimeoutModal`: 25-min idle → warning modal with 5-min countdown → auto-logout. Any user activity while modal is open dismisses it. "Stay signed in" extends via refresh token.
+4. `AdminLoginForm`: password visibility toggle; OTP expiry countdown (M:SS, amber → red); "Resend code" with 60s cooldown; submit spinner; "Verify" disabled until 6 digits entered.
+5. `AdminSetupForm`: 2-step progress bar; password toggle; OTP countdown + resend on step 2; back-navigation between steps.
+
+**Rationale:**
+1. **Correctness:** Refresh token cookie is the durable session credential. Ignoring it on page reload is a UX regression, not a security feature.
+2. **Security UX:** Password visibility toggles reduce copy-paste errors on shared screens; OTP countdowns prevent users submitting expired codes; resend cooldown prevents OTP flooding abuse.
+3. **Compliance posture:** Idle timeout is a standard requirement in admin control planes (PCI-DSS, ISO 27001) — 30-min is the common threshold; we use 25+5 = 30 min total.
+4. **Industry parity:** Vercel, Shopify Admin, AWS Console, and Stripe Dashboard all implement silent refresh-on-load + idle timeout for admin sessions.
+
+**Alternatives considered:**
+- *Persist Zustand store to `localStorage`/`sessionStorage`.* Rejected — access tokens in browser storage are vulnerable to XSS; the HTTP-only cookie model is the correct solution.
+- *Keep page-reload "refresh session" button.* Rejected — reloading re-runs `AdminGuard` which would immediately redirect without a silent refresh, creating a confusing loop.
+- *Backend-enforced session timeout only.* Rejected — backend enforces absolute token TTL but cannot detect browser-side inactivity; client-side idle detection is the standard complement.
+
+**Affected files:** `frontend/components/auth/AdminGuard.tsx`, `frontend/components/auth/AdminSessionWarning.tsx`, `frontend/hooks/use-idle-timeout.ts`, `frontend/components/auth/AdminIdleTimeoutModal.tsx`, `frontend/components/admin/AdminConsoleShell.tsx`, `frontend/components/auth/AdminLoginForm.tsx`, `frontend/components/admin/AdminSetupForm.tsx`.
+
+---
+
+## [2026-05-28] Merchant admin lifecycle managed from ops console (list + OTP-gated deactivate)
+
+**Context:** The ops console already listed **operators** (`GET /ops/users`) and managed **admin invites** (`/ops/admin-invites`), but there was no surface to inspect or revoke access for **provisioned merchant admin accounts** (`User.role = ADMIN`) after invite consumption. Operators needed parity with the Operators table (status, permissions, last-login metadata, OTP-confirmed deactivation) without routing through merchant `/admin/users` ban APIs.
+
+**Decision — Add `GET /api/v1/ops/admin-users` and `POST /api/v1/ops/admin-users/:adminUserId/deactivate` with OTP action `admin-user-deactivate`. Deactivation sets `isBanned` + revokes refresh tokens; login, refresh, and admin OTP flows fail closed for banned admins. No ops API to reactivate — issue a new admin invite for the same email. Frontend: `/ops/admin-users` + `OpsAdminUsersPanel` mirroring `OpsUsersPanel`.**
+
+**Rationale:**
+1. **Separation of concerns:** Platform operators manage merchant staff access; merchant admins manage customers (`users:write` ban is customer-only).
+2. **Consistent security bar:** Sixth critical OTP action; same challenge binding as other ops mutations.
+3. **Auditability:** `USER_DEACTIVATED` audit entries include `summary.targetType: 'merchant_admin'`.
+
+**Alternatives considered:**
+- *Reuse `/admin/users/:id/ban` from ops UI via merchant JWT.* Rejected — wrong auth plane and forbidden for admin-role users.
+- *Ops reactivate endpoint.* Rejected — invite-based re-provisioning preserves permission grants and audit trail.
+
+**Affected files:** `ops.service.ts`, `ops.routes.ts`, `admin-endpoint-policy-registry.ts`, `auth.service.ts`, `frontend/components/ops/OpsAdminUsersPanel.tsx`, `frontend/lib/ops-client-api.ts`, route/docs indexes.
+
+---
+
 ## [2026-05-27] Strict Typing and Mocks in Vitest without `any` 
 
 **Context:** During the final production readiness checks, several backend tests (`inventory.routes.test.ts`, `cart-cleanup.worker.test.ts`, `notifications.worker.test.ts`) were failing ESLint checks due to `@typescript-eslint/no-unsafe-call`. Tests were casting mocked objects like `app.prisma as any` or directly calling `mockResolvedValue` on raw mocked functions which broke type safety boundaries. Additionally, the `FEATURE_GST_INVOICING_ENABLED` feature flag being overridden locally caused invoice generation tests to fail, exposing that tests weren't fully isolating environment-derived feature flags.

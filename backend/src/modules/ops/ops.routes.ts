@@ -332,6 +332,7 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
                 'config-save',
                 'load-shed-change',
                 'user-deactivate',
+                'admin-user-deactivate',
                 'system-restart',
                 'invite-revoke'
               ],
@@ -871,6 +872,133 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
       const body = request.body as { reason: string; challengeId: string; otpCode: string };
       return opsService.deactivateOpsUser({
         targetOpsUserId: params.opsUserId,
+        requestorOpsUserId: opsUser.id,
+        reason: body.reason,
+        challengeId: body.challengeId,
+        otpCode: body.otpCode,
+        requestIp: request.ip,
+        requestPath: request.url,
+        method: request.method
+      });
+    }
+  );
+
+  fastify.get(
+    '/api/v1/ops/admin-users',
+    {
+      preHandler: [opsAuthGuard, opsPermissionGuard('ops:read')],
+      config: { rateLimit: routeRateLimitProfiles.opsRead },
+      schema: {
+        params: emptyObjectSchema,
+        querystring: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            isActive: { type: 'boolean' },
+            page: { type: 'number', minimum: 1, maximum: 100000 },
+            limit: { type: 'number', minimum: 1, maximum: 100 }
+          }
+        },
+        response: {
+          200: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['items', 'page', 'limit', 'total'],
+            properties: {
+              items: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  additionalProperties: false,
+                  required: [
+                    'id',
+                    'email',
+                    'name',
+                    'permissions',
+                    'isActive',
+                    'isVerified',
+                    'phone',
+                    'createdAt',
+                    'deactivatedAt',
+                    'deactivatedReason'
+                  ],
+                  properties: {
+                    id: { type: 'string', maxLength: 80 },
+                    email: { type: 'string', maxLength: 160 },
+                    name: { type: 'string', maxLength: 160 },
+                    permissions: { type: 'array', items: { type: 'string', maxLength: 64 } },
+                    isActive: { type: 'boolean' },
+                    isVerified: { type: 'boolean' },
+                    phone: { anyOf: [{ type: 'string', maxLength: 20 }, { type: 'null' }] },
+                    createdAt: { type: 'string', maxLength: 40 },
+                    deactivatedAt: { anyOf: [{ type: 'string', maxLength: 40 }, { type: 'null' }] },
+                    deactivatedReason: { anyOf: [{ type: 'string', maxLength: 500 }, { type: 'null' }] }
+                  }
+                }
+              },
+              page: { type: 'number' },
+              limit: { type: 'number' },
+              total: { type: 'number' }
+            }
+          },
+          ...standardAdminErrorResponses
+        }
+      }
+    },
+    async (request) => {
+      const query = request.query as { isActive?: boolean; page?: number; limit?: number };
+      return opsService.listMerchantAdminUsers(query);
+    }
+  );
+
+  fastify.post(
+    '/api/v1/ops/admin-users/:adminUserId/deactivate',
+    {
+      preHandler: [opsAuthGuard, opsPermissionGuard('ops:write')],
+      config: { rateLimit: routeRateLimitProfiles.opsCritical },
+      schema: {
+        params: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['adminUserId'],
+          properties: {
+            adminUserId: { type: 'string', minLength: 1, maxLength: 80 }
+          }
+        },
+        querystring: emptyObjectSchema,
+        body: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['reason', 'challengeId', 'otpCode'],
+          properties: {
+            reason: { type: 'string', minLength: 10, maxLength: 500 },
+            challengeId: { type: 'string', minLength: 1, maxLength: 80 },
+            otpCode: { type: 'string', minLength: 6, maxLength: 6, pattern: '^[0-9]{6}$' }
+          }
+        },
+        response: {
+          200: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['adminUserId', 'deactivated'],
+            properties: {
+              adminUserId: { type: 'string', maxLength: 80 },
+              deactivated: { type: 'boolean' }
+            }
+          },
+          ...standardAdminErrorResponses
+        }
+      }
+    },
+    async (request) => {
+      const opsUser = request.opsUser;
+      if (!opsUser) {
+        throw new AppError(ERROR_CODES.UNAUTHORISED, 'Ops authentication required', 401);
+      }
+      const params = request.params as { adminUserId: string };
+      const body = request.body as { reason: string; challengeId: string; otpCode: string };
+      return opsService.deactivateMerchantAdminUser({
+        targetAdminUserId: params.adminUserId,
         requestorOpsUserId: opsUser.id,
         reason: body.reason,
         challengeId: body.challengeId,

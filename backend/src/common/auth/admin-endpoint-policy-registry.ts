@@ -119,6 +119,8 @@ export const ADMIN_ENDPOINT_POLICY_REGISTRY: readonly EndpointPolicy[] = [
   { method: 'GET', path: '/api/v1/ops/users', permission: 'ops:read', layer: 'C' },
   { method: 'GET', path: '/api/v1/ops/users/:opsUserId', permission: 'ops:read', layer: 'C' },
   { method: 'POST', path: '/api/v1/ops/users/:opsUserId/deactivate', permission: 'ops:write', layer: 'C' },
+  { method: 'GET', path: '/api/v1/ops/admin-users', permission: 'ops:read', layer: 'C' },
+  { method: 'POST', path: '/api/v1/ops/admin-users/:adminUserId/deactivate', permission: 'ops:write', layer: 'C' },
   { method: 'GET', path: '/api/v1/ops/audit/logs', permission: 'ops:read', layer: 'C' },
   { method: 'POST', path: '/api/v1/ops/auth/logout', permission: 'ops:read', layer: 'C' },
   { method: 'POST', path: '/api/v1/ops/system/restart', permission: 'ops:write', layer: 'C' }

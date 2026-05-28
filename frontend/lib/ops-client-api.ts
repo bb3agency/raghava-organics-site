@@ -9,6 +9,7 @@ export type OpsOtpActionType =
   | "config-save"
   | "load-shed-change"
   | "user-deactivate"
+  | "admin-user-deactivate"
   | "system-restart"
   | "invite-revoke";
 
@@ -575,6 +576,49 @@ export async function deactivateOpsUserClient(input: {
   otpCode: string;
 }): Promise<{ opsUserId: string; deactivated: boolean }> {
   return opsFetch(`/ops/users/${input.opsUserId}/deactivate`, {
+    method: "POST",
+    body: JSON.stringify({
+      reason: input.reason,
+      challengeId: input.challengeId,
+      otpCode: input.otpCode,
+    }),
+  });
+}
+
+export interface MerchantAdminUserListItem {
+  id: string;
+  email: string;
+  name: string;
+  permissions: string[];
+  isActive: boolean;
+  isVerified: boolean;
+  phone: string | null;
+  createdAt: string;
+  deactivatedAt: string | null;
+  deactivatedReason: string | null;
+}
+
+export interface MerchantAdminUserList {
+  items: MerchantAdminUserListItem[];
+  page: number;
+  limit: number;
+  total: number;
+}
+
+export async function listMerchantAdminUsersClient(query?: {
+  page?: number;
+  limit?: number;
+}): Promise<MerchantAdminUserList> {
+  return opsFetch<MerchantAdminUserList>(buildPath("/ops/admin-users", query));
+}
+
+export async function deactivateMerchantAdminUserClient(input: {
+  adminUserId: string;
+  reason: string;
+  challengeId: string;
+  otpCode: string;
+}): Promise<{ adminUserId: string; deactivated: boolean }> {
+  return opsFetch(`/ops/admin-users/${input.adminUserId}/deactivate`, {
     method: "POST",
     body: JSON.stringify({
       reason: input.reason,

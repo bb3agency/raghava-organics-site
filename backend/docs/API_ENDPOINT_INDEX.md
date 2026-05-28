@@ -274,7 +274,7 @@ Ops endpoints are platform/developer controls. Do not expose write controls in n
 | POST | `/api/v1/ops/config/validate` | Validate config draft (ops:read) |
 | GET | `/api/v1/ops/config/stored` | DB-backed config rows. Per item: `{ domain, key, maskedValue, plaintextValue, keyVersion, requiresRestart, updatedAt }`. `plaintextValue` is **required** and returned for every active row, INCLUDING real cryptographic secrets — deliberate operator-UX policy for the Ops console (see `HARDENING_HISTORY.md` and `DECISIONS.md`). `isOpsConfigSecretKey()` predicate still drives `<input type="password">` rendering on the frontend but no longer gates plaintext disclosure. (ops:read) |
 | POST | `/api/v1/ops/config/save` | Save encrypted DB config (OTP `config-save`; `domain?` optional; `null` deactivates key) |
-| POST | `/api/v1/ops/otp/request` | Request privileged-write OTP — body `{ action }` ∈ `config-save`, `load-shed-change`, `user-deactivate`, `system-restart`, `invite-revoke` |
+| POST | `/api/v1/ops/otp/request` | Request privileged-write OTP — body `{ action }` ∈ `config-save`, `load-shed-change`, `user-deactivate`, `admin-user-deactivate`, `system-restart`, `invite-revoke` |
 | POST | `/api/v1/ops/otp/verify` | Verify privileged-write OTP |
 | GET | `/api/v1/ops/otp/pending` | List caller's pending OTP challenges |
 | GET | `/api/v1/ops/invites` | List all invites (filterable by status) |
@@ -286,6 +286,8 @@ Ops endpoints are platform/developer controls. Do not expose write controls in n
 | GET | `/api/v1/ops/users` | List ops users (filterable by isActive) |
 | GET | `/api/v1/ops/users/:opsUserId` | Get single ops user profile |
 | POST | `/api/v1/ops/users/:opsUserId/deactivate` | Deactivate ops user account — requires OTP (`challengeId`, `otpCode`) |
+| GET | `/api/v1/ops/admin-users` | List merchant admin accounts (`User.role = ADMIN`) |
+| POST | `/api/v1/ops/admin-users/:adminUserId/deactivate` | Deactivate merchant admin — requires OTP action `admin-user-deactivate` |
 | GET | `/api/v1/ops/load-shed` | Current load-shed snapshot: `{ mode, phase, pendingUntil, activatedAt, reason }`. Mode ∈ `normal | reduced | emergency | maintenance`; `phase` ∈ `null | pending | active` (only non-null in `maintenance`) |
 | POST | `/api/v1/ops/load-shed` | Apply load-shed mode change immediately — requires OTP (`challengeId`, `otpCode`). `mode: 'maintenance'` writes durable `MaintenanceState` row, starts 2-min `pending` window, enqueues `maintenance-activation` job that pauses outbox+producer queues, drains active counts, drains `PENDING_PAYMENT`, flips `active`, then resumes queues (background work continues; Nginx serves the maintenance page at the edge). Exit by setting any other mode — durable row's phase/pendingUntil/activatedAt are cleared; no separate deactivation job needed |
 | GET | `/api/v1/ops/audit/logs` | Ops audit timeline (filterable by opsUserId) |
@@ -353,13 +355,14 @@ SaaS-grade UI expectations:
 
 ### Critical Ops Operations Requiring OTP
 
-All 5 critical mutation endpoints require secondary OTP verification:
+All 6 critical mutation endpoints require secondary OTP verification:
 
 1. `POST /api/v1/ops/config/save` — Config changes
 2. `POST /api/v1/ops/load-shed` — Load-shed mode changes
 3. `POST /api/v1/ops/system/restart` — Process restart scheduling
-4. `POST /api/v1/ops/users/:opsUserId/deactivate` — User deactivation
-5. `POST /api/v1/ops/invites/:inviteId/revoke` — Invite revocation
+4. `POST /api/v1/ops/users/:opsUserId/deactivate` — Ops operator deactivation
+5. `POST /api/v1/ops/admin-users/:adminUserId/deactivate` — Merchant admin deactivation
+6. `POST /api/v1/ops/invites/:inviteId/revoke` — Invite revocation
 
 **OTP Challenge Pattern:**
 1. Call `POST /api/v1/ops/otp/request` with `{ action }` (not `actionType`) → receive `challengeId`

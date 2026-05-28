@@ -171,6 +171,29 @@ describe('AuthService.requestAdminLoginOtp', () => {
     expect(result.message).toContain('OTP has been sent');
     expect(mocks.notificationsAdd).not.toHaveBeenCalled();
   });
+
+  it('returns generic message without sending OTP when admin is deactivated (isBanned)', async () => {
+    const { service, mocks } = createHarness({
+      userRecord: {
+        id: 'admin_1',
+        email: 'admin@example.com',
+        role: 'ADMIN',
+        passwordHash: bcrypt.hashSync('correctpass', 1),
+        isBanned: true,
+        isVerified: true
+      }
+    });
+
+    const result = await service.requestAdminLoginOtp({
+      email: 'admin@example.com',
+      password: 'correctpass',
+      clientIp: '127.0.0.1'
+    });
+
+    expect(result.message).toContain('OTP has been sent');
+    expect(mocks.notificationsAdd).not.toHaveBeenCalled();
+    expect(mocks.redisSet).not.toHaveBeenCalled();
+  });
 });
 
 describe('AuthService.verifyAdminLoginOtp', () => {
@@ -220,5 +243,30 @@ describe('AuthService.verifyAdminLoginOtp', () => {
 
     delete process.env.JWT_SECRET;
     delete process.env.JWT_REFRESH_SECRET;
+  });
+
+  it('rejects OTP verification when admin is deactivated (isBanned)', async () => {
+    const email = 'admin@example.com';
+    const otp = '654321';
+    const otpHash = crypto.createHash('sha256').update(otp).digest('hex');
+    const stored = `admin_1||${otpHash}`;
+
+    const { service, mocks } = createHarness({
+      redisGetValue: stored,
+      userRecord: {
+        id: 'admin_1',
+        email,
+        role: 'ADMIN',
+        passwordHash: bcrypt.hashSync('correctpass', 1),
+        isBanned: true,
+        isVerified: true
+      }
+    });
+
+    await expect(
+      service.verifyAdminLoginOtp({ email, otp, clientIp: '127.0.0.1' })
+    ).rejects.toMatchObject({ code: 'UNAUTHORISED', statusCode: 401 });
+
+    expect(mocks.redisDel).toHaveBeenCalled();
   });
 });

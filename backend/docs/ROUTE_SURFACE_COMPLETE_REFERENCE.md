@@ -180,6 +180,14 @@ Called from `/admin/setup` after OTP entry. Body: `{ token, otp }`. Creates the 
 **Ops session auth (`ops:write`)**  
 Purges all expired unconsumed admin invites. Also runs automatically as a scheduled BullMQ job.
 
+### `GET /api/v1/ops/admin-users`
+**Ops session auth (`ops:read`)**  
+Paginated list of merchant admin accounts (`User.role = ADMIN`). Returns permissions from `AdminPermissionGrant`, `isActive` (maps to `!isBanned`), verification status, and deactivation metadata. Used by the ops console **Merchant admins** page.
+
+### `POST /api/v1/ops/admin-users/:adminUserId/deactivate`
+**Ops session auth (`ops:write`)**  
+Deactivates a merchant admin (sets `isBanned`, revokes all refresh tokens). Body: `{ reason, challengeId, otpCode }` — reason min 10 chars, OTP action `admin-user-deactivate`. Cannot be reversed via API; issue a new admin invite to re-provision the same email. Merchant admin ban from `/admin/users/:id/ban` remains forbidden — this is the ops-only path.
+
 ---
 
 ## 5. Customer account and profile routes
@@ -677,7 +685,7 @@ Required before any critical ops mutation. The flow is:
 #### `POST /api/v1/ops/otp/request`
 **`ops:write`** — Sends an OTP to the ops user's registered email.
 
-**Body:** `{ action }` — must be one of: `config-save`, `load-shed-change`, `user-deactivate`, `system-restart`, `invite-revoke`. Any other value → `400 VALIDATION_ERROR`.
+**Body:** `{ action }` — must be one of: `config-save`, `load-shed-change`, `user-deactivate`, `admin-user-deactivate`, `system-restart`, `invite-revoke`. Any other value → `400 VALIDATION_ERROR`.
 
 Returns `{ challengeId, expiresAt }`. Challenge TTL: 10 minutes; max 3 verify attempts.
 
@@ -726,6 +734,16 @@ Body: `{ token, otp }`. Creates the ops user account and returns `{ opsUserId, e
 - Self-deactivation is **blocked** (`403 FORBIDDEN`)
 - Already-deactivated users return `409 CONFLICT`
 Sets `isActive = false` on the `OpsUser` record and appends a `USER_DEACTIVATED` audit log entry with the reason. Returns `{ opsUserId, deactivated: true }`.
+
+---
+
+### Merchant admin management (ops console)
+
+#### `GET /api/v1/ops/admin-users`
+**`ops:read`** — Paginated list of merchant admin accounts (`User.role = ADMIN`). Query: `isActive` (true/false), `page`, `limit`. Returns id, email, name, permissions (from `AdminPermissionGrant`), `isActive` (`!isBanned`), `isVerified`, phone, createdAt, deactivation metadata.
+
+#### `POST /api/v1/ops/admin-users/:adminUserId/deactivate`
+**`ops:write`** — Deactivate a merchant admin. Body: `{ reason, challengeId, otpCode }` — reason min 10 chars, OTP action `admin-user-deactivate`. Sets `isBanned`, `bannedAt`, `bannedReason` (prefixed `[ops:deactivate]`), revokes all active refresh tokens. Already-deactivated returns `409 CONFLICT`. No reactivate API — re-onboard via new admin invite. Audit log `USER_DEACTIVATED` with `summary.targetType: 'merchant_admin'`. Merchant admins cannot be banned via `/admin/users/:id/ban`; this is the ops-only path.
 
 ---
 
