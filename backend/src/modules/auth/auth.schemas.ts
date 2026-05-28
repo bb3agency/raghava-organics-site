@@ -200,10 +200,9 @@ export const forgotPasswordSchema = {
     200: {
       type: 'object',
       additionalProperties: false,
-      required: ['message', 'expiresAt'],
+      required: ['message'],
       properties: {
-        message: messageSchema,
-        expiresAt: { type: 'string', maxLength: 40 }
+        message: messageSchema
       }
     },
     ...standardErrorResponses
