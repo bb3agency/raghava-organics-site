@@ -7,10 +7,13 @@ function createHarness() {
   const adminUserInviteUpdate = vi.fn(async () => ({ id: 'invite_1' }));
   const adminUserInviteFindUnique = vi.fn();
   const adminUserInviteFindFirst = vi.fn(async (): Promise<unknown> => null);
+  const adminUserInviteFindMany = vi.fn(async (): Promise<unknown[]> => []);
+  const adminUserInviteCount = vi.fn(async () => 0);
   const adminUserInviteUpdateMany = vi.fn(async () => ({ count: 2 }));
   const userFindUnique = vi.fn(async () => null);
   const userFindFirst = vi.fn(async () => null);
   const opsUserFindUnique = vi.fn();
+  const storeSettingsFindUnique = vi.fn(async (): Promise<unknown> => null);
   const redisGet = vi.fn();
   const redisSet = vi.fn(async () => 'OK');
   const redisDel = vi.fn(async () => 1);
@@ -50,8 +53,11 @@ function createHarness() {
         update: adminUserInviteUpdate,
         findUnique: adminUserInviteFindUnique,
         findFirst: adminUserInviteFindFirst,
+        findMany: adminUserInviteFindMany,
+        count: adminUserInviteCount,
         updateMany: adminUserInviteUpdateMany
       },
+      storeSettings: { findUnique: storeSettingsFindUnique },
       $transaction: transaction
     },
     queues: {
@@ -72,10 +78,13 @@ function createHarness() {
       adminUserInviteUpdate,
       adminUserInviteFindUnique,
       adminUserInviteFindFirst,
+      adminUserInviteFindMany,
+      adminUserInviteCount,
       adminUserInviteUpdateMany,
       userFindUnique,
       userFindFirst,
       opsUserFindUnique,
+      storeSettingsFindUnique,
       redisGet,
       redisSet,
       redisDel,
@@ -234,6 +243,12 @@ describe('AdminInvitesService', () => {
 
   it('sendSetupOtp accepts name + password without phone and stores null phone in Redis', async () => {
     const { service, mocks } = createHarness();
+    mocks.storeSettingsFindUnique.mockResolvedValue({
+      notifyEmailEnabled: true,
+      notifySmsEnabled: false,
+      notifyWhatsappEnabled: false,
+      primaryNotificationChannels: { OtpVerification: 'EMAIL' }
+    });
     mocks.adminUserInviteFindUnique.mockResolvedValue({
       id: 'invite_1',
       inviteEmail: 'merchant@example.com',
@@ -304,6 +319,87 @@ describe('AdminInvitesService', () => {
         phone: '+911234567890'
       })
     ).rejects.toThrow('User already exists for invite phone number');
+  });
+
+  it('sendSetupOtp sends SMS when admin OTP channel resolves to sms', async () => {
+    const { service, mocks } = createHarness();
+    mocks.storeSettingsFindUnique.mockResolvedValue({
+      notifyEmailEnabled: true,
+      notifySmsEnabled: true,
+      notifyWhatsappEnabled: false,
+      primaryNotificationChannels: { OtpVerification: 'SMS' }
+    });
+    vi.stubEnv('SMS_PROVIDER', 'msg91');
+    vi.stubEnv('MSG91_AUTH_KEY', 'msg91-key');
+    mocks.adminUserInviteFindUnique.mockResolvedValue({
+      id: 'invite_1',
+      inviteEmail: 'merchant@example.com',
+      inviteName: 'Merchant Owner',
+      status: 'EMAIL_SENT',
+      permissions: ['products:read'],
+      expiresAt: new Date(Date.now() + 60_000)
+    });
+
+    await service.sendSetupOtp({
+      inviteToken: 'token_1234567890',
+      name: 'Merchant Owner',
+      password: 'securepassword',
+      phone: '+911234567890'
+    });
+
+    expect(mocks.notificationsAdd).toHaveBeenCalledWith(
+      'send-sms',
+      expect.objectContaining({ phone: '+911234567890', template: 'OtpVerification' }),
+      expect.any(Object)
+    );
+    vi.unstubAllEnvs();
+  });
+
+  it('listAdminInvites returns paginated invite lifecycle', async () => {
+    const { service, mocks } = createHarness();
+    mocks.adminUserInviteFindMany.mockResolvedValue([
+      {
+        id: 'invite_1',
+        inviteEmail: 'merchant@example.com',
+        inviteName: 'Merchant Owner',
+        status: 'EMAIL_SENT',
+        permissions: ['products:read'],
+        expiresAt: new Date('2026-05-28T00:00:00.000Z'),
+        createdAt: new Date('2026-05-27T00:00:00.000Z'),
+        createdByOpsUserId: 'ops_1',
+        consumedAt: null
+      }
+    ]);
+    mocks.adminUserInviteCount.mockResolvedValue(1);
+
+    const result = await service.listAdminInvites({ limit: 10, page: 1 });
+
+    expect(result.total).toBe(1);
+    expect(result.items[0]).toMatchObject({
+      id: 'invite_1',
+      inviteEmail: 'merchant@example.com',
+      status: 'EMAIL_SENT'
+    });
+  });
+
+  it('revokeAdminInvite marks active invite as cancelled', async () => {
+    const { service, mocks } = createHarness();
+    mocks.adminUserInviteFindUnique.mockResolvedValue({
+      id: 'invite_1',
+      status: 'EMAIL_SENT',
+      consumedAt: null
+    });
+    mocks.adminUserInviteUpdateMany.mockResolvedValueOnce({ count: 1 });
+
+    const result = await service.revokeAdminInvite({ inviteId: 'invite_1', revokerOpsUserId: 'ops_1' });
+
+    expect(result).toEqual({ inviteId: 'invite_1', revoked: true });
+    expect(mocks.adminUserInviteUpdateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'invite_1', status: { in: ['CREATED', 'EMAIL_SENT'] } },
+        data: { status: 'CANCELLED' }
+      })
+    );
   });
 
   it('consumeAdminInvite creates admin user with null phone when phone was not provided at setup', async () => {

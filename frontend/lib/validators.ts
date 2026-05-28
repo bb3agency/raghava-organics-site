@@ -19,7 +19,7 @@ export const passwordSchema = z
 
 export const sendOtpInputSchema = z.object({
   phone: phoneSchema,
-  channel: z.enum(["sms", "whatsapp", "email"]),
+  channel: z.enum(["sms", "whatsapp", "email"]).optional(),
   email: emailSchema.optional(),
   turnstileToken: z.string().max(4096).optional(),
 });
@@ -73,4 +73,12 @@ export const addCartItemInputSchema = z.object({
 
 export const updateCartItemInputSchema = z.object({
   quantity: z.number().int().min(1).max(1000),
+});
+export const emailRegisterInputSchema = z.object({
+  firstName: z.string().min(1, "First name is required").max(100),
+  lastName: z.string().min(1, "Last name is required").max(100),
+  phone: phoneSchema,
+  email: emailSchema,
+  password: passwordSchema,
+  turnstileToken: z.string().max(4096).optional(),
 });

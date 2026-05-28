@@ -33,6 +33,12 @@ function createHarness(overrides: {
   const notificationsAdd = vi.fn().mockResolvedValue(undefined);
   const permGrantFindMany = vi.fn().mockResolvedValue([]);
   const refreshCreate = vi.fn().mockResolvedValue({ id: 'rt_1' });
+  const storeSettingsFindUnique = vi.fn().mockResolvedValue({
+    notifyEmailEnabled: true,
+    notifySmsEnabled: false,
+    notifyWhatsappEnabled: false,
+    primaryNotificationChannels: { OtpVerification: 'EMAIL' }
+  });
 
   const fastify = {
     redis: {
@@ -47,14 +53,15 @@ function createHarness(overrides: {
     prisma: {
       user: { findUnique: userFindUnique, findFirst: vi.fn().mockResolvedValue(null) },
       adminPermissionGrant: { findMany: permGrantFindMany },
-      refreshToken: { create: refreshCreate, findMany: vi.fn().mockResolvedValue([]) }
+      refreshToken: { create: refreshCreate, findMany: vi.fn().mockResolvedValue([]) },
+      storeSettings: { findUnique: storeSettingsFindUnique }
     },
     jwt: { sign: vi.fn().mockReturnValue('signed-token') }
   } as unknown as FastifyInstance;
 
   return {
     service: new AuthService(fastify),
-    mocks: { userFindUnique, redisGet, redisSet, redisDel, redisIncr, redisExpire, notificationsAdd, permGrantFindMany, refreshCreate }
+    mocks: { userFindUnique, redisGet, redisSet, redisDel, redisIncr, redisExpire, notificationsAdd, permGrantFindMany, refreshCreate, storeSettingsFindUnique }
   };
 }
 
@@ -80,6 +87,42 @@ describe('AuthService.requestAdminLoginOtp', () => {
       expect.objectContaining({ template: 'OtpVerification', to: 'admin@example.com' }),
       expect.any(Object)
     );
+  });
+
+  it('sends admin login OTP over SMS when ops channel is set to SMS', async () => {
+    const { service, mocks } = createHarness({
+      userRecord: {
+        id: 'admin_1',
+        email: 'admin@example.com',
+        phone: '+911234567890',
+        role: 'ADMIN',
+        passwordHash: bcrypt.hashSync('correctpass', 1),
+        firstName: 'Admin',
+        lastName: 'User',
+        isVerified: true
+      }
+    });
+    mocks.storeSettingsFindUnique.mockResolvedValue({
+      notifyEmailEnabled: true,
+      notifySmsEnabled: true,
+      notifyWhatsappEnabled: false,
+      primaryNotificationChannels: { OtpVerification: 'SMS' }
+    });
+    vi.stubEnv('SMS_PROVIDER', 'msg91');
+    vi.stubEnv('MSG91_AUTH_KEY', 'msg91-key');
+
+    await service.requestAdminLoginOtp({
+      email: 'admin@example.com',
+      password: 'correctpass',
+      clientIp: '127.0.0.1'
+    });
+
+    expect(mocks.notificationsAdd).toHaveBeenCalledWith(
+      'send-sms',
+      expect.objectContaining({ phone: '+911234567890', template: 'OtpVerification' }),
+      expect.any(Object)
+    );
+    vi.unstubAllEnvs();
   });
 
   it('returns generic message without sending OTP when user is not found (anti-enumeration)', async () => {

@@ -272,58 +272,14 @@ NEXT_PUBLIC_RAZORPAY_KEY_ID=(pending)
 
 ---
 
-### 2026-05-26 — Storefront Design Sprint (Tasty Daily theme)
+### 2026-05-27 — Pre-production Hardening, Auth Redesign & Bug Fixes
 
-**Scope:** Storefront visual redesign only. `/ops`, `/admin`, backend untouched.
-
-**Design reference:** `frontend-design-reference/` (Tasty Daily organic grocery theme — mirrored locally, added to root `.gitignore`).
-
-**Design system applied:**
-- Font: Quicksand (Google Fonts, weights 400/500/600/700) — replaces Inter/Manrope in `lib/fonts.ts`
-- Primary colour: `#23403d` (deep forest green) — `oklch(0.272 0.045 178)`
-- Accent colour: `#ec6e55` (peach/coral, CTAs + badges + stars) — `oklch(0.64 0.155 28)`
-- Background: `#faf3ef` (warm cream) — `oklch(0.974 0.010 68)`
-- Border: `#efe8e4` warm — `oklch(0.924 0.012 60)`
-- All tokens updated in `app/globals.css` `:root` block; dark mode preserved for ops console
-
-**Components redesigned:**
-- `components/layout/Header.tsx` — sticky, logo with `Leaf` icon, centred desktop nav (Shop / Fresh / Staples / Offers), icon-only action bar
-- `components/layout/MainNav.tsx` — icon row: Search, Cart (with count badge), Admin shortcut, User/Sign-in; pill Sign-in button
-- `components/layout/Footer.tsx` — 4-col (Brand + Quick Links + Policies + Contact), dark green bg, peach social icons
-- `components/product/ProductCard.tsx` — rounded-2xl, Featured + sale-% pill badges, hover scale, out-of-stock overlay, rounded-full CTA, accent sale price
-- `components/product/ProductGrid.tsx` — priority on first 4 images for LCP
-- `components/shared/Rating.tsx` — stars now use `text-accent` (peach/coral)
-- `components/shared/PriceDisplay.tsx` — sale price coloured `text-accent`
-
-**New components created:**
-- `components/shared/NewsletterForm.tsx` — client component with success state
-- `components/product/PlpSortSelect.tsx` — client dropdown, updates `?sort=` URL param
-- `components/shared/SearchInput.tsx` — client search box with clear button, pushes `/search?q=`
-
-**Pages redesigned:**
-- `app/(storefront)/page.tsx` — full homepage: Hero (green bg, peach CTAs, star social proof), 6-category grid, Featured Products (live data), Trust Bar (4 icons), Newsletter CTA
-- `app/(storefront)/products/page.tsx` — PLP with breadcrumb, sort dropdown, organic empty state
-- `app/(storefront)/products/[slug]/page.tsx` — PDP with breadcrumb, category label, save-% badge, stock dot, variant pill selector, dual CTA (Add + Buy Now), trust grid, tags
-- `app/(storefront)/categories/[slug]/page.tsx` — category header, `generateMetadata`, organic empty state
-- `app/(storefront)/search/page.tsx` — `SearchInput` component, prompt/no-results/results states
-- `app/(storefront)/cart/page.tsx` — breadcrumb + styled header
-
-**Config:**
-- `next.config.ts` — `remotePatterns` for all HTTPS + `localhost` HTTP (product images)
-- `.gitignore` (repo root) — `frontend-design-reference/` excluded from git
-
-**Quality gate:** `npx tsc --noEmit` → 0 errors ✅
-
-**Next session priorities:**
-1. `cd frontend && npm run dev` → review at http://localhost:3101
-2. Redesign `ProductGallery` (thumbnails strip, main image, zoom on hover)
-3. Build checkout page UI — PREPAID Razorpay flow + COD confirmation
-4. Account pages (`/dashboard`, `/orders`, `/orders/[id]`) — organic styling pass
-5. Auth pages (`/login`, `/register`, `/forgot-password`) — match new design
-
----
-
-### 2026-05-27 — Pre-production Hardening & Bug Fixes
+**Storefront Authentication Redesign:**
+- Built out `EmailRegisterForm` to allow Email/Password sign-ups and auto-login transition directly matching the backend `register` endpoint.
+- Redesigned `login` and `register` pages to use segment toggle tabs for choosing between **OTP** vs **Email** flows.
+- Enhanced `SignupPhoneForm` and `OtpLoginForm` channel selector: Replaced standard dropdowns with pill buttons for **SMS**, **WhatsApp**, and **Email** to clearly highlight WhatsApp availability to customers.
+- Fixed user typings in `types/user.ts` (mapped `firstName` and `lastName` accurately, replacing the aggregate `name` property) to align completely with Fastify's sanitized user payload.
+- Updated `MainNav` and `dashboard` components to reflect the type safety fixes for `firstName`.
 
 **Frontend Fixes:**
 - Resolved `react-hooks/set-state-in-effect` linting error in `OpsUsersPanel.tsx` by using an inner async function and `active` mount flag.

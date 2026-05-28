@@ -1,10 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import {
+  getAdminOtpChannelConfig,
   requestAdminLoginOtp,
   verifyAdminLoginOtp,
 } from "@/lib/admin-auth-api";
@@ -34,11 +35,36 @@ export function AdminLoginForm({ onSuccess, enrollmentHint }: AdminLoginFormProp
   const [step, setStep] = useState<"credentials" | "otp">("credentials");
   const [error, setError] = useState<string | null>(null);
   const [expiresAt, setExpiresAt] = useState<string | null>(null);
+  const [otpChannel, setOtpChannel] = useState<"sms" | "whatsapp" | "email">("email");
+  const [loadingChannel, setLoadingChannel] = useState(true);
   const credentialsForm = useForm<CredentialsValues>({
     resolver: zodResolver(credentialsSchema),
     defaultValues: { email: "", password: "" },
   });
   const [otp, setOtp] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    void getAdminOtpChannelConfig()
+      .then((response) => {
+        if (!cancelled) {
+          setOtpChannel(response.channel);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setOtpChannel("email");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoadingChannel(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const handleRequestOtp = credentialsForm.handleSubmit(async (values) => {
     try {
@@ -107,15 +133,21 @@ export function AdminLoginForm({ onSuccess, enrollmentHint }: AdminLoginFormProp
           <button
             type="submit"
             className="h-11 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground disabled:opacity-60"
-            disabled={credentialsForm.formState.isSubmitting}
+            disabled={credentialsForm.formState.isSubmitting || loadingChannel}
           >
-            {credentialsForm.formState.isSubmitting ? "Sending code..." : "Send login code"}
+            {loadingChannel
+              ? "Loading login method..."
+              : credentialsForm.formState.isSubmitting
+                ? "Sending code..."
+                : "Send login code"}
           </button>
         </form>
       ) : (
         <form onSubmit={handleVerifyOtp} className="grid gap-4">
           <p className="text-sm text-muted-foreground">
-            Enter the 6-digit code sent to {credentialsForm.getValues("email")}
+            Enter the 6-digit code sent via{" "}
+            {otpChannel === "sms" ? "SMS" : otpChannel === "whatsapp" ? "WhatsApp" : "email"} to{" "}
+            {otpChannel === "email" ? credentialsForm.getValues("email") : "your registered phone"}
             {expiresAt ? ` (expires ${new Date(expiresAt).toLocaleTimeString()})` : ""}.
           </p>
           <label className="grid gap-1 text-sm" htmlFor="admin-otp">

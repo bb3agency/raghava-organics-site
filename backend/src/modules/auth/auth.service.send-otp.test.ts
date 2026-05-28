@@ -140,6 +140,85 @@ describe('AuthService sendOtp', () => {
     );
   });
 
+  it('enforces ops-selected primary channel even if client requests a different channel', async () => {
+    vi.stubEnv('NOTIFY_SMS_ENABLED', 'true');
+    vi.stubEnv('NOTIFY_WHATSAPP_ENABLED', 'true');
+    vi.stubEnv('META_WHATSAPP_ACCESS_TOKEN', 'wa-token');
+    vi.stubEnv('META_WHATSAPP_PHONE_NUMBER_ID', 'wa-phone-id');
+
+    const notificationsAdd = vi.fn().mockResolvedValue(undefined);
+    const fastify = {
+      redis: {
+        get: vi.fn().mockResolvedValue(null),
+        set: vi.fn().mockResolvedValue('OK'),
+        del: vi.fn().mockResolvedValue(1),
+        ttl: vi.fn().mockResolvedValue(-1),
+        incr: vi.fn().mockResolvedValue(1),
+        expire: vi.fn().mockResolvedValue(1)
+      },
+      queues: { notifications: { add: notificationsAdd } },
+      prisma: {
+        user: { findFirst: vi.fn().mockResolvedValue(null) },
+        storeSettings: {
+          findUnique: vi.fn().mockResolvedValue({
+            storeName: 'Acme Shop',
+            notifyEmailEnabled: false,
+            notifySmsEnabled: true,
+            notifyWhatsappEnabled: true,
+            primaryNotificationChannels: { CustomerOtpVerification: 'WHATSAPP' }
+          })
+        }
+      }
+    } as unknown as FastifyInstance;
+
+    const service = new AuthService(fastify);
+    await service.sendOtp({ phone: '9876543210', channel: 'sms' });
+
+    expect(notificationsAdd).toHaveBeenCalledWith(
+      'send-whatsapp',
+      expect.objectContaining({
+        phone: '9876543210',
+        template: 'CustomerOtpVerification'
+      }),
+      expect.objectContaining({
+        jobId: expect.stringContaining('otp:whatsapp:9876543210:')
+      })
+    );
+  });
+
+  it('exposes effective customer OTP channel from ops config', async () => {
+    vi.stubEnv('NOTIFY_SMS_ENABLED', 'true');
+    vi.stubEnv('NOTIFY_WHATSAPP_ENABLED', 'false');
+    const fastify = {
+      redis: {
+        get: vi.fn().mockResolvedValue(null),
+        set: vi.fn().mockResolvedValue('OK'),
+        del: vi.fn().mockResolvedValue(1),
+        ttl: vi.fn().mockResolvedValue(-1),
+        incr: vi.fn().mockResolvedValue(1),
+        expire: vi.fn().mockResolvedValue(1)
+      },
+      queues: { notifications: { add: vi.fn().mockResolvedValue(undefined) } },
+      prisma: {
+        user: { findFirst: vi.fn().mockResolvedValue(null) },
+        storeSettings: {
+          findUnique: vi.fn().mockResolvedValue({
+            notifyEmailEnabled: false,
+            notifySmsEnabled: true,
+            notifyWhatsappEnabled: false,
+            primaryNotificationChannels: { CustomerOtpVerification: 'SMS' }
+          })
+        }
+      }
+    } as unknown as FastifyInstance;
+
+    const service = new AuthService(fastify);
+    await expect(service.getCustomerOtpChannelConfig()).resolves.toEqual({
+      channel: 'sms',
+      availableChannels: ['sms']
+    });
+  });
+
   it('cleans redis OTP keys and throws when OTP enqueue fails', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,

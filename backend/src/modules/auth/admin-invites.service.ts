@@ -6,6 +6,7 @@ import { AppError } from '@common/errors/app-error';
 import { ERROR_CODES } from '@common/errors/error-codes';
 import { AdminPermission, MERCHANT_DEFAULT_PERMISSIONS } from '@common/auth/admin-permissions';
 import { sendNotificationFailureAlert } from '@modules/notifications/notification-failure-alert';
+import { getAvailableOtpChannels, resolveEffectiveOtpChannel, resolvePrimaryOtpChannel } from './otp-channel';
 
 const ADMIN_INVITE_TTL_MS = 10 * 60 * 1000;
 const ADMIN_SETUP_OTP_TTL_SECONDS = 5 * 60;
@@ -166,6 +167,104 @@ export class AdminInvitesService {
     };
   }
 
+  async listAdminInvites(input?: {
+    status?: 'CREATED' | 'EMAIL_SENT' | 'CONSUMED' | 'CANCELLED' | 'EXPIRED_CLEANED';
+    page?: number;
+    limit?: number;
+  }): Promise<{
+    items: Array<{
+      id: string;
+      inviteEmail: string;
+      inviteName: string;
+      status: string;
+      permissions: string[];
+      expiresAt: string;
+      createdAt: string;
+      createdByOpsUserId: string | null;
+      consumedAt: string | null;
+    }>;
+    page: number;
+    limit: number;
+    total: number;
+  }> {
+    const page = Math.max(1, input?.page ?? 1);
+    const limit = Math.min(100, Math.max(1, input?.limit ?? 20));
+    const skip = (page - 1) * limit;
+    const where = input?.status ? { status: input.status } : {};
+
+    const [items, total] = await Promise.all([
+      this.fastify.prisma.adminUserInvite.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+        select: {
+          id: true,
+          inviteEmail: true,
+          inviteName: true,
+          status: true,
+          permissions: true,
+          expiresAt: true,
+          createdAt: true,
+          createdByOpsUserId: true,
+          consumedAt: true
+        }
+      }),
+      this.fastify.prisma.adminUserInvite.count({ where })
+    ]);
+
+    return {
+      items: items.map((item) => ({
+        id: item.id,
+        inviteEmail: item.inviteEmail,
+        inviteName: item.inviteName,
+        status: item.status,
+        permissions: item.permissions,
+        expiresAt: item.expiresAt.toISOString(),
+        createdAt: item.createdAt.toISOString(),
+        createdByOpsUserId: item.createdByOpsUserId,
+        consumedAt: item.consumedAt ? item.consumedAt.toISOString() : null
+      })),
+      page,
+      limit,
+      total
+    };
+  }
+
+  async revokeAdminInvite(input: {
+    inviteId: string;
+    revokerOpsUserId?: string;
+  }): Promise<{ inviteId: string; revoked: boolean }> {
+    const invite = await this.fastify.prisma.adminUserInvite.findUnique({
+      where: { id: input.inviteId },
+      select: { id: true, status: true, consumedAt: true }
+    });
+    if (!invite) {
+      throw new AppError(ERROR_CODES.NOT_FOUND, 'Admin invite not found', 404);
+    }
+
+    const result = await this.fastify.prisma.adminUserInvite.updateMany({
+      where: {
+        id: input.inviteId,
+        status: { in: ['CREATED', 'EMAIL_SENT'] }
+      },
+      data: { status: 'CANCELLED' }
+    });
+
+    this.fastify.log.info(
+      {
+        event: 'ADMIN_INVITE_REVOKE',
+        inviteId: input.inviteId,
+        revokerOpsUserId: input.revokerOpsUserId ?? null,
+        previousStatus: invite.status,
+        revoked: result.count > 0
+      },
+      'Merchant admin invite revoke requested'
+    );
+
+    return { inviteId: input.inviteId, revoked: result.count > 0 };
+  }
+
   async consumeAdminInvite(input: {
     inviteToken: string;
     otp: string;
@@ -310,23 +409,76 @@ export class AdminInvitesService {
     await this.fastify.redis.set(otpKey, otpHash, 'EX', Math.min(ADMIN_SETUP_OTP_TTL_SECONDS, ttlSeconds));
     await this.fastify.redis.del(attemptKey);
 
+    const storeSettings = await this.fastify.prisma.storeSettings.findUnique({
+      where: { singletonKey: 'default' },
+      select: {
+        notifyEmailEnabled: true,
+        notifySmsEnabled: true,
+        notifyWhatsappEnabled: true,
+        primaryNotificationChannels: true
+      }
+    });
+    const availableChannels = getAvailableOtpChannels({
+      ...(storeSettings
+        ? {
+            emailEnabled: storeSettings.notifyEmailEnabled,
+            smsEnabled: storeSettings.notifySmsEnabled,
+            whatsappEnabled: storeSettings.notifyWhatsappEnabled
+          }
+        : {})
+    });
+    const primary = resolvePrimaryOtpChannel(storeSettings?.primaryNotificationChannels, 'OtpVerification');
+    const channel = resolveEffectiveOtpChannel(availableChannels, primary);
+
     const otpJobId = `admin-setup-otp:${invite.id}:${Date.now()}`;
     try {
-      await this.fastify.queues.notifications.add('send-email', {
-        to: invite.inviteEmail,
-        template: 'OtpVerification',
-        data: { otp }
-      }, { jobId: otpJobId });
+      if (channel === 'email') {
+        await this.fastify.queues.notifications.add(
+          'send-email',
+          {
+            to: invite.inviteEmail,
+            template: 'OtpVerification',
+            data: { otp }
+          },
+          { jobId: otpJobId }
+        );
+      } else if (channel === 'sms') {
+        if (!setupPhone) {
+          throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Phone is required for SMS OTP setup', 400);
+        }
+        await this.fastify.queues.notifications.add(
+          'send-sms',
+          {
+            phone: setupPhone,
+            template: 'OtpVerification',
+            data: { otp }
+          },
+          { jobId: otpJobId }
+        );
+      } else {
+        if (!setupPhone) {
+          throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Phone is required for WhatsApp OTP setup', 400);
+        }
+        await this.fastify.queues.notifications.add(
+          'send-whatsapp',
+          {
+            phone: setupPhone,
+            template: 'OtpVerification',
+            data: { otp }
+          },
+          { jobId: otpJobId }
+        );
+      }
     } catch (error) {
       await sendNotificationFailureAlert({
         prisma: this.fastify.prisma,
         template: 'OtpVerification',
-        channel: 'EMAIL',
-        recipient: invite.inviteEmail,
+        channel: channel.toUpperCase() as 'SMS' | 'WHATSAPP' | 'EMAIL',
+        recipient: channel === 'email' ? invite.inviteEmail : (setupPhone ?? invite.inviteEmail),
         errorMessage: error instanceof Error ? error.message : 'Unable to enqueue admin setup OTP',
         failureStage: 'QUEUE_ENQUEUE',
         queueName: 'notifications',
-        jobName: 'send-email',
+        jobName: channel === 'email' ? 'send-email' : channel === 'sms' ? 'send-sms' : 'send-whatsapp',
         jobId: otpJobId
       });
       throw error;

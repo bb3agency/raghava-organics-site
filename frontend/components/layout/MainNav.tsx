@@ -50,7 +50,7 @@ export function MainNav() {
         <div className="hidden flex-col lg:flex">
           {isSignedIn ? (
             <>
-              <span className="text-xs font-bold text-[#767676]">Hello, {user?.name?.split(' ')[0] || 'User'}</span>
+              <span className="text-xs font-bold text-[#767676]">Hello, {user?.firstName || 'User'}</span>
               <span className="text-sm font-bold text-[#23403d]">My Account</span>
             </>
           ) : (

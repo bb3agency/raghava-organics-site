@@ -22,7 +22,12 @@ const AUTH_ADMIN_EXEMPT_ROUTES = new Set([
   'POST /api/v1/ops/invites/setup/send-otp',
   // Browser login routes are intentionally pre-auth — no session exists yet when requesting/verifying the login OTP.
   'POST /api/v1/ops/auth/login/request-otp',
-  'POST /api/v1/ops/auth/login/verify-otp'
+  'POST /api/v1/ops/auth/login/verify-otp',
+  // Admin OTP channel config is intentionally public — needed before login session exists.
+  'GET /api/v1/auth/admin/otp-channel',
+  // Admin invite list/revoke are ops-controlled (opsAuthGuard + opsPermissionGuard), not admin-JWT-controlled.
+  'GET /api/v1/admin/invites',
+  'POST /api/v1/admin/invites/:inviteId/revoke'
 ]);
 
 function shouldRequireCustomerPreHandler(method, routePath) {

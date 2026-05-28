@@ -46,7 +46,9 @@ Canonical low-noise index of backend HTTP endpoints. Route files and schemas rem
 | POST | `/api/v1/auth/login` | Customer login | Sets refresh cookie |
 | POST | `/api/v1/auth/refresh` | Refresh access token | Uses HTTP-only refresh cookie |
 | POST | `/api/v1/auth/logout` | Logout | Clears refresh cookie |
-| POST | `/api/v1/auth/admin/login/request-otp` | Admin login step 1 — verify email+password, send OTP to email | Public, auth-sensitive rate limit |
+| GET | `/api/v1/auth/otp-channel` | Customer OTP channel config — `{ channel, availableChannels[] }` | Public, pre-auth |
+| GET | `/api/v1/auth/admin/otp-channel` | Admin OTP channel config — `{ channel, availableChannels[] }` | Public, pre-auth |
+| POST | `/api/v1/auth/admin/login/request-otp` | Admin login step 1 — always returns `200 { message }` (anti-enumeration); if credentials valid, sends OTP to email | Public, auth-sensitive rate limit |
 | POST | `/api/v1/auth/admin/login/verify-otp` | Admin login step 2 — verify OTP, issue JWT access+refresh tokens | Sets refresh cookie |
 
 Identity boundary contract (critical):
@@ -244,7 +246,9 @@ Admin UI should be served under `/admin/*` in the frontend and call `/api/v1/adm
 
 | Method | Endpoint | UI use |
 |---|---|---|
+| GET | `/api/v1/admin/invites` | List all admin invites (ops:read) |
 | POST | `/api/v1/admin/invites` | Ops-created merchant admin invite |
+| POST | `/api/v1/admin/invites/:inviteId/revoke` | Revoke an active invite (ops:write, OTP-gated) |
 | POST | `/api/v1/admin/invites/setup/send-otp` | Send setup OTP |
 | POST | `/api/v1/admin/invites/consume` | Consume setup token on `/admin/setup` |
 | POST | `/api/v1/admin/invites/cleanup-expired` | Ops cleanup of expired invites |

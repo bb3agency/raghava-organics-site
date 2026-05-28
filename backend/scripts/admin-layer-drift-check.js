@@ -6,7 +6,9 @@ const { parseFastifyRouteConfigsFromAst } = require('./route-ast-utils.js');
 const EXEMPT_ENDPOINTS = new Set(['GET /api/v1/ops/metrics']);
 const EXEMPT_ADMIN_LAYER_C_ENDPOINTS = new Set([
   'POST /api/v1/admin/invites',
-  'POST /api/v1/admin/invites/cleanup-expired'
+  'POST /api/v1/admin/invites/cleanup-expired',
+  'GET /api/v1/admin/invites',
+  'POST /api/v1/admin/invites/:inviteId/revoke'
 ]);
 
 function parseRegistryEntries(registrySource) {

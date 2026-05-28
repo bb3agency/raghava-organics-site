@@ -136,9 +136,13 @@ Invalidates the current session. Clears refresh cookie. Requires valid JWT (cust
 
 Admin login uses a **2-step email OTP flow**. There is no TOTP/authenticator-app MFA — email OTP is the MFA layer.
 
+### `GET /api/v1/auth/admin/otp-channel`
+**Public — no auth required.**  
+Returns the active OTP delivery channel for admin login: `{ channel: 'email'|'sms'|'whatsapp', availableChannels[] }`. Driven by the backend's `NOTIFY_*_ENABLED` flags and store settings. Call this before rendering the admin login form to display the correct OTP hint to the user. Rate-limited by auth-sensitive profile.
+
 ### `POST /api/v1/auth/admin/login/request-otp`
 **Public — no auth required.**  
-Step 1 of admin login. Body: `{ email, password }`. Verifies credentials against the admin account. If valid, generates a time-limited OTP and sends it to the admin's registered email address. Returns `{ expiresAt }`. Does **not** issue a JWT. OTP TTL: 300 seconds. Max 5 verification attempts before lockout. Anti-enumeration: generic error message on credential failure. Rate-limited by auth-sensitive profile.
+Step 1 of admin login. Body: `{ email, password }`. **Always returns `200` with `{ message }` regardless of whether credentials are valid or the account exists** (anti-enumeration hardening — the response gives no information about account existence or OTP delivery). Does **not** issue a JWT. If credentials are valid, generates a time-limited OTP and sends it to the admin's email. OTP TTL: 300 seconds. Max 5 verification attempts before lockout. Rate-limited by auth-sensitive profile.
 
 ### `POST /api/v1/auth/admin/login/verify-otp`
 **Public — no auth required.**  
@@ -150,9 +154,17 @@ Step 2 of admin login. Body: `{ email, otp }`. Verifies the OTP against the acti
 
 The admin account creation flow is: ops issues invite → invite email sent → new admin clicks setup link → setup OTP flow → account created.
 
+### `GET /api/v1/admin/invites`
+**Ops session auth (`ops:read`)**  
+Returns a paginated list of all admin invites. Query params: `status` (optional filter: `CREATED | EMAIL_SENT | CONSUMED | CANCELLED | EXPIRED_CLEANED`), `page`, `limit`. Returns `{ items[], page, limit, total }`. Used in the Ops UI to inspect and manage the invite lifecycle.
+
 ### `POST /api/v1/admin/invites`
 **Ops session auth (`ops:write`)**  
 Creates an invite for a new merchant admin. Body: `{ email, name, permissions[], setupBaseUrl }`. Returns `{ inviteToken, expiresAt, setupUrl }`. Backend composes `setupUrl` as `${setupBaseUrl}/admin/setup?token=...`. Invite expires after 10 minutes.
+
+### `POST /api/v1/admin/invites/:inviteId/revoke`
+**Ops session auth (`ops:write`)**  
+Cancels an active (non-consumed, non-expired) admin invite. Requires an ops email-OTP challenge (`{ challengeId, otpCode }`) as the request body. Sets invite `status` to `CANCELLED`. Use the ops OTP flow (`POST /api/v1/ops/otp/request` → `POST /api/v1/ops/otp/verify`) to obtain the challenge before calling this route.
 
 ### `POST /api/v1/admin/invites/setup/send-otp`
 **No auth required** (public — new admin is not logged in yet).  
@@ -160,7 +172,7 @@ Called from the `/admin/setup` page. Validates the invite token, accepts `{ toke
 
 ### `POST /api/v1/admin/invites/consume`
 **No auth required** (public — new admin is not logged in yet).  
-Called from `/admin/setup` after OTP entry. Body: `{ token, otp }`. Creates the admin account and returns `{ userId, email, role, permissions }`. After this, the admin must authenticate via the 2-step email OTP flow: `POST /auth/admin/login/request-otp` → `POST /auth/admin/login/verify-otp`.
+Called from `/admin/setup` after OTP entry. Body: `{ token, otp }`. Creates the admin account and returns `{ adminUserId, email, name, permissions[] }`. No `role` or `mfaRequired` field in the response. After this, the admin must authenticate via the 2-step email OTP flow: `POST /auth/admin/login/request-otp` → `POST /auth/admin/login/verify-otp`.
 
 ### `POST /api/v1/admin/invites/cleanup-expired`
 **Ops session auth (`ops:write`)**  

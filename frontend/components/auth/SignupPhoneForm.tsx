@@ -1,17 +1,16 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { getApiErrorMessage } from "@/lib/error-messages";
-import { sendOtp, verifyOtpAndSignup } from "@/lib/auth-api";
+import { sendOtp, verifyOtpAndSignup, getOtpChannelConfig, type OtpChannelConfigResponse } from "@/lib/auth-api";
 import { signupPhoneInputSchema } from "@/lib/validators";
 import { AuthErrorBanner } from "@/components/auth/AuthErrorBanner";
 import type { AuthSession } from "@/types/user";
 
 type FormValues = z.infer<typeof signupPhoneInputSchema>;
-type OtpChannel = "sms" | "whatsapp" | "email";
 
 interface SignupPhoneFormProps {
   onSuccess: (session: AuthSession) => Promise<void> | void;
@@ -20,7 +19,23 @@ interface SignupPhoneFormProps {
 export function SignupPhoneForm({ onSuccess }: SignupPhoneFormProps) {
   const [error, setError] = useState<string | null>(null);
   const [otpInfo, setOtpInfo] = useState<string | null>(null);
-  const [channel, setChannel] = useState<OtpChannel>("sms");
+  const [config, setConfig] = useState<OtpChannelConfigResponse | null>(null);
+  const [loadingConfig, setLoadingConfig] = useState(true);
+
+  useEffect(() => {
+    async function loadConfig() {
+      try {
+        const data = await getOtpChannelConfig();
+        setConfig(data);
+      } catch (err) {
+        setError(getApiErrorMessage(err) || "Failed to load signup config");
+      } finally {
+        setLoadingConfig(false);
+      }
+    }
+    loadConfig();
+  }, []);
+
   const form = useForm<FormValues>({
     resolver: zodResolver(signupPhoneInputSchema),
     defaultValues: {
@@ -33,25 +48,29 @@ export function SignupPhoneForm({ onSuccess }: SignupPhoneFormProps) {
   });
 
   const send = async () => {
+    const effectiveChannel = config?.channel || "sms";
+
+    // Validate phone and email fields before sending OTP
+    const fieldsToValidate: (keyof FormValues)[] = ["phone"];
+    if (effectiveChannel === "email") fieldsToValidate.push("email");
+    
+    const isValid = await form.trigger(fieldsToValidate);
+    if (!isValid) return;
+
     const phone = form.getValues("phone");
     const email = form.getValues("email");
-    if (!phone) {
-      setError("Enter your phone number first.");
-      return;
-    }
-    if (channel === "email" && !email) {
-      setError("Email is required when OTP channel is Email.");
-      return;
-    }
+
     try {
       setError(null);
+      setOtpInfo("Sending OTP...");
       const result = await sendOtp({
         phone,
-        channel,
-        ...(channel === "email" && email ? { email } : {}),
+        channel: effectiveChannel,
+        ...(effectiveChannel === "email" && email ? { email } : {}),
       });
       setOtpInfo(result.message);
     } catch (err) {
+      setOtpInfo(null);
       setError(getApiErrorMessage(err));
     }
   };
@@ -72,22 +91,18 @@ export function SignupPhoneForm({ onSuccess }: SignupPhoneFormProps) {
     }
   });
 
+  const effectiveChannel = config?.channel || "sms";
+
   return (
     <form onSubmit={submit} className="grid gap-5">
       <div className="grid gap-1.5">
-        <label htmlFor="signup-otp-channel" className="text-sm font-bold text-[#23403d]">
-          Receive OTP via
+        <label className="text-sm font-bold text-[#23403d]">
+          {effectiveChannel === "whatsapp" 
+            ? "Enter your details to receive OTP via WhatsApp" 
+            : effectiveChannel === "email"
+            ? "Enter your details to receive OTP via Email"
+            : "Enter your details to receive OTP via SMS"}
         </label>
-        <select
-          id="signup-otp-channel"
-          value={channel}
-          onChange={(event) => setChannel(event.target.value as OtpChannel)}
-          className="h-12 w-full cursor-pointer rounded-full border border-[#efe8e4] bg-[#faf3ef] px-4 text-sm font-medium text-[#23403d] focus:border-[#23403d] focus:outline-none focus:ring-1 focus:ring-[#23403d]"
-        >
-          <option value="sms">SMS</option>
-          <option value="whatsapp">WhatsApp</option>
-          <option value="email">Email</option>
-        </select>
       </div>
 
       <div className="grid gap-1.5">
@@ -139,14 +154,14 @@ export function SignupPhoneForm({ onSuccess }: SignupPhoneFormProps) {
 
       <div className="grid gap-1.5">
         <label htmlFor="email" className="text-sm font-bold text-[#23403d]">
-          Email <span className="text-[#767676] font-medium">{channel === "email" ? "(required for OTP)" : "(optional)"}</span>
+          Email <span className="text-[#767676] font-medium">{effectiveChannel === "email" ? "(required for OTP)" : "(optional)"}</span>
         </label>
         <input
           id="email"
           type="email"
           className="h-12 w-full rounded-full border border-[#efe8e4] bg-[#faf3ef] px-4 text-sm font-medium text-[#23403d] placeholder:text-[#767676] focus:border-[#23403d] focus:outline-none focus:ring-1 focus:ring-[#23403d]"
           {...form.register("email")}
-          required={channel === "email"}
+          required={effectiveChannel === "email"}
         />
         <p className="text-xs font-bold text-red-500">
           {form.formState.errors.email?.message}
@@ -157,9 +172,9 @@ export function SignupPhoneForm({ onSuccess }: SignupPhoneFormProps) {
         type="button"
         className="h-12 w-full rounded-full border-2 border-[#efe8e4] bg-white px-6 text-sm font-bold text-[#23403d] transition-colors hover:border-[#23403d] disabled:cursor-not-allowed disabled:opacity-60"
         onClick={() => void send()}
-        disabled={form.formState.isSubmitting}
+        disabled={form.formState.isSubmitting || loadingConfig}
       >
-        Send OTP
+        {loadingConfig ? "Loading..." : "Send OTP"}
       </button>
 
       {otpInfo ? <p className="text-xs font-bold text-[#00aa63]">{otpInfo}</p> : null}

@@ -20,7 +20,7 @@ export default function AccountDashboardPage() {
       try {
         const me = await getCurrentUser(accessToken);
         if (!cancelled) {
-          setName(me.name);
+          setName(me.firstName);
           setEmail(me.email);
         }
       } catch (err) {

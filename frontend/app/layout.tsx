@@ -22,7 +22,7 @@ export default function RootLayout({
       lang="en"
       className={`${bodyFont.variable} ${headingFont.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col font-sans">
+      <body className="min-h-full flex flex-col font-sans overflow-x-hidden">
         {/*
           Global maintenance banner. Self-hides on /ops/* routes (operators
           already see the load-shed panel) and on `normal|reduced|emergency`

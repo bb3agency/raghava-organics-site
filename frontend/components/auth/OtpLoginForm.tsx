@@ -1,10 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
-import { sendOtp, verifyOtp } from "@/lib/auth-api";
+import { sendOtp, verifyOtp, getOtpChannelConfig, type OtpChannelConfigResponse } from "@/lib/auth-api";
 import { getApiErrorMessage } from "@/lib/error-messages";
 import { sendOtpInputSchema, verifyOtpInputSchema } from "@/lib/validators";
 import { AuthErrorBanner } from "@/components/auth/AuthErrorBanner";
@@ -13,7 +13,6 @@ import type { AuthSession } from "@/types/user";
 const phoneSchema = sendOtpInputSchema.pick({ phone: true });
 type PhoneValues = z.infer<typeof phoneSchema>;
 type VerifyValues = z.infer<typeof verifyOtpInputSchema>;
-type OtpChannel = "sms" | "whatsapp" | "email";
 
 interface OtpLoginFormProps {
   onSuccess: (session: AuthSession) => Promise<void> | void;
@@ -24,8 +23,23 @@ export function OtpLoginForm({ onSuccess }: OtpLoginFormProps) {
   const [error, setError] = useState<string | null>(null);
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
-  const [channel, setChannel] = useState<OtpChannel>("sms");
+  const [config, setConfig] = useState<OtpChannelConfigResponse | null>(null);
+  const [loadingConfig, setLoadingConfig] = useState(true);
   const [info, setInfo] = useState<string | null>(null);
+
+  useEffect(() => {
+    async function loadConfig() {
+      try {
+        const data = await getOtpChannelConfig();
+        setConfig(data);
+      } catch (err) {
+        setError(getApiErrorMessage(err) || "Failed to load login config");
+      } finally {
+        setLoadingConfig(false);
+      }
+    }
+    loadConfig();
+  }, []);
 
   const phoneForm = useForm<PhoneValues>({
     resolver: zodResolver(phoneSchema),
@@ -40,10 +54,11 @@ export function OtpLoginForm({ onSuccess }: OtpLoginFormProps) {
   const send = phoneForm.handleSubmit(async (values) => {
     try {
       setError(null);
+      const effectiveChannel = config?.channel || "sms";
       const result = await sendOtp({
         phone: values.phone,
-        channel,
-        ...(channel === "email" && email.trim() ? { email: email.trim() } : {}),
+        channel: effectiveChannel,
+        ...(effectiveChannel === "email" && email.trim() ? { email: email.trim() } : {}),
       });
       setInfo(result.message);
       setPhone(values.phone);
@@ -64,22 +79,18 @@ export function OtpLoginForm({ onSuccess }: OtpLoginFormProps) {
     }
   });
 
+  const effectiveChannel = config?.channel || "sms";
+
   return step === "phone" ? (
     <form onSubmit={send} className="grid gap-5">
       <div className="grid gap-1.5">
-        <label htmlFor="otp-channel" className="text-sm font-bold text-[#23403d]">
-          Receive OTP via
+        <label className="text-sm font-bold text-[#23403d]">
+          {effectiveChannel === "whatsapp" 
+            ? "Enter your phone number to receive OTP via WhatsApp" 
+            : effectiveChannel === "email"
+            ? "Enter your phone number to receive OTP via Email"
+            : "Enter your phone number to receive OTP via SMS"}
         </label>
-        <select
-          id="otp-channel"
-          value={channel}
-          onChange={(event) => setChannel(event.target.value as OtpChannel)}
-          className="h-12 w-full cursor-pointer rounded-full border border-[#efe8e4] bg-[#faf3ef] px-4 text-sm font-medium text-[#23403d] focus:border-[#23403d] focus:outline-none focus:ring-1 focus:ring-[#23403d]"
-        >
-          <option value="sms">SMS</option>
-          <option value="whatsapp">WhatsApp</option>
-          <option value="email">Email</option>
-        </select>
       </div>
 
       <div className="grid gap-1.5">
@@ -98,7 +109,7 @@ export function OtpLoginForm({ onSuccess }: OtpLoginFormProps) {
           {phoneForm.formState.errors.phone?.message}
         </p>
       </div>
-      {channel === "email" ? (
+      {effectiveChannel === "email" ? (
         <div className="grid gap-1.5">
           <label htmlFor="otp-email" className="text-sm font-bold text-[#23403d]">
             Email for OTP
@@ -118,9 +129,9 @@ export function OtpLoginForm({ onSuccess }: OtpLoginFormProps) {
       <button
         type="submit"
         className="mt-2 h-12 w-full rounded-full bg-[#23403d] px-8 text-sm font-bold text-white transition-transform hover:-translate-y-1 hover:bg-[#ec6e55] hover:shadow-lg disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0"
-        disabled={phoneForm.formState.isSubmitting}
+        disabled={phoneForm.formState.isSubmitting || loadingConfig}
       >
-        {phoneForm.formState.isSubmitting ? "Sending OTP..." : "Send OTP"}
+        {loadingConfig ? "Loading login method..." : phoneForm.formState.isSubmitting ? "Sending OTP..." : "Send OTP"}
       </button>
     </form>
   ) : (

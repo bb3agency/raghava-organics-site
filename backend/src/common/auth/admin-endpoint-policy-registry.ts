@@ -8,7 +8,9 @@ export type EndpointPolicy = {
 };
 
 export const ADMIN_ENDPOINT_POLICY_REGISTRY: readonly EndpointPolicy[] = [
+  { method: 'GET', path: '/api/v1/admin/invites', permission: 'ops:read', layer: 'C' },
   { method: 'POST', path: '/api/v1/admin/invites', permission: 'ops:write', layer: 'C' },
+  { method: 'POST', path: '/api/v1/admin/invites/:inviteId/revoke', permission: 'ops:write', layer: 'C' },
   { method: 'POST', path: '/api/v1/admin/invites/cleanup-expired', permission: 'ops:write', layer: 'C' },
   { method: 'GET', path: '/api/v1/admin/analytics/revenue', permission: 'analytics:read', layer: 'A' },
   { method: 'POST', path: '/api/v1/admin/analytics/outbox-dead-letter/:id/replay-preview', permission: 'analytics:replay', layer: 'B' },

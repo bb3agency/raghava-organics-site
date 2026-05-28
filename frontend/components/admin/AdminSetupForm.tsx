@@ -1,9 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ApiError } from "@/lib/api";
 import { consumeAdminInvite, sendAdminSetupOtp } from "@/lib/admin-setup-api";
+import { getAdminOtpChannelConfig } from "@/lib/admin-auth-api";
 
 interface AdminSetupFormProps {
   token: string;
@@ -19,6 +20,31 @@ export function AdminSetupForm({ token }: AdminSetupFormProps) {
   const [expiresAt, setExpiresAt] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [otpChannel, setOtpChannel] = useState<"sms" | "whatsapp" | "email">("email");
+  const [loadingChannel, setLoadingChannel] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    void getAdminOtpChannelConfig()
+      .then((response) => {
+        if (!cancelled) {
+          setOtpChannel(response.channel);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setOtpChannel("email");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoadingChannel(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function requestOtp() {
     setError(null);
@@ -26,9 +52,9 @@ export function AdminSetupForm({ token }: AdminSetupFormProps) {
     try {
       const response = await sendAdminSetupOtp({
         token,
-        phone,
+        name: name.trim(),
         password,
-        ...(name.trim() ? { name } : {}),
+        ...(phone.trim() ? { phone } : {}),
       });
       setOtpSent(true);
       setExpiresAt(response.expiresAt);
@@ -47,11 +73,8 @@ export function AdminSetupForm({ token }: AdminSetupFormProps) {
     setError(null);
     setIsLoading(true);
     try {
-      const result = await consumeAdminInvite({ token, otp });
-      const target = result.mfaRequired
-        ? "/admin/login?mfaEnrollment=1"
-        : "/admin/login";
-      router.replace(target);
+      await consumeAdminInvite({ token, otp });
+      router.replace("/admin/login");
     } catch (err) {
       if (err instanceof ApiError) {
         setError(`${err.code}: ${err.message}`);
@@ -67,23 +90,25 @@ export function AdminSetupForm({ token }: AdminSetupFormProps) {
     <section className="mx-auto grid w-full max-w-xl gap-4 rounded-lg border border-border p-6">
       <h1 className="font-heading text-2xl font-semibold">Admin setup</h1>
       <p className="text-sm text-muted-foreground">
-        Complete invite onboarding using OTP verification.
+        Complete invite onboarding using OTP verification via{" "}
+        {otpChannel === "sms" ? "SMS" : otpChannel === "whatsapp" ? "WhatsApp" : "email"}.
       </p>
       <label className="grid gap-1 text-sm">
-        Name (optional)
+        Name
         <input
           value={name}
           onChange={(event) => setName(event.target.value)}
           className="h-10 rounded-md border border-border bg-background px-3 text-sm"
+          required
         />
       </label>
       <label className="grid gap-1 text-sm">
-        Phone
+        Phone {otpChannel === "email" ? "(optional)" : "(required)"}
         <input
           value={phone}
           onChange={(event) => setPhone(event.target.value)}
           className="h-10 rounded-md border border-border bg-background px-3 text-sm"
-          required
+          required={otpChannel !== "email"}
         />
       </label>
       <label className="grid gap-1 text-sm">
@@ -100,10 +125,16 @@ export function AdminSetupForm({ token }: AdminSetupFormProps) {
       <button
         type="button"
         onClick={requestOtp}
-        disabled={isLoading || !phone.trim() || password.trim().length < 8}
+        disabled={
+          isLoading ||
+          loadingChannel ||
+          !name.trim() ||
+          (otpChannel !== "email" && !phone.trim()) ||
+          password.trim().length < 8
+        }
         className="h-10 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground disabled:cursor-not-allowed disabled:opacity-60"
       >
-        Send OTP
+        {loadingChannel ? "Loading setup method..." : "Send OTP"}
       </button>
       {otpSent ? (
         <>

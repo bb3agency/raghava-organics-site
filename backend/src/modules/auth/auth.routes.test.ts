@@ -1,6 +1,6 @@
 import Fastify from 'fastify';
 import { Role } from '@prisma/client';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { registerAuthRoutes } from './auth.routes';
 import { adminInviteCreateSchema } from './auth.schemas';
@@ -37,6 +37,11 @@ function createApp() {
       updateMany: refreshUpdateMany
     },
     user: {},
+    adminUserInvite: {
+      findMany: vi.fn(async () => []),
+      count: vi.fn(async () => 0)
+    },
+    storeSettings: { findUnique: vi.fn(async () => null) },
     adminPermissionGrant: { findMany: vi.fn(async () => []) }
   } as unknown as NonNullable<Parameters<typeof app.decorate>[1]>);
   app.decorate('redis', {
@@ -77,6 +82,13 @@ describe('adminInviteCreateSchema permission enum', () => {
 describe('auth routes logout role handling', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.stubEnv('NOTIFY_SMS_ENABLED', 'true');
+    vi.stubEnv('SMS_PROVIDER', 'msg91');
+    vi.stubEnv('MSG91_AUTH_KEY', 'msg91-auth-key');
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it('allows customer logout', async () => {
@@ -142,6 +154,56 @@ describe('auth routes logout role handling', () => {
     await app.close();
   });
 
+  it('exposes public OTP channel config route', async () => {
+    const { app } = createApp();
+    const prisma = (app as unknown as { prisma: { storeSettings: { findUnique: ReturnType<typeof vi.fn> } } }).prisma;
+    prisma.storeSettings.findUnique.mockResolvedValue({
+      notifyEmailEnabled: false,
+      notifySmsEnabled: true,
+      notifyWhatsappEnabled: false,
+      primaryNotificationChannels: { CustomerOtpVerification: 'SMS' }
+    });
+    await registerAuthRoutes(app);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/v1/auth/otp-channel'
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      channel: 'sms',
+      availableChannels: ['sms']
+    });
+
+    await app.close();
+  });
+
+  it('exposes public admin OTP channel config route', async () => {
+    const { app } = createApp();
+    const prisma = (app as unknown as { prisma: { storeSettings: { findUnique: ReturnType<typeof vi.fn> } } }).prisma;
+    prisma.storeSettings.findUnique.mockResolvedValue({
+      notifyEmailEnabled: true,
+      notifySmsEnabled: false,
+      notifyWhatsappEnabled: false,
+      primaryNotificationChannels: { OtpVerification: 'EMAIL' }
+    });
+    await registerAuthRoutes(app);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/v1/auth/admin/otp-channel'
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      channel: 'email',
+      availableChannels: ['email']
+    });
+
+    await app.close();
+  });
+
   it('does not register old TOTP MFA routes', async () => {
     const { app } = createApp();
     await registerAuthRoutes(app);
@@ -183,6 +245,15 @@ describe('auth routes logout role handling', () => {
       url: '/api/v1/admin/invites/consume',
       payload: {}
     });
+    const listResponse = await app.inject({
+      method: 'GET',
+      url: '/api/v1/admin/invites'
+    });
+    const revokeResponse = await app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/invites/invite_1/revoke',
+      payload: {}
+    });
     const cleanupResponse = await app.inject({
       method: 'POST',
       url: '/api/v1/admin/invites/cleanup-expired',
@@ -195,6 +266,8 @@ describe('auth routes logout role handling', () => {
     });
 
     expect(createResponse.statusCode).not.toBe(404);
+    expect(listResponse.statusCode).not.toBe(404);
+    expect(revokeResponse.statusCode).not.toBe(404);
     expect(consumeResponse.statusCode).not.toBe(404);
     expect(cleanupResponse.statusCode).not.toBe(404);
     expect(signupPhoneResponse.statusCode).not.toBe(404);

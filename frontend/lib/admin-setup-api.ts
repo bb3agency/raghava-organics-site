@@ -2,9 +2,9 @@ import { apiClient } from "@/lib/api";
 
 export interface SendAdminSetupOtpInput {
   token: string;
-  phone: string;
+  name: string;
   password: string;
-  name?: string;
+  phone?: string;
 }
 
 export interface SendAdminSetupOtpResponse {
@@ -22,7 +22,6 @@ export interface ConsumeAdminInviteResponse {
   email: string;
   name: string;
   permissions: string[];
-  mfaRequired: boolean;
 }
 
 export async function sendAdminSetupOtp(input: SendAdminSetupOtpInput) {

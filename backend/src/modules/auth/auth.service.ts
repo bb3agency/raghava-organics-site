@@ -8,6 +8,7 @@ import { ERROR_CODES } from '@common/errors/error-codes';
 import { recordAuthAbuseEscalation, recordAuthChallenge, recordAuthRiskSignal } from '@common/observability/metrics';
 import { resolveAdminPermissions } from '@common/auth/admin-permissions';
 import { sendNotificationFailureAlert } from '@modules/notifications/notification-failure-alert';
+import { getAvailableOtpChannels, OtpChannel, resolveEffectiveOtpChannel, resolvePrimaryOtpChannel } from './otp-channel';
 
 type PublicUser = {
   id: string;
@@ -36,7 +37,7 @@ type LoginInput = {
 
 type OtpInput = {
   phone: string;
-  channel: 'sms' | 'whatsapp' | 'email';
+  channel?: OtpChannel;
   email?: string;
   turnstileToken?: string;
 };
@@ -129,54 +130,52 @@ function stableHash(value: string): string {
 export class AuthService {
   constructor(private readonly fastify: FastifyInstance) {}
 
-  private isEnabled(value: string | undefined, defaultValue: boolean): boolean {
-    const normalized = (value ?? '').trim().toLowerCase();
-    if (normalized.length === 0) {
-      return defaultValue;
-    }
-    return normalized === 'true';
+  async getCustomerOtpChannelConfig(): Promise<{ channel: OtpChannel; availableChannels: OtpChannel[] }> {
+    const settings = await this.fastify.prisma.storeSettings.findUnique({
+      where: { singletonKey: 'default' },
+      select: {
+        notifyEmailEnabled: true,
+        notifySmsEnabled: true,
+        notifyWhatsappEnabled: true,
+        primaryNotificationChannels: true
+      }
+    });
+
+    const availableChannels = getAvailableOtpChannels({
+      ...(settings ? {
+        emailEnabled: settings.notifyEmailEnabled,
+        smsEnabled: settings.notifySmsEnabled,
+        whatsappEnabled: settings.notifyWhatsappEnabled
+      } : {})
+    });
+    const primary = resolvePrimaryOtpChannel(settings?.primaryNotificationChannels, 'CustomerOtpVerification');
+    const channel = resolveEffectiveOtpChannel(availableChannels, primary);
+    return { channel, availableChannels };
   }
 
-  private hasSmsProviderCredentials(): boolean {
-    const provider = (process.env.SMS_PROVIDER ?? 'msg91').trim().toLowerCase();
-    if (provider === 'noop') {
-      return false;
-    }
-    if (provider === 'msg91') {
-      return Boolean((process.env.MSG91_AUTH_KEY ?? '').trim());
-    }
-    if (provider === 'fast2sms') {
-      return Boolean((process.env.FAST2SMS_API_KEY ?? '').trim());
-    }
-    return false;
-  }
+  async getAdminOtpChannelConfig(): Promise<{ channel: OtpChannel; availableChannels: OtpChannel[] }> {
+    const settings = await this.fastify.prisma.storeSettings.findUnique({
+      where: { singletonKey: 'default' },
+      select: {
+        notifyEmailEnabled: true,
+        notifySmsEnabled: true,
+        notifyWhatsappEnabled: true,
+        primaryNotificationChannels: true
+      }
+    });
 
-  private isEmailChannelConfigured(): boolean {
-    return this.isEnabled(process.env.NOTIFY_EMAIL_ENABLED, true) && Boolean((process.env.RESEND_API_KEY ?? '').trim());
-  }
-
-  private isSmsChannelConfigured(): boolean {
-    return this.isEnabled(process.env.NOTIFY_SMS_ENABLED, true) && this.hasSmsProviderCredentials();
-  }
-
-  private isWhatsappChannelConfigured(): boolean {
-    return this.isEnabled(process.env.NOTIFY_WHATSAPP_ENABLED, false) &&
-      Boolean((process.env.META_WHATSAPP_ACCESS_TOKEN ?? '').trim()) &&
-      Boolean((process.env.META_WHATSAPP_PHONE_NUMBER_ID ?? '').trim());
-  }
-
-  private getAvailableOtpChannels(): Array<'sms' | 'whatsapp' | 'email'> {
-    const channels: Array<'sms' | 'whatsapp' | 'email'> = [];
-    if (this.isSmsChannelConfigured()) {
-      channels.push('sms');
-    }
-    if (this.isWhatsappChannelConfigured()) {
-      channels.push('whatsapp');
-    }
-    if (this.isEmailChannelConfigured()) {
-      channels.push('email');
-    }
-    return channels;
+    const availableChannels = getAvailableOtpChannels({
+      ...(settings
+        ? {
+            emailEnabled: settings.notifyEmailEnabled,
+            smsEnabled: settings.notifySmsEnabled,
+            whatsappEnabled: settings.notifyWhatsappEnabled
+          }
+        : {})
+    });
+    const primary = resolvePrimaryOtpChannel(settings?.primaryNotificationChannels, 'OtpVerification');
+    const channel = resolveEffectiveOtpChannel(availableChannels, primary);
+    return { channel, availableChannels };
   }
 
   private resolveRefreshSecret(): string {
@@ -537,21 +536,25 @@ export class AuthService {
     const otp = generateOtp();
     const otpHash = hashOtp(otp);
     const customerEmail = input.email?.trim().toLowerCase() || undefined;
-    const availableChannels = this.getAvailableOtpChannels();
-    if (availableChannels.length === 0) {
-      throw new AppError(
-        ERROR_CODES.VALIDATION_ERROR,
-        'No login/signup communication channel is configured. Configure at least one of SMS, WhatsApp, or Email in Ops.',
-        400
-      );
-    }
-    if (!availableChannels.includes(input.channel)) {
-      throw new AppError(
-        ERROR_CODES.VALIDATION_ERROR,
-        `Selected channel '${input.channel}' is not configured. Available channels: ${availableChannels.join(', ')}`,
-        400
-      );
-    }
+    const storeSettings = await this.fastify.prisma.storeSettings.findUnique({
+      where: { singletonKey: 'default' },
+      select: {
+        storeName: true,
+        notifyEmailEnabled: true,
+        notifySmsEnabled: true,
+        notifyWhatsappEnabled: true,
+        primaryNotificationChannels: true
+      }
+    });
+    const availableChannels = getAvailableOtpChannels({
+      ...(storeSettings ? {
+        emailEnabled: storeSettings.notifyEmailEnabled,
+        smsEnabled: storeSettings.notifySmsEnabled,
+        whatsappEnabled: storeSettings.notifyWhatsappEnabled
+      } : {})
+    });
+    const primaryChannel = resolvePrimaryOtpChannel(storeSettings?.primaryNotificationChannels, 'CustomerOtpVerification');
+    const channel = resolveEffectiveOtpChannel(availableChannels, primaryChannel);
 
     let recipientEmail: string | undefined;
     if (customerEmail) {
@@ -568,14 +571,10 @@ export class AuthService {
     await this.fastify.redis.set(cooldownKey, '1', 'EX', OTP_RESEND_SECONDS);
     await this.fastify.redis.set(globalCooldownKey, '1', 'EX', OTP_RESEND_SECONDS);
 
-    const storeSettings = await this.fastify.prisma.storeSettings.findUnique({
-      where: { singletonKey: 'default' },
-      select: { storeName: true }
-    });
     const storeName = (storeSettings?.storeName ?? '').trim() || 'Our Store';
 
     try {
-      if (input.channel === 'email') {
+      if (channel === 'email') {
         if (!recipientEmail) {
           throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Email is required for email OTP delivery', 400);
         }
@@ -589,7 +588,7 @@ export class AuthService {
           },
           `otp:email:${input.phone}:${Date.now()}`
         );
-      } else if (input.channel === 'sms') {
+      } else if (channel === 'sms') {
         await this.enqueueOutboxMessage(
           'notifications',
           'send-sms',
@@ -616,12 +615,12 @@ export class AuthService {
       await sendNotificationFailureAlert({
         prisma: this.fastify.prisma,
         template: 'CustomerOtpVerification',
-        channel: input.channel.toUpperCase() as 'SMS' | 'WHATSAPP' | 'EMAIL',
-        recipient: input.channel === 'email' ? (recipientEmail ?? input.phone) : input.phone,
+        channel: channel.toUpperCase() as 'SMS' | 'WHATSAPP' | 'EMAIL',
+        recipient: channel === 'email' ? (recipientEmail ?? input.phone) : input.phone,
         errorMessage: error instanceof Error ? error.message : 'Unable to enqueue OTP delivery',
         failureStage: 'QUEUE_ENQUEUE',
         queueName: 'notifications',
-        jobName: input.channel === 'email' ? 'send-email' : input.channel === 'sms' ? 'send-sms' : 'send-whatsapp'
+        jobName: channel === 'email' ? 'send-email' : channel === 'sms' ? 'send-sms' : 'send-whatsapp'
       });
       await this.fastify.redis.del(otpKey, cooldownKey, globalCooldownKey);
       if (error instanceof AppError) {
@@ -858,6 +857,7 @@ export class AuthService {
       return { message: genericMessage };
     }
 
+    const otpConfig = await this.getAdminOtpChannelConfig();
     const otp = generateOtp();
     const otpHash = hashOtp(otp);
     const otpKey = `auth:admin:login-otp:${stableHash(input.email.trim().toLowerCase())}`;
@@ -873,21 +873,53 @@ export class AuthService {
 
     const jobId = `admin-login-otp:${user.id}:${Date.now()}`;
     try {
-      await this.fastify.queues.notifications.add('send-email', {
-        to: user.email,
-        template: 'OtpVerification',
-        data: { otp }
-      }, { jobId });
+      if (otpConfig.channel === 'email') {
+        await this.fastify.queues.notifications.add(
+          'send-email',
+          {
+            to: user.email,
+            template: 'OtpVerification',
+            data: { otp }
+          },
+          { jobId }
+        );
+      } else if (otpConfig.channel === 'sms') {
+        if (!user.phone) {
+          throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Admin phone number is required for SMS OTP delivery', 400);
+        }
+        await this.fastify.queues.notifications.add(
+          'send-sms',
+          {
+            phone: user.phone,
+            template: 'OtpVerification',
+            data: { otp }
+          },
+          { jobId }
+        );
+      } else {
+        if (!user.phone) {
+          throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Admin phone number is required for WhatsApp OTP delivery', 400);
+        }
+        await this.fastify.queues.notifications.add(
+          'send-whatsapp',
+          {
+            phone: user.phone,
+            template: 'OtpVerification',
+            data: { otp }
+          },
+          { jobId }
+        );
+      }
     } catch (error) {
       await sendNotificationFailureAlert({
         prisma: this.fastify.prisma,
         template: 'OtpVerification',
-        channel: 'EMAIL',
-        recipient: user.email ?? input.email,
+        channel: otpConfig.channel.toUpperCase() as 'SMS' | 'WHATSAPP' | 'EMAIL',
+        recipient: otpConfig.channel === 'email' ? (user.email ?? input.email) : (user.phone ?? input.email),
         errorMessage: error instanceof Error ? error.message : 'Unable to enqueue admin login OTP email',
         failureStage: 'QUEUE_ENQUEUE',
         queueName: 'notifications',
-        jobName: 'send-email',
+        jobName: otpConfig.channel === 'email' ? 'send-email' : otpConfig.channel === 'sms' ? 'send-sms' : 'send-whatsapp',
         jobId
       });
       throw error;

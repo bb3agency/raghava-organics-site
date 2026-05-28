@@ -68,7 +68,7 @@ export const sendOtpSchema = {
   body: {
     type: 'object',
     additionalProperties: false,
-    required: ['phone', 'channel'],
+    required: ['phone'],
     properties: {
       phone: { type: 'string', maxLength: 20 },
       channel: { type: 'string', enum: ['sms', 'whatsapp', 'email'], maxLength: 16 },
@@ -82,6 +82,48 @@ export const sendOtpSchema = {
       additionalProperties: false,
       required: ['message'],
       properties: { message: messageSchema }
+    },
+    ...standardErrorResponses
+  }
+} as const;
+
+export const otpChannelConfigSchema = {
+  params: emptyParamsSchema,
+  querystring: emptyQuerystringSchema,
+  response: {
+    200: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['channel', 'availableChannels'],
+      properties: {
+        channel: { type: 'string', enum: ['sms', 'whatsapp', 'email'], maxLength: 16 },
+        availableChannels: {
+          type: 'array',
+          items: { type: 'string', enum: ['sms', 'whatsapp', 'email'], maxLength: 16 },
+          maxItems: 3
+        }
+      }
+    },
+    ...standardErrorResponses
+  }
+} as const;
+
+export const adminOtpChannelConfigSchema = {
+  params: emptyParamsSchema,
+  querystring: emptyQuerystringSchema,
+  response: {
+    200: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['channel', 'availableChannels'],
+      properties: {
+        channel: { type: 'string', enum: ['sms', 'whatsapp', 'email'], maxLength: 16 },
+        availableChannels: {
+          type: 'array',
+          items: { type: 'string', enum: ['sms', 'whatsapp', 'email'], maxLength: 16 },
+          maxItems: 3
+        }
+      }
     },
     ...standardErrorResponses
   }
@@ -338,6 +380,84 @@ export const adminInviteCreateSchema = {
         expiresAt: { type: 'string', maxLength: 40 },
         setupUrl: { type: 'string', maxLength: 500 },
         permissions: { type: 'array', items: merchantAdminPermissionSchema }
+      }
+    },
+    ...standardErrorResponses
+  }
+} as const;
+
+export const adminInviteListSchema = {
+  params: emptyParamsSchema,
+  querystring: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      status: { type: 'string', enum: ['CREATED', 'EMAIL_SENT', 'CONSUMED', 'CANCELLED', 'EXPIRED_CLEANED'], maxLength: 24 },
+      page: { type: 'number', minimum: 1, maximum: 100000 },
+      limit: { type: 'number', minimum: 1, maximum: 100 }
+    }
+  },
+  response: {
+    200: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['items', 'page', 'limit', 'total'],
+      properties: {
+        items: {
+          type: 'array',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['id', 'inviteEmail', 'inviteName', 'status', 'permissions', 'expiresAt', 'createdAt', 'createdByOpsUserId', 'consumedAt'],
+            properties: {
+              id: idSchema,
+              inviteEmail: { type: 'string', maxLength: 255 },
+              inviteName: { type: 'string', maxLength: 160 },
+              status: { type: 'string', maxLength: 24 },
+              permissions: { type: 'array', items: merchantAdminPermissionSchema },
+              expiresAt: { type: 'string', maxLength: 40 },
+              createdAt: { type: 'string', maxLength: 40 },
+              createdByOpsUserId: { anyOf: [{ type: 'string', maxLength: 80 }, { type: 'null' }] },
+              consumedAt: { anyOf: [{ type: 'string', maxLength: 40 }, { type: 'null' }] }
+            }
+          }
+        },
+        page: { type: 'number' },
+        limit: { type: 'number' },
+        total: { type: 'number' }
+      }
+    },
+    ...standardErrorResponses
+  }
+} as const;
+
+export const adminInviteRevokeSchema = {
+  params: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['inviteId'],
+    properties: {
+      inviteId: { type: 'string', minLength: 1, maxLength: 80 }
+    }
+  },
+  querystring: emptyQuerystringSchema,
+  body: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['challengeId', 'otpCode'],
+    properties: {
+      challengeId: { type: 'string', minLength: 1, maxLength: 80 },
+      otpCode: { type: 'string', minLength: 6, maxLength: 6, pattern: '^[0-9]{6}$' }
+    }
+  },
+  response: {
+    200: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['inviteId', 'revoked'],
+      properties: {
+        inviteId: idSchema,
+        revoked: { type: 'boolean' }
       }
     },
     ...standardErrorResponses

@@ -2,9 +2,11 @@ export type UserRole = "CUSTOMER" | "ADMIN" | string;
 
 export interface User {
   id: string;
-  email: string;
-  name: string | null;
+  email: string | null;
   phone: string | null;
+  firstName: string | null;
+  lastName: string | null;
+  isVerified: boolean;
   role?: UserRole;
   permissions?: string[];
 }

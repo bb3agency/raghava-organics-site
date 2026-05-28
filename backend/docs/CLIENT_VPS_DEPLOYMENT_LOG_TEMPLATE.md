@@ -194,10 +194,12 @@
 **Status:** `[ ]` not started · `[~]` in progress · `[x]` done
 
 - [ ] Merchant admin invite created from ops-authenticated context: `POST /api/v1/admin/invites`
+- [ ] Invite list verified from ops context: `GET /api/v1/admin/invites` returns the invite with correct `status`
 - [ ] `/admin/setup?token=...` completed before 10-minute expiry using `POST /api/v1/admin/invites/consume`
 - [ ] Admin permissions explicitly granted by invite consumption (`AdminPermissionGrant`; fail-closed — zero implicit permissions)
 - [ ] Admin login tested via 2-step email OTP: `POST /api/v1/auth/admin/login/request-otp` → `POST /api/v1/auth/admin/login/verify-otp` returns token with expected `permissions` claim
 - [ ] No TOTP/authenticator-app enrollment required (email OTP is the sole second factor)
+- [ ] Invite revocation flow verified from ops context: `POST /api/v1/admin/invites/:inviteId/revoke` (OTP-gated) correctly cancels an active invite
 - [ ] Expired invite cleanup route verified from ops context: `POST /api/v1/admin/invites/cleanup-expired`
 
 | Field | Value |

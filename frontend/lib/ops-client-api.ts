@@ -144,6 +144,32 @@ export interface OpsInviteListItem {
   createdAt: string;
 }
 
+export type AdminInviteStatus =
+  | "CREATED"
+  | "EMAIL_SENT"
+  | "CONSUMED"
+  | "CANCELLED"
+  | "EXPIRED_CLEANED";
+
+export interface AdminInviteListItem {
+  id: string;
+  inviteEmail: string;
+  inviteName: string;
+  status: AdminInviteStatus;
+  permissions: string[];
+  expiresAt: string;
+  createdAt: string;
+  createdByOpsUserId: string | null;
+  consumedAt: string | null;
+}
+
+export interface AdminInviteList {
+  items: AdminInviteListItem[];
+  page: number;
+  limit: number;
+  total: number;
+}
+
 export interface OpsInviteList {
   items: OpsInviteListItem[];
   page: number;
@@ -470,6 +496,47 @@ export async function revokeOpsInviteClient(input: {
 
 export async function cleanupExpiredOpsInvitesClient(): Promise<{ cleaned: number }> {
   return opsFetch("/ops/invites/cleanup-expired", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export async function listAdminInvitesClient(query?: {
+  status?: AdminInviteStatus;
+  page?: number;
+  limit?: number;
+}): Promise<AdminInviteList> {
+  return opsFetch<AdminInviteList>(buildPath("/admin/invites", query));
+}
+
+export async function createAdminInviteClient(input: {
+  email: string;
+  name: string;
+  setupBaseUrl: string;
+  permissions: string[];
+}): Promise<{ inviteId: string; expiresAt: string; setupUrl: string; permissions: string[] }> {
+  return opsFetch("/admin/invites", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function revokeAdminInviteClient(input: {
+  inviteId: string;
+  challengeId: string;
+  otpCode: string;
+}): Promise<{ inviteId: string; revoked: boolean }> {
+  return opsFetch(`/admin/invites/${input.inviteId}/revoke`, {
+    method: "POST",
+    body: JSON.stringify({
+      challengeId: input.challengeId,
+      otpCode: input.otpCode,
+    }),
+  });
+}
+
+export async function cleanupExpiredAdminInvitesClient(): Promise<{ cleaned: number }> {
+  return opsFetch("/admin/invites/cleanup-expired", {
     method: "POST",
     body: JSON.stringify({}),
   });

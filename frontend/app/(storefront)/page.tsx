@@ -1,3 +1,4 @@
+import Image from "next/image";
 import Link from "next/link";
 import { Suspense } from "react";
 import { Leaf, Truck, RotateCcw, ShieldCheck, Star, ArrowRight, Timer } from "lucide-react";
@@ -42,12 +43,12 @@ async function FeaturedProducts() {
 }
 
 const CATEGORIES = [
-  { label: "Fresh Vegetables", slug: "fresh-vegetables", emoji: "🥦", color: "bg-[#e8f5e9] text-[#2e7d32]" },
-  { label: "Fresh Fruits", slug: "fruits", emoji: "🍎", color: "bg-[#ffebee] text-[#c62828]" },
-  { label: "Dairy & Eggs", slug: "dairy-eggs", emoji: "🥚", color: "bg-[#fff8e1] text-[#c62828]" },
-  { label: "Bakery", slug: "bakery", emoji: "🥖", color: "bg-[#fff3e0] text-[#f57f17]" },
-  { label: "Meat & Seafood", slug: "meat", emoji: "🥩", color: "bg-[#fce4ec] text-[#c2185b]" },
-  { label: "Drinks", slug: "drinks", emoji: "🧃", color: "bg-[#e3f2fd] text-[#1565c0]" },
+  { label: "Fresh Vegetables", slug: "fresh-vegetables", image: "https://images.unsplash.com/photo-1566385101042-1a0aa0c1268c?w=160&h=160&fit=crop", color: "bg-[#e8f5e9]" },
+  { label: "Fresh Fruits", slug: "fruits", image: "https://images.unsplash.com/photo-1610832958506-aa56368176cf?w=160&h=160&fit=crop", color: "bg-[#ffebee]" },
+  { label: "Dairy & Eggs", slug: "dairy-eggs", image: "https://images.unsplash.com/photo-1550583724-b2692b85b150?w=160&h=160&fit=crop", color: "bg-[#fff8e1]" },
+  { label: "Bakery", slug: "bakery", image: "https://images.unsplash.com/photo-1509440159596-0249088772ff?w=160&h=160&fit=crop", color: "bg-[#fff3e0]" },
+  { label: "Meat & Seafood", slug: "meat", image: "https://images.unsplash.com/photo-1607623814075-e51df1bdc82f?w=160&h=160&fit=crop", color: "bg-[#fce4ec]" },
+  { label: "Drinks", slug: "drinks", image: "https://images.unsplash.com/photo-1622483767028-3f66f32aef97?w=160&h=160&fit=crop", color: "bg-[#e3f2fd]" },
 ];
 
 const TRUST_ITEMS = [
@@ -141,8 +142,8 @@ export default function HomePage() {
               href={`/categories/${cat.slug}`}
               className="group flex flex-col items-center justify-center gap-4 rounded-[20px] bg-white p-6 text-center shadow-sm transition-all hover:shadow-md"
             >
-              <div className={`flex size-20 items-center justify-center rounded-full ${cat.color} text-4xl transition-transform group-hover:scale-110`}>
-                {cat.emoji}
+              <div className={`flex size-20 items-center justify-center rounded-full ${cat.color} transition-transform group-hover:scale-110 overflow-hidden`}>
+                <Image src={cat.image} alt={cat.label} width={80} height={80} className="size-full object-cover mix-blend-multiply" />
               </div>
               <span className="text-sm font-bold text-[#23403d]">
                 {cat.label}
@@ -154,7 +155,8 @@ export default function HomePage() {
 
       {/* ── Deal of the Day (Countdown) ─────────────────────────────── */}
       <section className="mx-auto w-full max-w-[1440px] px-4 py-8 lg:px-8">
-        <div className="relative overflow-hidden rounded-[20px] bg-[#23403d] p-8 lg:p-14">
+        <div className="relative overflow-hidden rounded-[20px] bg-[#23403d] p-8 lg:p-14" style={{ backgroundImage: "url('https://images.unsplash.com/photo-1542838132-92c53300491e?q=80&w=2574&auto=format&fit=crop')", backgroundSize: 'cover', backgroundPosition: 'center' }}>
+          <div className="absolute inset-0 bg-[#23403d]/85 mix-blend-multiply" aria-hidden="true" />
           <div className="relative z-10 flex flex-col items-center text-center lg:items-start lg:text-left">
             <span className="mb-4 inline-flex items-center gap-2 rounded-full bg-[#ec6e55] px-4 py-1.5 text-sm font-bold text-white">
               <Timer className="size-4" /> Limited Time Offer

@@ -740,6 +740,8 @@ git push origin main
    - Required ops auth: `ops_session` cookie (email-OTP login) with OTP challenge for privileged write.
    - Required permission: `ops:write`.
    - Endpoint policy: Layer C developer/ops control surface, not merchant admin self-service.
+   - After creation, verify the invite status via `GET /api/v1/admin/invites` (`ops:read`) — confirm it appears with status `EMAIL_SENT`.
+   - If the invite must be cancelled before setup, use `POST /api/v1/admin/invites/:inviteId/revoke` (`ops:write`, OTP-gated) to set its status to `CANCELLED`.
    - Body: `email`, `name`, `setupBaseUrl`, optional merchant-only `permissions`.
    - The generated setup link targets `/admin/setup?token=...` and expires in 10 minutes.
 

@@ -30,17 +30,21 @@ interface AdminLoginVerifyResponse {
   admin: AdminLoginApiUser;
 }
 
+export interface AdminOtpChannelConfigResponse {
+  channel: "sms" | "whatsapp" | "email";
+  availableChannels: Array<"sms" | "whatsapp" | "email">;
+}
+
 function mapAdminUser(admin: AdminLoginApiUser, accessToken: string): User {
   const claims = parseAccessTokenClaims(accessToken);
-  const name =
-    [admin.firstName, admin.lastName].filter((part) => Boolean(part?.trim())).join(" ") ||
-    null;
 
   return {
     id: admin.id,
     email: admin.email ?? "",
     phone: admin.phone,
-    name,
+    firstName: admin.firstName,
+    lastName: admin.lastName,
+    isVerified: admin.isVerified,
     role: admin.role,
     permissions: claims?.permissions ?? [],
   };
@@ -53,6 +57,12 @@ export async function requestAdminLoginOtp(
   return apiClient("/auth/admin/login/request-otp", {
     method: "POST",
     body: JSON.stringify(body),
+  });
+}
+
+export async function getAdminOtpChannelConfig(): Promise<AdminOtpChannelConfigResponse> {
+  return apiClient<AdminOtpChannelConfigResponse>("/auth/admin/otp-channel", {
+    method: "GET",
   });
 }
 

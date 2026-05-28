@@ -2,6 +2,7 @@ import { apiClient } from "@/lib/api";
 import type { User } from "@/types/user";
 import {
   emailLoginInputSchema,
+  emailRegisterInputSchema,
   forgotPasswordInputSchema,
   sendOtpInputSchema,
   signupPhoneInputSchema,
@@ -19,7 +20,7 @@ export interface AuthSessionResponse {
 
 export interface SendOtpInput {
   phone: string;
-  channel: "sms" | "whatsapp" | "email";
+  channel?: "sms" | "whatsapp" | "email";
   email?: string;
   turnstileToken?: string;
 }
@@ -37,6 +38,15 @@ export interface SignupPhoneInput {
   email?: string;
 }
 
+export interface EmailRegisterInput {
+  firstName: string;
+  lastName: string;
+  phone: string;
+  email: string;
+  password: string;
+  turnstileToken?: string;
+}
+
 export interface EmailLoginInput {
   email: string;
   password: string;
@@ -48,10 +58,21 @@ export interface ForgotPasswordInput {
   turnstileToken?: string;
 }
 
+export interface OtpChannelConfigResponse {
+  channel: "sms" | "whatsapp" | "email";
+  availableChannels: Array<"sms" | "whatsapp" | "email">;
+}
+
 export async function refreshAccessToken(): Promise<RefreshTokenResponse> {
   return apiClient<RefreshTokenResponse>("/auth/refresh", {
     method: "POST",
     body: JSON.stringify({}),
+  });
+}
+
+export async function getOtpChannelConfig(): Promise<OtpChannelConfigResponse> {
+  return apiClient<OtpChannelConfigResponse>("/auth/otp-channel", {
+    method: "GET",
   });
 }
 
@@ -76,6 +97,16 @@ export async function verifyOtpAndSignup(
 ): Promise<AuthSessionResponse> {
   const body = signupPhoneInputSchema.parse(input);
   return apiClient<AuthSessionResponse>("/auth/signup-phone", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function registerWithEmail(
+  input: EmailRegisterInput,
+): Promise<{ user: User }> {
+  const body = emailRegisterInputSchema.parse(input);
+  return apiClient<{ user: User }>("/auth/register", {
     method: "POST",
     body: JSON.stringify(body),
   });

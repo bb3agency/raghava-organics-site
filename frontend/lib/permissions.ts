@@ -2,9 +2,13 @@
 export const ADMIN_PERMISSIONS = {
   ordersRead: "orders:read",
   ordersWrite: "orders:write",
+  ordersExport: "orders:export",
   ordersRefund: "orders:refund",
+  ordersNotify: "orders:notify",
   productsRead: "products:read",
   productsWrite: "products:write",
+  categoriesRead: "categories:read",
+  categoriesWrite: "categories:write",
   inventoryRead: "inventory:read",
   inventoryWrite: "inventory:write",
   usersRead: "users:read",
@@ -17,7 +21,9 @@ export const ADMIN_PERMISSIONS = {
   reviewsModerate: "reviews:moderate",
   couponsRead: "coupons:read",
   couponsWrite: "coupons:write",
+  dashboardRead: "dashboard:read",
   analyticsRead: "analytics:read",
+  analyticsExport: "analytics:export",
   analyticsReplay: "analytics:replay",
 } as const;
 

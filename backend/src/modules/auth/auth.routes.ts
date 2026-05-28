@@ -1,5 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import { Role } from '@prisma/client';
+import { AppError } from '@common/errors/app-error';
+import { ERROR_CODES } from '@common/errors/error-codes';
 import { getCurrentUser } from '@common/decorators/current-user';
 import { jwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import { opsAuthGuard } from '@common/guards/ops-auth.guard';
@@ -9,16 +11,21 @@ import { routeRateLimitProfiles } from '@common/rate-limit/rate-limit-policies';
 import { idempotencyOnSend, idempotencyPreHandler } from '@common/idempotency/idempotency';
 import { AuthService } from './auth.service';
 import { AdminInvitesService } from './admin-invites.service';
+import { OpsService } from '@modules/ops/ops.service';
 import {
+  adminInviteListSchema,
+  adminInviteRevokeSchema,
   adminInviteCleanupSchema,
   adminInviteSetupOtpSchema,
   adminInviteConsumeSchema,
+  adminOtpChannelConfigSchema,
   adminInviteCreateSchema,
   adminLoginRequestOtpSchema,
   adminLoginVerifyOtpSchema,
   forgotPasswordSchema,
   loginSchema,
   logoutSchema,
+  otpChannelConfigSchema,
   refreshSchema,
   registerSchema,
   sendOtpSchema,
@@ -98,6 +105,7 @@ function extractAbuseRiskContext(headers: Record<string, unknown>): {
 export async function registerAuthRoutes(fastify: FastifyInstance): Promise<void> {
   const authService = new AuthService(fastify);
   const adminInvitesService = new AdminInvitesService(fastify);
+  const opsService = new OpsService(fastify);
   fastify.addHook('onSend', async (request, reply, payload) => {
     await idempotencyOnSend(request, reply, payload);
     return payload;
@@ -117,6 +125,28 @@ export async function registerAuthRoutes(fastify: FastifyInstance): Promise<void
         clientIp: request.ip,
         risk: extractAbuseRiskContext(request.headers as Record<string, unknown>)
       })
+  );
+
+  fastify.get(
+    '/api/v1/auth/otp-channel',
+    {
+      schema: otpChannelConfigSchema,
+      config: {
+        rateLimit: routeRateLimitProfiles.authSensitive
+      }
+    },
+    async () => authService.getCustomerOtpChannelConfig()
+  );
+
+  fastify.get(
+    '/api/v1/auth/admin/otp-channel',
+    {
+      schema: adminOtpChannelConfigSchema,
+      config: {
+        rateLimit: routeRateLimitProfiles.authSensitive
+      }
+    },
+    async () => authService.getAdminOtpChannelConfig()
   );
 
   fastify.post(
@@ -322,6 +352,59 @@ export async function registerAuthRoutes(fastify: FastifyInstance): Promise<void
         inviteName: body.name,
         permissions: body.permissions,
         setupBaseUrl: body.setupBaseUrl
+      });
+    }
+  );
+
+  fastify.get(
+    '/api/v1/admin/invites',
+    {
+      schema: adminInviteListSchema,
+      preHandler: [opsAuthGuard, opsPermissionGuard('ops:read')],
+      config: {
+        rateLimit: routeRateLimitProfiles.opsRead
+      }
+    },
+    async (request) => {
+      const query = request.query as {
+        status?: 'CREATED' | 'EMAIL_SENT' | 'CONSUMED' | 'CANCELLED' | 'EXPIRED_CLEANED';
+        page?: number;
+        limit?: number;
+      };
+      return adminInvitesService.listAdminInvites(query);
+    }
+  );
+
+  fastify.post(
+    '/api/v1/admin/invites/:inviteId/revoke',
+    {
+      schema: adminInviteRevokeSchema,
+      preHandler: [opsAuthGuard, opsPermissionGuard('ops:write')],
+      config: {
+        rateLimit: routeRateLimitProfiles.opsCritical
+      }
+    },
+    async (request) => {
+      const opsUser = request.opsUser;
+      if (!opsUser) {
+        throw new AppError(ERROR_CODES.UNAUTHORISED, 'Ops authentication required', 401);
+      }
+      const params = request.params as { inviteId: string };
+      const body = request.body as { challengeId: string; otpCode: string };
+
+      await opsService.verifyEmailOtp({
+        opsUserId: opsUser.id,
+        challengeId: body.challengeId,
+        code: body.otpCode,
+        expectedAction: 'invite-revoke',
+        requestIp: request.ip,
+        requestPath: request.url,
+        method: request.method
+      });
+
+      return adminInvitesService.revokeAdminInvite({
+        inviteId: params.inviteId,
+        revokerOpsUserId: opsUser.id
       });
     }
   );
