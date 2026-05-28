@@ -14,7 +14,8 @@ async function main() {
       role: Role.ADMIN,
       firstName: 'System',
       lastName: 'Admin',
-      isVerified: true
+      isVerified: true,
+      phone: process.env.SEED_ADMIN_PHONE || '9000000000'
     },
     create: {
       email,
@@ -22,7 +23,8 @@ async function main() {
       firstName: 'System',
       lastName: 'Admin',
       role: Role.ADMIN,
-      isVerified: true
+      isVerified: true,
+      phone: process.env.SEED_ADMIN_PHONE || '9000000000'
     }
   });
 
