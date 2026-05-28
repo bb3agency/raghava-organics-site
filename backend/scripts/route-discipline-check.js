@@ -11,9 +11,6 @@ const AUTH_ADMIN_EXEMPT_ROUTES = new Set([
   'POST /api/v1/auth/admin/login/verify-otp',
   // Guarded via scoped onRequest hook in queues.routes.ts (not inline preHandler)
   'GET /api/v1/ops/queues/dlq/summary',
-  // Admin invite lifecycle is intentionally ops-controlled, not admin-role controlled.
-  'POST /api/v1/admin/invites',
-  'POST /api/v1/admin/invites/cleanup-expired',
   // Invite consume routes are intentionally public bootstrap endpoints.
   'POST /api/v1/admin/invites/consume',
   'POST /api/v1/ops/invites/consume',
@@ -25,9 +22,6 @@ const AUTH_ADMIN_EXEMPT_ROUTES = new Set([
   'POST /api/v1/ops/auth/login/verify-otp',
   // Admin OTP channel config is intentionally public — needed before login session exists.
   'GET /api/v1/auth/admin/otp-channel',
-  // Admin invite list/revoke are ops-controlled (opsAuthGuard + opsPermissionGuard), not admin-JWT-controlled.
-  'GET /api/v1/admin/invites',
-  'POST /api/v1/admin/invites/:inviteId/revoke'
 ]);
 
 function shouldRequireCustomerPreHandler(method, routePath) {

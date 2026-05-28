@@ -920,9 +920,9 @@ Customer namespaces (`/api/v1/users/me*`, `/api/v1/wishlist*`, `/api/v1/orders*`
 ### 7.9 Admin Routes (`/api/v1/admin`)
 
 Most admin routes require ADMIN JWT plus the listed merchant permission. The invite bootstrap routes are intentional exceptions:
-- `POST /api/v1/admin/invites` and `POST /api/v1/admin/invites/cleanup-expired` require ops auth + `ops:write` (Layer C developer/ops surface).
-- `POST /api/v1/admin/invites/consume` is public but rate-limited and token-bound for `/admin/setup`.
-- Route-discipline tooling must treat these as narrow explicit exemptions, not as precedent for unguarded admin routes.
+- `POST /api/v1/ops/admin-invites`, `GET /api/v1/ops/admin-invites`, and `POST /api/v1/ops/admin-invites/cleanup-expired` require ops session auth + `ops:write/read` (Layer C ops surface). These live under the `/ops/` path prefix so the ops session cookie reaches them.
+- `POST /api/v1/admin/invites/consume` and `POST /api/v1/admin/invites/setup/send-otp` are public but rate-limited and token-bound for `/admin/setup`.
+- Route-discipline tooling no longer needs exemptions for the ops-gated invite routes — they sit under `/api/v1/ops/` and are auto-detected as ops-guarded.
 
 | Method | Path | Description |
 |---|---|---|

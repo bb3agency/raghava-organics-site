@@ -448,7 +448,7 @@ The `npm run ci:reliability-gates` command runs the full quality pipeline:
 3. **E2E Tests** — API integration tests via Supertest
 4. **Security Tests** — Auth, webhook, permission boundary tests
 5. **Guardrail Tests** — Governance script validation
-6. **Route Discipline** — Ensures all routes follow conventions; explicit exemptions are limited to ops-controlled admin invite creation/cleanup and public one-time invite consumption endpoints (`POST /api/v1/admin/invites/consume`, `POST /api/v1/ops/invites/consume`)
+6. **Route Discipline** — Ensures all routes follow conventions; explicit exemptions are limited to public one-time invite consumption/setup endpoints (`POST /api/v1/admin/invites/consume`, `POST /api/v1/ops/invites/consume`, `POST /api/v1/admin/invites/setup/send-otp`). Ops-gated admin invite management routes (`/api/v1/ops/admin-invites*`) require no exemption — they are auto-detected as ops-guarded.
 7. **Serializer Exposure** — Prevents internal field leaks in API responses
 8. **Build** — Production TypeScript compilation
 9. **Admin Contract** — Validates admin permission registry integrity; this smoke requires a running backend at `BASE_URL` (default `http://127.0.0.1:3000`) with seeded/known admin credentials, so local `fetch failed` at this step means the environment is not running rather than a TypeScript/build defect

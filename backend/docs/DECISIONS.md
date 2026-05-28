@@ -363,10 +363,19 @@ Not-ready responses use `error.code: CONFIG_NOT_READY` and include the full read
 
 ---
 
+## [2026-05-28] Ops-gated admin invite routes moved to `/api/v1/ops/` namespace
+
+**Decision — Move ops-authenticated admin invite management routes under the ops path prefix.**  
+Routes `GET/POST /api/v1/admin/invites`, `POST /api/v1/admin/invites/:inviteId/revoke`, and `POST /api/v1/admin/invites/cleanup-expired` have been renamed to `GET/POST /api/v1/ops/admin-invites`, `POST /api/v1/ops/admin-invites/:inviteId/revoke`, and `POST /api/v1/ops/admin-invites/cleanup-expired`. The two public bootstrap routes (`setup/send-otp` and `consume`) remain under `/api/v1/admin/invites/` since they require no session.  
+*Rationale:* The ops session cookie is scoped to `path: /api/v1/ops` for least-privilege (httpOnly, sameSite:strict). Placing ops-authenticated routes outside this path meant the browser never sent the cookie, causing 401 errors in the Ops Invites UI. The architectural fix is to co-locate all ops-session-required routes under `/api/v1/ops/` rather than widening the cookie scope. This is consistent with how ops queue routes were already moved to `/api/v1/ops/queues/` in the May-21 refactor.  
+*Files changed:* `auth.routes.ts`, `admin-endpoint-policy-registry.ts`, `auth.routes.test.ts`, `ops.routes.ts` (cookie path unchanged), `frontend/lib/ops-client-api.ts`, `scripts/route-discipline-check.js`, `scripts/admin-layer-drift-check.js`.
+
+---
+
 ## [2026-05-21] Admin permissions required at invite creation; queue routes moved to ops plane
 
 **Decision 1 — `permissions` is now required at admin invite creation.**  
-Removed the silent `MERCHANT_DEFAULT_PERMISSIONS` fallback from `normalizeInvitePermissions`. Ops must now explicitly declare every permission when creating an admin invite via HTTP (`POST /admin/invites`) or `admin-newuser.mjs`. An invite with an empty or missing `permissions` array is rejected at schema validation.  
+Removed the silent `MERCHANT_DEFAULT_PERMISSIONS` fallback from `normalizeInvitePermissions`. Ops must now explicitly declare every permission when creating an admin invite via HTTP (`POST /ops/admin-invites`) or `admin-newuser.mjs`. An invite with an empty or missing `permissions` array is rejected at schema validation.  
 *Rationale:* The previous silent fallback was a privilege escalation footgun — forgetting to specify permissions accidentally created a fully-privileged merchant admin. Explicit-only provisioning is consistent with the fail-closed model used everywhere else.
 
 **Decision 2 — `queues:inspect` removed from admin permission surface; queue inspection moved to ops plane.**  

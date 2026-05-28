@@ -331,7 +331,7 @@ export async function registerAuthRoutes(fastify: FastifyInstance): Promise<void
   );
 
   fastify.post(
-    '/api/v1/admin/invites',
+    '/api/v1/ops/admin-invites',
     {
       schema: adminInviteCreateSchema,
       preHandler: [opsAuthGuard, opsPermissionGuard('ops:write')],
@@ -357,7 +357,7 @@ export async function registerAuthRoutes(fastify: FastifyInstance): Promise<void
   );
 
   fastify.get(
-    '/api/v1/admin/invites',
+    '/api/v1/ops/admin-invites',
     {
       schema: adminInviteListSchema,
       preHandler: [opsAuthGuard, opsPermissionGuard('ops:read')],
@@ -376,7 +376,7 @@ export async function registerAuthRoutes(fastify: FastifyInstance): Promise<void
   );
 
   fastify.post(
-    '/api/v1/admin/invites/:inviteId/revoke',
+    '/api/v1/ops/admin-invites/:inviteId/revoke',
     {
       schema: adminInviteRevokeSchema,
       preHandler: [opsAuthGuard, opsPermissionGuard('ops:write')],
@@ -446,7 +446,7 @@ export async function registerAuthRoutes(fastify: FastifyInstance): Promise<void
   );
 
   fastify.post(
-    '/api/v1/admin/invites/cleanup-expired',
+    '/api/v1/ops/admin-invites/cleanup-expired',
     {
       schema: adminInviteCleanupSchema,
       preHandler: [opsAuthGuard, opsPermissionGuard('ops:write')],

@@ -237,7 +237,7 @@ describe('auth routes logout role handling', () => {
 
     const createResponse = await app.inject({
       method: 'POST',
-      url: '/api/v1/admin/invites',
+      url: '/api/v1/ops/admin-invites',
       payload: {}
     });
     const consumeResponse = await app.inject({
@@ -247,16 +247,16 @@ describe('auth routes logout role handling', () => {
     });
     const listResponse = await app.inject({
       method: 'GET',
-      url: '/api/v1/admin/invites'
+      url: '/api/v1/ops/admin-invites'
     });
     const revokeResponse = await app.inject({
       method: 'POST',
-      url: '/api/v1/admin/invites/invite_1/revoke',
+      url: '/api/v1/ops/admin-invites/invite_1/revoke',
       payload: {}
     });
     const cleanupResponse = await app.inject({
       method: 'POST',
-      url: '/api/v1/admin/invites/cleanup-expired',
+      url: '/api/v1/ops/admin-invites/cleanup-expired',
       payload: {}
     });
     const signupPhoneResponse = await app.inject({

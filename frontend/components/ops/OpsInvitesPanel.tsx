@@ -3,6 +3,7 @@
 import { type FormEvent, useEffect, useState } from "react";
 import { OpsCriticalOtpForm } from "@/components/ops/OpsCriticalOtpForm";
 import { useOpsCanWrite } from "@/components/ops/OpsSessionProvider";
+import { useRouter } from "next/navigation";
 import {
   OpsAlert,
   OpsBadge,
@@ -23,6 +24,7 @@ import {
   cleanupExpiredOpsInvitesClient,
   createAdminInviteClient,
   createOpsInviteClient,
+  isOpsUnauthorisedError,
   listAdminInvitesClient,
   listOpsInvitesClient,
   revokeAdminInviteClient,
@@ -36,6 +38,7 @@ const ADMIN_REVOKABLE_STATUSES = new Set<AdminInviteListItem["status"]>(["CREATE
 const ADMIN_PERMISSION_CHOICES = Object.values(ADMIN_PERMISSIONS);
 
 export function OpsInvitesPanel() {
+  const router = useRouter();
   const canWrite = useOpsCanWrite();
   const [opsItems, setOpsItems] = useState<OpsInviteListItem[]>([]);
   const [adminItems, setAdminItems] = useState<AdminInviteListItem[]>([]);
@@ -53,36 +56,54 @@ export function OpsInvitesPanel() {
   ]);
 
   async function reload() {
-    const [opsList, adminList] = await Promise.all([
-      listOpsInvitesClient({ limit: 50 }),
-      listAdminInvitesClient({ limit: 50 }),
-    ]);
-    setOpsItems(opsList.items);
-    setAdminItems(adminList.items);
+    setError(null);
+    await Promise.all([reloadOpsInvites(), reloadAdminInvites()]);
+  }
+
+  async function reloadOpsInvites() {
+    try {
+      const opsList = await listOpsInvitesClient({ limit: 50 });
+      setOpsItems(opsList.items);
+    } catch (err) {
+      if (isOpsUnauthorisedError(err)) {
+        router.replace("/ops/login");
+        return;
+      }
+      setError((prev) => prev ?? getApiErrorMessageWithHint(err));
+    }
+  }
+
+  async function reloadAdminInvites() {
+    try {
+      const adminList = await listAdminInvitesClient({ limit: 50 });
+      setAdminItems(adminList.items);
+    } catch (err) {
+      if (isOpsUnauthorisedError(err)) {
+        router.replace("/ops/login");
+        return;
+      }
+      setError((prev) => prev ?? getApiErrorMessageWithHint(err));
+    }
   }
 
   useEffect(() => {
     let cancelled = false;
-    void Promise.all([listOpsInvitesClient({ limit: 50 }), listAdminInvitesClient({ limit: 50 })])
-      .then(([opsList, adminList]) => {
-        if (!cancelled) {
-          setOpsItems(opsList.items);
-          setAdminItems(adminList.items);
-        }
-      })
-      .catch((err) => {
-        if (!cancelled) {
-          setError(getApiErrorMessageWithHint(err));
-        }
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setLoading(false);
-        }
-      });
+
+    async function load() {
+      setLoading(true);
+      setError(null);
+      await reloadOpsInvites();
+      await reloadAdminInvites();
+      if (!cancelled) {
+        setLoading(false);
+      }
+    }
+
+    void load();
     return () => {
       cancelled = true;
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function handleCreate(event: FormEvent<HTMLFormElement>) {

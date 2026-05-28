@@ -4,12 +4,7 @@ const logger = require('./lib/logger');
 const { parseFastifyRouteConfigsFromAst } = require('./route-ast-utils.js');
 
 const EXEMPT_ENDPOINTS = new Set(['GET /api/v1/ops/metrics']);
-const EXEMPT_ADMIN_LAYER_C_ENDPOINTS = new Set([
-  'POST /api/v1/admin/invites',
-  'POST /api/v1/admin/invites/cleanup-expired',
-  'GET /api/v1/admin/invites',
-  'POST /api/v1/admin/invites/:inviteId/revoke'
-]);
+const EXEMPT_ADMIN_LAYER_C_ENDPOINTS = new Set([]);
 
 function parseRegistryEntries(registrySource) {
   const entryRegex = /\{\s*method:\s*'([^']+)'\s*,\s*path:\s*'([^']+)'\s*,\s*permission:\s*'([^']+)'\s*,\s*layer:\s*'([^']+)'\s*\}/g;

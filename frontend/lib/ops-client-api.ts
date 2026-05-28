@@ -506,7 +506,7 @@ export async function listAdminInvitesClient(query?: {
   page?: number;
   limit?: number;
 }): Promise<AdminInviteList> {
-  return opsFetch<AdminInviteList>(buildPath("/admin/invites", query));
+  return opsFetch<AdminInviteList>(buildPath("/ops/admin-invites", query));
 }
 
 export async function createAdminInviteClient(input: {
@@ -515,7 +515,7 @@ export async function createAdminInviteClient(input: {
   setupBaseUrl: string;
   permissions: string[];
 }): Promise<{ inviteId: string; expiresAt: string; setupUrl: string; permissions: string[] }> {
-  return opsFetch("/admin/invites", {
+  return opsFetch("/ops/admin-invites", {
     method: "POST",
     body: JSON.stringify(input),
   });
@@ -526,7 +526,7 @@ export async function revokeAdminInviteClient(input: {
   challengeId: string;
   otpCode: string;
 }): Promise<{ inviteId: string; revoked: boolean }> {
-  return opsFetch(`/admin/invites/${input.inviteId}/revoke`, {
+  return opsFetch(`/ops/admin-invites/${input.inviteId}/revoke`, {
     method: "POST",
     body: JSON.stringify({
       challengeId: input.challengeId,
@@ -536,7 +536,7 @@ export async function revokeAdminInviteClient(input: {
 }
 
 export async function cleanupExpiredAdminInvitesClient(): Promise<{ cleaned: number }> {
-  return opsFetch("/admin/invites/cleanup-expired", {
+  return opsFetch("/ops/admin-invites/cleanup-expired", {
     method: "POST",
     body: JSON.stringify({}),
   });

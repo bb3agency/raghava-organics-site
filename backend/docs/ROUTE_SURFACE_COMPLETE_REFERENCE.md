@@ -154,15 +154,17 @@ Step 2 of admin login. Body: `{ email, otp }`. Verifies the OTP against the acti
 
 The admin account creation flow is: ops issues invite → invite email sent → new admin clicks setup link → setup OTP flow → account created.
 
-### `GET /api/v1/admin/invites`
+> **Cookie scope note:** The ops-managed admin invite routes (`/api/v1/ops/admin-invites*`) live under the ops path prefix so the `ops_session` cookie (scoped to `path: /api/v1/ops`) reaches them. The two public setup/consume routes stay under `/api/v1/admin/invites/` since they require no session.
+
+### `GET /api/v1/ops/admin-invites`
 **Ops session auth (`ops:read`)**  
 Returns a paginated list of all admin invites. Query params: `status` (optional filter: `CREATED | EMAIL_SENT | CONSUMED | CANCELLED | EXPIRED_CLEANED`), `page`, `limit`. Returns `{ items[], page, limit, total }`. Used in the Ops UI to inspect and manage the invite lifecycle.
 
-### `POST /api/v1/admin/invites`
+### `POST /api/v1/ops/admin-invites`
 **Ops session auth (`ops:write`)**  
 Creates an invite for a new merchant admin. Body: `{ email, name, permissions[], setupBaseUrl }`. Returns `{ inviteToken, expiresAt, setupUrl }`. Backend composes `setupUrl` as `${setupBaseUrl}/admin/setup?token=...`. Invite expires after 10 minutes.
 
-### `POST /api/v1/admin/invites/:inviteId/revoke`
+### `POST /api/v1/ops/admin-invites/:inviteId/revoke`
 **Ops session auth (`ops:write`)**  
 Cancels an active (non-consumed, non-expired) admin invite. Requires an ops email-OTP challenge (`{ challengeId, otpCode }`) as the request body. Sets invite `status` to `CANCELLED`. Use the ops OTP flow (`POST /api/v1/ops/otp/request` → `POST /api/v1/ops/otp/verify`) to obtain the challenge before calling this route.
 
@@ -174,7 +176,7 @@ Called from the `/admin/setup` page. Validates the invite token, accepts `{ toke
 **No auth required** (public — new admin is not logged in yet).  
 Called from `/admin/setup` after OTP entry. Body: `{ token, otp }`. Creates the admin account and returns `{ adminUserId, email, name, permissions[] }`. No `role` or `mfaRequired` field in the response. After this, the admin must authenticate via the 2-step email OTP flow: `POST /auth/admin/login/request-otp` → `POST /auth/admin/login/verify-otp`.
 
-### `POST /api/v1/admin/invites/cleanup-expired`
+### `POST /api/v1/ops/admin-invites/cleanup-expired`
 **Ops session auth (`ops:write`)**  
 Purges all expired unconsumed admin invites. Also runs automatically as a scheduled BullMQ job.
 
@@ -908,7 +910,7 @@ Reviews are only visible on the storefront after admin approval.
 ## 25. Admin setup flow (first-time and new admins)
 
 ```
-1. Ops user with ops:write → POST /admin/invites → get setupUrl
+1. Ops user with ops:write → POST /ops/admin-invites → get setupUrl
 2. New admin opens setupUrl (/admin/setup?token=...)
 3. Frontend → POST /admin/invites/setup/send-otp with { token, password, phone, name? }
 4. Admin enters OTP from phone

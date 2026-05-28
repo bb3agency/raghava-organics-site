@@ -4,6 +4,16 @@ This document preserves detailed hardening history for engineering traceability.
 
 ## Recent hardening changes
 
+**Ops-gated admin invite routes moved to `/api/v1/ops/` namespace — May 28, 2026:**
+
+Root cause: The ops session cookie was scoped to `path: '/api/v1/ops'`. Routes `GET/POST /api/v1/admin/invites*` (ops:read/write guarded) sat outside this path, so the browser never sent the cookie to them — every request from the Ops Invites UI returned 401 ("Please sign in to continue"). The naive fix of widening the cookie to `path: '/api/v1'` was evaluated but rejected as a deviation from least-privilege, even though it would have been functionally safe (httpOnly + sameSite:strict).
+
+Fix applied: renamed all 4 ops-authenticated admin invite routes to `GET/POST /api/v1/ops/admin-invites`, `/ops/admin-invites/:inviteId/revoke`, `/ops/admin-invites/cleanup-expired`. Cookie path stays `/api/v1/ops`. Two public bootstrap routes (`/admin/invites/setup/send-otp` and `/admin/invites/consume`) are unchanged — they require no session.
+
+Architecture principle codified: **Any route protected by `opsAuthGuard` must live under `/api/v1/ops/` so the browser-scoped session cookie reaches it.**
+
+---
+
 **SMS channel defaults changed to opt-in; single-channel enforcement added to admin UI — May 28, 2026:**
 
 Root cause identified during CI reliability-gate debugging: `StoreSettings.notifySmsEnabled` defaulted to `true` in the Prisma schema, meaning any first-run upsert of the `storeSettings` row (e.g., triggered by `PATCH /api/v1/admin/settings/shipping` during CI setup) enabled SMS automatically. The `getAvailableOtpChannels` routing layer added SMS to available channels, `resolveEffectiveOtpChannel` picked it as the first fallback, and the admin login OTP route threw HTTP 400 because the CI admin user had no phone number.
