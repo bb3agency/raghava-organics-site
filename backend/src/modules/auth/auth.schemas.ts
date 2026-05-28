@@ -285,9 +285,10 @@ export const adminLoginRequestOtpSchema = {
     200: {
       type: 'object',
       additionalProperties: false,
-      required: ['message'],
+      required: ['message', 'expiresAt'],
       properties: {
-        message: messageSchema
+        message: messageSchema,
+        expiresAt: { type: 'string', maxLength: 40 }
       }
     },
     ...standardErrorResponses

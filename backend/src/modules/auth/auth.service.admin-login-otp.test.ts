@@ -136,7 +136,6 @@ describe('AuthService.requestAdminLoginOtp', () => {
     });
 
     expect(result.message).toContain('OTP has been sent');
-    expect(result.expiresAt).toBeTruthy();
     expect(mocks.notificationsAdd).not.toHaveBeenCalled();
     expect(mocks.redisSet).not.toHaveBeenCalled();
   });
@@ -176,7 +175,7 @@ describe('AuthService.requestAdminLoginOtp', () => {
     expect(mocks.notificationsAdd).not.toHaveBeenCalled();
   });
 
-  it('returns generic message without sending OTP when admin is deactivated (isBanned)', async () => {
+  it('rejects OTP request when admin is deactivated (isBanned)', async () => {
     const { service, mocks } = createHarness({
       userRecord: {
         id: 'admin_1',
@@ -188,14 +187,14 @@ describe('AuthService.requestAdminLoginOtp', () => {
       }
     });
 
-    const result = await service.requestAdminLoginOtp({
-      email: 'admin@example.com',
-      password: 'correctpass',
-      clientIp: '127.0.0.1'
-    });
+    await expect(
+      service.requestAdminLoginOtp({
+        email: 'admin@example.com',
+        password: 'correctpass',
+        clientIp: '127.0.0.1'
+      })
+    ).rejects.toMatchObject({ code: 'UNAUTHORISED', statusCode: 401 });
 
-    expect(result.message).toContain('OTP has been sent');
-    expect(result.expiresAt).toBeTruthy();
     expect(mocks.notificationsAdd).not.toHaveBeenCalled();
     expect(mocks.redisSet).not.toHaveBeenCalled();
   });

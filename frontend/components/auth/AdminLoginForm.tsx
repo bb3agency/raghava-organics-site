@@ -111,7 +111,15 @@ export function AdminLoginForm({ onSuccess, enrollmentHint }: AdminLoginFormProp
       startResendCooldown();
       startOtpCountdown(response.expiresAt);
     } catch (err) {
-      setError(getApiErrorMessage(err));
+      if (isApiErrorWithCode(err, "UNAUTHORISED")) {
+        setStep("credentials");
+        setOtp("");
+        setError(
+          "This admin account is deactivated. Ask Ops to issue a new admin invite to restore access."
+        );
+      } else {
+        setError(getApiErrorMessage(err));
+      }
     }
   });
 
@@ -126,7 +134,15 @@ export function AdminLoginForm({ onSuccess, enrollmentHint }: AdminLoginFormProp
       startResendCooldown();
       startOtpCountdown(response.expiresAt);
     } catch (err) {
-      setError(getApiErrorMessage(err));
+      if (isApiErrorWithCode(err, "UNAUTHORISED")) {
+        setStep("credentials");
+        setOtp("");
+        setError(
+          "This admin account is deactivated. Ask Ops to issue a new admin invite to restore access."
+        );
+      } else {
+        setError(getApiErrorMessage(err));
+      }
     }
   }
 

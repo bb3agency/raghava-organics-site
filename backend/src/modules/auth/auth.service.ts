@@ -884,7 +884,7 @@ export class AuthService {
     if (user.isBanned) {
       await this.registerFailedAuthAttempt(input.email, clientIp, 'admin');
       await this.fastify.redis.del(otpKey, attemptKey);
-      return { message: genericMessage, expiresAt: fallbackExpiresAt };
+      throw new AppError(ERROR_CODES.UNAUTHORISED, 'Admin account not found or inactive', 401);
     }
 
     const otpConfig = await this.getAdminOtpChannelConfig();
