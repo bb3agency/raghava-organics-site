@@ -748,18 +748,21 @@ export class AuthService {
           }
         }, jobId);
       } catch (error) {
-        await sendNotificationFailureAlert({
-          prisma: this.fastify.prisma,
-          template: 'PasswordReset',
-          channel: 'EMAIL',
-          recipient: user.email ?? input.email,
-          errorMessage: error instanceof Error ? error.message : 'Unable to enqueue password reset email',
-          failureStage: 'QUEUE_ENQUEUE',
-          queueName: 'notifications',
-          jobName: 'send-email',
-          jobId
-        });
-        throw error;
+        try {
+          await sendNotificationFailureAlert({
+            prisma: this.fastify.prisma,
+            template: 'PasswordReset',
+            channel: 'EMAIL',
+            recipient: user.email ?? input.email,
+            errorMessage: error instanceof Error ? error.message : 'Unable to enqueue password reset email',
+            failureStage: 'QUEUE_ENQUEUE',
+            queueName: 'notifications',
+            jobName: 'send-email',
+            jobId
+          });
+        } catch {
+          // Notification alert failures must never break password-reset request flow.
+        }
       }
     }
 
