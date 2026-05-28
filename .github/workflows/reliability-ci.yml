@@ -64,6 +64,9 @@ jobs:
       DR_REQUIRE_HOOK: "false"
       INVOICE_STORAGE_ROOT: ./tmp/invoices
       OPS_DB_ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef
+      RESEND_API_KEY: ci-test-key
+      RESEND_FROM: ci@example.com
+      NOTIFY_EMAIL_ENABLED: "true"
 
     steps:
       - name: Checkout
