@@ -74,7 +74,7 @@ const ADMIN_TEST_PASSWORD = 'Admin@12345';
 function createAdminLoginApp(userRecord: Record<string, unknown> | null) {
   const notificationsAdd = vi.fn(async () => undefined);
   const userFindUnique = vi.fn(async () => userRecord);
-  const redisGet = vi.fn(async () => null);
+  const redisGet = vi.fn<(key: string) => Promise<string | null>>(async () => null);
   const redisSet = vi.fn(async () => 'OK');
   const redisDel = vi.fn(async () => 1);
 
