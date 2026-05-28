@@ -723,16 +723,30 @@ export class AuthService {
     input: ForgotPasswordInput,
     context?: { clientIp?: string; risk?: AbuseRiskContext }
   ): Promise<{ message: string }> {
-    await this.validateAuthChallenge({
-      action: 'forgot-password',
-      ...(input.turnstileToken ? { token: input.turnstileToken } : {}),
-      ...(context?.clientIp ? { clientIp: context.clientIp } : {}),
-      subject: input.email,
-      ...(context?.risk ? { risk: context.risk } : {})
-    });
-    const user = await this.fastify.prisma.user.findUnique({
-      where: { email: input.email }
-    });
+    const genericResponse = { message: 'If the account exists, a password reset email has been queued.' };
+    try {
+      await this.validateAuthChallenge({
+        action: 'forgot-password',
+        ...(input.turnstileToken ? { token: input.turnstileToken } : {}),
+        ...(context?.clientIp ? { clientIp: context.clientIp } : {}),
+        subject: input.email,
+        ...(context?.risk ? { risk: context.risk } : {})
+      });
+    } catch (error) {
+      if (error instanceof AppError && error.statusCode < 500) {
+        throw error;
+      }
+      return genericResponse;
+    }
+
+    let user: User | null = null;
+    try {
+      user = await this.fastify.prisma.user.findUnique({
+        where: { email: input.email }
+      });
+    } catch {
+      return genericResponse;
+    }
 
     if (user) {
       const resetToken = crypto.randomBytes(PASSWORD_RESET_TOKEN_BYTES).toString('hex');
@@ -766,7 +780,7 @@ export class AuthService {
       }
     }
 
-    return { message: 'If the account exists, a password reset email has been queued.' };
+    return genericResponse;
   }
 
   async login(input: LoginInput, context?: LoginContext): Promise<AuthResult> {

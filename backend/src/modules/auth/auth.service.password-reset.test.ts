@@ -85,4 +85,38 @@ describe('AuthService requestPasswordReset', () => {
     });
     expect(add).toHaveBeenCalled();
   });
+
+  it('returns generic success when challenge infra check throws internal error', async () => {
+    const add = vi.fn().mockResolvedValue(undefined);
+    const findUnique = vi.fn().mockResolvedValue(null);
+    const ttl = vi.fn().mockRejectedValue(new Error('redis unavailable'));
+
+    const fastify = {
+      prisma: {
+        user: { findUnique }
+      },
+      queues: {
+        notifications: { add }
+      },
+      redis: {
+        get: vi.fn().mockResolvedValue(null),
+        set: vi.fn().mockResolvedValue('OK'),
+        del: vi.fn().mockResolvedValue(1),
+        incr: vi.fn().mockResolvedValue(1),
+        expire: vi.fn().mockResolvedValue(1),
+        ttl
+      }
+    } as unknown as FastifyInstance;
+
+    const service = new AuthService(fastify);
+    const result = await service.requestPasswordReset(
+      { email: 'user@example.com' },
+      { clientIp: '127.0.0.1' }
+    );
+
+    expect(result).toEqual({
+      message: 'If the account exists, a password reset email has been queued.'
+    });
+    expect(findUnique).not.toHaveBeenCalled();
+  });
 });
