@@ -70,10 +70,17 @@ export function OpsUsersPanel() {
         <OpsDataTable
           rows={users}
           rowKey={(row) => row.id}
+          mobileCardTitle={(row) => row.name}
+          mobileCardDescription={(row) => row.email}
           emptyTitle="No operators"
+          emptyDescription="Invite operators from the invites screen to grant ops access."
           columns={[
             { key: "name", header: "Name", cell: (row) => row.name },
-            { key: "email", header: "Email", cell: (row) => row.email },
+            {
+              key: "email",
+              header: "Email",
+              cell: (row) => <span className="break-all">{row.email}</span>,
+            },
             {
               key: "active",
               header: "Status",
@@ -104,7 +111,9 @@ export function OpsUsersPanel() {
             {
               key: "id",
               header: "ID",
-              cell: (row) => <code className="text-xs text-muted-foreground">{row.id}</code>,
+              cell: (row) => (
+                <code className="break-all text-xs text-muted-foreground">{row.id}</code>
+              ),
             },
             ...(canWrite
               ? [

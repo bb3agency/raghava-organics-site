@@ -207,6 +207,8 @@ export interface OpsDataTableProps<T> {
   rowKey: (row: T) => string;
   emptyTitle?: string;
   emptyDescription?: string;
+  mobileCardTitle?: (row: T) => ReactNode;
+  mobileCardDescription?: (row: T) => ReactNode;
 }
 
 export function OpsDataTable<T>({
@@ -215,6 +217,8 @@ export function OpsDataTable<T>({
   rowKey,
   emptyTitle = "No records",
   emptyDescription,
+  mobileCardTitle,
+  mobileCardDescription,
 }: OpsDataTableProps<T>) {
   if (rows.length === 0) {
     return <OpsEmptyState title={emptyTitle} description={emptyDescription} />;
@@ -222,8 +226,37 @@ export function OpsDataTable<T>({
 
   return (
     <div className="overflow-hidden rounded-xl border border-border/80">
-      <div className="overflow-x-auto">
-        <table className="min-w-full text-sm">
+      <div className="grid gap-3 p-3 md:hidden">
+        {rows.map((row) => (
+          <article
+            key={rowKey(row)}
+            className="grid gap-3 rounded-lg border border-border/70 bg-card/60 p-3 shadow-sm"
+          >
+            {mobileCardTitle ? (
+              <div className="grid gap-1">
+                <h3 className="text-sm font-semibold leading-tight text-foreground">
+                  {mobileCardTitle(row)}
+                </h3>
+                {mobileCardDescription ? (
+                  <p className="text-xs text-muted-foreground">{mobileCardDescription(row)}</p>
+                ) : null}
+              </div>
+            ) : null}
+            <dl className="grid gap-2">
+              {columns.map((col) => (
+                <div key={col.key} className="grid gap-1">
+                  <dt className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                    {col.header}
+                  </dt>
+                  <dd className={cn("text-sm text-foreground", col.className)}>{col.cell(row)}</dd>
+                </div>
+              ))}
+            </dl>
+          </article>
+        ))}
+      </div>
+      <div className="hidden overflow-x-auto md:block">
+        <table className="min-w-[48rem] text-sm">
           <thead>
             <tr className="border-b border-border/80 bg-muted/40">
               {columns.map((col) => (

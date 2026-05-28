@@ -84,11 +84,17 @@ export function OpsAdminUsersPanel() {
         <OpsDataTable
           rows={users}
           rowKey={(row) => row.id}
+          mobileCardTitle={(row) => row.name}
+          mobileCardDescription={(row) => row.email}
           emptyTitle="No merchant admins"
           emptyDescription="Create an admin invite to provision the first merchant account."
           columns={[
             { key: "name", header: "Name", cell: (row) => row.name },
-            { key: "email", header: "Email", cell: (row) => row.email },
+            {
+              key: "email",
+              header: "Email",
+              cell: (row) => <span className="break-all">{row.email}</span>,
+            },
             {
               key: "active",
               header: "Status",
@@ -132,7 +138,9 @@ export function OpsAdminUsersPanel() {
             {
               key: "id",
               header: "ID",
-              cell: (row) => <code className="text-xs text-muted-foreground">{row.id}</code>,
+              cell: (row) => (
+                <code className="break-all text-xs text-muted-foreground">{row.id}</code>
+              ),
             },
             ...(canWrite
               ? [

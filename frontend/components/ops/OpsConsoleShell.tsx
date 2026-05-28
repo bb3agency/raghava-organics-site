@@ -126,7 +126,7 @@ export function OpsConsoleShell({ children }: OpsConsoleShellProps) {
         ) : null}
         <aside
           className={cn(
-            "fixed inset-y-0 left-0 z-50 flex w-72 flex-col border-r border-border/60 bg-sidebar shadow-xl transition-transform duration-300 lg:hidden",
+            "fixed inset-y-0 left-0 z-50 flex w-[min(20rem,88vw)] flex-col border-r border-border/60 bg-sidebar shadow-xl transition-transform duration-300 lg:hidden",
             mobileNavOpen ? "translate-x-0" : "-translate-x-full",
           )}
           aria-label="Ops mobile navigation"
@@ -181,15 +181,17 @@ export function OpsConsoleShell({ children }: OpsConsoleShellProps) {
                 <p className="font-heading text-sm font-semibold">Raghava Ops</p>
               </div>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex min-w-0 items-center gap-2">
               <OpsBadge tone={canWrite ? "info" : "muted"}>
                 {canWrite ? "ops:write" : "ops:read"}
               </OpsBadge>
-              <span className="hidden text-sm text-muted-foreground sm:inline">{session.email}</span>
+              <span className="hidden truncate text-sm text-muted-foreground sm:inline">
+                {session.email}
+              </span>
             </div>
           </header>
 
-          <main className="flex-1 px-4 py-8 lg:px-8 lg:py-10">
+          <main className="flex-1 px-3 py-6 sm:px-4 lg:px-8 lg:py-10">
             <div className="mx-auto max-w-6xl">{children}</div>
           </main>
         </div>
