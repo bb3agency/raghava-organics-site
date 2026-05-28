@@ -37,18 +37,23 @@ export function getAvailableOtpChannels(flags?: OtpChannelFlags): OtpChannel[] {
   const whatsappEnabled = flags?.whatsappEnabled ?? isEnabled(process.env.NOTIFY_WHATSAPP_ENABLED, false);
   const emailEnabled = flags?.emailEnabled ?? isEnabled(process.env.NOTIFY_EMAIL_ENABLED, true);
 
+  // When a flag is explicitly provided by the caller (sourced from DB settings / runtime config),
+  // trust it without requiring provider credentials in env — credential validation is the worker's
+  // concern at delivery time, not the routing layer's.  Credential checks only apply when the
+  // flag was derived from env vars (flags parameter absent or the specific key omitted).
   const channels: OtpChannel[] = [];
-  if (smsEnabled && hasSmsProviderCredentials()) {
+  if (smsEnabled && (flags?.smsEnabled !== undefined || hasSmsProviderCredentials())) {
     channels.push('sms');
   }
   if (
     whatsappEnabled &&
-    Boolean((process.env.META_WHATSAPP_ACCESS_TOKEN ?? '').trim()) &&
-    Boolean((process.env.META_WHATSAPP_PHONE_NUMBER_ID ?? '').trim())
+    (flags?.whatsappEnabled !== undefined ||
+      (Boolean((process.env.META_WHATSAPP_ACCESS_TOKEN ?? '').trim()) &&
+        Boolean((process.env.META_WHATSAPP_PHONE_NUMBER_ID ?? '').trim())))
   ) {
     channels.push('whatsapp');
   }
-  if (emailEnabled && Boolean((process.env.RESEND_API_KEY ?? '').trim())) {
+  if (emailEnabled && (flags?.emailEnabled !== undefined || Boolean((process.env.RESEND_API_KEY ?? '').trim()))) {
     channels.push('email');
   }
   return channels;
