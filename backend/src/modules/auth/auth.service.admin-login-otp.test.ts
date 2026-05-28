@@ -76,6 +76,7 @@ describe('AuthService.requestAdminLoginOtp', () => {
     });
 
     expect(result.message).toContain('OTP has been sent');
+    expect(result.expiresAt).toBeTruthy();
     expect(mocks.redisSet).toHaveBeenCalledWith(
       expect.stringContaining('auth:admin:login-otp:'),
       expect.stringContaining('admin_1||'),
@@ -135,6 +136,7 @@ describe('AuthService.requestAdminLoginOtp', () => {
     });
 
     expect(result.message).toContain('OTP has been sent');
+    expect(result.expiresAt).toBeTruthy();
     expect(mocks.notificationsAdd).not.toHaveBeenCalled();
     expect(mocks.redisSet).not.toHaveBeenCalled();
   });
@@ -156,6 +158,7 @@ describe('AuthService.requestAdminLoginOtp', () => {
     });
 
     expect(result.message).toContain('OTP has been sent');
+    expect(result.expiresAt).toBeTruthy();
     expect(mocks.notificationsAdd).not.toHaveBeenCalled();
   });
 
@@ -169,6 +172,7 @@ describe('AuthService.requestAdminLoginOtp', () => {
     });
 
     expect(result.message).toContain('OTP has been sent');
+    expect(result.expiresAt).toBeTruthy();
     expect(mocks.notificationsAdd).not.toHaveBeenCalled();
   });
 
@@ -191,6 +195,7 @@ describe('AuthService.requestAdminLoginOtp', () => {
     });
 
     expect(result.message).toContain('OTP has been sent');
+    expect(result.expiresAt).toBeTruthy();
     expect(mocks.notificationsAdd).not.toHaveBeenCalled();
     expect(mocks.redisSet).not.toHaveBeenCalled();
   });

@@ -832,8 +832,13 @@ export class AuthService {
     clientIp: string;
     turnstileToken?: string;
     risk?: AbuseRiskContext;
-  }): Promise<{ message: string }> {
+  }): Promise<{ message: string; expiresAt: string }> {
     const clientIp = input.clientIp ?? 'unknown';
+    const emailNorm = input.email.trim().toLowerCase();
+    const emailHash = stableHash(emailNorm);
+    const otpKey = `auth:admin:login-otp:${emailHash}`;
+    const attemptKey = `auth:admin:login-otp-attempts:${emailHash}`;
+    const fallbackExpiresAt = new Date(Date.now() + AuthService.ADMIN_LOGIN_OTP_TTL_SECONDS * 1000).toISOString();
     await this.validateAuthChallenge({
       action: 'login',
       ...(input.turnstileToken ? { token: input.turnstileToken } : {}),
@@ -848,31 +853,33 @@ export class AuthService {
 
     if (!user || user.role !== Role.ADMIN) {
       await this.registerFailedAuthAttempt(input.email, clientIp, 'admin');
-      return { message: genericMessage };
+      await this.fastify.redis.del(otpKey, attemptKey);
+      return { message: genericMessage, expiresAt: fallbackExpiresAt };
     }
 
     const validPassword = await bcrypt.compare(input.password, user.passwordHash);
     if (!validPassword) {
       await this.registerFailedAuthAttempt(input.email, clientIp, 'admin');
-      return { message: genericMessage };
+      await this.fastify.redis.del(otpKey, attemptKey);
+      return { message: genericMessage, expiresAt: fallbackExpiresAt };
     }
 
     if (user.isBanned) {
       await this.registerFailedAuthAttempt(input.email, clientIp, 'admin');
-      return { message: genericMessage };
+      await this.fastify.redis.del(otpKey, attemptKey);
+      return { message: genericMessage, expiresAt: fallbackExpiresAt };
     }
 
     const otpConfig = await this.getAdminOtpChannelConfig();
     const otp = generateOtp();
     const otpHash = hashOtp(otp);
-    const otpKey = `auth:admin:login-otp:${stableHash(input.email.trim().toLowerCase())}`;
-    const attemptKey = `auth:admin:login-otp-attempts:${stableHash(input.email.trim().toLowerCase())}`;
+    const expiresAt = new Date(Date.now() + AuthService.ADMIN_LOGIN_OTP_TTL_SECONDS * 1000).toISOString();
 
     await this.fastify.redis.set(otpKey, `${user.id}||${otpHash}`, 'EX', AuthService.ADMIN_LOGIN_OTP_TTL_SECONDS);
     await this.fastify.redis.del(attemptKey);
 
     if (process.env.NODE_ENV !== 'production') {
-      const ciKey = `auth:admin:login-otp:ci-plaintext:${stableHash(input.email.trim().toLowerCase())}`;
+      const ciKey = `auth:admin:login-otp:ci-plaintext:${emailHash}`;
       await this.fastify.redis.set(ciKey, otp, 'EX', AuthService.ADMIN_LOGIN_OTP_TTL_SECONDS);
     }
 
@@ -930,7 +937,7 @@ export class AuthService {
       throw error;
     }
 
-    return { message: genericMessage };
+    return { message: genericMessage, expiresAt };
   }
 
   /**
