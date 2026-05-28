@@ -51,7 +51,7 @@ function createUnavailableWhatsappAdapter(): WhatsappProviderAdapter {
 
 export function createNotificationProviders(runtimeConfig: NodeJS.ProcessEnv = process.env): NotificationProviders {
   const emailEnabled = isEnabled(runtimeConfig.NOTIFY_EMAIL_ENABLED, true);
-  const smsEnabled = isEnabled(runtimeConfig.NOTIFY_SMS_ENABLED, true);
+  const smsEnabled = isEnabled(runtimeConfig.NOTIFY_SMS_ENABLED, false);
   const whatsappEnabled = isEnabled(runtimeConfig.NOTIFY_WHATSAPP_ENABLED, false);
 
   const resendApiKey = (runtimeConfig.RESEND_API_KEY ?? '').trim();

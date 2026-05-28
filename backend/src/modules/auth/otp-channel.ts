@@ -33,7 +33,7 @@ function hasSmsProviderCredentials(): boolean {
 }
 
 export function getAvailableOtpChannels(flags?: OtpChannelFlags): OtpChannel[] {
-  const smsEnabled = flags?.smsEnabled ?? isEnabled(process.env.NOTIFY_SMS_ENABLED, true);
+  const smsEnabled = flags?.smsEnabled ?? isEnabled(process.env.NOTIFY_SMS_ENABLED, false);
   const whatsappEnabled = flags?.whatsappEnabled ?? isEnabled(process.env.NOTIFY_WHATSAPP_ENABLED, false);
   const emailEnabled = flags?.emailEnabled ?? isEnabled(process.env.NOTIFY_EMAIL_ENABLED, true);
 

@@ -2038,7 +2038,7 @@ Token: <SHIPROCKET_WEBHOOK_TOKEN>
 | `EMAIL_PROVIDER` | No | `resend` | Email provider adapter. Default: `resend`. |
 | `RESEND_API_KEY` | **Yes** | `re_XXXXX` | Required at runtime because notification providers are initialized with fail-fast validation. |
 | `RESEND_FROM` | Conditional | `Store <noreply@foodstore.com>` | Required when `NOTIFY_EMAIL_ENABLED=true`. RFC 5322 format. |
-| `NOTIFY_SMS_ENABLED` | No | `true` | Enable SMS notifications. Default: `true`. |
+| `NOTIFY_SMS_ENABLED` | No | `false` | Enable SMS notifications. Default: `false` (opt-in). Set to `true` only after configuring provider credentials via Ops UI. |
 | `SMS_PROVIDER` | No | `msg91` | SMS provider adapter. Default: `msg91`. Allowed: `msg91`, `fast2sms`, `noop`. |
 | `MSG91_AUTH_KEY` | Conditional | `auth-key` | Required when `SMS_PROVIDER=msg91`. |
 | `MSG91_SENDER_ID` | Conditional | `STOREX` | 6-char DLT-registered sender ID. Required when `SMS_PROVIDER=msg91`. |

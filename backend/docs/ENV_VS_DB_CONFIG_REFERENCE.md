@@ -311,6 +311,8 @@ These are stored AES-256-GCM encrypted in the `OpsConfigSecret` table and applie
 
 **`NOTIFY_EMAIL_ENABLED`** / **`NOTIFY_SMS_ENABLED`** / **`NOTIFY_WHATSAPP_ENABLED`**
 - **What:** Master channel on/off toggles. If `NOTIFY_EMAIL_ENABLED=false`, no email is ever sent regardless of per-template configuration. Useful for disabling a broken provider without redeploying.
+- **Defaults (env layer):** `NOTIFY_EMAIL_ENABLED` → `true`; `NOTIFY_SMS_ENABLED` → `false` (opt-in); `NOTIFY_WHATSAPP_ENABLED` → `false`.
+- **DB-layer override:** `StoreSettings.notifyEmailEnabled` / `notifySmsEnabled` / `notifyWhatsappEnabled` take precedence over the env flag when the `storeSettings` row exists. Manage via admin `PATCH /api/v1/admin/settings/notifications` or the **Admin → Settings → Notifications** UI. Only one channel should be active at a time — the admin UI enforces single-channel selection.
 
 **`EMAIL_PROVIDER`**
 - **What:** Email provider selection. Currently only `resend` is implemented.

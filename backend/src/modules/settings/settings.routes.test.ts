@@ -44,7 +44,7 @@ function createApp() {
     gstin: null,
     fssaiNumber: null,
     notifyEmailEnabled: true,
-    notifySmsEnabled: true,
+    notifySmsEnabled: false,
     notifyWhatsappEnabled: false,
     primaryNotificationChannels: null,
     smsTemplates: null,

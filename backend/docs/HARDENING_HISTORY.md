@@ -4,6 +4,20 @@ This document preserves detailed hardening history for engineering traceability.
 
 ## Recent hardening changes
 
+**SMS channel defaults changed to opt-in; single-channel enforcement added to admin UI — May 28, 2026:**
+
+Root cause identified during CI reliability-gate debugging: `StoreSettings.notifySmsEnabled` defaulted to `true` in the Prisma schema, meaning any first-run upsert of the `storeSettings` row (e.g., triggered by `PATCH /api/v1/admin/settings/shipping` during CI setup) enabled SMS automatically. The `getAvailableOtpChannels` routing layer added SMS to available channels, `resolveEffectiveOtpChannel` picked it as the first fallback, and the admin login OTP route threw HTTP 400 because the CI admin user had no phone number.
+
+Changes applied:
+- `prisma/schema.prisma`: `notifySmsEnabled @default(false)` (was `@default(true)`)
+- Migration `20260528110000_fix_notify_sms_default`: `ALTER TABLE "StoreSettings" ALTER COLUMN "notifySmsEnabled" SET DEFAULT false`
+- `settings.service.ts`, `otp-channel.ts`, `notifications.worker.ts`, `notification-provider.ts`: all SMS env/null fallbacks changed from `true` → `false`
+- Admin notifications settings page replaced with a proper single-channel selector UI (`NotificationsChannelPanel`) — radio buttons for Email / SMS / WhatsApp, enforcing single active channel
+
+Design principle codified: **Email is the default and only auto-active channel. SMS and WhatsApp are opt-in, enabled explicitly via Ops UI credentials + Admin Settings channel selector.**
+
+---
+
 **OTP emails (and every other notification) silently stop after a system restart — `notifications` queue left paused by drain protocol, no recovery on worker boot — May 26, 2026:**
 
 Reported by an operator on the Raghava Organics VPS: after a routine ops `system-restart` action verified earlier in the day, every subsequent OTP request returned HTTP 200 from `POST /api/v1/ops/otp/request`, the `OpsOtpChallenge` row was created in Postgres with status `PENDING`, but no email ever arrived. SMS and other notification templates were equally affected. Workers were "up", health endpoint reported `db` and `redis` both `connected`, `RESEND_API_KEY` was present in both `raghava-organics-backend` and `raghava-organics-workers` envs (loaded from `.env` since this client has not migrated it into the Ops DB overlay), and there were zero error/warn log lines anywhere.

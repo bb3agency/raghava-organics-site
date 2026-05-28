@@ -177,7 +177,7 @@ export class SettingsService {
 
     return {
       emailEnabled: settings?.notifyEmailEnabled ?? true,
-      smsEnabled: settings?.notifySmsEnabled ?? true,
+      smsEnabled: settings?.notifySmsEnabled ?? false,
       whatsappEnabled: settings?.notifyWhatsappEnabled ?? false,
       primaryChannels: this.normalizePrimaryChannels(settings?.primaryNotificationChannels),
       smsTemplates: SmsTemplateRegistry.normalizeTemplateOverrides(settings?.smsTemplates)
@@ -242,14 +242,14 @@ export class SettingsService {
 
       return {
         emailEnabled: settings?.notifyEmailEnabled ?? (process.env.NOTIFY_EMAIL_ENABLED ?? 'true').toLowerCase() === 'true',
-        smsEnabled: settings?.notifySmsEnabled ?? (process.env.NOTIFY_SMS_ENABLED ?? 'true').toLowerCase() === 'true',
+        smsEnabled: settings?.notifySmsEnabled ?? (process.env.NOTIFY_SMS_ENABLED ?? 'false').toLowerCase() === 'true',
         whatsappEnabled:
           settings?.notifyWhatsappEnabled ?? (process.env.NOTIFY_WHATSAPP_ENABLED ?? 'false').toLowerCase() === 'true'
       };
     } catch {
       return {
         emailEnabled: (process.env.NOTIFY_EMAIL_ENABLED ?? 'true').toLowerCase() === 'true',
-        smsEnabled: (process.env.NOTIFY_SMS_ENABLED ?? 'true').toLowerCase() === 'true',
+        smsEnabled: (process.env.NOTIFY_SMS_ENABLED ?? 'false').toLowerCase() === 'true',
         whatsappEnabled: (process.env.NOTIFY_WHATSAPP_ENABLED ?? 'false').toLowerCase() === 'true'
       };
     }

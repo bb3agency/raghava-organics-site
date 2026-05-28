@@ -489,7 +489,11 @@ Store profile: store name, contact email, support phone, address, logo URL, time
 Shipping configuration: default courier provider, free shipping threshold (paise), flat rate, COD surcharge.
 
 ### `GET /PATCH /api/v1/admin/settings/notifications`
-**Per-template primary notification channel routing.** This is where you configure which channel (EMAIL/SMS/WHATSAPP) is used for each notification template (OTP, ORDER_CONFIRMED, ORDER_SHIPPED, etc.). Stored in `StoreSettings.primaryNotificationChannels`. Does **not** control provider API keys — that is ops-only.
+**Single-channel selector + per-template routing.** Controls:
+- `emailEnabled` / `smsEnabled` / `whatsappEnabled` — stored in `StoreSettings` (DB-layer, overrides env flags). Only one should be `true` at a time; the admin UI (`/admin/settings/notifications`) enforces single-channel selection via radio buttons.
+- `primaryChannels` — per-template primary channel mapping (EMAIL/SMS/WHATSAPP) stored in `StoreSettings.primaryNotificationChannels`.
+
+Does **not** control provider credentials — those are ops-only (`POST /ops/config/save` domain `notifications`). Default DB state: `notifyEmailEnabled=true`, `notifySmsEnabled=false`, `notifyWhatsappEnabled=false`.
 
 ### `GET /PATCH /api/v1/admin/settings/inventory`
 Inventory defaults: low-stock threshold, out-of-stock behaviour (block checkout vs allow with backorder flag).

@@ -1198,7 +1198,7 @@ const defaultJobOptions = {
 
 **Toggle behavior:**
 - `NOTIFY_EMAIL_ENABLED` — defaults to `true` (if unset)
-- `NOTIFY_SMS_ENABLED` — defaults to `true` (if unset)
+- `NOTIFY_SMS_ENABLED` — defaults to `false` (if unset); SMS is opt-in — must explicitly enable and configure provider credentials
 - `NOTIFY_WHATSAPP_ENABLED` — defaults to `false` (if unset); must explicitly enable
 
 **Credential validation:**

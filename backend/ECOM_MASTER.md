@@ -1179,7 +1179,7 @@ PCI scope, caller-class JSON minimisation (public vs customer vs admin vs ops), 
 
 ### 🔔 Notifications Module (Pluggable — multi-channel)
 - Three independent channel adapters: Email (Resend), SMS (MSG91 or Fast2SMS — selectable via `SMS_PROVIDER` ops config key), WhatsApp (Meta Cloud API direct)
-- Each channel enabled/disabled by env var: `NOTIFY_EMAIL_ENABLED`, `NOTIFY_SMS_ENABLED`, `NOTIFY_WHATSAPP_ENABLED`
+- Each channel enabled/disabled by env var: `NOTIFY_EMAIL_ENABLED` (default: on), `NOTIFY_SMS_ENABLED` (default: **off** — opt-in), `NOTIFY_WHATSAPP_ENABLED` (default: off)
 - 8 React Email templates: `ORDER_CONFIRMED`, `PAYMENT_FAILED`, `ORDER_SHIPPED`, `OUT_FOR_DELIVERY`, `ORDER_DELIVERED`, `ORDER_CANCELLED`, `LOW_STOCK_ALERT` (admin), `PASSWORD_RESET`
 - All notifications queued via BullMQ — never synchronous in the request cycle
 - Every send attempt creates a `NotificationLog` record
@@ -1490,7 +1490,7 @@ EMAIL_PROVIDER=resend
 RESEND_API_KEY=re_XXXXXXXX
 EMAIL_FROM=orders@annapoorna.com
 
-NOTIFY_SMS_ENABLED=true
+NOTIFY_SMS_ENABLED=false      # Opt-in — set to true only after configuring provider credentials via Ops UI
 SMS_PROVIDER=msg91           # msg91 | fast2sms | noop
 MSG91_AUTH_KEY=<auth-key>    # Required when SMS_PROVIDER=msg91
 MSG91_SENDER_ID=ANNFDS       # Required when SMS_PROVIDER=msg91

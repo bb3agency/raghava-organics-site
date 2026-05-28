@@ -179,7 +179,7 @@ export function createNotificationsWorker(
   async function resolveEffectiveNotificationFlags(runtimeConfig: NodeJS.ProcessEnv) {
     const envFlags = {
       email: parseEnabledFlag(runtimeConfig.NOTIFY_EMAIL_ENABLED, true),
-      sms: parseEnabledFlag(runtimeConfig.NOTIFY_SMS_ENABLED, true),
+      sms: parseEnabledFlag(runtimeConfig.NOTIFY_SMS_ENABLED, false),
       whatsapp: parseEnabledFlag(runtimeConfig.NOTIFY_WHATSAPP_ENABLED, false)
     };
     const settings = await prisma.storeSettings.findUnique({

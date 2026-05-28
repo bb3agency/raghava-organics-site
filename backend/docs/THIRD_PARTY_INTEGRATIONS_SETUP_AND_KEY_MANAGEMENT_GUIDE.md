@@ -91,7 +91,7 @@ Dispatch policy (applies regardless of provider):
 - All three notification channels are validated at startup only when their respective `NOTIFY_*_ENABLED` flag is `true`
 - Default behaviors (code-enforced in `src/config/feature-flags.ts` and `src/modules/notifications/notification-provider.ts`):
   - `NOTIFY_EMAIL_ENABLED` — defaults to `true` if unset
-  - `NOTIFY_SMS_ENABLED` — defaults to `true` if unset
+  - `NOTIFY_SMS_ENABLED` — defaults to `false` if unset (opt-in channel — enable only after configuring provider credentials)
   - `NOTIFY_WHATSAPP_ENABLED` — defaults to `false` if unset (opt-in channel)
 - Provider adapters are instantiated in `createNotificationProviders()` with unavailable adapters returned for disabled channels
 - Notification worker (`queues/workers/notifications.worker.ts`) logs provider as `'meta-whatsapp'` for WhatsApp messages
@@ -106,7 +106,7 @@ Dispatch policy (applies regardless of provider):
 
 - Toggles (all support `true`/`false`):
   - `NOTIFY_EMAIL_ENABLED` — defaults to `true` if unset
-  - `NOTIFY_SMS_ENABLED` — defaults to `true` if unset
+  - `NOTIFY_SMS_ENABLED` — defaults to `false` if unset (opt-in channel — enable only after configuring provider credentials)
   - `NOTIFY_WHATSAPP_ENABLED` — defaults to `false` if unset (opt-in channel)
 
 - Resend:

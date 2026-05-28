@@ -996,7 +996,7 @@ model StoreSettings {
   isCodEnabled              Boolean  @default(false)
   cancellationWindowHours   Int      @default(24)
   notifyEmailEnabled        Boolean  @default(true)
-  notifySmsEnabled          Boolean  @default(true)
+  notifySmsEnabled          Boolean  @default(false)
   notifyWhatsappEnabled     Boolean  @default(false)
   primaryNotificationChannels Json?
   smsTemplates              Json?

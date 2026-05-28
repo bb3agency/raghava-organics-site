@@ -613,7 +613,7 @@ These features are built into the template but can be switched on or off per cli
 | Product Reviews & Ratings | OFF | `FEATURE_REVIEWS_ENABLED` | Enable when storefront reviews module is activated |
 | Wishlist | OFF | `FEATURE_WISHLIST_ENABLED` | Enable for higher-intent categories and repeat browsing |
 | Email Notifications | **ON** | `NOTIFY_EMAIL_ENABLED` | Always on — disable only without a valid domain email |
-| SMS Notifications | **ON** | `NOTIFY_SMS_ENABLED` | Always on for Indian clients |
+| SMS Notifications | OFF | `NOTIFY_SMS_ENABLED` | Enable after configuring MSG91 or Fast2SMS credentials in Ops UI; single primary channel enforced in admin notification settings |
 | WhatsApp Notifications | OFF | `NOTIFY_WHATSAPP_ENABLED` | Enable once client has a verified WhatsApp Business account |
 | GST Invoicing | **ON** | `FEATURE_GST_INVOICING_ENABLED` | Always on for GST-registered Indian businesses |
 | Response Envelope | OFF | `FEATURE_RESPONSE_ENVELOPE_ENABLED` | Wraps all 2xx JSON responses in `{ success, data, meta? }` format. Enable when frontend expects standardized envelope. |
