@@ -108,7 +108,7 @@ This checklist validates both:
 - [ ] First ops identity invite bootstrap is performed via `npm run ops:newuser -- --email=<ops@email> --name="Primary Ops" --setup-base-url="https://<client-domain>" --yes` on trusted VPS host session (SSH) only.
 - [ ] Merchant admin invite bootstrap is performed via `npm run admin:newuser -- --email=<admin@email> --name="Merchant Admin" --setup-base-url="https://<client-domain>" --yes` (or ops-authenticated admin invite API fallback), never via local seed scripts.
 - [ ] Invite `setupBaseUrl` is passed as frontend base origin only (for example, `https://<client-domain>`), never path URLs like `/ops/setup` or `/admin/setup`; backend appends setup paths.
-- [ ] Cross-domain invite email boundaries are verified: ops invite fails `409 CONFLICT` when email exists in `User`, and admin invite fails `409 CONFLICT` when email exists in `OpsUser`.
+- [ ] Cross-domain invite email boundaries are verified: ops invite fails `409 CONFLICT` when email exists in `User` (except explicit deactivated-merchant-admin message); admin invite fails `409 CONFLICT` when email exists in `OpsUser`; admin invite allows **deactivated** merchant admin emails and reactivates the same `User` on consume.
 - [ ] Invite setup link expires within 10 minutes; expired unconsumed invite records are cleaned and auditable.
 - [ ] Ops write actions require email OTP challenge verification (`ops:write`) before committing.
 - [ ] Ops write actions persist tamper-evident audit-chain records (`OpsAuditLog` chain hash continuity).

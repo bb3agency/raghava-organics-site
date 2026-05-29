@@ -80,10 +80,10 @@ set PAYMENT_PROVIDER=noop&& npx tsx watch queues/workers/index.ts
 |---|---|
 | **Method** | `POST /api/v1/auth/admin/login/request-otp` |
 | **Body** | `{ email: adminEmail, password: adminPassword }` |
-| **Expected status** | `200` |
-| **Assertions** | `j.expiresAt` is a string |
-| **Side-effects** | OTP sent to admin email; stores `expiresAt` |
-| **Notes** | Does **not** issue a JWT — JWT is issued only after OTP verification |
+| **Expected status** | `200` (valid active admin credentials only) |
+| **Assertions** | `j.expiresAt` is a string; `j.message` present |
+| **Side-effects** | OTP sent to admin email on true success; stores `expiresAt` |
+| **Notes** | Does **not** issue a JWT — JWT is issued only after OTP verification. Wrong password for known admin → `401 INVALID_CREDENTIALS`. Unknown email → `200` generic without OTP (anti-enumeration). |
 
 ```json
 // Actual response shape

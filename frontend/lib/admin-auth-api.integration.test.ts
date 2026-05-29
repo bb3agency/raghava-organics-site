@@ -21,7 +21,7 @@ describe("admin auth api integration", () => {
     }
   });
 
-  it("admin login OTP request always returns generic message (no email enumeration)", async () => {
+  it("admin login OTP request returns generic 200 for unknown email (anti-enumeration)", async () => {
     try {
       const result = await requestAdminLoginOtp({
         email: "nobody@example.com",
@@ -29,7 +29,23 @@ describe("admin auth api integration", () => {
       });
       expect(result).toHaveProperty("message");
       expect(typeof result.message).toBe("string");
+      expect(result).toHaveProperty("expiresAt");
     } catch (error) {
+      expectApiOrNetworkError(error);
+    }
+  });
+
+  it("admin login OTP request rejects wrong password for known admin with INVALID_CREDENTIALS", async () => {
+    try {
+      await requestAdminLoginOtp({
+        email: process.env.ADMIN_TEST_EMAIL ?? "admin@example.com",
+        password: "definitely-wrong-password",
+      });
+    } catch (error) {
+      if (error instanceof ApiError) {
+        expect(error.code).toBe("INVALID_CREDENTIALS");
+        return;
+      }
       expectApiOrNetworkError(error);
     }
   });

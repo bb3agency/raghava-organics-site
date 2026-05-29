@@ -53,6 +53,12 @@ Pair this with `docs/BACKEND_GO_LIVE_CHECKLIST.md` for final go-live sign-off. T
 
 ### 3.0) Admin Session Lifecycle (Critical)
 
+**Admin login (2-step OTP — step 1 credentials):**
+- [ ] `POST /auth/admin/login/request-otp` advances to OTP UI **only on HTTP 200** after valid active admin credentials.
+- [ ] `401 INVALID_CREDENTIALS` keeps user on email/password step with **"Incorrect password."** (no OTP sent).
+- [ ] `401 UNAUTHORISED` keeps user on credentials with deactivated-admin copy (ops-deactivated / `isBanned`).
+- [ ] Unknown email may still receive generic `200` without OTP (anti-enumeration) — UI must not treat that as proof an OTP was delivered.
+
 **Session restoration on page refresh:**
 - [ ] `AdminGuard` attempts `POST /api/v1/auth/refresh` silently when `accessToken` is null (page reload).
 - [ ] On refresh success: parse JWT claims to reconstruct `User` (`sub`, `role`, `permissions`), call `setSession()`, render admin console.
@@ -75,6 +81,13 @@ Pair this with `docs/BACKEND_GO_LIVE_CHECKLIST.md` for final go-live sign-off. T
 - [ ] Auto-logout triggers when countdown reaches 0.
 - [ ] User activity while modal is open (any tracked event) dismisses it without logging out.
 - [ ] Idle tracking is disabled when `accessToken` is null (no timers running on the login page).
+
+### 3.0b) Ops merchant admin re-invite (Critical)
+
+- [ ] `/ops/invites` uses **merchant admin invite** form (not top ops-operator form) to restore deactivated merchant admins.
+- [ ] `POST /ops/admin-invites` succeeds for deactivated admin email; setup at `/admin/setup` completes without `409 User already exists`.
+- [ ] Ops operator invite form surfaces backend message when email belongs to deactivated merchant admin (directs to merchant admin invite).
+- [ ] `OpsAdminUsersPanel` links operators to merchant admin invite flow after deactivation.
 
 ### 3.1) Ops Control Plane Security (Critical)
 

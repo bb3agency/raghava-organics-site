@@ -34,7 +34,7 @@
 
 **Context:** The ops console already listed **operators** (`GET /ops/users`) and managed **admin invites** (`/ops/admin-invites`), but there was no surface to inspect or revoke access for **provisioned merchant admin accounts** (`User.role = ADMIN`) after invite consumption. Operators needed parity with the Operators table (status, permissions, last-login metadata, OTP-confirmed deactivation) without routing through merchant `/admin/users` ban APIs.
 
-**Decision — Add `GET /api/v1/ops/admin-users` and `POST /api/v1/ops/admin-users/:adminUserId/deactivate` with OTP action `admin-user-deactivate`. Deactivation sets `isBanned` + revokes refresh tokens; login, refresh, and admin OTP flows fail closed for banned admins. No ops API to reactivate — issue a new admin invite for the same email. Frontend: `/ops/admin-users` + `OpsAdminUsersPanel` mirroring `OpsUsersPanel`.**
+**Decision — Add `GET /api/v1/ops/admin-users` and `POST /api/v1/ops/admin-users/:adminUserId/deactivate` with OTP action `admin-user-deactivate`. Deactivation sets `isBanned` + revokes refresh tokens; login, refresh, and admin OTP flows fail closed for banned admins. Re-onboard via **merchant admin invite** (same email allowed; setup reactivates the existing `User` id — see [2026-05-28] merchant admin re-invite entry). Frontend: `/ops/admin-users` + `OpsAdminUsersPanel` mirroring `OpsUsersPanel`.**
 
 **Rationale:**
 1. **Separation of concerns:** Platform operators manage merchant staff access; merchant admins manage customers (`users:write` ban is customer-only).
@@ -43,7 +43,7 @@
 
 **Alternatives considered:**
 - *Reuse `/admin/users/:id/ban` from ops UI via merchant JWT.* Rejected — wrong auth plane and forbidden for admin-role users.
-- *Ops reactivate endpoint.* Rejected — invite-based re-provisioning preserves permission grants and audit trail.
+- *Ops reactivate endpoint.* Rejected — invite-based reactivation on the same `User` id preserves audit trail without a separate PATCH reactivate API.
 
 **Affected files:** `ops.service.ts`, `ops.routes.ts`, `admin-endpoint-policy-registry.ts`, `auth.service.ts`, `frontend/components/ops/OpsAdminUsersPanel.tsx`, `frontend/lib/ops-client-api.ts`, route/docs indexes.
 
@@ -539,11 +539,32 @@ Adds `POST /api/v1/ops/system/restart` to the ops control plane and a proactive 
 
 ---
 
+## [2026-05-28] Merchant admin re-invite reactivates deactivated accounts
+
+`POST /api/v1/ops/admin-invites` and `/admin/invites/consume` now allow emails tied to **deactivated** merchant admins (`isBanned`). Setup **reactivates the existing `User` id** (clears ban, updates password/name/permissions) instead of rejecting with `409 User already exists`. Active admins and customers remain blocked. Ops **operator** invites still reject merchant-admin emails; the API returns an explicit message to use the merchant admin invite form.
+
+**Affects:** `admin-invites.service.ts`, `ops.service.ts` (`createOpsInvite`), `admin-invites.service.test.ts`, `frontend/components/ops/OpsInvitesPanel.tsx`, `docs/ROUTE_SURFACE_COMPLETE_REFERENCE.md`.
+
+---
+
+## [2026-05-28] Admin login step 1 — explicit errors for known admin credential failures
+
+Tightened `POST /api/v1/auth/admin/login/request-otp` so merchant admins get actionable feedback without weakening email enumeration for unknown addresses.
+
+- **Known admin + wrong password:** `401 INVALID_CREDENTIALS` (`Incorrect password`). No OTP enqueued; failed-attempt counter incremented.
+- **Known admin + deactivated (`isBanned`):** `401 UNAUTHORISED` (unchanged). No OTP enqueued.
+- **Unknown email or non-admin role:** `200` with generic `{ message, expiresAt }` and **no OTP** (anti-enumeration preserved).
+- **Frontend:** `AdminLoginForm` advances to OTP step only on **200**; uses `getAdminLoginErrorMessage()` for step-1 failures.
+
+*Alt: Always return 200 for every failure (rejected — merchants could not distinguish wrong password from success and reached a dead OTP screen); reject wrong password with generic 401 for all emails (rejected — confirms admin account existence for arbitrary addresses).* **Affects:** `src/modules/auth/auth.service.ts`, `src/modules/auth/auth.routes.test.ts`, `src/modules/auth/auth.service.admin-login-otp.test.ts`, `frontend/components/auth/AdminLoginForm.tsx`, `frontend/lib/admin-auth-api.ts`, `frontend/lib/error-messages.ts`, `docs/API_ENDPOINT_INDEX.md`, `docs/ROUTE_SURFACE_COMPLETE_REFERENCE.md`, `docs/NEXTJS_FRONTEND_INTEGRATION_GUIDE.md`, `docs/MASTER_DEPLOYMENT_PLAYBOOK.md`.
+
+---
+
 ## [2026-05-18] Admin login migrated to 2-step email OTP flow — TOTP removed
 
 Replaced the single-step `POST /api/v1/auth/admin/login` (password-only) + TOTP MFA flow with a mandatory 2-step email OTP flow. TOTP/authenticator-app MFA has been fully removed from the admin auth path.
 
-- **Step 1 — `POST /api/v1/auth/admin/login/request-otp` (public):** Body: `{ email, password }`. Verifies credentials against the admin account. On success, generates a 6-digit time-limited OTP (TTL 300 s), stores it hashed in Redis, and sends it to the admin's registered email. Returns `{ expiresAt }`. Does **not** issue a JWT. Anti-enumeration: generic error on credential failure.
+- **Step 1 — `POST /api/v1/auth/admin/login/request-otp` (public):** Body: `{ email, password }`. Verifies credentials against the admin account. On success, generates a 6-digit time-limited OTP (TTL 300 s), stores it hashed in Redis, and sends it to the admin's registered email. Returns `{ message, expiresAt }`. Does **not** issue a JWT. Wrong password for a **known** admin returns `401 INVALID_CREDENTIALS`; deactivated admin returns `401 UNAUTHORISED`; unknown email / non-admin returns generic `200` without OTP (see [2026-05-28] entry).
 - **Step 2 — `POST /api/v1/auth/admin/login/verify-otp` (public):** Body: `{ email, otp }`. Verifies OTP against the active challenge (max 5 attempts before lockout). On success, issues JWT access token (short-lived) + refresh token (sets `httpOnly` secure cookie). Returns `{ accessToken, admin }`. Anti-enumeration: generic error on OTP failure.
 - **TOTP removal:** `User.mfaSecretEncrypted`, `User.mfaEnabled`, and all TOTP-related service methods (`setupAdminMfa`, `confirmAdminMfaSetup`, `disableAdminMfa`, `verifyAdminMfa`) remain in the schema and service as legacy fields — they are retained for data-migration safety but the login flow no longer uses them. `ADMIN_MFA_ENCRYPTION_KEY` and `ADMIN_MFA_ENFORCE` env vars have been fully removed from the codebase.
 - **Rationale:** Email OTP is simpler to operate (no authenticator-app provisioning step for merchant admins), eliminates TOTP backup-code complexity, and reuses the same OTP infrastructure already in place for ops browser login. The 2-step model preserves security (credential check + out-of-band OTP challenge) without adding device dependencies.

@@ -50,6 +50,14 @@ function mapAdminUser(admin: AdminLoginApiUser, accessToken: string): User {
   };
 }
 
+/**
+ * Admin login step 1 — verify email + password, enqueue OTP on success.
+ *
+ * - **200** — OTP issued; advance UI to OTP step (`expiresAt` + `message`).
+ * - **401 `INVALID_CREDENTIALS`** — known admin, wrong password (no OTP sent).
+ * - **401 `UNAUTHORISED`** — admin deactivated (`isBanned`); no OTP sent.
+ * - **200 generic message** — unknown email or non-admin role (anti-enumeration; no OTP sent).
+ */
 export async function requestAdminLoginOtp(
   input: z.infer<typeof adminLoginRequestSchema>,
 ): Promise<{ expiresAt: string; message?: string }> {

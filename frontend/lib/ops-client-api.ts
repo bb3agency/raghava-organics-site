@@ -510,6 +510,10 @@ export async function listAdminInvitesClient(query?: {
   return opsFetch<AdminInviteList>(buildPath("/ops/admin-invites", query));
 }
 
+/**
+ * Create merchant admin invite (`POST /ops/admin-invites`).
+ * Deactivated merchant admin emails are allowed; setup consume reactivates the same user id.
+ */
 export async function createAdminInviteClient(input: {
   email: string;
   name: string;

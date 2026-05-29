@@ -9,7 +9,7 @@ import {
   requestAdminLoginOtp,
   verifyAdminLoginOtp,
 } from "@/lib/admin-auth-api";
-import { getApiErrorMessage, isApiErrorWithCode } from "@/lib/error-messages";
+import { getAdminLoginErrorMessage, isApiErrorWithCode } from "@/lib/error-messages";
 import { emailSchema, otpSchema, passwordSchema } from "@/lib/validators";
 import { AuthErrorBanner } from "@/components/auth/AuthErrorBanner";
 import { Eye, EyeOff, Loader2, Send } from "lucide-react";
@@ -115,10 +115,14 @@ export function AdminLoginForm({ onSuccess, enrollmentHint }: AdminLoginFormProp
         setStep("credentials");
         setOtp("");
         setError(
-          "This admin account is deactivated. Ask Ops to issue a new admin invite to restore access."
+          "This admin account is deactivated. Ask Ops to send a merchant admin invite for this email (Invites → merchant admin section) to restore access."
         );
+      } else if (isApiErrorWithCode(err, "INVALID_CREDENTIALS")) {
+        setStep("credentials");
+        setOtp("");
+        setError(getAdminLoginErrorMessage(err));
       } else {
-        setError(getApiErrorMessage(err));
+        setError(getAdminLoginErrorMessage(err));
       }
     }
   });
@@ -138,10 +142,14 @@ export function AdminLoginForm({ onSuccess, enrollmentHint }: AdminLoginFormProp
         setStep("credentials");
         setOtp("");
         setError(
-          "This admin account is deactivated. Ask Ops to issue a new admin invite to restore access."
+          "This admin account is deactivated. Ask Ops to send a merchant admin invite for this email (Invites → merchant admin section) to restore access."
         );
+      } else if (isApiErrorWithCode(err, "INVALID_CREDENTIALS")) {
+        setStep("credentials");
+        setOtp("");
+        setError(getAdminLoginErrorMessage(err));
       } else {
-        setError(getApiErrorMessage(err));
+        setError(getAdminLoginErrorMessage(err));
       }
     }
   }
@@ -167,7 +175,7 @@ export function AdminLoginForm({ onSuccess, enrollmentHint }: AdminLoginFormProp
           "This account has been deactivated. Contact your administrator if you believe this is an error."
         );
       } else {
-        setError(getApiErrorMessage(err));
+        setError(getAdminLoginErrorMessage(err));
       }
     }
   }

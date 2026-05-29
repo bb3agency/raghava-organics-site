@@ -42,6 +42,9 @@ Security principles codified:
 
 ---
 
+**Merchant admin re-invite after ops deactivation — May 28, 2026:**
+- `POST /api/v1/ops/admin-invites` and `/admin/invites/consume` allow emails for **deactivated** merchant admins (`role=ADMIN`, `isBanned=true`). Setup reactivates the existing `User` id (clears ban, refreshes password/permissions) instead of `409 User already exists`. Active admins and customers remain blocked. Ops operator invites reject merchant-admin emails with explicit copy pointing to the merchant admin invite form. `admin-newuser.mjs` aligned.
+
 **Ops-gated admin invite routes moved to `/api/v1/ops/` namespace — May 28, 2026:**
 
 Root cause: The ops session cookie was scoped to `path: '/api/v1/ops'`. Routes `GET/POST /api/v1/admin/invites*` (ops:read/write guarded) sat outside this path, so the browser never sent the cookie to them — every request from the Ops Invites UI returned 401 ("Please sign in to continue"). The naive fix of widening the cookie to `path: '/api/v1'` was evaluated but rejected as a deviation from least-privilege, even though it would have been functionally safe (httpOnly + sameSite:strict).
@@ -766,7 +769,7 @@ Production-grade audit of all `/admin` and `/ops` routes, services, and guards. 
 - Replaced the single-step `POST /api/v1/auth/admin/login` (password + TOTP) flow with a mandatory 2-step email OTP flow: `POST /api/v1/auth/admin/login/request-otp` (credential check → OTP issued, Redis-stored hashed) then `POST /api/v1/auth/admin/login/verify-otp` (OTP check → JWT issued). No TOTP codes, no authenticator-app provisioning, no `User.mfaEnabled` read in the hot path.
 - TOTP service methods (`setupAdminMfa`, `confirmAdminMfaSetup`, `disableAdminMfa`, `verifyAdminMfa`) and schema fields (`User.mfaSecretEncrypted`, `User.mfaEnabled`) retained as legacy stubs for data-migration safety but are no longer called by any live auth path.
 - `ADMIN_MFA_ENCRYPTION_KEY` and `ADMIN_MFA_ENFORCE` have been fully removed from the codebase and env contract. The `mfa-crypto.ts` module is an empty stub retained for file-system compatibility only.
-- OTP TTL: `ADMIN_LOGIN_OTP_TTL_SECONDS` (default `300`). Rate limit: `authSensitive` profile on both new routes. Anti-enumeration: identical error responses regardless of account existence or OTP correctness.
+- OTP TTL: `ADMIN_LOGIN_OTP_TTL_SECONDS` (default `300`). Rate limit: `authSensitive` profile on both new routes. Anti-enumeration for **unknown email / non-admin** only (generic `200`, no OTP). **May 2026 update:** known admin wrong password → `401 INVALID_CREDENTIALS`; deactivated admin → `401 UNAUTHORISED` (see `docs/DECISIONS.md` [2026-05-28]).
 - Schemas: `adminLoginRequestOtpSchema`, `adminLoginVerifyOtpSchema` added to `auth.schemas.ts`; legacy `adminLoginSchema` retained in schema file but no longer wired to a live route.
 - Route discipline: both new routes registered in `admin-endpoint-policy-registry.ts`; old single-step login removed from the registry.
 - Tests: `auth.service.admin-login-email-otp.test.ts` added covering request-OTP (credential check, OTP generation, notification enqueue, redis set), verify-OTP (success, wrong OTP, expired OTP, max-attempts lockout), anti-enumeration assertions.

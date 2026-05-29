@@ -168,7 +168,7 @@ export function OpsInvitesPanel() {
         <OpsCard>
           <OpsCardHeader
             title="Create invite"
-            description="setupBaseUrl must be the storefront origin only (no /ops/setup path). New ops users always receive OPS_READ + OPS_WRITE."
+            description="Ops operators only — not for merchant admins. setupBaseUrl is storefront origin only (no path). New ops users receive OPS_READ + OPS_WRITE."
           />
           <form onSubmit={handleCreate} className="grid gap-4 sm:grid-cols-2">
             <OpsField label="Email" htmlFor="invite-email">
@@ -307,7 +307,7 @@ export function OpsInvitesPanel() {
         <OpsCard>
           <OpsCardHeader
             title="Create merchant admin invite"
-            description="These invites bootstrap merchant admin users at /admin/setup."
+            description="Bootstraps merchant admins at /admin/setup. Deactivated merchant admin emails can be re-invited here—the same account is reactivated (audit history kept)."
           />
           <form onSubmit={handleCreateAdminInvite} className="grid gap-4 sm:grid-cols-2">
             <OpsField label="Admin email" htmlFor="admin-invite-email">

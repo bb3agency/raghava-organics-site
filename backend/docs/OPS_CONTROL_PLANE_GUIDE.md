@@ -252,7 +252,8 @@ Security rationale:
 Identity boundary contract:
 
 - `User` (customer/admin) emails and `OpsUser` emails are mutually exclusive.
-- Ops and admin invite flows fail closed with `409 CONFLICT` when invite email is already used by the other account domain.
+- Ops and admin invite flows fail closed with `409 CONFLICT` when invite email is already used by the **other** account domain (active `User` / `OpsUser`).
+- **Exception:** deactivated merchant admins (`User.role=ADMIN`, `isBanned=true`) may receive a new merchant admin invite on the same email; setup reactivates that user id. Ops **operator** invites still reject any existing `User` email (with an explicit message when the user is a deactivated merchant admin).
 
 Recommended first-time runbook:
 

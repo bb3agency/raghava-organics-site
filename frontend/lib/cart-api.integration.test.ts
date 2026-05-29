@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { ApiError } from "@/lib/api";
 import {
   addCartItem,
@@ -6,19 +6,11 @@ import {
   getCart,
   getDeliveryRates,
 } from "@/lib/cart-api";
+import { isBackendHealthy } from "@/lib/test/backend-health";
 
-const API_BASE =
-  process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3000/api/v1";
+const backendHealthy = await isBackendHealthy();
 
-describe("cart api integration", () => {
-  beforeAll(async () => {
-    const res = await fetch(`${API_BASE.replace(/\/$/, "")}/health`, {
-      signal: AbortSignal.timeout(4000),
-    });
-    if (!res.ok) {
-      throw new Error("Backend health endpoint is not reachable for integration tests");
-    }
-  });
+describe.skipIf(!backendHealthy)("cart api integration", () => {
   it("loads guest cart with expected shape", async () => {
     const cart = await getCart();
     expect(typeof cart.id).toBe("string");

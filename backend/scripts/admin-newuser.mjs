@@ -162,9 +162,18 @@ async function main() {
     throw new Error('Invalid email format');
   }
 
-  const existingUser = await prisma.user.findUnique({ where: { email: inviteEmail } });
+  const existingUser = await prisma.user.findUnique({
+    where: { email: inviteEmail },
+    select: { role: true, isBanned: true }
+  });
   if (existingUser) {
-    throw new Error(`User already exists for email=${inviteEmail}`);
+    const isDeactivatedAdmin = existingUser.role === 'ADMIN' && existingUser.isBanned === true;
+    if (!isDeactivatedAdmin) {
+      throw new Error(`User already exists for email=${inviteEmail}`);
+    }
+    console.log(
+      `Note: ${inviteEmail} is a deactivated merchant admin — invite will reactivate that account on setup consume.`
+    );
   }
 
   const token = crypto.randomBytes(32).toString('base64url');

@@ -226,6 +226,10 @@ NEXT_PUBLIC_RAZORPAY_KEY_ID=(pending)
   - Error hints for `409` / `ops_audit_chain_lock_timeout` via `getApiErrorMessageWithHint`.
   - Backend/docs/rules synced: COD webhook capture (no `cod-collected`), metrics header `x-ops-token`.
   - Validation: `npm run typecheck`, `npm run lint`, `npm run build` green.
+- Merchant admin re-invite (2026-05-28): deactivated admin emails accepted on `POST /ops/admin-invites`; setup reactivates same user id. Ops operator invite form shows explicit error directing to merchant admin invite.
+- Admin login step-1 hardening (2026-05-28):
+  - Backend: known admin wrong password → `401 INVALID_CREDENTIALS`; deactivated → `401 UNAUTHORISED`; unknown email → generic `200` (no OTP).
+  - Frontend: `AdminLoginForm` stays on credentials for those 401s; `getAdminLoginErrorMessage()` maps password failures to "Incorrect password."
 - Full ops/admin contract rebaseline (2026-05-23):
   - Removed stale ops approvals surface and admin MFA/TOTP UI; admin login is email OTP (`request-otp` → `verify-otp`).
   - Ops browser integration via `lib/ops-client-api.ts` (`credentials: 'include'`); server metrics remain in `lib/ops-api.ts`.

@@ -49,6 +49,9 @@ export function getErrorMessage(code: string): string {
 
 export function getAdminLoginErrorMessage(error: unknown): string {
   if (error instanceof ApiError) {
+    if (error.code === "INVALID_CREDENTIALS") {
+      return "Incorrect password.";
+    }
     if (
       error.status === 403 &&
       error.message.toLowerCase().includes("mfa setup is required")
@@ -106,6 +109,16 @@ function readHintKey(error: ApiError): string | undefined {
 }
 
 export function getApiErrorMessageWithHint(error: unknown): string {
+  if (error instanceof ApiError) {
+    const serverMessage = (error.message ?? "").trim();
+    if (
+      serverMessage &&
+      !GENERIC_BACKEND_MESSAGES.has(serverMessage) &&
+      (error.code === "CONFLICT" || error.code === "VALIDATION_ERROR")
+    ) {
+      return serverMessage;
+    }
+  }
   const message = getApiErrorMessage(error);
   if (error instanceof ApiError) {
     const hintKey = readHintKey(error);

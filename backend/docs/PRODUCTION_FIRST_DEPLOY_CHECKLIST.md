@@ -306,8 +306,8 @@ curl https://your-domain.com/api/v1/health/live
 # Runtime readiness (must be empty before go-live)
 curl https://your-domain.com/api/v1/health/ready
 
-# Admin login flow (should return 200)
-curl -X POST https://your-domain.com/api/v1/auth/admin/request-otp \
+# Admin login step 1 (valid credentials → 200 + OTP enqueued; wrong password for known admin → 401)
+curl -X POST https://your-domain.com/api/v1/auth/admin/login/request-otp \
   -H "Content-Type: application/json" \
   -d '{"email":"admin@example.com","password":"Admin@12345"}'
 ```

@@ -1033,19 +1033,19 @@ If credentials are compromised, deactivate the affected `OpsUser`, bootstrap a n
 Run this after Ops bootstrap is verified and before frontend go-live sign-off.
 
 1. From an authenticated ops browser session, create the merchant admin invite:
-   - Route: `POST /api/v1/admin/invites`
+   - Route: `POST /api/v1/ops/admin-invites`
    - Auth: `ops_session` cookie (email-OTP login) with OTP challenge for privileged write
    - Permission: `ops:write`
    - Body: `email`, `name`, `setupBaseUrl`, optional merchant-only `permissions`
    - `setupBaseUrl` must be base origin only (for example, `https://foodstore.com`), not `https://foodstore.com/admin/setup`; backend appends `/admin/setup?token=...`
 2. Complete setup at `/admin/setup?token=...` within 10 minutes.
-3. Confirm the backend created `User(role=ADMIN)` and explicit merchant `AdminPermissionGrant` rows.
+3. Confirm the backend created or reactivated `User(role=ADMIN)` and explicit merchant `AdminPermissionGrant` rows (re-invite after ops deactivation reuses the same `userId`).
 4. Verify login via 2-step email OTP (`POST /api/v1/auth/admin/login/request-otp` → `POST /api/v1/auth/admin/login/verify-otp`) and confirm JWT `permissions` contains expected merchant scopes only.
 5. Confirm no ops/developer scopes are present in the issued JWT.
-6. Verify expired invite cleanup from ops context with `POST /api/v1/admin/invites/cleanup-expired`.
+6. Verify expired invite cleanup from ops context with `POST /api/v1/ops/admin-invites/cleanup-expired`.
 7. Record invite creation, consumption time, permissions granted, and cleanup evidence in `CLIENT_VPS_DEPLOYMENT_LOG.md`.
 
-Fail-closed identity rule: merchant admin invite creation/setup must return `409 CONFLICT` if invite email already exists in ops (`OpsUser`) domain.
+Fail-closed identity rule: merchant admin invite must return `409 CONFLICT` if invite email exists in `OpsUser`, is an active merchant admin, or is a customer. Deactivated merchant admin emails are allowed and reactivated on setup consume.
 
 Do not use local/legacy admin seed scripts as production go-live provisioning. Do not grant `ops:*`, `developer:*`, provider-secret, database, Redis, or ops-control permissions through merchant admin setup.
 
@@ -1229,10 +1229,12 @@ Admin login uses a mandatory 2-step email OTP flow. There is no single-step logi
   "email": "admin@store.com",   // required
   "password": "securepass"      // required (8–128)
 }
-// Response 200 → data
-{ "expiresAt": "2026-05-20T16:35:00.000Z" }
-// Side effect: 6-digit OTP sent to admin's registered email (TTL 300s, max 5 attempts)
-// Anti-enumeration: generic response regardless of credential correctness
+// Response 200 → data (valid active admin only — OTP actually sent)
+{ "message": "If a registered admin account exists...", "expiresAt": "2026-05-20T16:35:00.000Z" }
+// Response 401 INVALID_CREDENTIALS — known admin, wrong password (no OTP)
+// Response 401 UNAUTHORISED — admin deactivated (isBanned; no OTP)
+// Response 200 generic — unknown email or non-admin (anti-enumeration; no OTP sent)
+// Side effect on true success: 6-digit OTP to admin channel (TTL 300s, max 5 verify attempts)
 ```
 
 #### `POST /api/v1/auth/admin/login/verify-otp` (step 2)

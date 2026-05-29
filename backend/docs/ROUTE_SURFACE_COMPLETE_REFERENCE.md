@@ -142,7 +142,15 @@ Returns the active OTP delivery channel for admin login: `{ channel: 'email'|'sm
 
 ### `POST /api/v1/auth/admin/login/request-otp`
 **Public — no auth required.**  
-Step 1 of admin login. Body: `{ email, password }`. **Always returns `200` with `{ message }` regardless of whether credentials are valid or the account exists** (anti-enumeration hardening — the response gives no information about account existence or OTP delivery). Does **not** issue a JWT. If credentials are valid, generates a time-limited OTP and sends it to the admin's email. OTP TTL: 300 seconds. Max 5 verification attempts before lockout. Rate-limited by auth-sensitive profile.
+Step 1 of admin login. Body: `{ email, password }`. Does **not** issue a JWT.
+
+**Responses:**
+- **200 `{ message, expiresAt }`** — Active admin with correct password: OTP generated (hashed in Redis), sent via configured channel (`email` / `sms` / `whatsapp`). OTP TTL: 300 seconds.
+- **401 `INVALID_CREDENTIALS`** — Known admin (`role=ADMIN`) with wrong password. No OTP issued. Frontend must stay on the credentials step and show password error copy.
+- **401 `UNAUTHORISED`** — Known admin deactivated via ops (`isBanned=true`). No OTP issued.
+- **200 generic `{ message, expiresAt }`** — Unknown email or non-admin role (anti-enumeration): same shape as success but **no OTP** enqueued and no Redis challenge written.
+
+Max 5 OTP verification attempts on step 2 before lockout. Rate-limited by auth-sensitive profile.
 
 ### `POST /api/v1/auth/admin/login/verify-otp`
 **Public — no auth required.**  
@@ -163,6 +171,8 @@ Returns a paginated list of all admin invites. Query params: `status` (optional 
 ### `POST /api/v1/ops/admin-invites`
 **Ops session auth (`ops:write`)**  
 Creates an invite for a new merchant admin. Body: `{ email, name, permissions[], setupBaseUrl }`. Returns `{ inviteToken, expiresAt, setupUrl }`. Backend composes `setupUrl` as `${setupBaseUrl}/admin/setup?token=...`. Invite expires after 10 minutes.
+
+**Email reuse:** Unknown emails and **deactivated** merchant admins (`role=ADMIN`, `isBanned=true`) are allowed. Active merchant admins and customer accounts are rejected (`409`). When a deactivated admin completes setup, the **same `User` row is reactivated** (ban cleared, password/permissions refreshed); prior ops audit/deactivation history on that user id is retained.
 
 ### `POST /api/v1/ops/admin-invites/:inviteId/revoke`
 **Ops session auth (`ops:write`)**  
@@ -186,7 +196,7 @@ Paginated list of merchant admin accounts (`User.role = ADMIN`). Returns permiss
 
 ### `POST /api/v1/ops/admin-users/:adminUserId/deactivate`
 **Ops session auth (`ops:write`)**  
-Deactivates a merchant admin (sets `isBanned`, revokes all refresh tokens). Body: `{ reason, challengeId, otpCode }` — reason min 10 chars, OTP action `admin-user-deactivate`. Cannot be reversed via API; issue a new admin invite to re-provision the same email. Merchant admin ban from `/admin/users/:id/ban` remains forbidden — this is the ops-only path.
+Deactivates a merchant admin (sets `isBanned`, revokes all refresh tokens). Body: `{ reason, challengeId, otpCode }` — reason min 10 chars, OTP action `admin-user-deactivate`. No direct reactivate API — issue a **merchant admin invite** for the same email; `/admin/setup` reactivates the existing `User` row (ban cleared, password/permissions refreshed). Merchant admin ban from `/admin/users/:id/ban` remains forbidden — this is the ops-only path.
 
 ---
 
@@ -743,7 +753,7 @@ Sets `isActive = false` on the `OpsUser` record and appends a `USER_DEACTIVATED`
 **`ops:read`** — Paginated list of merchant admin accounts (`User.role = ADMIN`). Query: `isActive` (true/false), `page`, `limit`. Returns id, email, name, permissions (from `AdminPermissionGrant`), `isActive` (`!isBanned`), `isVerified`, phone, createdAt, deactivation metadata.
 
 #### `POST /api/v1/ops/admin-users/:adminUserId/deactivate`
-**`ops:write`** — Deactivate a merchant admin. Body: `{ reason, challengeId, otpCode }` — reason min 10 chars, OTP action `admin-user-deactivate`. Sets `isBanned`, `bannedAt`, `bannedReason` (prefixed `[ops:deactivate]`), revokes all active refresh tokens. Already-deactivated returns `409 CONFLICT`. No reactivate API — re-onboard via new admin invite. Audit log `USER_DEACTIVATED` with `summary.targetType: 'merchant_admin'`. Merchant admins cannot be banned via `/admin/users/:id/ban`; this is the ops-only path.
+**`ops:write`** — Deactivate a merchant admin. Body: `{ reason, challengeId, otpCode }` — reason min 10 chars, OTP action `admin-user-deactivate`. Sets `isBanned`, `bannedAt`, `bannedReason` (prefixed `[ops:deactivate]`), revokes all active refresh tokens. Already-deactivated returns `409 CONFLICT`. Re-onboard via merchant admin invite (reactivates same `userId`). Audit log `USER_DEACTIVATED` with `summary.targetType: 'merchant_admin'`. Merchant admins cannot be banned via `/admin/users/:id/ban`; this is the ops-only path.
 
 ---
 
@@ -934,7 +944,7 @@ Reviews are only visible on the storefront after admin approval.
 4. Admin enters OTP from phone
 5. Frontend → POST /admin/invites/consume with { token, otp }
 6. Account created — admin uses the 2-step login flow to get JWT:
-   a. POST /auth/admin/login/request-otp with { email, password } → OTP sent to admin email
+   a. POST /auth/admin/login/request-otp with { email, password } → on valid active admin, OTP sent; wrong password → 401 INVALID_CREDENTIALS; unknown email → generic 200 (no OTP)
    b. POST /auth/admin/login/verify-otp with { email, otp } → receives { accessToken, admin } + refresh cookie
 ```
 

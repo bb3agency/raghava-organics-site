@@ -477,9 +477,19 @@ api.interceptors.response.use(
 
 **Pattern: Admin Auth (2-step OTP → JWT)**
 ```typescript
-// Step 1: Request OTP with credentials
-await api.post('/auth/admin/login/request-otp', { email, password });
-// UI shows: "OTP sent to your email"
+// Step 1: Request OTP with credentials — advance to OTP UI only on 200
+try {
+  const { expiresAt } = await api.post('/auth/admin/login/request-otp', { email, password });
+  setStep('otp');
+  setExpiresAt(expiresAt);
+} catch (err) {
+  if (err.code === 'INVALID_CREDENTIALS') {
+    // Known admin, wrong password — stay on credentials; show "Incorrect password."
+  } else if (err.code === 'UNAUTHORISED') {
+    // Deactivated admin (isBanned) — stay on credentials
+  }
+  // Unknown email may still get 200 generic without OTP (anti-enumeration)
+}
 
 // Step 2: Verify OTP
 const { accessToken, admin } = await api.post('/auth/admin/login/verify-otp', { email, otp });
@@ -1032,7 +1042,7 @@ Do **not** build all pages/screens first and integrate API calls later. Build ea
 Required delivery sequence (6 tiers, strict order):
 
 1. **Foundation** — auth bootstrap, refresh-on-401, shared API client, dual-envelope response parser, `error.code` mapper, permission-aware nav scaffold, Zustand stores (auth + cart).
-2. **Ops control plane surfaces** — public routes `/ops/login` and `/ops/setup` only (no console nav); all other `/ops/*` routes gated by `GET /ops/session` with redirect to login on `401`; session bootstrap (`GET /ops/session`), load-shed change (`POST /ops/load-shed` — applies immediately with OTP confirmation), audit timeline, config overview/stored/save screens with masked values only.
+2. **Ops control plane surfaces** — public routes `/ops/login` and `/ops/setup` only (no console nav); all other `/ops/*` routes gated by `GET /ops/session` with redirect to login on `401`; session bootstrap (`GET /ops/session`), load-shed change including the new `maintenance` mode (`POST /ops/load-shed` — applies immediately with OTP confirmation; `maintenance` writes a durable Postgres-backed row that survives Redis flushes and starts a 2-min `pending` warning before Nginx serves the static maintenance page for non-ops routes), audit timeline, config overview/stored/save screens with masked values only.
 3. **Admin read surfaces** — dashboard KPIs/charts, orders list/detail + return request queue + return request detail (`GET /admin/return-requests/:id`), global shipments (`GET /admin/shipments`, `shipments:read`) + global payments (`GET /admin/payments`, `payments:read`), inventory list + adjustment history per variant (`GET /admin/inventory/history/:variantId`), product list + categories, customer index + CRM view (customer detail includes ban fields `isBanned`/`bannedAt`/`bannedReason`; paginated order tab via `GET /admin/users/:id/orders`; admin notes list `GET /admin/users/:id/notes`), review moderation queue. Build before mutations so you have real data to validate against.
 4. **Admin mutation surfaces** — ship action (run shipping provider dry-run simultaneously), Razorpay PREPAID checkout (run Razorpay test payment dry-run simultaneously), COD checkout, cancel/refund (async — UI must show pending-refund state until worker finalises), COD collection, return request approve/reject (`PATCH /admin/return-requests/:id`), stock adjustment + bulk stock update (`POST /admin/inventory/bulk-update`, max 100 variants, full rollback on any failure), product variant delete (`DELETE /admin/products/:id/variants/:variantId` — disabled in UI if last variant; backend returns 400), review hard-delete (`DELETE /admin/reviews/:id`, destructive confirmation required), customer ban (`PATCH /admin/users/:id/ban`, `users:write`, mandatory reason) + unban (`DELETE /admin/users/:id/ban`), admin notes create/delete (`POST`/`DELETE /admin/users/:id/notes`, `users:write`), settings (shipping/store/notifications/inventory/cod), coupon lifecycle (create → edit → pause/resume → soft-delete → restore; clone via `POST .../coupons/:id/clone`; audit log per coupon via `GET .../coupons/:id/audit`; handle `RATE_LIMIT_EXCEEDED` 429 gracefully on write actions; `BUY_X_GET_Y` type hidden in forms until v2.2; deleted coupons remain visible in list with restore action — hard delete does not exist).
 5. **Reliability surfaces** — reconciliation issues, outbox dead-letter list + replay-preview + replay, inbox failures + replay-preview + replay, analytics (revenue, funnel, category breakdown, inventory alerts, notification delivery), Bull Board queue visibility.
@@ -1042,7 +1052,8 @@ Non-negotiable boundaries:
 - Merchant operations stay on `/api/v1/admin/*`. Platform controls stay on `/api/v1/ops/*`.
 - Never proxy merchant actions through ops APIs to simplify UI.
 - Never persist raw ops credentials in browser storage or URLs.
-- Ops load-shed change is a single-step action: `POST /ops/load-shed` applies immediately after OTP confirmation. There is no approval queue or separate confirm/reject step.
+- Ops load-shed change is a single-step action: `POST /ops/load-shed` applies immediately after OTP confirmation. There is no approval queue or separate confirm/reject step. The mode enum is `normal | reduced | emergency | maintenance`. The response carries `{ mode, updated, phase, pendingUntil }` — `phase` is non-null only when `mode === 'maintenance'` (`pending` during the 2-minute warning, `active` after the cutover).
+- **Global storefront maintenance banner:** A `MaintenanceBanner` client component must be mounted in the root layout (`app/layout.tsx`). It polls `GET /api/v1/maintenance/status` (public, rate-limit-exempt) every 60 s normally and every 5 s during `maintenance/pending`, renders a countdown to `pendingUntil` aligned with the server clock (use `status.serverTime`, never `Date.now()` alone), hides itself on every `/ops/*` route, and renders nothing while mode is `normal | reduced | emergency`. The banner is mandatory on all customer-facing surfaces — without it, the only warning shoppers get during the 2-minute window is a sudden 503 from Nginx.
 - Authoritative reference for what each admin/ops route does, what permission it requires, and what each layer cannot do: `docs/ROUTE_SURFACE_COMPLETE_REFERENCE.md`.
 - Invoice CTA state must use `invoice.hasPdf` only; never derive from guessed URL fields.
 - Invoice downloads are authenticated backend routes only:
@@ -1052,7 +1063,7 @@ Non-negotiable boundaries:
 - `DATABASE_URL`, initial `REDIS_URL`, and `OPS_DB_ENCRYPTION_KEY` are bootstrap-only; render them as read-only if visible and route operators to deployment env changes.
 - DB-overlay eligible Ops config keys must show restart-required behavior: saved values are encrypted, override env only for non-bootstrap contract keys, and take effect only after API/worker restart.
 - `/admin/setup` must consume invite tokens only through `POST /api/v1/admin/invites/consume`; never persist invite tokens in browser storage or expose ops/developer permissions in merchant admin setup.
-- `POST /api/v1/admin/invites` and cleanup are ops-authenticated Layer C actions; do not expose invite creation/cleanup inside merchant admin self-service screens.
+- `POST /api/v1/ops/admin-invites` and cleanup are ops-authenticated Layer C actions; do not expose invite creation/cleanup inside merchant admin self-service screens. Deactivated merchant admin emails may be re-invited (same `userId` reactivated on consume).
 
 Per-slice test gate (required before closing):
 - one route-level integration test against the real backend module (not mocked),

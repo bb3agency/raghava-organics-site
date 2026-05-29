@@ -841,7 +841,8 @@ export class AuthService {
 
   /**
    * Step 1 of admin login: verify email + password, then send a 6-digit OTP to the admin's email.
-   * Returns a generic message to prevent user enumeration on failure.
+   * Unknown email / non-admin role: generic success (anti-enumeration).
+   * Known admin with wrong password or deactivated account: 401 (no OTP issued).
    */
   async requestAdminLoginOtp(input: {
     email: string;
@@ -878,7 +879,7 @@ export class AuthService {
     if (!validPassword) {
       await this.registerFailedAuthAttempt(input.email, clientIp, 'admin');
       await this.fastify.redis.del(otpKey, attemptKey);
-      return { message: genericMessage, expiresAt: fallbackExpiresAt };
+      throw new AppError(ERROR_CODES.INVALID_CREDENTIALS, 'Incorrect password', 401);
     }
 
     if (user.isBanned) {

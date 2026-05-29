@@ -736,18 +736,19 @@ git push origin main
 **Execution steps:**
 
 1. **Create merchant admin invite** from an authenticated ops context:
-   - Backend route: `POST /api/v1/admin/invites`
+   - Backend route: `POST /api/v1/ops/admin-invites`
    - Required ops auth: `ops_session` cookie (email-OTP login) with OTP challenge for privileged write.
    - Required permission: `ops:write`.
    - Endpoint policy: Layer C developer/ops control surface, not merchant admin self-service.
-   - After creation, verify the invite status via `GET /api/v1/admin/invites` (`ops:read`) — confirm it appears with status `EMAIL_SENT`.
-   - If the invite must be cancelled before setup, use `POST /api/v1/admin/invites/:inviteId/revoke` (`ops:write`, OTP-gated) to set its status to `CANCELLED`.
-   - Body: `email`, `name`, `setupBaseUrl`, optional merchant-only `permissions`.
+   - After creation, verify the invite status via `GET /api/v1/ops/admin-invites` (`ops:read`) — confirm it appears with status `EMAIL_SENT`.
+   - If the invite must be cancelled before setup, use `POST /api/v1/ops/admin-invites/:inviteId/revoke` (`ops:write`, OTP-gated) to set its status to `CANCELLED`.
+   - Body: `email`, `name`, `setupBaseUrl`, required merchant-only `permissions`.
+   - **Deactivated merchant admin emails are allowed** (re-invite after ops deactivation).
    - The generated setup link targets `/admin/setup?token=...` and expires in 10 minutes.
 
 2. **Complete merchant setup** at `/admin/setup`:
-   - Frontend calls `POST /api/v1/admin/invites/consume` with `token`, `password`, and optional `name`.
-   - Backend creates `User(role=ADMIN)`, marks the invite consumed, and inserts merchant `AdminPermissionGrant` rows.
+   - Frontend calls `POST /api/v1/admin/invites/setup/send-otp` then `POST /api/v1/admin/invites/consume` with token + OTP.
+   - Backend creates `User(role=ADMIN)` **or reactivates** a deactivated admin (same `userId`, ban cleared), marks the invite consumed, and inserts merchant `AdminPermissionGrant` rows.
    - Default grants cover dashboard, products, categories, inventory, coupons, settings, reviews, analytics, orders, exports, notifications, and users read.
    - Developer/ops permissions (`ops:*`, `developer:*`) are not granted by this flow.
    - Invite token is accepted once; expired or consumed invites require a fresh ops-created invite.
@@ -759,7 +760,7 @@ git push origin main
 5. **Confirm admin permission snapshot caveat** is in your ops SOP: permission grant/revoke changes are token-issuance scoped. Mid-session changes require session revocation or logout/re-auth for immediate effect.
 
 6. **Clean expired admin invites** when needed from an authenticated ops context:
-   - Backend route: `POST /api/v1/admin/invites/cleanup-expired`
+   - Backend route: `POST /api/v1/ops/admin-invites/cleanup-expired`
    - Required permission: `ops:write`.
    - Use this for operational cleanup evidence; it must not be exposed as a merchant admin UI action.
 

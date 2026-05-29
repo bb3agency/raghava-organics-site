@@ -1,19 +1,11 @@
-import { beforeAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { apiClient, ApiError } from "@/lib/api";
+import { isBackendHealthy } from "@/lib/test/backend-health";
 import type { HealthStatus } from "@/types/api";
 
-const API_BASE =
-  process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3000/api/v1";
+const backendHealthy = await isBackendHealthy();
 
-describe("API client integration (live backend)", () => {
-  beforeAll(async () => {
-    const res = await fetch(`${API_BASE.replace(/\/$/, "")}/health`, {
-      signal: AbortSignal.timeout(4000),
-    });
-    if (!res.ok) {
-      throw new Error("Backend health endpoint is not reachable for integration tests");
-    }
-  });
+describe.skipIf(!backendHealthy)("API client integration (live backend)", () => {
 
   it("parses health response", async () => {
     const health = await apiClient<HealthStatus>("/health");

@@ -38,6 +38,16 @@ function splitInviteName(inviteName: string): { firstName: string; lastName: str
   return { firstName, lastName };
 }
 
+type MerchantAdminEmailLookup = {
+  id: string;
+  role: Role;
+  isBanned: boolean;
+};
+
+function isDeactivatedMerchantAdmin(user: MerchantAdminEmailLookup): boolean {
+  return user.role === Role.ADMIN && user.isBanned;
+}
+
 export class AdminInvitesService {
   constructor(private readonly fastify: FastifyInstance) {}
 
@@ -74,6 +84,36 @@ export class AdminInvitesService {
     return { invite, inviteTokenHash };
   }
 
+  private async assertMerchantAdminInviteEmailAllowed(inviteEmail: string): Promise<void> {
+    const existingUser = await this.fastify.prisma.user.findUnique({
+      where: { email: inviteEmail },
+      select: { id: true, role: true, isBanned: true }
+    });
+    if (!existingUser) {
+      return;
+    }
+    if (isDeactivatedMerchantAdmin(existingUser)) {
+      return;
+    }
+    if (existingUser.role === Role.ADMIN) {
+      throw new AppError(ERROR_CODES.CONFLICT, 'An active merchant admin already uses this email', 409);
+    }
+    throw new AppError(ERROR_CODES.CONFLICT, 'Email is already in use by a customer account', 409);
+  }
+
+  private async assertInvitePhoneAvailable(phone: string | null, reactivateUserId?: string): Promise<void> {
+    if (!phone) {
+      return;
+    }
+    const existingPhone = await this.fastify.prisma.user.findFirst({
+      where: { phone },
+      select: { id: true }
+    });
+    if (existingPhone && existingPhone.id !== reactivateUserId) {
+      throw new AppError(ERROR_CODES.CONFLICT, 'User already exists for invite phone number', 409);
+    }
+  }
+
   async createAdminInvite(input: {
     createdByOpsUserId?: string;
     inviteEmail: string;
@@ -89,10 +129,7 @@ export class AdminInvitesService {
     if (!inviteName) {
       throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Invite name is required', 400);
     }
-    const existingUser = await this.fastify.prisma.user.findUnique({ where: { email: inviteEmail } });
-    if (existingUser) {
-      throw new AppError(ERROR_CODES.CONFLICT, 'User already exists for invite email', 409);
-    }
+    await this.assertMerchantAdminInviteEmailAllowed(inviteEmail);
     const existingOpsUser = await this.fastify.prisma.opsUser.findUnique({ where: { email: inviteEmail } });
     if (existingOpsUser) {
       throw new AppError(ERROR_CODES.CONFLICT, 'Email is already in use by an ops account', 409);
@@ -298,38 +335,62 @@ export class AdminInvitesService {
       throw new AppError(ERROR_CODES.INVALID_CREDENTIALS, 'Invalid or expired OTP', 401);
     }
 
-    const existingUser = await this.fastify.prisma.user.findUnique({ where: { email: invite.inviteEmail } });
+    const existingUser = await this.fastify.prisma.user.findUnique({
+      where: { email: invite.inviteEmail },
+      select: { id: true, role: true, isBanned: true }
+    });
+    let reactivateUserId: string | undefined;
     if (existingUser) {
-      throw new AppError(ERROR_CODES.CONFLICT, 'User already exists for invite email', 409);
+      if (!isDeactivatedMerchantAdmin(existingUser)) {
+        if (existingUser.role === Role.ADMIN) {
+          throw new AppError(ERROR_CODES.CONFLICT, 'An active merchant admin already uses this email', 409);
+        }
+        throw new AppError(ERROR_CODES.CONFLICT, 'Email is already in use by a customer account', 409);
+      }
+      reactivateUserId = existingUser.id;
     }
     const existingOpsUser = await this.fastify.prisma.opsUser.findUnique({ where: { email: invite.inviteEmail } });
     if (existingOpsUser) {
       throw new AppError(ERROR_CODES.CONFLICT, 'Email is already in use by an ops account', 409);
     }
 
-    if (setupPayload.phone) {
-      const existingPhone = await this.fastify.prisma.user.findFirst({ where: { phone: setupPayload.phone } });
-      if (existingPhone) {
-        throw new AppError(ERROR_CODES.CONFLICT, 'User already exists for invite phone number', 409);
-      }
-    }
+    await this.assertInvitePhoneAvailable(setupPayload.phone, reactivateUserId);
 
     const displayName = setupPayload.name?.trim() || invite.inviteName;
     const { firstName, lastName } = splitInviteName(displayName);
     const permissions = normalizeInvitePermissions(invite.permissions);
 
     const user = await this.fastify.prisma.$transaction(async (tx) => {
-      const admin = await tx.user.create({
-        data: {
-          email: invite.inviteEmail,
-          phone: setupPayload.phone ?? null,
-          passwordHash: setupPayload.passwordHash,
-          firstName,
-          lastName,
-          role: Role.ADMIN,
-          isVerified: true
-        }
-      });
+      const admin = reactivateUserId
+        ? await tx.user.update({
+            where: { id: reactivateUserId },
+            data: {
+              phone: setupPayload.phone ?? null,
+              passwordHash: setupPayload.passwordHash,
+              firstName,
+              lastName,
+              role: Role.ADMIN,
+              isVerified: true,
+              isBanned: false,
+              bannedAt: null,
+              bannedReason: null
+            }
+          })
+        : await tx.user.create({
+            data: {
+              email: invite.inviteEmail,
+              phone: setupPayload.phone ?? null,
+              passwordHash: setupPayload.passwordHash,
+              firstName,
+              lastName,
+              role: Role.ADMIN,
+              isVerified: true
+            }
+          });
+
+      if (reactivateUserId) {
+        await tx.adminPermissionGrant.deleteMany({ where: { userId: reactivateUserId } });
+      }
 
       await tx.adminPermissionGrant.createMany({
         data: permissions.map((permission) => ({
@@ -356,6 +417,18 @@ export class AdminInvitesService {
 
     await this.fastify.redis.del(otpKey, payloadKey, attemptKey);
 
+    if (reactivateUserId) {
+      this.fastify.log.info(
+        {
+          event: 'MERCHANT_ADMIN_REACTIVATED_VIA_INVITE',
+          adminUserId: reactivateUserId,
+          inviteId: invite.id,
+          email: invite.inviteEmail
+        },
+        'Deactivated merchant admin reactivated via invite setup'
+      );
+    }
+
     return {
       adminUserId: user.id,
       email: user.email ?? invite.inviteEmail,
@@ -380,21 +453,20 @@ export class AdminInvitesService {
     }
     const setupPhone = input.phone?.trim() || null;
 
-    const existingUser = await this.fastify.prisma.user.findUnique({ where: { email: invite.inviteEmail } });
-    if (existingUser) {
-      throw new AppError(ERROR_CODES.CONFLICT, 'User already exists for invite email', 409);
-    }
+    await this.assertMerchantAdminInviteEmailAllowed(invite.inviteEmail);
+    const reactivateUser = await this.fastify.prisma.user.findUnique({
+      where: { email: invite.inviteEmail },
+      select: { id: true, role: true, isBanned: true }
+    });
+    const reactivateUserId =
+      reactivateUser && isDeactivatedMerchantAdmin(reactivateUser) ? reactivateUser.id : undefined;
+
     const existingOpsUser = await this.fastify.prisma.opsUser.findUnique({ where: { email: invite.inviteEmail } });
     if (existingOpsUser) {
       throw new AppError(ERROR_CODES.CONFLICT, 'Email is already in use by an ops account', 409);
     }
 
-    if (setupPhone) {
-      const existingPhone = await this.fastify.prisma.user.findFirst({ where: { phone: setupPhone } });
-      if (existingPhone) {
-        throw new AppError(ERROR_CODES.CONFLICT, 'User already exists for invite phone number', 409);
-      }
-    }
+    await this.assertInvitePhoneAvailable(setupPhone, reactivateUserId);
 
     const otp = crypto.randomInt(100000, 999999).toString();
     const otpHash = hashOpaqueToken(otp);

@@ -217,6 +217,33 @@ describe('OpsService cross-table email collision guards', () => {
     expect(mocks.opsUserInviteCreate).not.toHaveBeenCalled();
   });
 
+  it('createOpsInvite rejects deactivated merchant admin email with merchant-invite guidance', async () => {
+    const { service, mocks } = createOpsServiceHarness();
+    mocks.userFindUnique.mockResolvedValueOnce({
+      role: 'ADMIN',
+      isBanned: true
+    });
+
+    await expect(
+      service.createOpsInvite({
+        inviteEmail: 'merchant@example.com',
+        inviteName: 'Ops Person',
+        permissions: ['OPS_READ'],
+        ipAllowlist: [],
+        setupBaseUrl: 'https://example.com',
+        requestIp: '127.0.0.1',
+        requestPath: '/api/v1/ops/invites',
+        method: 'POST'
+      })
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: ERROR_CODES.CONFLICT,
+      message: expect.stringContaining('merchant admin invite')
+    });
+
+    expect(mocks.opsUserInviteCreate).not.toHaveBeenCalled();
+  });
+
   it('createOpsInvite rejects when email already exists as an OpsUser', async () => {
     const { service, mocks } = createOpsServiceHarness();
     mocks.userFindUnique.mockResolvedValueOnce(null);

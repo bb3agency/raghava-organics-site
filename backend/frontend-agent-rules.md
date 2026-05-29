@@ -477,9 +477,19 @@ api.interceptors.response.use(
 
 **Pattern: Admin Auth (2-step OTP → JWT)**
 ```typescript
-// Step 1: Request OTP with credentials
-await api.post('/auth/admin/login/request-otp', { email, password });
-// UI shows: "OTP sent to your email"
+// Step 1: Request OTP with credentials — advance to OTP UI only on 200
+try {
+  const { expiresAt } = await api.post('/auth/admin/login/request-otp', { email, password });
+  setStep('otp');
+  setExpiresAt(expiresAt);
+} catch (err) {
+  if (err.code === 'INVALID_CREDENTIALS') {
+    // Known admin, wrong password — stay on credentials; show "Incorrect password."
+  } else if (err.code === 'UNAUTHORISED') {
+    // Deactivated admin (isBanned) — stay on credentials
+  }
+  // Unknown email may still get 200 generic without OTP (anti-enumeration)
+}
 
 // Step 2: Verify OTP
 const { accessToken, admin } = await api.post('/auth/admin/login/verify-otp', { email, otp });
@@ -1053,7 +1063,7 @@ Non-negotiable boundaries:
 - `DATABASE_URL`, initial `REDIS_URL`, and `OPS_DB_ENCRYPTION_KEY` are bootstrap-only; render them as read-only if visible and route operators to deployment env changes.
 - DB-overlay eligible Ops config keys must show restart-required behavior: saved values are encrypted, override env only for non-bootstrap contract keys, and take effect only after API/worker restart.
 - `/admin/setup` must consume invite tokens only through `POST /api/v1/admin/invites/consume`; never persist invite tokens in browser storage or expose ops/developer permissions in merchant admin setup.
-- `POST /api/v1/admin/invites` and cleanup are ops-authenticated Layer C actions; do not expose invite creation/cleanup inside merchant admin self-service screens.
+- `POST /api/v1/ops/admin-invites` and cleanup are ops-authenticated Layer C actions; do not expose invite creation/cleanup inside merchant admin self-service screens. Deactivated merchant admin emails may be re-invited (same `userId` reactivated on consume).
 
 Per-slice test gate (required before closing):
 - one route-level integration test against the real backend module (not mocked),

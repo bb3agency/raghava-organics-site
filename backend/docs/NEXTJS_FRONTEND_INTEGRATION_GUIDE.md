@@ -242,20 +242,20 @@ For provider-facing retry/backoff boundaries (timeouts, retry eligibility, and n
 
 | Endpoint | Notes |
 | --- | --- |
-| `POST /api/v1/auth/admin/login/request-otp` | Admin login step 1 — verifies email + password, sends 6-digit OTP to admin's registered email. Public, auth-sensitive rate-limited. Anti-enumeration: identical response regardless of account existence or OTP correctness. |
+| `POST /api/v1/auth/admin/login/request-otp` | Admin login step 1 — verifies email + password; on success sends 6-digit OTP. Public, auth-sensitive rate-limited. **Branch on `error.code`:** advance to OTP UI only on **200** after valid active admin credentials. `401 INVALID_CREDENTIALS` = wrong password for known admin (stay on credentials, show "Incorrect password."). `401 UNAUTHORISED` = deactivated admin. Unknown email / non-admin: **200** generic message without OTP (anti-enumeration — do not reveal account existence). |
 | `POST /api/v1/auth/admin/login/verify-otp` | Admin login step 2 — verifies OTP (300s TTL, max 5 attempts), issues JWT access token + sets HTTP-only refresh cookie. Admin UI **must** use role + permission scopes on every `/api/v1/admin/*` call (`TRD.md` §6.3, §7.9). |
-| `GET /api/v1/admin/invites` | Ops-authenticated invite list. Requires `ops:read`, Layer C policy mapping. Query params: `status`, `page`, `limit`. Returns `{ items[], page, limit, total }`. Used in the Ops UI invite management screen. |
-| `POST /api/v1/admin/invites` | Ops-authenticated merchant admin invite creation. Requires `ops:write`, Layer C policy mapping, and ops auth headers; backend appends `/admin/setup?token=...` to provided `setupBaseUrl` (base origin only), expires in 10 minutes. |
-| `POST /api/v1/admin/invites/:inviteId/revoke` | Ops-authenticated invite revocation. Requires `ops:write`, Layer C policy mapping, and an email-OTP challenge (`{ challengeId, otpCode }`) in the body. Sets invite `status` to `CANCELLED`. |
+| `GET /api/v1/ops/admin-invites` | Ops-authenticated merchant admin invite list. Requires `ops:read`. Query: `status`, `page`, `limit`. |
+| `POST /api/v1/ops/admin-invites` | Ops-authenticated merchant admin invite creation (`ops:write`). Appends `/admin/setup?token=...` to `setupBaseUrl` (origin only). Allows **deactivated** merchant admin emails; blocks active admins, customers, and ops emails. |
+| `POST /api/v1/ops/admin-invites/:inviteId/revoke` | Ops-authenticated invite revocation (`ops:write` + email OTP challenge). Sets `CANCELLED`. |
 | `POST /api/v1/admin/invites/setup/send-otp` | Public — sends setup OTP to the invite email address. Called from `/admin/setup` before consuming the invite. Body: `{ token, name, phone? }`. |
 | `POST /api/v1/admin/invites/consume` | Public but rate-limited one-time setup-token completion route for `/admin/setup`; creates `User(role=ADMIN)` and merchant `AdminPermissionGrant` rows only after valid unexpired token and OTP verification. |
-| `POST /api/v1/admin/invites/cleanup-expired` | Ops-authenticated cleanup route for expired unconsumed merchant admin invites. Requires `ops:write`; do not expose in merchant UI. |
+| `POST /api/v1/ops/admin-invites/cleanup-expired` | Ops-authenticated cleanup of expired unconsumed merchant admin invites (`ops:write`). |
 
 Admin UI is served as routes within the same frontend deployment (for example `/admin`), with permissions enforced by backend admin JWT scopes. Do not create a separate admin deployment/domain in the canonical model.
 
-`/admin/setup` UX contract: read the `token` query param, render a name + password creation form. First call `POST /api/v1/admin/invites/setup/send-otp` with the token and name (phone optional) to receive an OTP at the invite email address. Then call `POST /api/v1/admin/invites/consume` with the token and OTP to complete setup. On success, redirect to admin login (`/admin/login`). Do not store invite tokens in localStorage/sessionStorage/logs. Treat invalid, consumed, or expired tokens as terminal and ask the operator to issue a new invite. This flow grants merchant ecommerce permissions only; do not display or request `ops:*`, `developer:*`, provider-secret, database, Redis, or ops-control permissions from merchant setup screens.
+`/admin/setup` UX contract: read the `token` query param, render a name + password creation form. First call `POST /api/v1/admin/invites/setup/send-otp` with the token and name (phone optional) to receive an OTP at the invite email address. Then call `POST /api/v1/admin/invites/consume` with the token and OTP to complete setup. On success, redirect to admin login (`/admin/login`). **Re-invite:** if the email belonged to a deactivated merchant admin, consume **reactivates** the same `User` id (clears `isBanned`, replaces password/permissions) — do not assume a new row is always created. Do not store invite tokens in localStorage/sessionStorage/logs. Treat invalid, consumed, or expired tokens as terminal and ask the operator to issue a new invite. This flow grants merchant ecommerce permissions only; do not display or request `ops:*`, `developer:*`, provider-secret, database, Redis, or ops-control permissions from merchant setup screens.
 
-Identity boundary contract: normal customer/admin `User` emails and `OpsUser` emails are mutually exclusive. Frontend must surface backend `409 CONFLICT` responses for duplicate cross-domain email attempts as hard-stop validation errors.
+Identity boundary contract: `User` and `OpsUser` emails are mutually exclusive for **active** accounts. Ops UI: use the **merchant admin invite** form (not the top ops-operator form) to restore deactivated merchant admins. Surface backend `409 CONFLICT` messages verbatim when specific (ops client uses `getApiErrorMessageWithHint`).
 
 ### 4.1 Layer ownership model (backend-enforced)
 
@@ -901,7 +901,7 @@ All security gates passing:
 Before going live, verify:
 
 **Auth & Session:**
-- [ ] Admin login uses 2-step OTP flow
+- [ ] Admin login uses 2-step OTP flow; step 1 advances to OTP screen only on **200** (not on `401 INVALID_CREDENTIALS` / `401 UNAUTHORISED`)
 - [ ] Ops login uses 2-step OTP flow  
 - [ ] Access tokens stored in memory (never localStorage)
 - [ ] Refresh token handling automatic via httpOnly cookie

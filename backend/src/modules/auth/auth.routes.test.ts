@@ -389,6 +389,61 @@ describe('auth routes admin login OTP (deactivated admin)', () => {
     await app.close();
   });
 
+  it('POST /auth/admin/login/request-otp returns 200 for unknown email (anti-enumeration, no OTP)', async () => {
+    const { app, mocks } = createAdminLoginApp(null);
+    await registerAuthRoutes(app);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/admin/login/request-otp',
+      payload: {
+        email: 'unknown-admin@example.com',
+        password: ADMIN_TEST_PASSWORD
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as { message?: string; expiresAt?: string };
+    expect(body.message).toContain('OTP has been sent');
+    expect(body.expiresAt).toBeTruthy();
+    expect(mocks.notificationsAdd).not.toHaveBeenCalled();
+    expect(mocks.redisSet).not.toHaveBeenCalled();
+
+    await app.close();
+  });
+
+  it('POST /auth/admin/login/request-otp returns 401 when password is wrong for known admin', async () => {
+    const passwordHash = bcrypt.hashSync(ADMIN_TEST_PASSWORD, 1);
+    const { app, mocks } = createAdminLoginApp({
+      id: 'admin_active',
+      email: ADMIN_TEST_EMAIL,
+      role: Role.ADMIN,
+      passwordHash,
+      isBanned: false,
+      isVerified: true,
+      phone: null
+    });
+    await registerAuthRoutes(app);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/admin/login/request-otp',
+      payload: {
+        email: ADMIN_TEST_EMAIL,
+        password: 'not-the-real-password'
+      }
+    });
+
+    expect(response.statusCode).toBe(401);
+    const body = response.json() as { error?: { code?: string; message?: string } };
+    expect(body.error?.code).toBe('INVALID_CREDENTIALS');
+    expect(body.error?.message).toContain('password');
+    expect(mocks.notificationsAdd).not.toHaveBeenCalled();
+    expect(mocks.redisSet).not.toHaveBeenCalled();
+
+    await app.close();
+  });
+
   it('POST /auth/admin/login/request-otp returns 200 for active admin', async () => {
     const passwordHash = bcrypt.hashSync(ADMIN_TEST_PASSWORD, 1);
     const { app, mocks } = createAdminLoginApp({

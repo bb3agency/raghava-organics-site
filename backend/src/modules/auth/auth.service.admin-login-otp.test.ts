@@ -161,18 +161,19 @@ describe('AuthService.requestAdminLoginOtp', () => {
     expect(mocks.notificationsAdd).not.toHaveBeenCalled();
   });
 
-  it('returns generic message without sending OTP when password is wrong (anti-enumeration)', async () => {
+  it('rejects OTP request when password is wrong for a known admin', async () => {
     const { service, mocks } = createHarness();
 
-    const result = await service.requestAdminLoginOtp({
-      email: 'admin@example.com',
-      password: 'wrongpass',
-      clientIp: '127.0.0.1'
-    });
+    await expect(
+      service.requestAdminLoginOtp({
+        email: 'admin@example.com',
+        password: 'wrongpass',
+        clientIp: '127.0.0.1'
+      })
+    ).rejects.toMatchObject({ code: 'INVALID_CREDENTIALS', statusCode: 401 });
 
-    expect(result.message).toContain('OTP has been sent');
-    expect(result.expiresAt).toBeTruthy();
     expect(mocks.notificationsAdd).not.toHaveBeenCalled();
+    expect(mocks.redisSet).not.toHaveBeenCalled();
   });
 
   it('rejects OTP request when admin is deactivated (isBanned)', async () => {

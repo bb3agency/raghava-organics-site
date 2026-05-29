@@ -78,13 +78,12 @@ if errorlevel 1 (
 )
 echo   Postgres OK.
 
-echo [3/5] Freeing port 3000 and releasing stale Node processes...
+echo [3/5] Freeing port 3000 if another process is listening...
 for /f "tokens=5" %%a in ('netstat -ano ^| findstr /R /C:":3000 .*LISTENING"') do (
   echo   Killing stale PID %%a holding port 3000
   taskkill /F /PID %%a >nul 2>&1
 )
-REM Kill any remaining node.exe holding the Prisma query engine DLL lock
-taskkill /F /IM node.exe /T >nul 2>&1
+REM Do NOT taskkill all node.exe — that terminates this dev-up.cmd parent and breaks startup.
 
 echo [4/5] Ensuring Prisma database + migrations are ready...
 node scripts\dev-ensure-prisma-ready.js

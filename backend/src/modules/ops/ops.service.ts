@@ -672,8 +672,18 @@ export class OpsService {
     if (!inviteName) {
       throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Invite name is required', 400);
     }
-    const existingUser = await this.fastify.prisma.user.findUnique({ where: { email: inviteEmail } });
+    const existingUser = await this.fastify.prisma.user.findUnique({
+      where: { email: inviteEmail },
+      select: { role: true, isBanned: true }
+    });
     if (existingUser) {
+      if (existingUser.role === 'ADMIN' && existingUser.isBanned) {
+        throw new AppError(
+          ERROR_CODES.CONFLICT,
+          'Email belongs to a deactivated merchant admin. Use a merchant admin invite (below) to restore access.',
+          409
+        );
+      }
       throw new AppError(ERROR_CODES.CONFLICT, 'Email is already in use by a customer or admin account', 409);
     }
     const existingOpsUser = await prisma.opsUser.findUnique({ where: { email: inviteEmail } });
@@ -1952,7 +1962,7 @@ export class OpsService {
 
   /**
    * Deactivates a merchant admin (sets isBanned, revokes refresh sessions).
-   * Login and token refresh fail closed while deactivated. Re-onboard via new invite only.
+   * Login and token refresh fail closed while deactivated. Re-onboard via merchant admin invite (reactivates same user id; audit history retained).
    */
   async deactivateMerchantAdminUser(input: {
     targetAdminUserId: string;

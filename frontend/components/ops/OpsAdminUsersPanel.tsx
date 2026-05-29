@@ -73,7 +73,8 @@ export function OpsAdminUsersPanel() {
         <Link href="/ops/invites" className="underline underline-offset-2">
           Invites
         </Link>{" "}
-        page. Deactivated admins cannot log in until a new invite is issued for the same email.
+        page (merchant admin invite section). Deactivated admins cannot log in until that invite is
+        completed — setup reactivates the same account.
       </OpsAlert>
 
       <OpsCard>

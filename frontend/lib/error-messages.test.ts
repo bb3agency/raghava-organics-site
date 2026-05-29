@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   getErrorMessage,
+  getAdminLoginErrorMessage,
   getApiErrorMessageWithHint,
   isAuthFailureCode,
   shouldAttemptTokenRefresh,
@@ -31,5 +32,19 @@ describe("error-messages", () => {
   it("detects token refresh eligibility", () => {
     const err = new ApiError("TOKEN_EXPIRED", "expired", 401);
     expect(shouldAttemptTokenRefresh(err)).toBe(true);
+  });
+
+  it("maps admin login INVALID_CREDENTIALS to password-specific copy", () => {
+    const err = new ApiError("INVALID_CREDENTIALS", "Incorrect password", 401);
+    expect(getAdminLoginErrorMessage(err)).toBe("Incorrect password.");
+  });
+
+  it("prefers specific backend message for CONFLICT in getApiErrorMessageWithHint", () => {
+    const err = new ApiError(
+      "CONFLICT",
+      "Email belongs to a deactivated merchant admin. Use a merchant admin invite (below) to restore access.",
+      409,
+    );
+    expect(getApiErrorMessageWithHint(err)).toContain("merchant admin invite");
   });
 });
