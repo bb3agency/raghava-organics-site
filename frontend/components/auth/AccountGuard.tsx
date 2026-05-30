@@ -3,7 +3,7 @@
 import type { ReactNode } from "react";
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { useAuthStore } from "@/stores/auth";
+import { useAccountSessionRestore } from "@/hooks/use-account-session-restore";
 
 interface AccountGuardProps {
   children: ReactNode;
@@ -11,18 +11,26 @@ interface AccountGuardProps {
 
 export function AccountGuard({ children }: AccountGuardProps) {
   const router = useRouter();
-  const accessToken = useAuthStore((s) => s.accessToken);
+  const { status, accessToken } = useAccountSessionRestore();
 
   useEffect(() => {
-    if (!accessToken) {
+    if (status === "failed") {
       router.replace("/login");
     }
-  }, [accessToken, router]);
+  }, [status, router]);
 
-  if (!accessToken) {
+  if (status === "checking" || status === "restoring") {
     return (
       <p className="text-sm text-muted-foreground" role="status" aria-live="polite">
-        Redirecting to sign in...
+        Restoring your session…
+      </p>
+    );
+  }
+
+  if (status === "failed" || !accessToken) {
+    return (
+      <p className="text-sm text-muted-foreground" role="status" aria-live="polite">
+        Redirecting to sign in…
       </p>
     );
   }

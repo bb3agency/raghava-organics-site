@@ -1,6 +1,7 @@
 "use client";
 
 import { create } from "zustand";
+import { resetAuthSessionRestoreCache } from "@/lib/restore-auth-session";
 import type { User } from "@/types/user";
 
 interface AuthState {
@@ -24,8 +25,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       permissions: user.permissions ?? [],
     }),
   setAccessToken: (accessToken) => set({ accessToken }),
-  clearSession: () =>
-    set({ accessToken: null, user: null, permissions: [] }),
+  clearSession: () => {
+    resetAuthSessionRestoreCache();
+    set({ accessToken: null, user: null, permissions: [] });
+  },
   hasPermission: (permission) => {
     const perms = get().permissions;
     return perms.includes(permission) || perms.includes("*");

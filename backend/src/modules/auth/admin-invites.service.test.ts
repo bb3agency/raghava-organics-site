@@ -566,6 +566,47 @@ describe('AdminInvitesService', () => {
     ).resolves.toMatchObject({ message: 'OTP sent successfully' });
   });
 
+  it('sendSetupOtp allows phone belonging to a different deactivated merchant admin', async () => {
+    const { service, mocks } = createHarness();
+    mocks.storeSettingsFindUnique.mockResolvedValue({
+      notifyEmailEnabled: true,
+      notifySmsEnabled: false,
+      notifyWhatsappEnabled: false,
+      primaryNotificationChannels: { OtpVerification: 'EMAIL' }
+    });
+    mocks.adminUserInviteFindUnique.mockResolvedValue({
+      id: 'invite_1',
+      inviteEmail: 'merchant@example.com',
+      inviteName: 'Merchant Owner',
+      status: 'EMAIL_SENT',
+      permissions: ['products:read'],
+      expiresAt: new Date(Date.now() + 60_000)
+    });
+    // Email matches a deactivated admin
+    mocks.userFindUnique.mockResolvedValue({
+      id: 'admin_deactivated',
+      role: 'ADMIN',
+      isBanned: true
+    });
+    // But phone belongs to a DIFFERENT deactivated admin
+    mocks.userFindFirst.mockResolvedValue({
+      id: 'other_deactivated_admin',
+      role: 'ADMIN',
+      isBanned: true,
+      phone: '+911234567890'
+    });
+    mocks.opsUserFindUnique.mockResolvedValue(null);
+
+    await expect(
+      service.sendSetupOtp({
+        inviteToken: 'token_1234567890',
+        name: 'Merchant Owner',
+        password: 'securepassword',
+        phone: '+911234567890'
+      })
+    ).resolves.toMatchObject({ message: 'OTP sent successfully' });
+  });
+
   it('sendSetupOtp allows deactivated merchant admin email before consume', async () => {
     const { service, mocks } = createHarness();
     mocks.storeSettingsFindUnique.mockResolvedValue({

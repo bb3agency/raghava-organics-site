@@ -4,6 +4,32 @@
 
 ---
 
+## [2026-05-30] VPS automated cleanup — per-client cron-based maintenance for multi-tenant deployments
+
+**Context:** The Raghava Organics VPS reached 83% disk usage due to accumulated Docker images, build caches, PM2 logs, Next.js build artifacts, and rotated system logs. The existing cron job (`docker buildx prune`) only cleaned build cache — not dangling images, stopped containers, unused volumes, or application logs. For multi-client VPS deployments, manual cleanup per client is operationally unsustainable.
+
+**Decision — Implement a template-based automated cleanup system:**
+1. **Template script:** `scripts/vps-cleanup-template.sh` — client-agnostic bash script with placeholder variables (`{{CLIENT_ID}}`, `{{FRONTEND_PATH}}`, `{{PM2_PROCESS_NAME}}`).
+2. **Installer:** `scripts/install-vps-cleanup.sh` — copies template to `/etc/cron.daily/vps-cleanup-<CLIENT_ID>` with variable substitution and executable permissions.
+3. **Scope:** Global Docker cleanup (dangling images/volumes/networks, 5GB build cache retention) + client-scoped PM2 log flush + Next.js cache cleanup + old log rotation cleanup + NPM cache + journal vacuum + GitHub Actions self-hosted runner cache (`_work/*` and `_tool/*`).
+4. **Schedule:** System cron daily (06:25 AM via `/etc/cron.daily/`).
+5. **Safety:** Docker prune only removes *dangling* resources (running containers untouched). PM2 flush is client-scoped by process name. 5GB build cache retained. Actions Runner caches are safely cleared between deployments.
+
+**Rationale:**
+1. **Operational sustainability:** Multi-client VPS (5–10 sites) requires automated maintenance — manual cleanup per client doesn't scale.
+2. **Disk space predictability:** Prevents surprise "disk full" outages during deploys or log rotations.
+3. **Client isolation:** PM2 log flush is scoped to client process name; other clients' logs unaffected. Docker cleanup is intentionally global (shared resource benefits all clients).
+4. **Template reusability:** New clients copy the same template, only substituting three variables — no per-client script maintenance drift.
+
+**Alternatives considered:**
+- *Single global cleanup script (not per-client).* Rejected — harder to attribute cleanup actions to specific clients in logs; PM2 flush would need to enumerate all client processes; less flexible for client-specific paths.
+- *Docker system prune -a (aggressive).* Rejected — `-a` removes all unused images including those referenced by stopped containers; safer to only prune dangling images (`-f` without `-a`).
+- *Logrotate instead of cron.* Rejected — logrotate handles system logs well but doesn't cover Docker, PM2, or Next.js caches; cron.daily is the standard pattern for multi-resource cleanup.
+
+**Affected files:** `backend/scripts/vps-cleanup-template.sh`, `backend/scripts/install-vps-cleanup.sh`, `backend/docs/CLIENT_VPS_SETUP_GUIDE.md` §12, `backend/docs/CLIENT_ONBOARDING_EXECUTION_ORDER.md` Phase 7.2, `backend/docs/MASTER_DEPLOYMENT_PLAYBOOK.md`, `backend/docs/HARDENING_HISTORY.md`.
+
+---
+
 ## [2026-05-28] Admin session — silent refresh on page reload, idle timeout, and login/setup UX
 
 **Context:** `AdminGuard` checked only the in-memory Zustand `accessToken`; on page refresh the store is always empty (Zustand is not persisted), so admins were immediately redirected to login despite having a valid HTTP-only refresh token cookie. The session warning banner offered only a page reload, which would again lose the session. There was no idle timeout. The `AdminLoginForm` and `AdminSetupForm` lacked standard security-UX primitives (password reveal, OTP countdown, resend cooldown) that reduce accidental lockout and phishing exposure.
@@ -27,6 +53,24 @@
 - *Backend-enforced session timeout only.* Rejected — backend enforces absolute token TTL but cannot detect browser-side inactivity; client-side idle detection is the standard complement.
 
 **Affected files:** `frontend/components/auth/AdminGuard.tsx`, `frontend/components/auth/AdminSessionWarning.tsx`, `frontend/hooks/use-idle-timeout.ts`, `frontend/components/auth/AdminIdleTimeoutModal.tsx`, `frontend/components/admin/AdminConsoleShell.tsx`, `frontend/components/auth/AdminLoginForm.tsx`, `frontend/components/admin/AdminSetupForm.tsx`.
+
+---
+
+## [2026-05-28] Admin session restore — single-flight refresh (React Strict Mode)
+
+**Context:** After the silent refresh-on-load work, some admins still landed on `/admin/login` after a full page refresh despite a valid `refresh_token` cookie. Root cause: React Strict Mode (dev) mounts `AdminGuard` twice; each mount called `POST /auth/refresh`. The backend rotates refresh tokens (single-use CAS), so the first call consumed the cookie token and the second call failed with `401`, triggering redirect to login.
+
+**Decision:**
+1. Centralise restore in `lib/restore-admin-session.ts` with a **single in-flight promise** so concurrent callers share one refresh round-trip.
+2. Expose `useAdminSessionRestore()` for `AdminGuard` and `AdminConsoleShell` (shell previously redirected to login before restore completed).
+3. Reset the in-flight cache on `clearSession()` (logout).
+4. Unit tests in `lib/restore-admin-session.test.ts` cover dedupe, admin role parsing, and failure paths.
+
+**Rationale:** Token rotation is correct server behaviour; the client must not issue parallel refresh requests on mount. Same pattern as idempotent retry — one execution per logical restore.
+
+**Affected files:** `frontend/lib/restore-auth-session.ts`, `frontend/lib/restore-admin-session.ts`, `frontend/hooks/use-auth-session-restore.ts`, `frontend/hooks/use-admin-session-restore.ts`, `frontend/components/auth/AdminGuard.tsx`, `frontend/components/admin/AdminConsoleShell.tsx`, `frontend/app/(auth)/admin/login/page.tsx`, `frontend/stores/auth.ts`.
+
+**Follow-up (same day):** Generalised deduped refresh into `restoreAuthSessionFromCookie()`; `AccountGuard` uses `useAccountSessionRestore()` so customer `/dashboard` and account routes survive page reload the same way. `/admin/login` redirects to `/admin` when a valid admin refresh cookie is already present.
 
 ---
 

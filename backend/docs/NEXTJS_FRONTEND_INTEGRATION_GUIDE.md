@@ -671,7 +671,7 @@ Analytics/chart implementation should match TRD expectations (Recharts primitive
 **Frontend Requirements:**
 - Never store tokens in `localStorage` or `sessionStorage`
 - Access tokens stay in memory (Zustand/Redux store) — lost on page refresh by design
-- **On page refresh:** `AdminGuard` must attempt `POST /api/v1/auth/refresh` before redirecting to login. The refresh token cookie survives page reload; ignoring it causes unnecessary re-authentication on every browser reload.
+- **On page refresh:** `AdminGuard` (via `restoreAuthSessionFromCookie()` / `useAdminSessionRestore`) and `AccountGuard` (via `useAccountSessionRestore`) must each attempt **one** shared deduped `POST /api/v1/auth/refresh` before redirecting to login. The refresh token cookie survives page reload. React Strict Mode double-mounts must not fire two parallel refreshes (backend rotates refresh tokens; the second call would fail with `401`). Implementation: `frontend/lib/restore-auth-session.ts`.
 - Refresh happens automatically via httpOnly cookie
 - For ops UI: cookie handling is automatic, no manual token management needed
 
@@ -680,7 +680,7 @@ Analytics/chart implementation should match TRD expectations (Recharts primitive
 ```
 1. Page load / refresh:
    AdminGuard checks accessToken in Zustand store
-   → null? → call POST /api/v1/auth/refresh silently
+   → null? → call POST /api/v1/auth/refresh silently (deduped — one in-flight request)
      → success: parse JWT claims (sub, role, permissions) → setSession() → render console
      → failure: clearSession() → router.replace('/admin/login')
    → present? → validate canAccessAdmin(user) → render console

@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { useAdminSessionRestore } from "@/hooks/use-admin-session-restore";
 import { LogOut, Menu, X, Settings2 } from "lucide-react";
 import { ADMIN_NAV_ITEMS, isAdminNavActive } from "@/components/admin/admin-nav-config";
 import { AdminSessionProvider } from "@/components/admin/AdminSessionProvider";
@@ -12,7 +13,7 @@ import { AdminLoadingBlock } from "@/components/admin/ui/admin-ui";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/stores/auth";
-import { isAdminUser, canViewAdminRoute } from "@/lib/permissions";
+import { canViewAdminRoute } from "@/lib/permissions";
 import { logoutSession } from "@/lib/auth-api";
 
 interface AdminConsoleShellProps {
@@ -24,16 +25,15 @@ export function AdminConsoleShell({ children }: AdminConsoleShellProps) {
   const pathname = usePathname();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
-  
-  const accessToken = useAuthStore((state) => state.accessToken);
-  const user = useAuthStore((state) => state.user);
+
+  const { status, accessToken, user } = useAdminSessionRestore();
   const clearSession = useAuthStore((state) => state.clearSession);
 
   useEffect(() => {
-    if (!isAdminUser(user)) {
+    if (status === "failed") {
       router.replace("/admin/login");
     }
-  }, [user, router]);
+  }, [status, router]);
 
   const closeMobileNav = () => setMobileNavOpen(false);
 
@@ -48,7 +48,15 @@ export function AdminConsoleShell({ children }: AdminConsoleShellProps) {
     }
   }
 
-  if (!isAdminUser(user)) {
+  if (status === "checking" || status === "restoring") {
+    return (
+      <div className="admin-console flex min-h-screen items-center justify-center bg-[#faf3ef]">
+        <AdminLoadingBlock label="Restoring admin session…" />
+      </div>
+    );
+  }
+
+  if (status === "failed" || !user) {
     return (
       <div className="admin-console flex min-h-screen items-center justify-center bg-[#faf3ef]">
         <AdminLoadingBlock label="Redirecting to sign in…" />

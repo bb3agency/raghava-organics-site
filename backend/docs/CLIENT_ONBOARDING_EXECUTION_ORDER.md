@@ -516,9 +516,12 @@ DATABASE_URL="$MIGRATE_DATABASE_URL" npx prisma migrate deploy --schema prisma/s
 
 # VPS production: use compose overlay to avoid starting compose postgres
 docker compose -f docker-compose.yml -f docker-compose.prod.yml -p <client-id> up -d --build backend workers
+
+# Install daily automated cleanup script (one-time per client)
+sudo ./scripts/install-vps-cleanup.sh "<client-id>" "/var/www/<client-id>" "<client-id>-frontend"
 ```
 
-Reference: `docs/CLIENT_VPS_SETUP_GUIDE.md` §6–§7 (first deploy), §22 (automated CD setup), and `docs/PHASE7_VPS_DEPLOY_INCIDENT_PLAYBOOK.md`.
+Reference: `docs/CLIENT_VPS_SETUP_GUIDE.md` §6–§7 (first deploy), §12 (automated cleanup), §22 (automated CD setup), and `docs/PHASE7_VPS_DEPLOY_INCIDENT_PLAYBOOK.md`.
 
 ### 7.3 — Nginx configuration
 

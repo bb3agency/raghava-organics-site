@@ -1389,6 +1389,8 @@ Runtime env files are **never written by deploy scripts** — they must be place
 | `.github/workflows/deploy.yml` | Deploy workflow at **repo root** for monorepos, or `backend/.github/workflows/deploy.yml` for backend-only repos. `runs-on: ${{ vars.VPS_RUNNER_LABEL \|\| 'self-hosted' }}` — jobs `deploy-backend` and `deploy-frontend` |
 | `scripts/vps-deploy.sh` | Backend deploy script — Docker Compose build + migration + container swap |
 | `scripts/vps-frontend-deploy.sh` | Frontend deploy script — Next.js build + PM2 zero-downtime reload |
+| `scripts/vps-cleanup-template.sh` | **Template** for daily automated VPS cleanup (Docker, PM2, logs, cache) |
+| `scripts/install-vps-cleanup.sh` | **Installer** for per-client cron cleanup (`/etc/cron.daily/vps-cleanup-<client>`) |
 | `backend/docs/templates/scripts/install-github-runner.sh` | Reusable runner installer for client docs/scripts |
 | `backend/docs/templates/scripts/verify-cd-status.sh` | Reusable VPS verification helper (runner/CD/PM2/Docker) |
 | `backend/docs/templates/scripts/migrate-runner-directory.sh` | One-time legacy runner dir migration helper |
@@ -1404,6 +1406,68 @@ Runtime env files are **never written by deploy scripts** — they must be place
 - Self-hosted runner under systemd can have minimal PATH; VPS scripts must prefer project-local CLIs (`node_modules/.bin/*`) over global `npx`.
 - Production backend image intentionally strips `npm`/`npx`; do not run `npx prisma generate` inside runtime containers.
 - Runtime readiness (`/api/v1/health/ready`) is a hard gate. Missing Ops DB-overlay keys (`PAYMENT_PROVIDER`, `SHIPPING_PROVIDER`, `SMS_PROVIDER`, strict tokens/allowlists) correctly fail deploy until Phase 8 config is complete.
+
+---
+
+## 12. Automated VPS cleanup (per client)
+
+Multi-client VPS deployments accumulate disk space pressure from Docker images, build caches, PM2 logs, and frontend build artifacts. Each client should have an automated daily cleanup script installed.
+
+### 12.1 Cleanup script template
+
+**Template file:** `backend/scripts/vps-cleanup-template.sh`
+**Installer:** `backend/scripts/install-vps-cleanup.sh`
+
+The template is client-agnostic with placeholder variables:
+- `{{CLIENT_ID}}` — client identifier (e.g., `raghava-organics`)
+- `{{FRONTEND_PATH}}` — path to deployed frontend (e.g., `/var/www/raghava-organics`)
+- `{{PM2_PROCESS_NAME}}` — PM2 process name (e.g., `raghava-organics-frontend`)
+
+### 12.2 What the cleanup script handles
+
+| Resource | Action | Safety |
+|----------|--------|--------|
+| Docker images | `docker system prune -f` (dangling only) | Running containers untouched |
+| Docker build cache | `docker buildx prune --keep-storage 5GB` | Retains 5GB recent cache |
+| PM2 logs | `pm2 flush <process-name>` | Client-scoped only |
+| Next.js cache | Removes `.next/cache/*` | Rebuilds on next deploy |
+| Old rotated logs | Deletes `.gz`/`.old` files >7 days | Preserves current logs |
+| NPM cache | `npm cache clean --force` | Global cleanup |
+| System journal | `journalctl --vacuum-size=200M` | Caps at 200MB |
+| **Actions Runner** | Removes `_work/*` and `_tool/*` | Clears old build artifacts/downloads |
+
+### 12.3 Installation (one-time per client)
+
+Run during Phase 7 backend deploy or manually:
+
+```bash
+# On VPS, from backend directory
+sudo ./scripts/install-vps-cleanup.sh \
+  "raghava-organics" \
+  "/var/www/raghava-organics" \
+  "raghava-organics-frontend"
+```
+
+This creates `/etc/cron.daily/vps-cleanup-raghava-organics` which runs daily at 06:25 AM (system cron schedule).
+
+### 12.4 Verification
+
+```bash
+# Check script exists and is executable
+ls -la /etc/cron.daily/vps-cleanup-<client-id>
+
+# Check log from last run
+cat /var/log/vps-cleanup-<client-id>.log
+
+# Manual test run
+sudo /etc/cron.daily/vps-cleanup-<client-id>
+```
+
+### 12.5 Multi-client considerations
+
+- **Docker cleanup is global** — affects all clients on the VPS. This is intentional; unused images/volumes benefit all clients.
+- **PM2 log flush is client-scoped** — only touches the specified process name, leaving other clients' logs intact.
+- **Install once per client** during initial deploy. The `phase7-backend-deploy.sh` script auto-installs this if the installer is present.
 
 ---
 

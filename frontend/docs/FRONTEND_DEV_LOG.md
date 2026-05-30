@@ -230,6 +230,10 @@ NEXT_PUBLIC_RAZORPAY_KEY_ID=(pending)
 - Admin login step-1 hardening (2026-05-28):
   - Backend: known admin wrong password → `401 INVALID_CREDENTIALS`; deactivated → `401 UNAUTHORISED`; unknown email → generic `200` (no OTP).
   - Frontend: `AdminLoginForm` stays on credentials for those 401s; `getAdminLoginErrorMessage()` maps password failures to "Incorrect password."
+- Admin session restore fix (2026-05-28):
+  - `restoreAuthSessionFromCookie()` dedupes `POST /auth/refresh` (fixes React Strict Mode double-mount invalidating rotated refresh tokens).
+  - `useAdminSessionRestore()` / `useAccountSessionRestore()` via shared `useAuthSessionRestore()` — `AdminGuard`, `AdminConsoleShell`, `AccountGuard`, `/admin/login` redirect-when-ready.
+  - Tests: `lib/restore-auth-session.test.ts`, `lib/restore-admin-session.test.ts`.
 - Full ops/admin contract rebaseline (2026-05-23):
   - Removed stale ops approvals surface and admin MFA/TOTP UI; admin login is email OTP (`request-otp` → `verify-otp`).
   - Ops browser integration via `lib/ops-client-api.ts` (`credentials: 'include'`); server metrics remain in `lib/ops-api.ts`.

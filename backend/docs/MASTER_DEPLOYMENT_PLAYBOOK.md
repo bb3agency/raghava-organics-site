@@ -886,6 +886,11 @@ docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml u
 curl http://127.0.0.1:3001/api/v1/health  # verify db + redis connected
 curl http://127.0.0.1:3001/api/v1/health/ready  # Phase 7: informational; go-live requires status=ready and runtimeConfigMissingKeys=[]
 
+# 7.5 Install daily automated cleanup script (one-time per client — prevents disk space exhaustion)
+cd /var/www/<client-id>/backend
+sudo ./scripts/install-vps-cleanup.sh "<client-id>" "/var/www/<client-id>" "<client-id>-frontend"
+# Verify: cat /var/log/vps-cleanup-<client-id>.log (runs daily at 06:25 AM via system cron)
+
 # 7. Build and start frontend (FIRST-TIME BOOTSTRAP ONLY)
 # After completing §22 (runner setup), all subsequent frontend deploys are automated:
 # git push → CI → runner → vps-frontend-deploy.sh → npm run build → pm2 reload (zero downtime)

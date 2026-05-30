@@ -287,6 +287,7 @@ docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml u
 
 ## Runner maintenance (~1–2× per year)
 
+### Updating Runner Version
 GitHub deprecates old runner versions. Re-register:
 
 ```bash
@@ -298,6 +299,18 @@ sudo ./svc.sh stop
   --name "<client-id>-vps" --labels "self-hosted,<client-id>-vps" --unattended
 sudo ./svc.sh install && sudo ./svc.sh start
 ```
+
+### Disk Space Maintenance (Automated)
+Self-hosted runners accumulate substantial disk space from old build artifacts (`_work/` directory) and downloaded build tool cache (`_tool/` directory), often reaching multiple gigabytes.
+
+To prevent disk saturation on a shared multi-client VPS, this is automatically handled by the **VPS Cleanup Template** (`vps-cleanup-template.sh`) installed in `/etc/cron.daily/vps-cleanup-<client-id>`.
+
+The script runs daily at 06:25 AM and automatically runs:
+```bash
+rm -rf ~/actions-runner-<client-id>/_work/*
+rm -rf ~/actions-runner-<client-id>/_tool/*
+```
+*Note: This is fully safe. The runner will automatically recreate these folders and re-fetch any required tool caches on the next deployment run.*
 
 ---
 

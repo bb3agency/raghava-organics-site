@@ -4,6 +4,26 @@ This document preserves detailed hardening history for engineering traceability.
 
 ## Recent hardening changes
 
+---
+
+**VPS automated cleanup script template for multi-client deployments — May 30, 2026:**
+Root cause: Manual disk space cleanup was required periodically on the VPS (83% full). The existing cron job only cleaned Docker buildx cache, missing images, containers, volumes, PM2 logs, and frontend build caches. For multi-client VPS deployments, cleanup needs to be systematic and templated.
+Changes applied: Created `scripts/vps-cleanup-template.sh` — a configurable bash script template that handles:
+- Docker system prune (dangling images/containers/volumes, with 5GB build cache retention)
+- Client-specific PM2 log flushing (by process name, not global)
+- Next.js build cache cleanup (`.next/cache/*`)
+- Old log rotation cleanup (`.gz`/`.old` files >7 days)
+- NPM cache cleanup
+- System journal vacuum (capped at 200MB)
+- GitHub Actions self-hosted runner cache (`_work/*` and `_tool/*`)
+- Disk usage reporting with high-usage alerts (>80%)
+
+Also created `scripts/install-vps-cleanup.sh` — an installer that copies the template to `/etc/cron.daily/vps-cleanup-<CLIENT_ID>` with proper variable substitution for client ID, frontend path, and PM2 process name. Scheduled via system cron (runs daily at 06:25 AM alongside other cron.daily tasks).
+
+**Deactivated admin phone number reuse during invite setup — May 30, 2026:**
+Root cause: During admin invite consumption (`POST /api/v1/auth/admin/invites/setup/send-otp`), `assertInvitePhoneAvailable` blocked the phone number if it belonged to *any* user except the exact ID matching the invite email. If a user had an old, deactivated admin account using `+911234567890`, and was then invited on a *new* email address, they were permanently blocked from using their phone number on the new account.
+Changes applied: Updated `assertInvitePhoneAvailable` to skip the conflict check if the existing user owning the phone number is a deactivated merchant admin (`role=ADMIN`, `isBanned=true`). Their phone number is now effectively "freed up" and can be claimed by a new active account. Customers and active ops/admin users still trigger a 409 Conflict.
+
 **Admin session persistence, idle timeout, and login/setup UX hardening — May 28, 2026:**
 
 Root cause: `AdminGuard` redirected to `/admin/login` whenever `accessToken` was `null` in the Zustand store — which is always on a cold page load/refresh since Zustand is in-memory only. This meant a valid refresh token cookie was completely ignored on page reload, requiring the admin to re-authenticate every time they refreshed the browser tab. Additionally, the session warning component offered only a page-reload fallback rather than a real token extension, and there was no idle timeout mechanism to auto-logout inactive sessions.

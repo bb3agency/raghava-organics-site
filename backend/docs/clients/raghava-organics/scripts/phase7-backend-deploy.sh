@@ -68,6 +68,14 @@ for i in $(seq 1 30); do
     docker image prune -f >/dev/null 2>&1 || true
     docker buildx prune --force --keep-storage 3GB >/dev/null 2>&1 || true
 
+    # Install daily VPS cleanup script for this client (if not already present)
+    log "Installing daily VPS cleanup script..."
+    if [ -f "$BACKEND_PATH/scripts/install-vps-cleanup.sh" ]; then
+      sudo "$BACKEND_PATH/scripts/install-vps-cleanup.sh" "$CLIENT_ID" "/var/www/$CLIENT_ID" "$CLIENT_ID-frontend" || true
+    else
+      log "Note: install-vps-cleanup.sh not found in backend/scripts — ensure cleanup is configured manually"
+    fi
+
     exit 0
   fi
   sleep 2

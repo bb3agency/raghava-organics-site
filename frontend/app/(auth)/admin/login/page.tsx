@@ -2,21 +2,37 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense } from "react";
+import { Suspense, useEffect } from "react";
 import { AdminLoginForm } from "@/components/auth/AdminLoginForm";
 import type { AuthSession } from "@/types/user";
 import { useAuthStore } from "@/stores/auth";
+import { useAdminSessionRestore } from "@/hooks/use-admin-session-restore";
 
 function AdminLoginContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const setSession = useAuthStore((state) => state.setSession);
+  const { status } = useAdminSessionRestore();
   const enrollmentHint = searchParams.get("mfaEnrollment") === "1";
+
+  useEffect(() => {
+    if (status === "ready") {
+      router.replace("/admin");
+    }
+  }, [status, router]);
 
   const handleSuccess = async (session: AuthSession) => {
     setSession(session.accessToken, session.user);
     router.replace("/admin");
   };
+
+  if (status === "checking" || status === "restoring" || status === "ready") {
+    return (
+      <p className="text-sm text-muted-foreground" role="status" aria-live="polite">
+        {status === "ready" ? "Redirecting to admin console…" : "Checking admin session…"}
+      </p>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-6 rounded-lg border border-border p-8">

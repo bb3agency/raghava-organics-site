@@ -107,11 +107,18 @@ export class AdminInvitesService {
     }
     const existingPhone = await this.fastify.prisma.user.findFirst({
       where: { phone },
-      select: { id: true }
+      select: { id: true, role: true, isBanned: true }
     });
-    if (existingPhone && existingPhone.id !== reactivateUserId) {
-      throw new AppError(ERROR_CODES.CONFLICT, 'User already exists for invite phone number', 409);
+    if (!existingPhone) {
+      return;
     }
+    if (existingPhone.id === reactivateUserId) {
+      return;
+    }
+    if (isDeactivatedMerchantAdmin(existingPhone)) {
+      return;
+    }
+    throw new AppError(ERROR_CODES.CONFLICT, 'User already exists for invite phone number', 409);
   }
 
   async createAdminInvite(input: {
