@@ -83,8 +83,9 @@ services:
       timeout: 3s
       retries: 10
       start_period: 10s
-    ports:
-      - "${REDIS_PORT:-6379}:6379"
+    # ports disabled for multi-client VPS security (Redis accessible only via Docker network)
+    # ports:
+    #   - "${REDIS_PORT:-6379}:6379"
     environment:
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
     volumes:
