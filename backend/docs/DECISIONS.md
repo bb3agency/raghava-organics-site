@@ -74,6 +74,10 @@
 
 **Follow-up — cookie same-site (2026-05-28):** Refresh still failed when `NEXT_PUBLIC_API_BASE_URL` pointed at `localhost:3000` while the UI ran on `localhost:3101` (cross-origin — browser never stored/sent `refresh_token`). Fix: Next.js rewrite `/api/v1/*` → Fastify; browser base URL must be storefront origin (`http://localhost:3101/api/v1`); `lib/api-base.ts` auto-corrects legacy cross-port env in the browser; `auth-cookies.ts` omits `Secure` in development/test for http local dev.
 
+**Follow-up — admin OTP device binding (2026-06-01):** Production refresh after admin login still failed because `POST /auth/admin/login/verify-otp` did not forward `extractAbuseRiskContext()` into `verifyAdminLoginOtp`, so the stored `deviceKeyHash` did not match `/auth/refresh` (session family revoked). Fix: forward risk on verify-otp; bind refresh tokens to **User-Agent + trusted client IP only** (ignore client-supplied fingerprint headers for binding); set `refresh_token` cookie `Path=/api/v1`; clear cookie on `401` refresh. **Deploy note:** existing refresh rows with old hash format require one re-login after backend deploy.
+
+**Security properties (unchanged intent):** `httpOnly` + `SameSite=Strict` + `Secure` (production); single-use refresh rotation (CAS); access token in memory only; device mismatch revokes session family; rate-limited `/auth/refresh`. Requires `TRUSTED_PROXY_ALLOWLIST_CIDR` on VPS so `request.ip` is stable behind Nginx.
+
 ---
 
 ## [2026-05-28] Merchant admin lifecycle managed from ops console (list + OTP-gated deactivate)

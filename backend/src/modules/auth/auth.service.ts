@@ -186,15 +186,22 @@ export class AuthService {
     return secret;
   }
 
-  private deriveTokenIssueContext(context?: LoginContext): TokenIssueContext {
-    const sessionSource = context?.risk?.sessionId?.trim() || crypto.randomUUID();
-    const deviceFingerprint = context?.risk?.deviceFingerprint?.trim() || 'unknown-device';
-    const tlsFingerprint = context?.risk?.tlsFingerprint?.trim() || 'unknown-tls';
+  /**
+   * Binds refresh tokens to server-observable signals only (User-Agent + client IP).
+   * Client-supplied fingerprint headers are ignored for binding — they are optional abuse
+   * signals elsewhere, not a trust anchor (prevents spoofing to bypass stolen-cookie checks).
+   */
+  private deriveDeviceKeyHash(context?: LoginContext): string {
     const userAgent = context?.risk?.userAgent?.trim() || 'unknown-agent';
     const clientIp = context?.clientIp?.trim() || 'unknown-ip';
+    return stableHash(`${userAgent}|${clientIp}`);
+  }
+
+  private deriveTokenIssueContext(context?: LoginContext): TokenIssueContext {
+    const sessionSource = context?.risk?.sessionId?.trim() || crypto.randomUUID();
     return {
       sessionId: sessionSource.slice(0, 128),
-      deviceKeyHash: stableHash(`${deviceFingerprint}|${tlsFingerprint}|${userAgent}|${clientIp}`)
+      deviceKeyHash: this.deriveDeviceKeyHash(context)
     };
   }
 
@@ -965,6 +972,7 @@ export class AuthService {
     email: string;
     otp: string;
     clientIp: string;
+    risk?: AbuseRiskContext;
   }): Promise<AuthResult> {
     const emailNorm = input.email.trim().toLowerCase();
     const otpKey = `auth:admin:login-otp:${stableHash(emailNorm)}`;
@@ -1005,7 +1013,14 @@ export class AuthService {
     }
 
     await this.clearFailedAuthAttempts(input.email, input.clientIp, 'admin');
-    return this.issueTokensForUser(user, this.deriveTokenIssueContext({ clientIp: input.clientIp, audience: 'admin' }));
+    return this.issueTokensForUser(
+      user,
+      this.deriveTokenIssueContext({
+        clientIp: input.clientIp,
+        audience: 'admin',
+        ...(input.risk ? { risk: input.risk } : {})
+      })
+    );
   }
 
   async refresh(refreshToken: string, context?: LoginContext): Promise<{ accessToken: string; refreshToken: string }> {

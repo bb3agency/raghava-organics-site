@@ -15,7 +15,21 @@ This guide describes how a **single Next.js frontend app** serving storefront an
 | `NEXT_PUBLIC_RAZORPAY_KEY_ID` | `rzp_live_xxx` | **Public** key only — never put key secret in Next bundle |
 | Server-only `INTERNAL_API_BASE_URL` | `http://127.0.0.1:<BACKEND_PORT>/api/v1` | Optional SSR/server-actions bypass of public DNS (same machine as Nginx/backend) |
 
-**Cookie domains:** backend sets **`refresh_token`** and **`cart_session`** with `httpOnly`, `sameSite: 'strict'`, and `Secure` in production-like profiles (`TRD.md` §8.3, constraint C-20). Development/test omits `Secure` on `refresh_token` (`auth-cookies.ts`). Frontends **must** call the API on the **same site** as the browser UI so cookies are stored and sent on `credentials: 'include'` requests.
+**Cookie domains:** backend sets **`refresh_token`** and **`cart_session`** with `httpOnly`, `sameSite: 'strict'`, and `Secure` in production-like profiles (`TRD.md` §8.3, constraint C-20). Development/test omits `Secure` on `refresh_token` (`auth-cookies.ts`). The refresh cookie uses **`Path=/api/v1`** (not site-wide `/`) so it is only sent to API routes. Frontends **must** call the API on the **same site** as the browser UI so cookies are stored and sent on `credentials: 'include'` requests.
+
+### 1.0.2 Session refresh security model (admin + customer)
+
+| Control | Behaviour |
+| --- | --- |
+| Access token | Short-lived JWT in memory (Zustand) only — not `localStorage` |
+| Refresh token | `httpOnly` cookie; rotated on every `POST /auth/refresh` (single-use CAS) |
+| CSRF | `SameSite=Strict` on refresh cookie — cross-site pages cannot trigger refresh |
+| Device binding | Refresh tokens bound to **User-Agent + client IP** (from trusted proxy). Mismatch revokes the session family |
+| Failed refresh | Backend clears `refresh_token` cookie on `401` |
+| Client restore | `restore-auth-session.ts` dedupes refresh (React Strict Mode safe) |
+| Admin OTP login | Verify-otp route forwards the same risk context as refresh (required for binding) |
+
+**Threat model notes:** Session persistence after reload is intentional when the refresh cookie is valid. Stolen-cookie abuse is mitigated by rotation, binding, and `Secure`/`httpOnly`/`SameSite` — not by disabling refresh. Configure **`TRUSTED_PROXY_ALLOWLIST_CIDR`** on the VPS so Nginx-forwarded client IPs are correct (`backend/.env` / Ops UI).
 
 ### 1.0.1 Local development — same-site API (required for admin/customer session refresh)
 

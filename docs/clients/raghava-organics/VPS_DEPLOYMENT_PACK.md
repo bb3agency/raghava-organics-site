@@ -15,7 +15,7 @@ Fill [VPS_INPUTS.md](./VPS_INPUTS.md) first, then run scripts under [scripts/](.
 | `POSTGRES_DB` (host) | `raghava_organics` |
 | VPS backend path | `/var/www/raghava-organics/backend` |
 | VPS frontend path | `/var/www/raghava-organics/frontend` |
-| Local API (dev) | `http://localhost:3000/api/v1` |
+| Local API (dev) | `http://localhost:3101/api/v1` (Next rewrite → backend `3000`) |
 | Production API | `https://raghavaorganics.com/api/v1` |
 | Production domain | `raghavaorganics.com` |
 | VPS IP | `178.104.46.202` |
@@ -48,6 +48,8 @@ DATABASE_URL="$MIGRATE_DATABASE_URL" npx prisma migrate deploy --schema prisma/s
 ## Phase 1 production `.env` (bootstrap-only)
 
 Copy to VPS `/var/www/raghava-organics/backend/.env` from vault. Template: [production.backend.env.example](./production.backend.env.example)
+
+**Session refresh on production:** After TLS, confirm `TRUSTED_PROXY_ALLOWLIST_CIDR` includes your Nginx/proxy CIDR (via Ops UI or bootstrap `.env`) so refresh token device binding sees the real client IP. Frontend `NEXT_PUBLIC_API_BASE_URL` must be `https://<domain>/api/v1` (same origin as the storefront). Admins must re-login once after deploying the 2026-06-01 refresh-binding fix if reload still logs them out.
 
 Generate secrets:
 

@@ -146,7 +146,7 @@ describe('AuthService refresh hardening + logout', () => {
     );
     const deviceKeyHash = crypto
       .createHash('sha256')
-      .update('device-a|tls-a|ua-a|127.0.0.1')
+      .update('ua-a|127.0.0.1')
       .digest('hex');
     mocks.refreshFindUnique.mockResolvedValue({
       id: 'rt-1',

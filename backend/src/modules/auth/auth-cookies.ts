@@ -1,5 +1,8 @@
 const REFRESH_COOKIE_MAX_AGE_SECONDS = 7 * 24 * 60 * 60;
 
+/** Limits cookie to API routes only (same pattern as `ops_session` → `/api/v1/ops`). */
+export const REFRESH_COOKIE_PATH = '/api/v1';
+
 function isProductionLikeCookieProfile(): boolean {
   const env = (process.env.NODE_ENV ?? 'development').trim().toLowerCase();
   return env !== 'development' && env !== 'test';
@@ -15,7 +18,7 @@ export function buildRefreshTokenSetCookieHeader(token: string): string {
     `refresh_token=${encodeURIComponent(token)}`,
     'HttpOnly',
     'SameSite=Strict',
-    'Path=/',
+    `Path=${REFRESH_COOKIE_PATH}`,
     `Max-Age=${REFRESH_COOKIE_MAX_AGE_SECONDS}`
   ];
 
@@ -31,7 +34,7 @@ export function buildRefreshTokenClearCookieHeader(): string {
     'refresh_token=',
     'HttpOnly',
     'SameSite=Strict',
-    'Path=/',
+    `Path=${REFRESH_COOKIE_PATH}`,
     'Max-Age=0'
   ];
 

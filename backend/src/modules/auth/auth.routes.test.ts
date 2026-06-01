@@ -4,7 +4,10 @@ import bcrypt from 'bcryptjs';
 import crypto from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { AppError } from '@common/errors/app-error';
+import { ERROR_CODES } from '@common/errors/error-codes';
 import { registerAuthRoutes } from './auth.routes';
+import { AuthService } from './auth.service';
 import { adminInviteCreateSchema } from './auth.schemas';
 
 interface MockError {
@@ -513,6 +516,82 @@ describe('auth routes admin login OTP (deactivated admin)', () => {
     const body = response.json() as { error?: { code?: string } };
     expect(body.error?.code).toBe('UNAUTHORISED');
 
+    await app.close();
+  });
+
+  it('POST /auth/refresh clears refresh_token cookie on 401', async () => {
+    const refreshSpy = vi.spyOn(AuthService.prototype, 'refresh').mockRejectedValue(
+      new AppError(ERROR_CODES.UNAUTHORISED, 'Invalid refresh token', 401)
+    );
+
+    const { app } = createApp();
+    await registerAuthRoutes(app);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/refresh',
+      headers: {
+        cookie: 'refresh_token=stale-token'
+      },
+      payload: {}
+    });
+
+    expect(response.statusCode).toBe(401);
+    expect(response.headers['set-cookie']).toContain('refresh_token=');
+    expect(response.headers['set-cookie']).toContain('Max-Age=0');
+
+    refreshSpy.mockRestore();
+    await app.close();
+  });
+
+  it('POST /auth/admin/login/verify-otp forwards abuse risk context for stable refresh token binding', async () => {
+    const verifySpy = vi.spyOn(AuthService.prototype, 'verifyAdminLoginOtp').mockResolvedValue({
+      accessToken: 'access-token',
+      refreshToken: 'refresh-token',
+      user: {
+        id: 'admin_1',
+        email: ADMIN_TEST_EMAIL,
+        phone: '+910000000000',
+        firstName: 'Admin',
+        lastName: 'User',
+        role: Role.ADMIN,
+        isVerified: true
+      }
+    });
+
+    const { app } = createApp();
+    await registerAuthRoutes(app);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/admin/login/verify-otp',
+      headers: {
+        'user-agent': 'vitest-agent',
+        'x-session-id': 'session-123',
+        'x-device-fingerprint': 'device-123',
+        'x-ja3-fingerprint': 'tls-123'
+      },
+      payload: {
+        email: ADMIN_TEST_EMAIL,
+        otp: '654321'
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(verifySpy).toHaveBeenCalledWith({
+      email: ADMIN_TEST_EMAIL,
+      otp: '654321',
+      clientIp: '127.0.0.1',
+      risk: {
+        sessionId: 'session-123',
+        deviceFingerprint: 'device-123',
+        tlsFingerprint: 'tls-123',
+        userAgent: 'vitest-agent'
+      }
+    });
+    expect(response.headers['set-cookie']).toContain('refresh_token=');
+
+    verifySpy.mockRestore();
     await app.close();
   });
 });

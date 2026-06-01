@@ -28,6 +28,8 @@ Changes applied: Updated `assertInvitePhoneAvailable` to skip the conflict check
 
 Root cause (2026-05-28 cookie same-site): `NEXT_PUBLIC_API_BASE_URL` pointed at `localhost:3000` while the UI ran on `localhost:3101`, so `refresh_token` was never sent on reload. Fix: Next rewrite `/api/v1/*`, browser base on storefront origin (`lib/api-base.ts`), deduped refresh (`lib/restore-auth-session.ts`), dev refresh cookies without `Secure` (`auth-cookies.ts`).
 
+**2026-06-01 — production admin refresh logout:** Admin OTP verify did not pass abuse/risk context into token issuance, so refresh `deviceKeyHash` mismatched and sessions were revoked on reload. Fix: forward risk on `POST /auth/admin/login/verify-otp`; device binding uses UA+IP only; `refresh_token` `Path=/api/v1`; clear cookie on refresh `401`. Re-login once after deploy if sessions were issued before this patch.
+
 Root cause: `AdminGuard` redirected to `/admin/login` whenever `accessToken` was `null` in the Zustand store — which is always on a cold page load/refresh since Zustand is in-memory only. This meant a valid refresh token cookie was completely ignored on page reload, requiring the admin to re-authenticate every time they refreshed the browser tab. Additionally, the session warning component offered only a page-reload fallback rather than a real token extension, and there was no idle timeout mechanism to auto-logout inactive sessions.
 
 Changes applied:

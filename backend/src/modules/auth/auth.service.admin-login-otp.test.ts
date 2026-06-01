@@ -33,6 +33,8 @@ function createHarness(overrides: {
   const notificationsAdd = vi.fn().mockResolvedValue(undefined);
   const permGrantFindMany = vi.fn().mockResolvedValue([]);
   const refreshCreate = vi.fn().mockResolvedValue({ id: 'rt_1' });
+  const refreshFindUnique = vi.fn().mockResolvedValue(null);
+  const refreshUpdateMany = vi.fn().mockResolvedValue({ count: 1 });
   const storeSettingsFindUnique = vi.fn().mockResolvedValue({
     notifyEmailEnabled: true,
     notifySmsEnabled: false,
@@ -53,7 +55,12 @@ function createHarness(overrides: {
     prisma: {
       user: { findUnique: userFindUnique, findFirst: vi.fn().mockResolvedValue(null) },
       adminPermissionGrant: { findMany: permGrantFindMany },
-      refreshToken: { create: refreshCreate, findMany: vi.fn().mockResolvedValue([]) },
+      refreshToken: {
+        create: refreshCreate,
+        findUnique: refreshFindUnique,
+        findMany: vi.fn().mockResolvedValue([]),
+        updateMany: refreshUpdateMany
+      },
       storeSettings: { findUnique: storeSettingsFindUnique }
     },
     jwt: { sign: vi.fn().mockReturnValue('signed-token') }
@@ -61,7 +68,20 @@ function createHarness(overrides: {
 
   return {
     service: new AuthService(fastify),
-    mocks: { userFindUnique, redisGet, redisSet, redisDel, redisIncr, redisExpire, notificationsAdd, permGrantFindMany, refreshCreate, storeSettingsFindUnique }
+    mocks: {
+      userFindUnique,
+      redisGet,
+      redisSet,
+      redisDel,
+      redisIncr,
+      redisExpire,
+      notificationsAdd,
+      permGrantFindMany,
+      refreshCreate,
+      refreshFindUnique,
+      refreshUpdateMany,
+      storeSettingsFindUnique
+    }
   };
 }
 
@@ -245,6 +265,72 @@ describe('AuthService.verifyAdminLoginOtp', () => {
       expect.stringContaining('auth:admin:login-otp:'),
       expect.stringContaining('auth:admin:login-otp-attempts:')
     );
+
+    delete process.env.JWT_SECRET;
+    delete process.env.JWT_REFRESH_SECRET;
+  });
+
+  it('issues refresh token that rotates on refresh with matching user-agent and IP', async () => {
+    const email = 'admin@example.com';
+    const otp = '654321';
+    const otpHash = crypto.createHash('sha256').update(otp).digest('hex');
+    const stored = `admin_1||${otpHash}`;
+    const userAgent = 'vitest-admin-browser';
+    const clientIp = '203.0.113.10';
+    const risk = {
+      sessionId: 'admin-session-1',
+      deviceFingerprint: 'ignored-fingerprint',
+      tlsFingerprint: 'ignored-tls',
+      userAgent
+    };
+
+    process.env.JWT_SECRET = 'test-jwt-secret';
+    process.env.JWT_REFRESH_SECRET = 'test-refresh-secret';
+
+    const { service, mocks } = createHarness({ redisGetValue: stored });
+    const issued = await service.verifyAdminLoginOtp({
+      email,
+      otp,
+      clientIp,
+      risk
+    });
+
+    expect(issued.refreshToken).toEqual(expect.any(String));
+    expect(mocks.refreshCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          deviceKeyHash: crypto.createHash('sha256').update(`${userAgent}|${clientIp}`).digest('hex')
+        })
+      })
+    );
+
+    const createData = (mocks.refreshCreate.mock.calls[0]?.[0] as {
+      data: { tokenHash: string; jti: string; sessionId: string; deviceKeyHash: string };
+    }).data;
+    mocks.refreshFindUnique.mockResolvedValue({
+      id: 'rt-1',
+      userId: 'admin_1',
+      jti: createData.jti,
+      sessionId: createData.sessionId,
+      tokenHash: createData.tokenHash,
+      deviceKeyHash: createData.deviceKeyHash,
+      consumedAt: null,
+      revokedAt: null,
+      expiresAt: new Date(Date.now() + 60_000)
+    });
+    mocks.refreshUpdateMany.mockResolvedValue({ count: 1 });
+    mocks.userFindUnique.mockResolvedValue({
+      id: 'admin_1',
+      email,
+      role: 'ADMIN',
+      passwordHash: bcrypt.hashSync('correctpass', 1),
+      isBanned: false,
+      isVerified: true
+    });
+
+    const rotated = await service.refresh(issued.refreshToken, { clientIp, risk });
+    expect(rotated.accessToken).toEqual(expect.any(String));
+    expect(rotated.refreshToken).not.toBe(issued.refreshToken);
 
     delete process.env.JWT_SECRET;
     delete process.env.JWT_REFRESH_SECRET;

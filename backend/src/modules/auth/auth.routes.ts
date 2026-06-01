@@ -243,12 +243,22 @@ export async function registerAuthRoutes(fastify: FastifyInstance): Promise<void
     },
     async (request, reply) => {
       const token = parseRefreshTokenFromCookie(request.headers.cookie);
-      const refreshed = await authService.refresh(token ?? '', {
-        clientIp: request.ip,
-        risk: extractAbuseRiskContext(request.headers as Record<string, unknown>)
-      });
-      setRefreshTokenCookie(reply, refreshed.refreshToken);
-      return { accessToken: refreshed.accessToken };
+      try {
+        const refreshed = await authService.refresh(token ?? '', {
+          clientIp: request.ip,
+          risk: extractAbuseRiskContext(request.headers as Record<string, unknown>)
+        });
+        setRefreshTokenCookie(reply, refreshed.refreshToken);
+        return { accessToken: refreshed.accessToken };
+      } catch (error) {
+        if (
+          error instanceof AppError &&
+          error.code === ERROR_CODES.UNAUTHORISED
+        ) {
+          clearRefreshTokenCookie(reply);
+        }
+        throw error;
+      }
     }
   );
 
@@ -308,7 +318,8 @@ export async function registerAuthRoutes(fastify: FastifyInstance): Promise<void
       const auth = await authService.verifyAdminLoginOtp({
         email: body.email,
         otp: body.otp,
-        clientIp: request.ip
+        clientIp: request.ip,
+        risk: extractAbuseRiskContext(request.headers as Record<string, unknown>)
       });
       setRefreshTokenCookie(reply, auth.refreshToken);
       return {
