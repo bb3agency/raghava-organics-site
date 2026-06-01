@@ -6,6 +6,7 @@ export default function OpsOverviewPage() {
     <OpsPageFrame
       title="Overview"
       description="Platform health, your operator session, and shortcuts to privileged control-plane actions."
+      className="gap-5 sm:gap-6"
     >
       <OpsDashboard />
     </OpsPageFrame>

@@ -145,4 +145,6 @@
 .ops-console {
   --font-sans: var(--font-body);
   --font-heading: var(--font-display);
+  max-width: 100%;
+  overflow-x: clip;
 }

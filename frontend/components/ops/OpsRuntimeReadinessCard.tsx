@@ -54,7 +54,7 @@ export function OpsRuntimeReadinessCard({
   const missingKeys = readiness?.runtimeConfigMissingKeys ?? [];
 
   return (
-    <OpsCard aria-live="polite">
+    <OpsCard className="min-w-0" aria-live="polite">
       <OpsCardHeader
         title="Runtime readiness"
         description="GET /health/ready — polls every 10s"
@@ -65,9 +65,9 @@ export function OpsRuntimeReadinessCard({
             size="sm"
             onClick={() => void loadReadiness()}
             disabled={isLoading}
-            className="gap-2"
+            className="w-full gap-2 sm:w-auto"
           >
-            <RefreshCw className={isLoading ? "size-4 animate-spin" : "size-4"} />
+            <RefreshCw className={isLoading ? "size-4 shrink-0 animate-spin" : "size-4 shrink-0"} />
             Refresh
           </Button>
         }
@@ -76,28 +76,28 @@ export function OpsRuntimeReadinessCard({
       {error && !readiness ? <OpsAlert tone="error">{error}</OpsAlert> : null}
 
       {readiness ? (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <div className="rounded-lg border border-border/60 bg-muted/20 p-4">
+        <div className="grid grid-cols-1 gap-3 min-[420px]:grid-cols-2 lg:grid-cols-4 lg:gap-4">
+          <div className="min-w-0 rounded-lg border border-border/60 bg-muted/20 p-4">
             <p className="text-xs text-muted-foreground">Status</p>
             <OpsBadge tone={isReady ? "success" : "warning"} className="mt-2">
               {readiness.status}
             </OpsBadge>
           </div>
-          <div className="rounded-lg border border-border/60 bg-muted/20 p-4">
+          <div className="min-w-0 rounded-lg border border-border/60 bg-muted/20 p-4">
             <p className="text-xs text-muted-foreground">Database</p>
             <OpsBadge tone={readiness.database === "connected" ? "success" : "danger"} className="mt-2">
               {readiness.database}
             </OpsBadge>
           </div>
-          <div className="rounded-lg border border-border/60 bg-muted/20 p-4">
+          <div className="min-w-0 rounded-lg border border-border/60 bg-muted/20 p-4">
             <p className="text-xs text-muted-foreground">Redis</p>
             <OpsBadge tone={readiness.redis === "connected" ? "success" : "danger"} className="mt-2">
               {readiness.redis}
             </OpsBadge>
           </div>
-          <div className="rounded-lg border border-border/60 bg-muted/20 p-4">
+          <div className="min-w-0 rounded-lg border border-border/60 bg-muted/20 p-4 min-[420px]:col-span-2 lg:col-span-1">
             <p className="text-xs text-muted-foreground">Workers</p>
-            <p className="mt-2 text-sm font-medium">{readiness.queues.workerFreshness}</p>
+            <p className="mt-2 text-sm font-medium break-words">{readiness.queues.workerFreshness}</p>
           </div>
         </div>
       ) : !error ? (

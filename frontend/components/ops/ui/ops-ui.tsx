@@ -11,16 +11,22 @@ export interface OpsPageHeaderProps {
 
 export function OpsPageHeader({ title, description, actions }: OpsPageHeaderProps) {
   return (
-    <header className="flex flex-col gap-4 border-b border-border/60 pb-6 sm:flex-row sm:items-start sm:justify-between">
-      <div className="grid gap-1">
-        <h1 className="font-heading text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
+    <header className="flex min-w-0 flex-col gap-3 border-b border-border/60 pb-4 sm:flex-row sm:items-start sm:justify-between sm:gap-4 sm:pb-6">
+      <div className="min-w-0 grid gap-1">
+        <h1 className="font-heading text-xl font-semibold tracking-tight text-foreground sm:text-2xl lg:text-3xl">
           {title}
         </h1>
         {description ? (
-          <p className="max-w-2xl text-sm leading-relaxed text-muted-foreground">{description}</p>
+          <p className="max-w-2xl text-sm leading-relaxed text-pretty text-muted-foreground">
+            {description}
+          </p>
         ) : null}
       </div>
-      {actions ? <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div> : null}
+      {actions ? (
+        <div className="flex w-full min-w-0 shrink-0 flex-wrap items-center gap-2 sm:w-auto sm:justify-end">
+          {actions}
+        </div>
+      ) : null}
     </header>
   );
 }
@@ -38,9 +44,9 @@ export function OpsPageFrame({
   className,
 }: OpsPageFrameProps) {
   return (
-    <div className={cn("grid gap-8", className)}>
+    <div className={cn("grid min-w-0 gap-5 sm:gap-8", className)}>
       <OpsPageHeader title={title} description={description} actions={actions} />
-      {children}
+      <div className="min-w-0">{children}</div>
     </div>
   );
 }
@@ -77,12 +83,16 @@ export interface OpsCardHeaderProps {
 
 export function OpsCardHeader({ title, description, actions }: OpsCardHeaderProps) {
   return (
-    <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-      <div className="grid gap-1">
-        <h2 className="font-heading text-lg font-semibold text-foreground">{title}</h2>
-        {description ? <p className="text-sm text-muted-foreground">{description}</p> : null}
+    <div className="mb-4 flex min-w-0 flex-col gap-3 sm:mb-5 sm:flex-row sm:items-start sm:justify-between">
+      <div className="min-w-0 grid gap-1">
+        <h2 className="font-heading text-base font-semibold text-foreground sm:text-lg">{title}</h2>
+        {description ? (
+          <p className="text-sm text-pretty text-muted-foreground">{description}</p>
+        ) : null}
       </div>
-      {actions ? <div className="flex flex-wrap gap-2">{actions}</div> : null}
+      {actions ? (
+        <div className="flex w-full min-w-0 flex-wrap gap-2 sm:w-auto sm:justify-end">{actions}</div>
+      ) : null}
     </div>
   );
 }
@@ -110,7 +120,7 @@ export function OpsBadge({ children, tone = "default", className }: OpsBadgeProp
   return (
     <span
       className={cn(
-        "inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium",
+        "inline-flex max-w-full items-center rounded-full px-2.5 py-0.5 text-xs font-medium",
         BADGE_TONES[tone],
         className,
       )}
@@ -129,10 +139,19 @@ export interface OpsStatCardProps {
 
 export function OpsStatCard({ label, value, hint, tone = "default" }: OpsStatCardProps) {
   return (
-    <OpsCard padding="md" className="flex flex-col gap-2">
+    <OpsCard padding="md" className="flex min-w-0 flex-col gap-2">
       <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">{label}</p>
-      <p className="font-heading text-2xl font-semibold tabular-nums text-foreground">{value}</p>
-      {hint ? <OpsBadge tone={tone}>{hint}</OpsBadge> : null}
+      <p className="font-heading text-xl font-semibold break-words tabular-nums text-foreground sm:text-2xl">
+        {value}
+      </p>
+      {hint ? (
+        <OpsBadge
+          tone={tone}
+          className="max-w-full whitespace-normal break-words text-left leading-snug"
+        >
+          {hint}
+        </OpsBadge>
+      ) : null}
     </OpsCard>
   );
 }

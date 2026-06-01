@@ -72,7 +72,7 @@ export function OpsConsoleShell({ children }: OpsConsoleShellProps) {
 
   if (loading) {
     return (
-      <div className="dark ops-console flex min-h-screen items-center justify-center bg-background">
+      <div className="dark ops-console flex min-h-dvh w-full items-center justify-center bg-background">
         <OpsLoadingBlock label="Authenticating ops session…" />
       </div>
     );
@@ -80,7 +80,7 @@ export function OpsConsoleShell({ children }: OpsConsoleShellProps) {
 
   if (!session) {
     return (
-      <div className="dark ops-console flex min-h-screen items-center justify-center bg-background">
+      <div className="dark ops-console flex min-h-dvh w-full items-center justify-center bg-background">
         <OpsLoadingBlock label="Redirecting to sign in…" />
       </div>
     );
@@ -90,7 +90,12 @@ export function OpsConsoleShell({ children }: OpsConsoleShellProps) {
 
   return (
     <OpsSessionProvider session={session}>
-      <div className="dark ops-console flex min-h-screen bg-background text-foreground">
+      <div
+        className={cn(
+          "dark ops-console flex min-h-dvh w-full max-w-[100vw] bg-background text-foreground",
+          mobileNavOpen && "max-lg:overflow-hidden",
+        )}
+      >
         {/* Desktop sidebar */}
         <aside
           className="hidden w-64 shrink-0 flex-col border-r border-border/60 bg-sidebar lg:flex"
@@ -126,7 +131,7 @@ export function OpsConsoleShell({ children }: OpsConsoleShellProps) {
         ) : null}
         <aside
           className={cn(
-            "fixed inset-y-0 left-0 z-50 flex w-[min(20rem,88vw)] flex-col border-r border-border/60 bg-sidebar shadow-xl transition-transform duration-300 lg:hidden",
+            "fixed inset-y-0 left-0 z-50 flex w-[min(20rem,calc(100vw-1rem))] max-w-full flex-col border-r border-border/60 bg-sidebar pb-[env(safe-area-inset-bottom)] shadow-xl transition-transform duration-300 lg:hidden",
             mobileNavOpen ? "translate-x-0" : "-translate-x-full",
           )}
           aria-label="Ops mobile navigation"
@@ -161,8 +166,8 @@ export function OpsConsoleShell({ children }: OpsConsoleShellProps) {
           />
         </aside>
 
-        <div className="flex min-w-0 flex-1 flex-col">
-          <header className="sticky top-0 z-30 flex items-center justify-between gap-3 border-b border-border/60 bg-background/90 px-4 py-3 backdrop-blur-md lg:px-8">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <header className="sticky top-0 z-30 flex shrink-0 items-center justify-between gap-2 border-b border-border/60 bg-background/90 px-3 py-3 backdrop-blur-md pt-[max(0.75rem,env(safe-area-inset-top))] sm:gap-3 sm:px-4 lg:px-8">
             <div className="flex items-center gap-3">
               <Button
                 type="button"
@@ -191,8 +196,8 @@ export function OpsConsoleShell({ children }: OpsConsoleShellProps) {
             </div>
           </header>
 
-          <main className="flex-1 px-3 py-6 sm:px-4 lg:px-8 lg:py-10">
-            <div className="mx-auto max-w-6xl">{children}</div>
+          <main className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain px-3 py-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] sm:px-4 sm:py-6 lg:px-8 lg:py-10">
+            <div className="mx-auto w-full min-w-0 max-w-6xl">{children}</div>
           </main>
         </div>
       </div>

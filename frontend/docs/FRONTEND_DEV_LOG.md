@@ -244,6 +244,7 @@ NEXT_PUBLIC_RAZORPAY_KEY_ID=(pending)
 - Ops UI auth shell (2026-05-24): `OpsRootLayout` hides console nav on `/ops/login` and `/ops/setup`; `OpsConsoleShell` gates all other `/ops/*` routes via `GET /ops/session` + redirect to login.
 - Ops queues DLQ summary (2026-05-24): frontend uses `bySourceQueue` to match `GET /ops/queues/dlq/summary` response (fixes `Object.entries` crash on `/ops/queues`).
 - Ops SaaS UI pass (2026-05-24): sidebar shell (`OpsConsoleShell`), shared `ops-ui` primitives, overview dashboard, polished login/setup, all control-plane panels with tables/badges/permission gates.
+- Ops mobile viewport (2026-05-28): `OpsConsoleShell` uses `min-h-dvh`, scrollable main, safe-area padding, drawer width cap; `/ops` overview (`OpsDashboard`) responsive stat grid, audit stack layout, truncated permission hints; `ops/layout.tsx` exports mobile viewport; shared `ops-ui` page/card header wrapping.
 
 **Blockers / decisions made:**
 - Backend startup gate now passes (`health` endpoint returns OK with DB and Redis connected).
