@@ -35,7 +35,7 @@ export function useIdleTimeout({
   onLogout,
   enabled = true,
 }: UseIdleTimeoutOptions) {
-  const lastActivityRef = useRef(Date.now());
+  const lastActivityRef = useRef(0);
   const warningShownRef = useRef(false);
   const timersRef = useRef<{ warning?: number; logout?: number }>({});
 
@@ -85,6 +85,8 @@ export function useIdleTimeout({
       clearTimers();
       return;
     }
+
+    lastActivityRef.current = Date.now();
 
     const handleActivity = () => reset();
 

@@ -15,7 +15,26 @@ This guide describes how a **single Next.js frontend app** serving storefront an
 | `NEXT_PUBLIC_RAZORPAY_KEY_ID` | `rzp_live_xxx` | **Public** key only — never put key secret in Next bundle |
 | Server-only `INTERNAL_API_BASE_URL` | `http://127.0.0.1:<BACKEND_PORT>/api/v1` | Optional SSR/server-actions bypass of public DNS (same machine as Nginx/backend) |
 
-**Cookie domains:** backend sets **`refresh_token`** and **`cart_session`** with `httpOnly`, `secure`, `sameSite: 'strict'` (`TRD.md` §8.3, constraint C-20 in `.cursor/rules`). Frontends **must** call the API on the **same site** or a configuration that allows cookies (avoid cross-site cookie contexts unless you explicitly design for them).
+**Cookie domains:** backend sets **`refresh_token`** and **`cart_session`** with `httpOnly`, `sameSite: 'strict'`, and `Secure` in production-like profiles (`TRD.md` §8.3, constraint C-20). Development/test omits `Secure` on `refresh_token` (`auth-cookies.ts`). Frontends **must** call the API on the **same site** as the browser UI so cookies are stored and sent on `credentials: 'include'` requests.
+
+### 1.0.1 Local development — same-site API (required for admin/customer session refresh)
+
+Do **not** point `NEXT_PUBLIC_API_BASE_URL` at `http://localhost:3000/api/v1` while the Next.js app runs on `http://localhost:3101` — the browser will not send `refresh_token` across ports and **admin refresh after page reload will fail**.
+
+| Variable | Local value | Purpose |
+| --- | --- | --- |
+| `NEXT_PUBLIC_API_BASE_URL` | `http://localhost:3101/api/v1` | Browser + `apiClient` (same origin as storefront) |
+| `BACKEND_PROXY_URL` | `http://127.0.0.1:3000` | Next.js rewrite target (`frontend/next.config.ts`) |
+| `INTERNAL_API_BASE_URL` | `http://127.0.0.1:3000/api/v1` | SSR, server actions, Vitest integration tests |
+
+Implementation: `frontend/lib/api-base.ts` (auto-corrects legacy cross-port public URL in the browser) + `frontend/lib/restore-auth-session.ts` (deduped `POST /auth/refresh` on load). Restart `npm run dev` after changing env.
+
+Verification:
+
+1. `curl http://127.0.0.1:3000/api/v1/health` → ok  
+2. With Next on 3101: `curl http://localhost:3101/api/v1/health` → ok (rewrite)  
+3. Admin login → DevTools → Cookies on **`localhost:3101`** → `refresh_token` present  
+4. Hard refresh `/admin` → stays signed in  
 
 ### 1.1 Frontend AI implementation brief (mandatory)
 

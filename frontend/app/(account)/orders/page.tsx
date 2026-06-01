@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useAuthStore } from "@/stores/auth";
 import { getMyOrders } from "@/lib/users-api";
+import { getBrowserApiBaseUrl } from "@/lib/api-base";
 import { getApiErrorMessage } from "@/lib/error-messages";
 import { formatPrice } from "@/lib/format-price";
 import { EmptyState } from "@/components/shared/EmptyState";
@@ -81,7 +82,7 @@ export default function AccountOrdersPage() {
             </Link>
             {order.invoice?.hasPdf ? (
               <a
-                href={`${process.env.NEXT_PUBLIC_API_BASE_URL}/orders/${order.id}/invoice.pdf`}
+                href={`${getBrowserApiBaseUrl()}/orders/${order.id}/invoice.pdf`}
                 target="_blank"
                 rel="noreferrer"
                 className="text-sm underline"

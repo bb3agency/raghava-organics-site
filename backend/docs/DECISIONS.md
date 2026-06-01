@@ -72,6 +72,8 @@
 
 **Follow-up (same day):** Generalised deduped refresh into `restoreAuthSessionFromCookie()`; `AccountGuard` uses `useAccountSessionRestore()` so customer `/dashboard` and account routes survive page reload the same way. `/admin/login` redirects to `/admin` when a valid admin refresh cookie is already present.
 
+**Follow-up — cookie same-site (2026-05-28):** Refresh still failed when `NEXT_PUBLIC_API_BASE_URL` pointed at `localhost:3000` while the UI ran on `localhost:3101` (cross-origin — browser never stored/sent `refresh_token`). Fix: Next.js rewrite `/api/v1/*` → Fastify; browser base URL must be storefront origin (`http://localhost:3101/api/v1`); `lib/api-base.ts` auto-corrects legacy cross-port env in the browser; `auth-cookies.ts` omits `Secure` in development/test for http local dev.
+
 ---
 
 ## [2026-05-28] Merchant admin lifecycle managed from ops console (list + OTP-gated deactivate)

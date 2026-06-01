@@ -1,3 +1,4 @@
+import { resolveApiBaseUrl } from "@/lib/api-base";
 import type { ApiEnvelope, ApiErrorBody } from "@/types/api";
 
 export class ApiError extends Error {
@@ -18,14 +19,13 @@ export interface ApiClientOptions extends RequestInit {
 }
 
 function getApiBase(): string {
-  const base =
-    process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3000/api/v1";
+  const base = resolveApiBaseUrl();
   if (!base) {
     throw new Error(
       "NEXT_PUBLIC_API_BASE_URL is not set. Configure frontend/.env.local.",
     );
   }
-  return base.replace(/\/$/, "");
+  return base;
 }
 
 function isEnvelope<T>(body: unknown): body is ApiEnvelope<T> {

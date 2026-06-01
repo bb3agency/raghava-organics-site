@@ -13,6 +13,10 @@ import { AuthService } from './auth.service';
 import { AdminInvitesService } from './admin-invites.service';
 import { OpsService } from '@modules/ops/ops.service';
 import {
+  buildRefreshTokenClearCookieHeader,
+  buildRefreshTokenSetCookieHeader
+} from './auth-cookies';
+import {
   adminInviteListSchema,
   adminInviteRevokeSchema,
   adminInviteCleanupSchema,
@@ -51,27 +55,11 @@ function parseRefreshTokenFromCookie(cookieHeader?: string): string | undefined 
 }
 
 function setRefreshTokenCookie(reply: { header: (name: string, value: string) => unknown }, token: string): void {
-  const cookie = [
-    `refresh_token=${encodeURIComponent(token)}`,
-    'HttpOnly',
-    'Secure',
-    'SameSite=Strict',
-    'Path=/',
-    `Max-Age=${7 * 24 * 60 * 60}`
-  ].join('; ');
-  reply.header('Set-Cookie', cookie);
+  reply.header('Set-Cookie', buildRefreshTokenSetCookieHeader(token));
 }
 
 function clearRefreshTokenCookie(reply: { header: (name: string, value: string) => unknown }): void {
-  const cookie = [
-    'refresh_token=',
-    'HttpOnly',
-    'Secure',
-    'SameSite=Strict',
-    'Path=/',
-    'Max-Age=0'
-  ].join('; ');
-  reply.header('Set-Cookie', cookie);
+  reply.header('Set-Cookie', buildRefreshTokenClearCookieHeader());
 }
 
 function extractAbuseRiskContext(headers: Record<string, unknown>): {

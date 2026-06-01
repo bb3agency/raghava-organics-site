@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { useAuthenticatedApi } from "@/hooks/use-authenticated-api";
-import { API_BASE_URL } from "@/lib/constants";
+import { getBrowserApiBaseUrl } from "@/lib/api-base";
 import { createIdempotencyKey } from "@/lib/idempotency";
 import { getApiErrorMessageWithHint } from "@/lib/error-messages";
 import { ADMIN_PERMISSIONS, hasAdminPermission } from "@/lib/permissions";
@@ -236,8 +236,7 @@ export function AdminOrderFulfillmentPanel({
     if (!selectedOrderId || !detail?.invoice?.hasPdf || !accessToken) {
       return;
     }
-    const base = API_BASE_URL || "http://localhost:3000/api/v1";
-    const url = `${base.replace(/\/$/, "")}/admin/orders/${selectedOrderId}/invoice.pdf`;
+    const url = `${getBrowserApiBaseUrl()}/admin/orders/${selectedOrderId}/invoice.pdf`;
     setBusyAction("invoice");
     setError(null);
     try {

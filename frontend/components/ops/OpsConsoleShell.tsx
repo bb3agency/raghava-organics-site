@@ -60,6 +60,37 @@ export function OpsConsoleShell({ children }: OpsConsoleShellProps) {
 
   const closeMobileNav = () => setMobileNavOpen(false);
 
+  useEffect(() => {
+    if (!mobileNavOpen) {
+      return;
+    }
+    const scrollY = window.scrollY;
+    const { style } = document.body;
+    const previous = {
+      position: style.position,
+      top: style.top,
+      left: style.left,
+      right: style.right,
+      overflow: style.overflow,
+      width: style.width,
+    };
+    style.position = "fixed";
+    style.top = `-${scrollY}px`;
+    style.left = "0";
+    style.right = "0";
+    style.width = "100%";
+    style.overflow = "hidden";
+    return () => {
+      style.position = previous.position;
+      style.top = previous.top;
+      style.left = previous.left;
+      style.right = previous.right;
+      style.overflow = previous.overflow;
+      style.width = previous.width;
+      window.scrollTo(0, scrollY);
+    };
+  }, [mobileNavOpen]);
+
   async function handleLogout() {
     setLoggingOut(true);
     try {
@@ -90,19 +121,15 @@ export function OpsConsoleShell({ children }: OpsConsoleShellProps) {
 
   return (
     <OpsSessionProvider session={session}>
-      <div
-        className={cn(
-          "dark ops-console flex min-h-dvh w-full max-w-[100vw] bg-background text-foreground",
-          mobileNavOpen && "max-lg:overflow-hidden",
-        )}
-      >
+      <div className="dark ops-console flex h-dvh max-h-dvh w-full max-w-[100vw] overflow-hidden bg-background text-foreground">
         {/* Desktop sidebar */}
         <aside
-          className="hidden w-64 shrink-0 flex-col border-r border-border/60 bg-sidebar lg:flex"
+          className="hidden h-full min-h-0 w-64 shrink-0 flex-col overflow-hidden border-r border-border/60 bg-sidebar lg:flex"
           aria-label="Ops navigation"
         >
           <OpsSidebarBrand />
-          <nav className="flex flex-1 flex-col gap-1 overflow-y-auto px-3 py-4">
+          <nav className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain px-3 py-4 [-webkit-overflow-scrolling:touch]">
+            <div className="flex flex-col gap-1">
             {OPS_NAV_ITEMS.map((item) => (
               <OpsNavLink
                 key={item.href}
@@ -111,6 +138,7 @@ export function OpsConsoleShell({ children }: OpsConsoleShellProps) {
                 onNavigate={closeMobileNav}
               />
             ))}
+            </div>
           </nav>
           <OpsSidebarFooter
             session={session}
@@ -120,23 +148,24 @@ export function OpsConsoleShell({ children }: OpsConsoleShellProps) {
           />
         </aside>
 
-        {/* Mobile drawer */}
+        {/* Mobile drawer — scroll only inside nav; backdrop does not scroll */}
         {mobileNavOpen ? (
           <button
             type="button"
-            className="fixed inset-0 z-40 bg-background/80 backdrop-blur-sm lg:hidden"
+            className="fixed inset-0 z-40 touch-none bg-background/80 backdrop-blur-sm lg:hidden"
             aria-label="Close navigation"
             onClick={() => setMobileNavOpen(false)}
           />
         ) : null}
         <aside
           className={cn(
-            "fixed inset-y-0 left-0 z-50 flex w-[min(20rem,calc(100vw-1rem))] max-w-full flex-col border-r border-border/60 bg-sidebar pb-[env(safe-area-inset-bottom)] shadow-xl transition-transform duration-300 lg:hidden",
-            mobileNavOpen ? "translate-x-0" : "-translate-x-full",
+            "fixed inset-y-0 left-0 z-50 flex h-dvh max-h-dvh w-[min(20rem,calc(100vw-1rem))] max-w-full flex-col overflow-hidden border-r border-border/60 bg-sidebar shadow-xl transition-transform duration-300 lg:hidden",
+            mobileNavOpen ? "translate-x-0" : "pointer-events-none -translate-x-full",
           )}
+          aria-hidden={!mobileNavOpen}
           aria-label="Ops mobile navigation"
         >
-          <div className="flex items-center justify-between border-b border-border/60 px-4 py-4">
+          <div className="flex shrink-0 items-center justify-between border-b border-border/60 px-4 py-4 pt-[max(1rem,env(safe-area-inset-top))]">
             <OpsSidebarBrand compact />
             <Button
               type="button"
@@ -148,26 +177,36 @@ export function OpsConsoleShell({ children }: OpsConsoleShellProps) {
               <X className="size-5" />
             </Button>
           </div>
-          <nav className="flex flex-1 flex-col gap-1 overflow-y-auto px-3 py-4">
-            {OPS_NAV_ITEMS.map((item) => (
-              <OpsNavLink
-                key={item.href}
-                item={item}
-                active={isOpsNavActive(pathname, item.href)}
-                onNavigate={closeMobileNav}
-              />
-            ))}
+          <nav className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain px-3 py-4 [-webkit-overflow-scrolling:touch]">
+            <div className="flex flex-col gap-1 pb-2">
+              {OPS_NAV_ITEMS.map((item) => (
+                <OpsNavLink
+                  key={item.href}
+                  item={item}
+                  active={isOpsNavActive(pathname, item.href)}
+                  onNavigate={closeMobileNav}
+                />
+              ))}
+            </div>
           </nav>
-          <OpsSidebarFooter
-            session={session}
-            canWrite={canWrite}
-            loggingOut={loggingOut}
-            onLogout={() => void handleLogout()}
-          />
+          <div className="shrink-0 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+            <OpsSidebarFooter
+              session={session}
+              canWrite={canWrite}
+              loggingOut={loggingOut}
+              onLogout={() => void handleLogout()}
+            />
+          </div>
         </aside>
 
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-          <header className="sticky top-0 z-30 flex shrink-0 items-center justify-between gap-2 border-b border-border/60 bg-background/90 px-3 py-3 backdrop-blur-md pt-[max(0.75rem,env(safe-area-inset-top))] sm:gap-3 sm:px-4 lg:px-8">
+        <div
+          className={cn(
+            "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden",
+            mobileNavOpen && "max-lg:pointer-events-none max-lg:touch-none",
+          )}
+          aria-hidden={mobileNavOpen}
+        >
+          <header className="z-30 flex shrink-0 items-center justify-between gap-2 border-b border-border/60 bg-background/90 px-3 py-3 pt-[max(0.75rem,env(safe-area-inset-top))] sm:gap-3 sm:px-4 lg:px-8">
             <div className="flex items-center gap-3">
               <Button
                 type="button"
@@ -196,7 +235,7 @@ export function OpsConsoleShell({ children }: OpsConsoleShellProps) {
             </div>
           </header>
 
-          <main className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain px-3 py-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] sm:px-4 sm:py-6 lg:px-8 lg:py-10">
+          <main className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-contain px-3 py-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] [-webkit-overflow-scrolling:touch] sm:px-4 sm:py-6 lg:px-8 lg:py-10">
             <div className="mx-auto w-full min-w-0 max-w-6xl">{children}</div>
           </main>
         </div>

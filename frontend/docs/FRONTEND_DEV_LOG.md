@@ -11,7 +11,8 @@
 | Field | Value |
 |---|---|
 | Client name | Raghava Organics |
-| Backend API (local) | `http://localhost:3000/api/v1` |
+| Backend API (direct / SSR) | `http://127.0.0.1:3000/api/v1` (`INTERNAL_API_BASE_URL`) |
+| Browser API (local) | `http://localhost:3101/api/v1` (`NEXT_PUBLIC_API_BASE_URL` + Next rewrite) |
 | Storefront URL (local) | `http://localhost:3101` |
 | Razorpay test key ID | `rzp_test_xxx` (set in `.env.local` when available) |
 | Feature flags active | `FEATURE_COUPONS_ENABLED=false`, `FEATURE_REVIEWS_ENABLED=false`, `FEATURE_WISHLIST_ENABLED=false`, `FEATURE_GST_INVOICING_ENABLED=true`, `FEATURE_RESPONSE_ENVELOPE_ENABLED=false` (defaults from backend `.env.example` — confirm in backend `.env`) |
@@ -63,7 +64,9 @@
 `.env.local` values logged (non-secret only):
 
 ```
-NEXT_PUBLIC_API_BASE_URL=http://localhost:3000/api/v1
+NEXT_PUBLIC_API_BASE_URL=http://localhost:3101/api/v1
+BACKEND_PROXY_URL=http://127.0.0.1:3000
+INTERNAL_API_BASE_URL=http://127.0.0.1:3000/api/v1
 NEXT_PUBLIC_STORE_NAME=Raghava Organics
 NEXT_PUBLIC_STOREFRONT_URL=http://localhost:3101
 NEXT_PUBLIC_RAZORPAY_KEY_ID=(pending)
@@ -233,7 +236,8 @@ NEXT_PUBLIC_RAZORPAY_KEY_ID=(pending)
 - Admin session restore fix (2026-05-28):
   - `restoreAuthSessionFromCookie()` dedupes `POST /auth/refresh` (fixes React Strict Mode double-mount invalidating rotated refresh tokens).
   - `useAdminSessionRestore()` / `useAccountSessionRestore()` via shared `useAuthSessionRestore()` — `AdminGuard`, `AdminConsoleShell`, `AccountGuard`, `/admin/login` redirect-when-ready.
-  - Tests: `lib/restore-auth-session.test.ts`, `lib/restore-admin-session.test.ts`.
+  - **Cookie same-site (2026-05-28):** `next.config.ts` rewrites `/api/v1/*` → `BACKEND_PROXY_URL`; `lib/api-base.ts` routes browser calls to storefront origin (`NEXT_PUBLIC_API_BASE_URL=http://localhost:3101/api/v1`). Misconfigured `:3000` API URL auto-corrects in browser. Backend omits `Secure` on refresh cookie in development/test.
+  - Tests: `lib/restore-auth-session.test.ts`, `lib/restore-admin-session.test.ts`, `lib/api-base.test.ts`.
 - Full ops/admin contract rebaseline (2026-05-23):
   - Removed stale ops approvals surface and admin MFA/TOTP UI; admin login is email OTP (`request-otp` → `verify-otp`).
   - Ops browser integration via `lib/ops-client-api.ts` (`credentials: 'include'`); server metrics remain in `lib/ops-api.ts`.

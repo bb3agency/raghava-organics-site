@@ -40,6 +40,8 @@ function hasValidSession(
   return Boolean(fromToken && validateUser(fromToken));
 }
 
+type RestorePhase = "idle" | "restoring" | "failed";
+
 export function useAuthSessionRestore(
   options: UseAuthSessionRestoreOptions,
 ): UseAuthSessionRestoreResult {
@@ -51,12 +53,20 @@ export function useAuthSessionRestore(
   const restoreBlockedRef = useRef(false);
   const restoreInProgressRef = useRef(false);
 
-  const [status, setStatus] = useState<AuthSessionRestoreStatus>(() =>
-    hasValidSession(accessToken, user, validateUser) ? "ready" : "checking",
-  );
+  const sessionValid = hasValidSession(accessToken, user, validateUser);
+
+  const [restorePhase, setRestorePhase] = useState<RestorePhase>("idle");
+
+  const status: AuthSessionRestoreStatus = sessionValid
+    ? "ready"
+    : restorePhase === "restoring"
+      ? "restoring"
+      : restorePhase === "failed"
+        ? "failed"
+        : "checking";
 
   useEffect(() => {
-    if (hasValidSession(accessToken, user, validateUser)) {
+    if (sessionValid) {
       restoreBlockedRef.current = false;
       restoreInProgressRef.current = false;
       if (accessToken && (!user || !validateUser(user))) {
@@ -65,33 +75,39 @@ export function useAuthSessionRestore(
           setSession(accessToken, fromToken);
         }
       }
-      setStatus("ready");
       return;
     }
 
     if (restoreBlockedRef.current || restoreInProgressRef.current) {
       if (restoreBlockedRef.current) {
-        setStatus("failed");
+        setRestorePhase("failed");
       }
       return;
     }
 
     restoreInProgressRef.current = true;
-    setStatus("restoring");
+    setRestorePhase("restoring");
 
     void restoreAuthSessionFromCookie().then((result) => {
       restoreInProgressRef.current = false;
       if (result.ok && validateUser(result.user)) {
         restoreBlockedRef.current = false;
         setSession(result.accessToken, result.user);
-        setStatus("ready");
+        setRestorePhase("idle");
         return;
       }
       restoreBlockedRef.current = true;
       clearSession();
-      setStatus("failed");
+      setRestorePhase("failed");
     });
-  }, [accessToken, user, setSession, clearSession, validateUser]);
+  }, [
+    sessionValid,
+    accessToken,
+    user,
+    setSession,
+    clearSession,
+    validateUser,
+  ]);
 
   return { status, accessToken, user };
 }

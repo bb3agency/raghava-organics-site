@@ -26,12 +26,31 @@ export function buildUserFromAccessToken(accessToken: string): User | null {
 
 let refreshInFlight: Promise<{ accessToken: string }> | null = null;
 
+/** Brief cache so React Strict Mode remount does not rotate the refresh token twice. */
+let recentRefresh: { accessToken: string; expiresAt: number } | null = null;
+
+const REFRESH_RESULT_CACHE_MS = 3_000;
+
 function refreshAccessTokenOnce(): Promise<{ accessToken: string }> {
-  if (!refreshInFlight) {
-    refreshInFlight = refreshAccessToken().finally(() => {
-      refreshInFlight = null;
-    });
+  const now = Date.now();
+  if (recentRefresh && recentRefresh.expiresAt > now) {
+    return Promise.resolve({ accessToken: recentRefresh.accessToken });
   }
+
+  if (!refreshInFlight) {
+    refreshInFlight = refreshAccessToken()
+      .then((response) => {
+        recentRefresh = {
+          accessToken: response.accessToken,
+          expiresAt: Date.now() + REFRESH_RESULT_CACHE_MS,
+        };
+        return response;
+      })
+      .finally(() => {
+        refreshInFlight = null;
+      });
+  }
+
   return refreshInFlight;
 }
 
@@ -55,4 +74,5 @@ export async function restoreAuthSessionFromCookie(): Promise<AuthSessionRestore
 /** Clears the in-flight refresh cache (e.g. on logout). */
 export function resetAuthSessionRestoreCache(): void {
   refreshInFlight = null;
+  recentRefresh = null;
 }

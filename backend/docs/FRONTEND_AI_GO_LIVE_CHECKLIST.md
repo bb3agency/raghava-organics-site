@@ -10,6 +10,7 @@ Pair this with `docs/BACKEND_GO_LIVE_CHECKLIST.md` for final go-live sign-off. T
 - [ ] `NEXT_PUBLIC_API_BASE_URL` includes `/api/v1`.
 - [ ] No hardcoded API URLs in code.
 - [ ] No alternate env names (for example `NEXT_PUBLIC_API_URL`).
+- [ ] **Cookie auth / same-site:** Local dev uses `NEXT_PUBLIC_API_BASE_URL` on the **storefront origin** (e.g. `http://localhost:3101/api/v1`) with `BACKEND_PROXY_URL` + Next rewrite; `INTERNAL_API_BASE_URL` points at Fastify for SSR/tests. Production uses one public origin for UI + `/api/v1` (Nginx). After admin login, `refresh_token` cookie is on the UI origin; hard refresh on `/admin` stays signed in (`AdminGuard` + `restore-auth-session.ts`). See `NEXTJS_FRONTEND_INTEGRATION_GUIDE.md` §1.0.1.
 - [ ] Production-like backend profile is understood:
   - `NODE_ENV=development` or `test` => development-like
   - Any other value (`production`, `staging`, `qa`, `uat`, custom, or unset) => production-like

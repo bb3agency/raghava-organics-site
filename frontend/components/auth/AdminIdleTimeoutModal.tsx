@@ -10,6 +10,7 @@ import { useIdleTimeout } from "@/hooks/use-idle-timeout";
 
 const WARNING_AFTER_MS = 25 * 60 * 1000; // 25 minutes
 const LOGOUT_AFTER_WARNING_MS = 5 * 60 * 1000; // 5 minutes
+const LOGOUT_COUNTDOWN_SEC = Math.ceil(LOGOUT_AFTER_WARNING_MS / 1000);
 
 export function AdminIdleTimeoutModal() {
   const router = useRouter();
@@ -17,12 +18,13 @@ export function AdminIdleTimeoutModal() {
   const setAccessToken = useAuthStore((s) => s.setAccessToken);
   const clearSession = useAuthStore((s) => s.clearSession);
   const [visible, setVisible] = useState(false);
-  const [remainingSec, setRemainingSec] = useState(
-    Math.ceil(LOGOUT_AFTER_WARNING_MS / 1000)
-  );
+  const [remainingSec, setRemainingSec] = useState(LOGOUT_COUNTDOWN_SEC);
   const [extending, setExtending] = useState(false);
 
-  const showWarning = useCallback(() => setVisible(true), []);
+  const showWarning = useCallback(() => {
+    setRemainingSec(LOGOUT_COUNTDOWN_SEC);
+    setVisible(true);
+  }, []);
   const hideWarning = useCallback(() => setVisible(false), []);
 
   const handleLogout = useCallback(() => {
@@ -62,7 +64,6 @@ export function AdminIdleTimeoutModal() {
   useEffect(() => {
     if (!visible) return;
 
-    setRemainingSec(Math.ceil(LOGOUT_AFTER_WARNING_MS / 1000));
     const interval = window.setInterval(() => {
       setRemainingSec((prev) => {
         if (prev <= 1) {

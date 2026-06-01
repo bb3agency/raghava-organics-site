@@ -1,5 +1,6 @@
 "use client";
 
+import { getBrowserApiBaseUrl, getInternalApiBaseUrl } from "@/lib/api-base";
 import { apiClient, ApiError } from "@/lib/api";
 import type { ReadinessStatus } from "@/types/api";
 
@@ -390,9 +391,7 @@ export async function saveOpsConfigClient(input: {
 }
 
 function getOpsApiBase(): string {
-  const base =
-    process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3000/api/v1";
-  return base.replace(/\/$/, "");
+  return getBrowserApiBaseUrl();
 }
 
 /** Readiness may return HTTP 503 with payload in envelope `data` when not ready. */
@@ -657,10 +656,9 @@ export async function getOpsDlqSummaryClient(): Promise<OpsDlqSummary> {
   return opsFetch<OpsDlqSummary>("/ops/queues/dlq/summary");
 }
 
+/** Bull Board runs on the API host and uses the `ops_session` cookie set there. */
 export function getOpsQueuesBoardUrl(): string {
-  const base =
-    process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3000/api/v1";
-  return `${base.replace(/\/$/, "")}/ops/queues`;
+  return `${getInternalApiBaseUrl()}/ops/queues`;
 }
 
 export function isOpsUnauthorisedError(error: unknown): boolean {
