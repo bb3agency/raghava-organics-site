@@ -10,6 +10,7 @@ describe('assertTurnstileToken', () => {
   it('no-ops when Turnstile is not enforced', async () => {
     vi.stubEnv('NODE_ENV', 'development');
     vi.stubEnv('TURNSTILE_SECRET_KEY', 'secret');
+    vi.stubEnv('TURNSTILE_ENFORCE_IN_DEV', '');
     await expect(assertTurnstileToken({})).resolves.toBeUndefined();
   });
 

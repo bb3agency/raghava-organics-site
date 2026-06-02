@@ -26,6 +26,8 @@ describe('SettingsService', () => {
   });
 
   it('returns template defaults when shipping is not configured yet', async () => {
+    vi.stubEnv('SHIPROCKET_PICKUP_PINCODE', '');
+    vi.stubEnv('DELHIVERY_PICKUP_PINCODE', '');
     const fastify = {
       prisma: {
         storeSettings: {
