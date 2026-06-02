@@ -152,7 +152,7 @@ jobs:
             echo "Monorepo root in sync at $ACTUAL_SHA"
           fi
 
-      - name: Deploy frontend locally via vps-frontend-deploy.sh
+      - name: Deploy frontend (git sync + npm build + pm2 reload)
         env:
           VPS_CLIENT_PATH: ${{ secrets.VPS_CLIENT_PATH }}
           VPS_FRONTEND_PATH: ${{ secrets.VPS_FRONTEND_PATH }}

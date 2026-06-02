@@ -213,12 +213,13 @@ git push origin main
 
 ### `vps-frontend-deploy.sh` (frontend)
 
-1. `git pull` + SHA verify (same monorepo)  
-2. Skip build if no frontend-relevant files changed since last deploy SHA  
-3. `npm ci` + `npm run build`  
-4. `pm2 reload <client-id>-frontend`  
-5. HTTP check on `http://127.0.0.1:<STOREFRONT_PORT>/`
-6. `/ops/setup` basic-auth check using `OPS_UI_BASIC_AUTH_USERNAME/PASSWORD` from `.env.production.local`
+1. `git fetch` + `reset --hard origin/main` at monorepo root + SHA verify  
+2. `npm ci` + `npm run build` in `FRONTEND_PATH` (always, unless `SKIP_FRONTEND_BUILD=true`)  
+3. `pm2 reload <client-id>-frontend`  
+4. HTTP check on `http://127.0.0.1:<STOREFRONT_PORT>/`  
+5. Records `.last-frontend-build-sha` when a build runs (separate from deploy SHA)
+
+`git pull` alone does not update the live site — browsers use the compiled `.next` bundle.
 
 **Downtime:** zero (graceful PM2 reload).
 

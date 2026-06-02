@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { getTurnstileSiteKey } from "@/lib/turnstile-config";
+import { getTurnstileSiteKey, isTurnstileConfigured } from "@/lib/turnstile-config";
 
 const TURNSTILE_SCRIPT_SRC =
   "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
@@ -71,14 +71,15 @@ interface TurnstileChallengeProps {
 }
 
 /**
- * Cloudflare Turnstile widget. Renders nothing when `NEXT_PUBLIC_TURNSTILE_SITE_KEY` is unset.
+ * Cloudflare Turnstile widget. Renders only when `isTurnstileConfigured()` is true
+ * (production build with site key, or dev with NEXT_PUBLIC_TURNSTILE_ENFORCE_IN_DEV=true).
  */
 export function TurnstileChallenge({
   onTokenChange,
   onLoadError,
   className,
 }: TurnstileChallengeProps) {
-  const siteKey = getTurnstileSiteKey();
+  const siteKey = isTurnstileConfigured() ? getTurnstileSiteKey() : null;
   const containerRef = useRef<HTMLDivElement>(null);
   const widgetIdRef = useRef<string | null>(null);
   const onTokenChangeRef = useRef(onTokenChange);

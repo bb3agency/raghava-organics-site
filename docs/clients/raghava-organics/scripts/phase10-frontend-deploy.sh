@@ -1,9 +1,22 @@
 #!/usr/bin/env bash
-# Phase 10 - Frontend PM2 deploy (run on VPS after backend + Nginx)
+# Phase 10 — Frontend deploy (Raghava Organics)
+#
+# Wraps the canonical CD script: git sync + npm ci + npm run build + pm2 reload.
+# Do not rely on git pull alone — browsers serve the compiled .next bundle.
+#
+# Usage (on VPS):
+#   bash docs/clients/raghava-organics/scripts/phase10-frontend-deploy.sh
+#
+# Env overrides:
+#   FRONTEND_PATH  default /var/www/raghava-organics/frontend
+#   BACKEND_PATH   default /var/www/raghava-organics/backend
+#   COMMIT_SHA     default HEAD after optional git pull (set when called from CI)
+
 set -euo pipefail
 
 FRONTEND_PATH="${FRONTEND_PATH:-/var/www/raghava-organics/frontend}"
-CLIENT_ID="${CLIENT_ID:-raghava-organics}"
+BACKEND_PATH="${BACKEND_PATH:-/var/www/raghava-organics/backend}"
+DEPLOY_SCRIPT="$BACKEND_PATH/scripts/vps-frontend-deploy.sh"
 
 if [ ! -d "$FRONTEND_PATH" ]; then
   echo "Missing $FRONTEND_PATH"
@@ -15,26 +28,22 @@ if [ ! -f "$FRONTEND_PATH/.env.production.local" ]; then
   exit 1
 fi
 
-cd "$FRONTEND_PATH"
-npm ci
-npm run build
-
-STOREFRONT_PORT=$(grep -E '^STOREFRONT_PORT=' .env.production.local | cut -d= -f2 | tr -d '[:space:]')
-STOREFRONT_PORT="${STOREFRONT_PORT:-3101}"
-
-if pm2 describe "${CLIENT_ID}-frontend" >/dev/null 2>&1; then
-  pm2 reload "${CLIENT_ID}-frontend" --update-env
-else
-  pm2 start npm --name "${CLIENT_ID}-frontend" -- start -- -p "$STOREFRONT_PORT"
-fi
-pm2 save
-
-HEALTH_URL="http://127.0.0.1:${STOREFRONT_PORT}"
-if curl -fsS "$HEALTH_URL" >/dev/null 2>&1; then
-  echo "Frontend is reachable on $HEALTH_URL"
-else
-  echo "Frontend did not respond on $HEALTH_URL - inspect: pm2 logs ${CLIENT_ID}-frontend"
+if [ ! -f "$DEPLOY_SCRIPT" ]; then
+  echo "Missing canonical deploy script: $DEPLOY_SCRIPT"
   exit 1
 fi
 
-echo "Frontend listening on port $STOREFRONT_PORT - verify via Nginx and https://<domain>/"
+GIT_ROOT=$(git -C "$FRONTEND_PATH" rev-parse --show-toplevel 2>/dev/null || echo "$(dirname "$FRONTEND_PATH")")
+
+if [ -z "${COMMIT_SHA:-}" ]; then
+  echo "Syncing git at $GIT_ROOT …"
+  git -C "$GIT_ROOT" fetch origin main
+  git -C "$GIT_ROOT" checkout main 2>/dev/null || git -C "$GIT_ROOT" checkout -B main origin/main
+  git -C "$GIT_ROOT" pull origin main --ff-only
+  COMMIT_SHA=$(git -C "$GIT_ROOT" rev-parse HEAD)
+fi
+
+echo "Deploying frontend at $FRONTEND_PATH (commit $COMMIT_SHA)…"
+bash "$DEPLOY_SCRIPT" "$FRONTEND_PATH" "$COMMIT_SHA"
+
+echo "Done. Verify https://<domain>/admin shows Admin Console (sidebar), not legacy Admin Read Surfaces."

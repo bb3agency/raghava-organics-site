@@ -209,18 +209,20 @@ bash /var/www/raghava-organics/docs/clients/raghava-organics/scripts/verify-cd-s
 git -C /var/www/raghava-organics rev-parse --short HEAD
 git -C /var/www/raghava-organics rev-parse --short origin/main
 cat /var/www/raghava-organics/frontend/.last-frontend-deploy-sha 2>/dev/null || echo "no frontend CD yet"
+cat /var/www/raghava-organics/frontend/.last-frontend-build-sha 2>/dev/null || echo "no frontend build yet"
 ```
 
 **Manual deploy (no new commit):** GitHub → Actions → **Deploy to VPS** → **Run workflow**.
 
-**Manual frontend only on VPS:**
+**Manual frontend only on VPS** (git sync + `npm run build` + pm2 reload — not `git pull` alone):
 
 ```bash
-SHA=$(git -C /var/www/raghava-organics rev-parse HEAD)
-bash /var/www/raghava-organics/backend/scripts/vps-frontend-deploy.sh \
-  /var/www/raghava-organics/frontend "$SHA"
-# Force rebuild even if change-detection skips:
-# FORCE_FRONTEND_BUILD=true bash ... (same command)
+bash /var/www/raghava-organics/site/docs/clients/raghava-organics/scripts/phase10-frontend-deploy.sh
+# Or:
+# bash /var/www/raghava-organics/backend/scripts/vps-frontend-deploy.sh \
+#   /var/www/raghava-organics/frontend "$(git -C /var/www/raghava-organics rev-parse HEAD)"
+# Backend-only push (skip build — rare):
+# SKIP_FRONTEND_BUILD=true bash .../vps-frontend-deploy.sh ...
 ```
 
 ---

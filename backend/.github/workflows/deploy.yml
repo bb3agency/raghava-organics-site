@@ -109,11 +109,9 @@ jobs:
           bash "$VPS_CLIENT_PATH/scripts/vps-deploy.sh" "$VPS_CLIENT_PATH" "$COMMIT_SHA"
 
   # ---------------------------------------------------------------------------
-  # Job 2: Frontend — Next.js build + PM2 zero-downtime reload
-  # Runs independently of the backend job — a CSS-only push will not trigger
-  # a Docker rebuild; a schema-only push will not restart the frontend.
-  # Change detection in vps-frontend-deploy.sh skips the build entirely if no
-  # frontend-relevant files changed since the last deployed SHA.
+  # Job 2: Frontend — git sync + npm ci + npm run build + pm2 reload
+  # Runs independently of the backend job. vps-frontend-deploy.sh always builds
+  # by default (SKIP_FRONTEND_BUILD=true only for rare backend-only reloads).
   # ---------------------------------------------------------------------------
   deploy-frontend:
     name: Deploy Frontend to Hetzner VPS
@@ -167,11 +165,10 @@ jobs:
             echo "Monorepo root in sync at $ACTUAL_SHA"
           fi
 
-      - name: Deploy frontend locally via vps-frontend-deploy.sh
+      - name: Deploy frontend (git sync + npm build + pm2 reload)
         env:
           VPS_CLIENT_PATH: ${{ secrets.VPS_CLIENT_PATH }}
           VPS_FRONTEND_PATH: ${{ secrets.VPS_FRONTEND_PATH }}
           COMMIT_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
-          # Monorepo: deploy script lives under backend/scripts/, not frontend/scripts/
           bash "$VPS_CLIENT_PATH/scripts/vps-frontend-deploy.sh" "$VPS_FRONTEND_PATH" "$COMMIT_SHA"

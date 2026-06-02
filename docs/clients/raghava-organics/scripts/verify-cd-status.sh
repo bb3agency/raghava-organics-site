@@ -166,9 +166,18 @@ else
 fi
 
 if [ -f "$FRONTEND_PATH/.last-frontend-deploy-sha" ]; then
-  info "Last CD frontend SHA: $(cat "$FRONTEND_PATH/.last-frontend-deploy-sha")"
+  info "Last CD frontend deploy SHA: $(cat "$FRONTEND_PATH/.last-frontend-deploy-sha")"
 else
   warn "No .last-frontend-deploy-sha — CD frontend deploy may never have succeeded"
+fi
+if [ -f "$FRONTEND_PATH/.last-frontend-build-sha" ]; then
+  info "Last frontend build SHA: $(cat "$FRONTEND_PATH/.last-frontend-build-sha")"
+  HEAD_SHA=$(git -C "$GIT_ROOT" rev-parse HEAD 2>/dev/null || echo "")
+  if [ -n "$HEAD_SHA" ] && [ "$(cat "$FRONTEND_PATH/.last-frontend-build-sha")" != "$HEAD_SHA" ]; then
+    warn "HEAD ($HEAD_SHA) != last build SHA — run phase10-frontend-deploy.sh (git pull alone is not enough)"
+  fi
+else
+  warn "No .last-frontend-build-sha — npm run build may never have run on this host"
 fi
 echo ""
 

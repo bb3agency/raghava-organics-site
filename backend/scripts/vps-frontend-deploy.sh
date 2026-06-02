@@ -6,23 +6,24 @@
 # The runner pulls the job from GitHub via outbound HTTPS and runs this script
 # directly - no inbound SSH connection is opened.
 #
-# Performs a zero-downtime deploy via PM2 reload (graceful worker drain + swap).
-# Skips build steps if no frontend-relevant files changed since the last deploy.
+# Every deploy (default):
+#   1. git fetch + reset to origin/main at monorepo root
+#   2. npm ci + npm run build in FRONTEND_PATH
+#   3. pm2 reload <client-id>-frontend (zero-downtime)
+#   4. HTTP health check
+#
+# git pull alone does NOT update what browsers see — this script (or phase10
+# wrapping it) must run after code changes.
+#
+# Optional: SKIP_FRONTEND_BUILD=true — PM2 reload + health check only (backend-only
+# pushes). Never use after frontend code changed; .last-frontend-build-sha is not updated.
 #
 # Usage:
 #   bash scripts/vps-frontend-deploy.sh <FRONTEND_PATH> <COMMIT_SHA>
 #
 # Arguments:
 #   FRONTEND_PATH  Absolute path to the client frontend directory on VPS
-#                  e.g. /var/www/foodstore/frontend
 #   COMMIT_SHA     The git commit SHA that CI validated (for verification)
-#
-# Requirements on VPS:
-#   - Self-hosted GitHub Actions runner installed and registered (see §22)
-#   - git, node, npm, pm2 (installed globally: npm install -g pm2)
-#   - PM2 process already started once manually (pm2 start -> pm2 save -> pm2 startup)
-#   - .env.local (or .env.production.local) present at FRONTEND_PATH (never written here)
-#   - CLIENT_ID env var set in .env.local (used to derive pm2 process name)
 # =============================================================================
 
 set -euo pipefail
@@ -43,9 +44,6 @@ resolve_storefront_port() {
   echo "3101"
 }
 
-# ---------------------------------------------------------------------------
-# 0. Arguments and validation
-# ---------------------------------------------------------------------------
 FRONTEND_PATH="${1:-}"
 COMMIT_SHA="${2:-}"
 
@@ -64,14 +62,11 @@ if [ ! -f "$FRONTEND_PATH/package.json" ]; then
   exit 1
 fi
 
-SHA_RECORD="$FRONTEND_PATH/.last-frontend-deploy-sha"
-FORCE_BUILD="${FORCE_FRONTEND_BUILD:-false}"
+DEPLOY_SHA_RECORD="$FRONTEND_PATH/.last-frontend-deploy-sha"
+BUILD_SHA_RECORD="$FRONTEND_PATH/.last-frontend-build-sha"
+SKIP_BUILD="${SKIP_FRONTEND_BUILD:-false}"
 
 GIT_ROOT=$(git -C "$FRONTEND_PATH" rev-parse --show-toplevel 2>/dev/null || echo "$FRONTEND_PATH")
-MONOREPO=false
-if [ "$GIT_ROOT" != "$FRONTEND_PATH" ]; then
-  MONOREPO=true
-fi
 
 echo "===== Frontend deploy started ====="
 echo "Path:   $FRONTEND_PATH"
@@ -80,10 +75,10 @@ echo "SHA:    $COMMIT_SHA"
 echo "Time:   $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 
 # ---------------------------------------------------------------------------
-# 1. Pull latest code and verify SHA (always at git root for monorepos)
+# 1. Sync git at monorepo root (git pull is not enough without build + pm2)
 # ---------------------------------------------------------------------------
 echo ""
-echo "----- Step 1: git pull -----"
+echo "----- Step 1: git sync -----"
 cd "$GIT_ROOT"
 git fetch --quiet origin main
 git checkout main 2>/dev/null || git checkout -B main origin/main
@@ -98,63 +93,39 @@ fi
 echo "SHA verified: $ACTUAL_SHA"
 
 # ---------------------------------------------------------------------------
-# 2. Detect whether frontend-relevant files actually changed
+# 2. Install dependencies and production build (default: always)
 # ---------------------------------------------------------------------------
 echo ""
-echo "----- Step 2: change detection -----"
-SKIP_BUILD=false
-
-if [ "$FORCE_BUILD" = "true" ]; then
-  echo "FORCE_FRONTEND_BUILD=true — full build required."
-elif [ -f "$SHA_RECORD" ]; then
-  LAST_SHA=$(cat "$SHA_RECORD")
-  echo "Last deployed SHA: $LAST_SHA"
-
-  CHANGED=$(git -C "$GIT_ROOT" diff --name-only "$LAST_SHA" "$COMMIT_SHA" 2>/dev/null || echo "UNKNOWN")
-  if [ "$CHANGED" = "UNKNOWN" ]; then
-    echo "Could not diff against last SHA (force-push or first deploy). Proceeding with full build."
-  elif [ "$MONOREPO" = "true" ]; then
-    if echo "$CHANGED" | grep -qE '^frontend/'; then
-      echo "Monorepo: frontend/ files changed — full build required."
-    else
-      echo "Monorepo: no frontend/ changes. Skipping build (PM2 reload only)."
-      SKIP_BUILD=true
-    fi
-  elif echo "$CHANGED" | grep -qE '^(app/|pages/|components/|lib/|hooks/|styles/|public/|next\.config|package\.json|package-lock\.json|tsconfig|tailwind\.config|postcss\.config)'; then
-    echo "Frontend-relevant files changed — full build required."
+echo "----- Step 2: frontend build -----"
+if [ "$SKIP_BUILD" = "true" ]; then
+  echo "::warning::SKIP_FRONTEND_BUILD=true — skipping npm ci / npm run build."
+  echo "Use only for backend-only deploys. Browsers will keep the previous .next bundle."
+  if [ -f "$BUILD_SHA_RECORD" ]; then
+    echo "Last built SHA: $(cat "$BUILD_SHA_RECORD")"
   else
-    echo "No frontend-relevant files changed. Skipping build."
-    SKIP_BUILD=true
+    echo "::warning::No $BUILD_SHA_RECORD — frontend may never have been built on this host."
   fi
 else
-  echo "No previous deploy SHA recorded. Proceeding with full build."
-fi
-
-# ---------------------------------------------------------------------------
-# 3. Install dependencies and build
-# ---------------------------------------------------------------------------
-if [ "$SKIP_BUILD" = "false" ]; then
-  echo ""
-  echo "----- Step 3: npm ci -----"
   cd "$FRONTEND_PATH"
+  echo "Running npm ci…"
   npm ci --prefer-offline 2>&1
-
-  echo ""
-  echo "----- Step 4: npm run build -----"
+  echo "Running npm run build…"
   npm run build 2>&1
-  echo "Build complete."
-else
-  echo ""
-  echo "----- Steps 3-4: skipped (no relevant changes) -----"
+  if [ ! -d "$FRONTEND_PATH/.next" ]; then
+    echo "::error::Build finished but .next/ is missing."
+    exit 1
+  fi
+  echo "$COMMIT_SHA" > "$BUILD_SHA_RECORD"
+  echo "Build complete. Recorded build SHA: $COMMIT_SHA"
 fi
 
 cd "$FRONTEND_PATH"
 
 # ---------------------------------------------------------------------------
-# 5. Derive PM2 process name from CLIENT_ID in env
+# 3. PM2 reload
 # ---------------------------------------------------------------------------
 echo ""
-echo "----- Step 5: PM2 reload -----"
+echo "----- Step 3: PM2 reload -----"
 
 CLIENT_ID=""
 for env_file in .env.local .env.production.local .env.production; do
@@ -182,17 +153,17 @@ else
   echo "Run the one-time setup first:"
   echo "  pm2 start npm --name '$PM2_NAME' -- start -- -p <STOREFRONT_PORT>"
   echo "  pm2 save && pm2 startup"
-  echo "Attempting cold start (port from STOREFRONT_PORT env or 3101)..."
+  echo "Attempting cold start (port from STOREFONT_PORT env or 3101)…"
   STOREFRONT_PORT=$(resolve_storefront_port "$FRONTEND_PATH")
   pm2 start npm --name "$PM2_NAME" -- start -- -p "$STOREFRONT_PORT"
   pm2 save
 fi
 
 # ---------------------------------------------------------------------------
-# 6. Health check - verify frontend is responding
+# 4. Health check
 # ---------------------------------------------------------------------------
 echo ""
-echo "----- Step 6: health check -----"
+echo "----- Step 4: health check -----"
 
 STOREFRONT_PORT=$(resolve_storefront_port "$FRONTEND_PATH")
 HEALTH_URL="http://127.0.0.1:${STOREFRONT_PORT}/"
@@ -216,13 +187,16 @@ for i in $(seq 1 $MAX_RETRIES); do
 done
 
 # ---------------------------------------------------------------------------
-# 7. Record deployed SHA
+# 5. Record deploy SHA (git sync + pm2; build SHA recorded separately)
 # ---------------------------------------------------------------------------
-echo "$COMMIT_SHA" > "$SHA_RECORD"
-echo "Deployed SHA recorded."
+echo "$COMMIT_SHA" > "$DEPLOY_SHA_RECORD"
+echo "Deploy SHA recorded: $COMMIT_SHA"
 
 echo ""
 echo "===== Frontend deploy complete ====="
-echo "Process: $PM2_NAME"
-echo "SHA:     $COMMIT_SHA"
-echo "Time:    $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+echo "Process:    $PM2_NAME"
+echo "Deploy SHA: $COMMIT_SHA"
+if [ -f "$BUILD_SHA_RECORD" ]; then
+  echo "Build SHA:  $(cat "$BUILD_SHA_RECORD")"
+fi
+echo "Time:       $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
