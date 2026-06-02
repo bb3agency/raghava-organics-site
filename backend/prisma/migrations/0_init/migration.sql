@@ -47,13 +47,13 @@ CREATE TYPE "OutboxStatus" AS ENUM ('PENDING', 'PUBLISHED', 'FAILED');
 CREATE TYPE "WebhookInboxStatus" AS ENUM ('PROCESSING', 'ENQUEUED', 'PROCESSED', 'FAILED');
 
 -- CreateEnum
-CREATE TYPE "OpsPermission" AS ENUM ('OPS_READ', 'OPS_WRITE', 'OPS_APPROVE');
+CREATE TYPE "OpsPermission" AS ENUM ('OPS_READ', 'OPS_WRITE');
 
 -- CreateEnum
 CREATE TYPE "OpsActionType" AS ENUM ('LOAD_SHED_CHANGE', 'ENV_READ', 'ENV_UPDATE', 'CONTAINER_RESTART', 'DB_BACKUP', 'DB_RESTORE', 'FEATURE_FLAG_TOGGLE', 'INVITE_CREATED', 'INVITE_CONSUMED', 'INVITE_EXPIRED_CLEANED', 'OTP_CHALLENGE_REQUESTED', 'OTP_CHALLENGE_VERIFIED', 'OTP_CHALLENGE_FAILED');
 
 -- CreateEnum
-CREATE TYPE "OpsActionStatus" AS ENUM ('PENDING_APPROVAL', 'APPROVED', 'REJECTED', 'EXECUTED', 'FAILED');
+CREATE TYPE "OpsActionStatus" AS ENUM ('EXECUTED', 'FAILED');
 
 -- CreateEnum
 CREATE TYPE "OpsInviteStatus" AS ENUM ('CREATED', 'EMAIL_SENT', 'CONSUMED', 'EXPIRED_CLEANED', 'CANCELLED');
@@ -222,23 +222,6 @@ CREATE TABLE "OpsAuditLog" (
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "OpsAuditLog_pkey" PRIMARY KEY ("id")
-);
-
--- CreateTable
-CREATE TABLE "OpsDualApprovalRequest" (
-    "id" TEXT NOT NULL,
-    "requestId" TEXT NOT NULL,
-    "requesterId" TEXT NOT NULL,
-    "actionType" "OpsActionType" NOT NULL,
-    "status" "OpsActionStatus" NOT NULL DEFAULT 'PENDING_APPROVAL',
-    "payload" JSONB NOT NULL,
-    "confirmerId" TEXT,
-    "expiresAt" TIMESTAMP(3) NOT NULL,
-    "confirmedAt" TIMESTAMP(3),
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" TIMESTAMP(3) NOT NULL,
-
-    CONSTRAINT "OpsDualApprovalRequest_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
@@ -840,18 +823,6 @@ CREATE INDEX "OpsAuditLog_actionType_createdAt_idx" ON "OpsAuditLog"("actionType
 CREATE INDEX "OpsAuditLog_actionStatus_createdAt_idx" ON "OpsAuditLog"("actionStatus", "createdAt");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "OpsDualApprovalRequest_requestId_key" ON "OpsDualApprovalRequest"("requestId");
-
--- CreateIndex
-CREATE INDEX "OpsDualApprovalRequest_status_expiresAt_idx" ON "OpsDualApprovalRequest"("status", "expiresAt");
-
--- CreateIndex
-CREATE INDEX "OpsDualApprovalRequest_requesterId_createdAt_idx" ON "OpsDualApprovalRequest"("requesterId", "createdAt");
-
--- CreateIndex
-CREATE INDEX "OpsDualApprovalRequest_confirmerId_idx" ON "OpsDualApprovalRequest"("confirmerId");
-
--- CreateIndex
 CREATE UNIQUE INDEX "RefreshToken_jti_key" ON "RefreshToken"("jti");
 
 -- CreateIndex
@@ -1135,12 +1106,6 @@ ALTER TABLE "OpsConfigSecret" ADD CONSTRAINT "OpsConfigSecret_opsUserId_fkey" FO
 
 -- AddForeignKey
 ALTER TABLE "OpsAuditLog" ADD CONSTRAINT "OpsAuditLog_opsUserId_fkey" FOREIGN KEY ("opsUserId") REFERENCES "OpsUser"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE "OpsDualApprovalRequest" ADD CONSTRAINT "OpsDualApprovalRequest_requesterId_fkey" FOREIGN KEY ("requesterId") REFERENCES "OpsUser"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE "OpsDualApprovalRequest" ADD CONSTRAINT "OpsDualApprovalRequest_confirmerId_fkey" FOREIGN KEY ("confirmerId") REFERENCES "OpsUser"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "RefreshToken" ADD CONSTRAINT "RefreshToken_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;

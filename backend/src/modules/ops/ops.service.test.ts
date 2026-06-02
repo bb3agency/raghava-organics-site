@@ -269,6 +269,7 @@ describe('OpsService cross-table email collision guards', () => {
 describe('OpsService failcase coverage', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    vi.stubEnv('AUTH_DEV_BYPASS', 'false');
     process.env.OPS_DB_ENCRYPTION_KEY = 'test-ops-db-encryption-key';
     process.env.OPS_DB_ENCRYPTION_KEY_VERSION = '1';
   });

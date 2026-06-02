@@ -1,5 +1,7 @@
 import crypto from 'crypto';
 import { FastifyInstance, FastifyRequest } from 'fastify';
+import { getAuthDevOtp, isAuthDevBypassEnabled } from '@common/auth/auth-dev-bypass';
+import { assertTurnstileToken } from '@common/auth/turnstile-verify';
 import { AppError } from '@common/errors/app-error';
 import { ERROR_CODES } from '@common/errors/error-codes';
 import { invalidateLoadShedProcessCache, LOAD_SHED_MODE_KEY, setLoadShedMode, setLoadShedModeViaRedis } from '@common/reliability/load-shed.guard';
@@ -2351,7 +2353,13 @@ export class OpsService {
   async requestLoginOtp(input: {
     email: string;
     requestIp: string;
+    turnstileToken?: string;
   }): Promise<{ message: string }> {
+    await assertTurnstileToken({
+      clientIp: input.requestIp,
+      ...(input.turnstileToken ? { turnstileToken: input.turnstileToken } : {})
+    });
+
     const email = input.email.trim().toLowerCase();
     const prisma = this.prisma();
     const opsUser = await prisma.opsUser.findUnique({ where: { email } });
@@ -2373,12 +2381,32 @@ export class OpsService {
       return { message: 'If a registered ops account exists for this email, an OTP has been sent.' };
     }
 
-    const otp = crypto.randomInt(100000, 999999).toString();
-    const otpHash = hashOpaqueToken(otp);
     const ttl = getLoginOtpTtlSeconds();
-
     const otpKey = `ops:login-otp:${hashOpaqueToken(email)}`;
     const attemptKey = `ops:login-otp-attempts:${hashOpaqueToken(email)}`;
+
+    if (isAuthDevBypassEnabled()) {
+      const devOtp = getAuthDevOtp();
+      const devOtpHash = hashOpaqueToken(devOtp);
+      await this.fastify.redis.set(otpKey, `${opsUser.id}||${devOtpHash}`, 'EX', ttl);
+      await this.fastify.redis.del(attemptKey);
+      await this.appendAuditLog({
+        opsUserId: opsUser.id,
+        actionType: 'OTP_CHALLENGE_REQUESTED',
+        actionStatus: 'EXECUTED',
+        requestId: `ops-login-otp-dev:${opsUser.id}:${Date.now()}`,
+        requestIp: input.requestIp,
+        requestPath: '/api/v1/ops/auth/login/request-otp',
+        method: 'POST',
+        summary: { channel: 'dev-bypass', action: 'ops-login' }
+      });
+      return {
+        message: `Development mode: use OTP ${devOtp} (no email sent).`
+      };
+    }
+
+    const otp = crypto.randomInt(100000, 999999).toString();
+    const otpHash = hashOpaqueToken(otp);
 
     await this.fastify.redis.set(otpKey, `${opsUser.id}||${otpHash}`, 'EX', ttl);
     await this.fastify.redis.del(attemptKey);

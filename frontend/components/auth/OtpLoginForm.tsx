@@ -8,6 +8,8 @@ import { sendOtp, verifyOtp, getOtpChannelConfig, type OtpChannelConfigResponse 
 import { getApiErrorMessage } from "@/lib/error-messages";
 import { sendOtpInputSchema, verifyOtpInputSchema } from "@/lib/validators";
 import { AuthErrorBanner } from "@/components/auth/AuthErrorBanner";
+import { TurnstileChallenge } from "@/components/auth/TurnstileChallenge";
+import { useAuthTurnstile } from "@/hooks/use-auth-turnstile";
 import type { AuthSession } from "@/types/user";
 
 const phoneSchema = sendOtpInputSchema.pick({ phone: true });
@@ -26,6 +28,14 @@ export function OtpLoginForm({ onSuccess }: OtpLoginFormProps) {
   const [config, setConfig] = useState<OtpChannelConfigResponse | null>(null);
   const [loadingConfig, setLoadingConfig] = useState(true);
   const [info, setInfo] = useState<string | null>(null);
+  const {
+    required: turnstileRequired,
+    ready: turnstileReady,
+    turnstileField,
+    onTurnstileTokenChange,
+    turnstileLoadError,
+    setTurnstileLoadError,
+  } = useAuthTurnstile();
 
   useEffect(() => {
     async function loadConfig() {
@@ -52,6 +62,10 @@ export function OtpLoginForm({ onSuccess }: OtpLoginFormProps) {
   });
 
   const send = phoneForm.handleSubmit(async (values) => {
+    if (turnstileRequired && !turnstileReady) {
+      setError("Complete the security check below, then try again.");
+      return;
+    }
     try {
       setError(null);
       const effectiveChannel = config?.channel || "sms";
@@ -59,6 +73,7 @@ export function OtpLoginForm({ onSuccess }: OtpLoginFormProps) {
         phone: values.phone,
         channel: effectiveChannel,
         ...(effectiveChannel === "email" && email.trim() ? { email: email.trim() } : {}),
+        ...turnstileField,
       });
       setInfo(result.message);
       setPhone(values.phone);
@@ -85,11 +100,11 @@ export function OtpLoginForm({ onSuccess }: OtpLoginFormProps) {
     <form onSubmit={send} className="grid gap-5">
       <div className="grid gap-1.5">
         <label className="text-sm font-bold text-[#23403d]">
-          {effectiveChannel === "whatsapp" 
-            ? "Enter your phone number to receive OTP via WhatsApp" 
+          {effectiveChannel === "whatsapp"
+            ? "Enter your phone number to receive OTP via WhatsApp"
             : effectiveChannel === "email"
-            ? "Enter your phone number to receive OTP via Email"
-            : "Enter your phone number to receive OTP via SMS"}
+              ? "Enter your phone number to receive OTP via Email"
+              : "Enter your phone number to receive OTP via SMS"}
         </label>
       </div>
 
@@ -125,13 +140,28 @@ export function OtpLoginForm({ onSuccess }: OtpLoginFormProps) {
           />
         </div>
       ) : null}
+      <TurnstileChallenge
+        onTokenChange={onTurnstileTokenChange}
+        onLoadError={setTurnstileLoadError}
+      />
+      {turnstileLoadError ? (
+        <p className="text-xs font-bold text-red-500" role="alert">
+          {turnstileLoadError}
+        </p>
+      ) : null}
       <AuthErrorBanner message={error} />
       <button
         type="submit"
         className="mt-2 h-12 w-full rounded-full bg-[#23403d] px-8 text-sm font-bold text-white transition-transform hover:-translate-y-1 hover:bg-[#ec6e55] hover:shadow-lg disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0"
-        disabled={phoneForm.formState.isSubmitting || loadingConfig}
+        disabled={
+          phoneForm.formState.isSubmitting || loadingConfig || (turnstileRequired && !turnstileReady)
+        }
       >
-        {loadingConfig ? "Loading login method..." : phoneForm.formState.isSubmitting ? "Sending OTP..." : "Send OTP"}
+        {loadingConfig
+          ? "Loading login method..."
+          : phoneForm.formState.isSubmitting
+            ? "Sending OTP..."
+            : "Send OTP"}
       </button>
     </form>
   ) : (

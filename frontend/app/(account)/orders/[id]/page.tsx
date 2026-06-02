@@ -1,28 +1,26 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useAuthStore } from "@/stores/auth";
-import { getMyOrder } from "@/lib/orders-api";
+import { getMyOrder, cancelMyOrder, retryPayment, createReturnRequest, type OrderSummary } from "@/lib/orders-api";
+import { getBrowserApiBaseUrl } from "@/lib/api-base";
 import { getApiErrorMessage } from "@/lib/error-messages";
 import { formatPrice } from "@/lib/format-price";
-
-interface OrderDetail {
-  id: string;
-  orderNumber: string;
-  status: string;
-  paymentMode: "PREPAID" | "COD";
-  subtotal: number;
-  shippingCharge: number;
-  discountAmount: number;
-  total: number;
-}
+import { Button } from "@/components/ui/button";
 
 export default function AccountOrderDetailPage() {
   const params = useParams<{ id: string }>();
+  const router = useRouter();
   const accessToken = useAuthStore((s) => s.accessToken);
-  const [order, setOrder] = useState<OrderDetail | null>(null);
+  const [order, setOrder] = useState<OrderSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [busyAction, setBusyAction] = useState<string | null>(null);
+  
+  // Return request states
+  const [showReturnForm, setShowReturnForm] = useState(false);
+  const [returnReason, setReturnReason] = useState("");
+  const [returnItems, setReturnItems] = useState<Record<string, { quantity: number; reason: string; selected: boolean }>>({});
 
   useEffect(() => {
     let cancelled = false;
@@ -33,7 +31,17 @@ export default function AccountOrderDetailPage() {
       try {
         const result = await getMyOrder(params.id, accessToken);
         if (!cancelled) {
-          setOrder(result as OrderDetail);
+          setOrder(result);
+          // Initialize return items configuration
+          const initialReturnConfig: Record<string, { quantity: number; reason: string; selected: boolean }> = {};
+          result.items?.forEach((item) => {
+            initialReturnConfig[item.id] = {
+              quantity: item.quantity,
+              reason: "",
+              selected: false,
+            };
+          });
+          setReturnItems(initialReturnConfig);
         }
       } catch (err) {
         if (!cancelled) {
@@ -47,35 +55,301 @@ export default function AccountOrderDetailPage() {
     };
   }, [accessToken, params.id]);
 
-  if (error) {
+  const handleCancel = async () => {
+    if (!accessToken || !order) return;
+    if (!confirm("Are you sure you want to cancel this order?")) return;
+    setBusyAction("cancel");
+    setError(null);
+    try {
+      await cancelMyOrder(order.id, accessToken, "Cancelled by customer");
+      const result = await getMyOrder(order.id, accessToken);
+      setOrder(result);
+    } catch (err) {
+      setError(getApiErrorMessage(err));
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const handleRetryPayment = async () => {
+    if (!accessToken || !order) return;
+    setBusyAction("retry");
+    setError(null);
+    try {
+      await retryPayment(order.id, accessToken);
+      // Let checkout form/modal handle razorpay redirect logic, for now redirect to checkout or dedicated retry
+      // This is a minimal implementation, ideally it opens Razorpay right here
+      router.push(`/checkout/payment?orderId=${order.id}`);
+    } catch (err) {
+      setError(getApiErrorMessage(err));
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const handleReturnSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!accessToken || !order) return;
+
+    const selectedItems = Object.entries(returnItems)
+      .filter(([_, config]) => config.selected)
+      .map(([orderItemId, config]) => ({
+        orderItemId,
+        quantity: config.quantity,
+        reason: config.reason || undefined,
+      }));
+
+    if (selectedItems.length === 0) {
+      setError("Please select at least one item to return.");
+      return;
+    }
+
+    if (!returnReason.trim()) {
+      setError("Please provide an overall reason for the return.");
+      return;
+    }
+
+    setBusyAction("return");
+    setError(null);
+    try {
+      await createReturnRequest(
+        order.id,
+        {
+          items: selectedItems,
+          reason: returnReason,
+        },
+        accessToken,
+      );
+      alert("Return request submitted successfully. We will review it shortly.");
+      setShowReturnForm(false);
+      const result = await getMyOrder(order.id, accessToken);
+      setOrder(result);
+    } catch (err) {
+      setError(getApiErrorMessage(err));
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  if (error && !order) {
     return <p className="text-sm text-destructive">{error}</p>;
   }
   if (!order) {
     return <p className="text-sm text-muted-foreground">Loading order...</p>;
   }
 
+  const canCancel = ["PENDING_PAYMENT", "CONFIRMED", "PROCESSING"].includes(order.status);
+  const canRetry = order.status === "PENDING_PAYMENT" || order.status === "PAYMENT_FAILED";
+
   return (
-    <section className="grid gap-3 rounded-lg border border-border p-4">
-      <h1 className="font-heading text-2xl font-semibold">{order.orderNumber}</h1>
-      <p className="text-sm text-muted-foreground">
-        {order.status} · {order.paymentMode}
-      </p>
-      <p className="flex justify-between text-sm">
-        <span>Subtotal</span>
-        <span>{formatPrice(order.subtotal)}</span>
-      </p>
-      <p className="flex justify-between text-sm">
-        <span>Shipping</span>
-        <span>{formatPrice(order.shippingCharge)}</span>
-      </p>
-      <p className="flex justify-between text-sm">
-        <span>Discount</span>
-        <span>-{formatPrice(order.discountAmount)}</span>
-      </p>
-      <p className="flex justify-between border-t border-border pt-2 font-medium">
-        <span>Total</span>
-        <span>{formatPrice(order.total)}</span>
-      </p>
+    <section className="grid gap-6">
+      <div className="grid gap-3 rounded-lg border border-border p-4">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <h1 className="font-heading text-2xl font-semibold">{order.orderNumber}</h1>
+            <p className="text-sm text-muted-foreground">
+              {order.status} · {order.paymentMode}
+            </p>
+          </div>
+          <div className="flex gap-2">
+             {order.invoice?.hasPdf ? (
+              <a
+                href={`${getBrowserApiBaseUrl()}/orders/${order.id}/invoice.pdf`}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex h-9 items-center justify-center rounded-md border border-border px-3 text-sm font-medium transition-colors hover:bg-muted"
+              >
+                Invoice
+              </a>
+            ) : null}
+            {canRetry && (
+              <Button
+                variant="default"
+                size="sm"
+                disabled={busyAction !== null}
+                onClick={handleRetryPayment}
+              >
+                {busyAction === "retry" ? "Processing..." : "Retry Payment"}
+              </Button>
+            )}
+            {canCancel && (
+               <Button
+                variant="destructive"
+                size="sm"
+                disabled={busyAction !== null}
+                onClick={handleCancel}
+              >
+                {busyAction === "cancel" ? "Cancelling..." : "Cancel Order"}
+              </Button>
+            )}
+          </div>
+        </div>
+
+        {error && <p className="text-sm text-destructive">{error}</p>}
+
+        <div className="mt-4 grid gap-2 border-t border-border pt-4">
+          <p className="flex justify-between text-sm">
+            <span>Subtotal</span>
+            <span>{formatPrice(order.subtotal)}</span>
+          </p>
+          <p className="flex justify-between text-sm">
+            <span>Shipping</span>
+            <span>{formatPrice(order.shippingCharge)}</span>
+          </p>
+          <p className="flex justify-between text-sm">
+            <span>Discount</span>
+            <span>-{formatPrice(order.discountAmount)}</span>
+          </p>
+          <p className="flex justify-between border-t border-border pt-2 font-medium">
+            <span>Total</span>
+            <span className="text-[#ec6e55]">{formatPrice(order.total)}</span>
+          </p>
+        </div>
+      </div>
+
+      <div className="grid gap-3 rounded-lg border border-border p-4">
+        <h2 className="font-heading text-lg font-semibold">Items</h2>
+        <div className="grid gap-4">
+          {order.items?.map((item) => (
+            <div key={item.id} className="flex items-center justify-between text-sm">
+              <div>
+                <p className="font-medium">{item.productName}</p>
+                <p className="text-muted-foreground">{item.variantName}</p>
+                <p className="text-muted-foreground">Qty: {item.quantity}</p>
+              </div>
+              <p className="font-medium">{formatPrice(item.totalPrice)}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {order.status === "DELIVERED" && !showReturnForm && (
+        <div className="rounded-lg border border-border p-4 text-center">
+          <p className="text-sm text-muted-foreground mb-3">Is there an issue with your items?</p>
+          <Button variant="outline" size="sm" onClick={() => setShowReturnForm(true)}>
+             Request a Return / Replacement
+          </Button>
+        </div>
+      )}
+
+      {order.status === "DELIVERED" && showReturnForm && (
+        <form onSubmit={handleReturnSubmit} className="grid gap-4 rounded-lg border border-[#ec6e55]/30 bg-[#faf3ef]/20 p-4">
+          <h2 className="font-heading text-lg font-bold text-[#23403d]">Request a Return</h2>
+          <p className="text-xs text-[#767676] mb-2">Select the items you would like to return and specify the details.</p>
+
+          <div className="grid gap-4">
+            {order.items?.map((item) => {
+              const config = returnItems[item.id] || { selected: false, quantity: item.quantity, reason: "" };
+              return (
+                <div key={item.id} className="grid gap-2 rounded border border-border p-3 text-sm bg-white">
+                  <div className="flex items-start gap-3">
+                    <input
+                      type="checkbox"
+                      id={`check-${item.id}`}
+                      className="mt-1 h-4 w-4 rounded border-gray-300 text-[#ec6e55] focus:ring-[#ec6e55]"
+                      checked={config.selected}
+                      onChange={(e) => setReturnItems({
+                        ...returnItems,
+                        [item.id]: { ...config, selected: e.target.checked }
+                      })}
+                    />
+                    <label htmlFor={`check-${item.id}`} className="font-medium flex-1 cursor-pointer">
+                      {item.productName} ({item.variantName})
+                    </label>
+                  </div>
+                  {config.selected && (
+                    <div className="pl-7 grid gap-3 mt-2 sm:grid-cols-3">
+                      <div>
+                        <label className="text-xs font-medium block mb-1">Quantity</label>
+                        <input
+                          type="number"
+                          min={1}
+                          max={item.quantity}
+                          className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                          value={config.quantity}
+                          onChange={(e) => setReturnItems({
+                            ...returnItems,
+                            [item.id]: { ...config, quantity: Math.min(item.quantity, Math.max(1, parseInt(e.target.value) || 1)) }
+                          })}
+                        />
+                      </div>
+                      <div className="sm:col-span-2">
+                        <label className="text-xs font-medium block mb-1">Reason for this item (Optional)</label>
+                        <input
+                          type="text"
+                          placeholder="e.g. damaged, wrong size"
+                          className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                          value={config.reason}
+                          onChange={(e) => setReturnItems({
+                            ...returnItems,
+                            [item.id]: { ...config, reason: e.target.value }
+                          })}
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="grid gap-1.5 mt-2">
+             <label className="text-xs font-bold block">Overall return reason</label>
+             <textarea
+               className="flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+               placeholder="Please specify why you are raising this return request..."
+               value={returnReason}
+               onChange={(e) => setReturnReason(e.target.value)}
+               required
+             />
+          </div>
+
+          <div className="flex justify-end gap-2 mt-2">
+             <Button type="button" variant="outline" size="sm" disabled={busyAction === "return"} onClick={() => setShowReturnForm(false)}>
+                Cancel
+             </Button>
+             <Button type="submit" variant="default" size="sm" disabled={busyAction === "return"}>
+                {busyAction === "return" ? "Submitting..." : "Submit Return"}
+             </Button>
+          </div>
+        </form>
+      )}
+
+      {order.shipment?.awb && (
+        <div className="grid gap-3 rounded-lg border border-border p-4">
+          <h2 className="font-heading text-lg font-semibold">Tracking</h2>
+          <div className="text-sm">
+            <p className="mb-2"><span className="font-medium">AWB:</span> {order.shipment.awb}</p>
+            <p className="mb-4"><span className="font-medium">Status:</span> {order.shipment.status}</p>
+            {order.shipment.trackingUrl && (
+              <a
+                href={order.shipment.trackingUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="text-primary underline"
+              >
+                Track on {order.shipment.provider}
+              </a>
+            )}
+          </div>
+          {order.shipment.events?.length > 0 && (
+            <div className="mt-4 border-t border-border pt-4">
+              <h3 className="mb-3 font-medium text-sm">Tracking History</h3>
+              <div className="grid gap-3">
+                 {order.shipment.events.map((event, i) => (
+                    <div key={i} className="text-xs">
+                      <p className="font-medium">{event.status}</p>
+                      <p className="text-muted-foreground">{event.description}</p>
+                      <p className="text-muted-foreground">
+                        {new Date(event.occurredAt).toLocaleString()} {event.location ? `· ${event.location}` : ""}
+                      </p>
+                    </div>
+                 ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </section>
   );
 }

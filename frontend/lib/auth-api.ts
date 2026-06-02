@@ -1,9 +1,11 @@
 import { apiClient } from "@/lib/api";
+import { createIdempotencyKey } from "@/lib/idempotency";
 import type { User } from "@/types/user";
 import {
   emailLoginInputSchema,
   emailRegisterInputSchema,
   forgotPasswordInputSchema,
+  resetPasswordInputSchema,
   sendOtpInputSchema,
   signupPhoneInputSchema,
   verifyOtpInputSchema,
@@ -58,6 +60,12 @@ export interface ForgotPasswordInput {
   turnstileToken?: string;
 }
 
+export interface ResetPasswordInput {
+  token: string;
+  password: string;
+  confirmPassword: string;
+}
+
 export interface OtpChannelConfigResponse {
   channel: "sms" | "whatsapp" | "email";
   availableChannels: Array<"sms" | "whatsapp" | "email">;
@@ -104,11 +112,12 @@ export async function verifyOtpAndSignup(
 
 export async function registerWithEmail(
   input: EmailRegisterInput,
-): Promise<{ user: User }> {
+): Promise<AuthSessionResponse> {
   const body = emailRegisterInputSchema.parse(input);
-  return apiClient<{ user: User }>("/auth/register", {
+  return apiClient<AuthSessionResponse>("/auth/register", {
     method: "POST",
     body: JSON.stringify(body),
+    credentials: "include",
   });
 }
 
@@ -124,10 +133,24 @@ export async function loginWithEmail(
 
 export async function requestPasswordReset(
   input: ForgotPasswordInput,
+  idempotencyKey = createIdempotencyKey(),
 ): Promise<{ message: string }> {
   const body = forgotPasswordInputSchema.parse(input);
   return apiClient<{ message: string }>("/auth/forgot-password", {
     method: "POST",
+    idempotencyKey,
+    body: JSON.stringify(body),
+  });
+}
+
+export async function resetPassword(
+  input: ResetPasswordInput,
+  idempotencyKey = createIdempotencyKey(),
+): Promise<{ message: string }> {
+  const body = resetPasswordInputSchema.parse(input);
+  return apiClient<{ message: string }>("/auth/reset-password", {
+    method: "POST",
+    idempotencyKey,
     body: JSON.stringify(body),
   });
 }

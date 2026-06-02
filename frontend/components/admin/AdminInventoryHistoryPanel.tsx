@@ -1,43 +1,125 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { AdminPagination } from "@/components/admin/AdminPagination";
+import { AdminSection } from "@/components/admin/AdminSection";
 import { useAuthenticatedApi } from "@/hooks/use-authenticated-api";
+import {
+  buildAdminQuery,
+  normalizePagination,
+  type AdminInventoryHistoryResponse,
+} from "@/lib/admin-api";
+import { formatAdminDate } from "@/lib/admin-format";
 import { getApiErrorMessageWithHint } from "@/lib/error-messages";
+import { Button } from "@/components/ui/button";
 
-export function AdminInventoryHistoryPanel() {
+export function AdminInventoryHistoryPanel({
+  initialVariantId = "",
+}: {
+  initialVariantId?: string;
+}) {
   const api = useAuthenticatedApi();
-  const [variantId, setVariantId] = useState("");
-  const [history, setHistory] = useState<unknown>(null);
+  const [variantId, setVariantId] = useState(initialVariantId);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [history, setHistory] = useState<AdminInventoryHistoryResponse | null>(null);
+
+  const load = useCallback(
+    async (targetPage: number) => {
+      if (!variantId.trim()) {
+        setError("Enter a variant ID.");
+        return;
+      }
+      setLoading(true);
+      setError(null);
+      try {
+        const response = await api<AdminInventoryHistoryResponse>(
+          `/admin/inventory/history/${variantId.trim()}${buildAdminQuery({
+            page: targetPage,
+            limit: 20,
+          })}`,
+        );
+        setHistory(response);
+      } catch (err) {
+        setError(getApiErrorMessageWithHint(err));
+        setHistory(null);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [api, variantId],
+  );
+
+  useEffect(() => {
+    if (initialVariantId) {
+      setVariantId(initialVariantId);
+    }
+  }, [initialVariantId]);
+
+  useEffect(() => {
+    if (initialVariantId.trim()) {
+      void load(1);
+    }
+  }, [initialVariantId, load]);
+
+  const meta = history ? normalizePagination(history) : null;
+  const items = history?.items ?? [];
 
   return (
-    <section className="grid gap-3 rounded-lg border border-border p-4">
-      <h3 className="font-medium">Adjustment history by variant</h3>
-      <div className="flex flex-wrap gap-2">
-        <input
-          value={variantId}
-          onChange={(event) => setVariantId(event.target.value)}
-          placeholder="Variant ID"
-          className="h-10 min-w-64 flex-1 rounded-md border px-3 text-sm"
-        />
-        <button
-          type="button"
-          className="h-10 rounded-md bg-primary px-4 text-sm text-primary-foreground"
-          onClick={() => {
-            void api(`/admin/inventory/history/${variantId}`)
-              .then(setHistory)
-              .catch((err) => setError(getApiErrorMessageWithHint(err)));
-          }}
-        >
-          Load history
-        </button>
-      </div>
-      {error ? <p className="text-sm text-destructive">{error}</p> : null}
-      {history ? (
-        <pre className="max-h-64 overflow-auto rounded-md border p-3 text-xs">
-          {JSON.stringify(history, null, 2)}
-        </pre>
+    <AdminSection
+      title="Adjustment history"
+      description="Stock changes for a specific variant."
+      loading={loading}
+      error={error}
+      empty={Boolean(history && items.length === 0)}
+      emptyMessage="No history entries for this variant."
+      actions={
+        <div className="flex flex-wrap gap-2">
+          <input
+            value={variantId}
+            onChange={(event) => setVariantId(event.target.value)}
+            placeholder="Variant ID"
+            className="h-9 min-w-48 rounded-md border border-border bg-background px-2 text-sm"
+          />
+          <Button type="button" size="sm" variant="outline" onClick={() => void load(1)}>
+            Load history
+          </Button>
+        </div>
+      }
+    >
+      {history && meta ? (
+        <>
+          <div className="overflow-x-auto rounded-md border border-border">
+            <table className="w-full text-left text-sm">
+              <thead className="border-b border-border bg-muted/50 text-xs uppercase text-muted-foreground">
+                <tr>
+                  <th className="px-3 py-2 font-medium">Delta</th>
+                  <th className="px-3 py-2 font-medium">Qty after</th>
+                  <th className="px-3 py-2 font-medium">Reason</th>
+                  <th className="px-3 py-2 font-medium">When</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((entry) => (
+                  <tr key={entry.id} className="border-b border-border last:border-0">
+                    <td className="px-3 py-2 font-medium">
+                      {entry.delta > 0 ? `+${entry.delta}` : entry.delta}
+                    </td>
+                    <td className="px-3 py-2">{entry.quantityAfter}</td>
+                    <td className="px-3 py-2 text-xs text-muted-foreground">
+                      {entry.reason ?? "—"}
+                    </td>
+                    <td className="px-3 py-2 text-xs text-muted-foreground">
+                      {formatAdminDate(entry.createdAt)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <AdminPagination meta={meta} onPageChange={(next) => void load(next)} />
+        </>
       ) : null}
-    </section>
+    </AdminSection>
   );
 }

@@ -1,6 +1,4 @@
 import { FastifyInstance } from 'fastify';
-import { AppError } from '@common/errors/app-error';
-import { ERROR_CODES } from '@common/errors/error-codes';
 import { SmsTemplateRegistry } from '@modules/notifications/sms-template-registry';
 import { supportedEmailTemplates } from '@modules/notifications/templates/email-templates';
 import {
@@ -19,6 +17,8 @@ import {
 export class SettingsService {
   private static readonly singletonKey = 'default';
   private static readonly defaultPrimaryChannel: PrimaryNotificationChannel = 'EMAIL';
+  /** Matches upsert create fallback in updateStoreProfile / updateShippingSettings. */
+  private static readonly defaultPickupPincode = '500001';
 
   constructor(private readonly fastify: FastifyInstance) {}
 
@@ -67,7 +67,11 @@ export class SettingsService {
       };
     }
 
-    throw new AppError(ERROR_CODES.NOT_FOUND, 'Pickup pincode is not configured', 404);
+    return {
+      pickupPincode: SettingsService.defaultPickupPincode,
+      minOrderValuePaise: 0,
+      source: 'default'
+    };
   }
 
   async updateShippingSettings(input: UpdateShippingSettingsInput): Promise<ShippingSettingsResponse> {

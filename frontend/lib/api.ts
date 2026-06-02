@@ -58,11 +58,13 @@ export async function apiClient<T>(
   const path = endpoint.startsWith("/") ? endpoint : `/${endpoint}`;
   const url = `${getApiBase()}${path}`;
 
+  const isFormData = init.body instanceof FormData;
+
   const response = await fetch(url, {
     ...init,
     credentials: "include",
     headers: {
-      "Content-Type": "application/json",
+      ...(isFormData ? {} : { "Content-Type": "application/json" }),
       ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
       ...(idempotencyKey ? { "idempotency-key": idempotencyKey } : {}),
       ...headers,

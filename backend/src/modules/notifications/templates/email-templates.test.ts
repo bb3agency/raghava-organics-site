@@ -19,11 +19,11 @@ describe('renderNotificationEmail', () => {
   it('renders PasswordReset template with email in body', async () => {
     const rendered = await renderNotificationEmail('PasswordReset', {
       email: 'user@example.com',
-      resetToken: 'reset-token-123'
+      resetUrl: 'http://localhost:3101/reset-password?token=abc123'
     });
     expect(rendered.subject).toContain('Password reset request');
     expect(rendered.html).toContain('user@example.com');
-    expect(rendered.html).toContain('reset-token-123');
+    expect(rendered.html).toContain('http://localhost:3101/reset-password?token=abc123');
   });
 
   it('renders OtpVerification template with otp in body', async () => {

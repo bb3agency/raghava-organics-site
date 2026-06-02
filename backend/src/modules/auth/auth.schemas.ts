@@ -55,8 +55,11 @@ export const registerSchema = {
     200: {
       type: 'object',
       additionalProperties: false,
-      required: ['user'],
-      properties: { user: userSchema }
+      required: ['accessToken', 'user'],
+      properties: {
+        accessToken: { type: 'string', maxLength: 2048 },
+        user: userSchema
+      }
     },
     ...standardErrorResponses
   }
@@ -81,7 +84,10 @@ export const sendOtpSchema = {
       type: 'object',
       additionalProperties: false,
       required: ['message'],
-      properties: { message: messageSchema }
+      properties: {
+        message: messageSchema,
+        devOtp: { type: 'string', minLength: 6, maxLength: 6, pattern: '^[0-9]{6}$' }
+      }
     },
     ...standardErrorResponses
   }
@@ -209,6 +215,32 @@ export const forgotPasswordSchema = {
   }
 } as const;
 
+export const resetPasswordSchema = {
+  params: emptyParamsSchema,
+  querystring: emptyQuerystringSchema,
+  body: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['token', 'password', 'confirmPassword'],
+    properties: {
+      token: { type: 'string', minLength: 1, maxLength: 255 },
+      password: { type: 'string', minLength: 8, maxLength: 128 },
+      confirmPassword: { type: 'string', minLength: 8, maxLength: 128 }
+    }
+  },
+  response: {
+    200: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['message'],
+      properties: {
+        message: messageSchema
+      }
+    },
+    ...standardErrorResponses
+  }
+} as const;
+
 export const loginSchema = {
   params: emptyParamsSchema,
   querystring: emptyQuerystringSchema,
@@ -288,7 +320,8 @@ export const adminLoginRequestOtpSchema = {
       required: ['message', 'expiresAt'],
       properties: {
         message: messageSchema,
-        expiresAt: { type: 'string', maxLength: 40 }
+        expiresAt: { type: 'string', maxLength: 40 },
+        devOtp: { type: 'string', minLength: 6, maxLength: 6, pattern: '^[0-9]{6}$' }
       }
     },
     ...standardErrorResponses

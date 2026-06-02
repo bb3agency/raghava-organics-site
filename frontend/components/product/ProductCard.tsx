@@ -1,10 +1,16 @@
+"use client";
+
 import Image from "next/image";
 import Link from "next/link";
+import { useState } from "react";
 import { Eye, Heart, ShoppingBag } from "lucide-react";
 import type { Product } from "@/types/product";
 import { Rating } from "@/components/shared/Rating";
 import { PriceDisplay } from "@/components/shared/PriceDisplay";
 import { AddToCartButton } from "@/components/cart/AddToCartButton";
+import { useAuthStore } from "@/stores/auth";
+import { useWishlistStore } from "@/stores/wishlist";
+import { addToWishlist, removeFromWishlist } from "@/lib/wishlist-api";
 
 interface ProductCardProps {
   product: Product;
@@ -13,6 +19,40 @@ interface ProductCardProps {
 
 export function ProductCard({ product, priority = false }: ProductCardProps) {
   const image = product.images[0];
+  const accessToken = useAuthStore((s) => s.accessToken);
+  const items = useWishlistStore((s) => s.items);
+  const toggleItem = useWishlistStore((s) => s.toggleItem);
+  const [loading, setLoading] = useState(false);
+
+  const inWishlist = items.has(product.id);
+
+  const handleWishlistToggle = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    if (!accessToken) {
+      alert("Please sign in to save items to your wishlist.");
+      return;
+    }
+    if (loading) return;
+
+    setLoading(true);
+    // Optimistic update
+    toggleItem(product.id, !inWishlist);
+
+    try {
+      if (inWishlist) {
+        await removeFromWishlist(product.id, accessToken);
+      } else {
+        await addToWishlist(product.id, accessToken);
+      }
+    } catch {
+      // Revert optimistic update on failure
+      toggleItem(product.id, inWishlist);
+      alert("Failed to update wishlist. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const activeVariant =
     product.variants.find((variant) => variant.isActive) ?? product.variants[0];
   const hasDiscount =
@@ -43,14 +83,16 @@ export function ProductCard({ product, priority = false }: ProductCardProps) {
         {/* Hover Actions (Tasty Daily style overlay buttons) */}
         <div className="absolute right-4 top-4 flex flex-col gap-2 opacity-0 transition-all duration-300 group-hover:opacity-100 lg:translate-x-4 lg:group-hover:translate-x-0">
           <button 
-            className="flex size-9 items-center justify-center rounded-full bg-white text-[#23403d] shadow-sm transition-colors hover:bg-[#ec6e55] hover:text-white" 
-            aria-label="Add to wishlist"
-            onClick={(e) => {
-              e.preventDefault();
-              alert("Wishlist feature coming soon!");
-            }}
+            className={`flex size-9 items-center justify-center rounded-full shadow-sm transition-colors ${
+              inWishlist 
+                ? "bg-[#ec6e55] text-white" 
+                : "bg-white text-[#23403d] hover:bg-[#ec6e55] hover:text-white"
+            } ${loading ? "opacity-50" : ""}`}
+            aria-label={inWishlist ? "Remove from wishlist" : "Add to wishlist"}
+            onClick={handleWishlistToggle}
+            disabled={loading}
           >
-            <Heart className="size-4" />
+            <Heart className={`size-4 ${inWishlist ? "fill-current" : ""}`} />
           </button>
           <Link 
             href={`/products/${product.slug}`}

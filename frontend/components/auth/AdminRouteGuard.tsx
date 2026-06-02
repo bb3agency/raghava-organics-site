@@ -2,8 +2,9 @@
 
 import type { ReactNode } from "react";
 import { useEffect } from "react";
-import { usePathname, useRouter } from "next/navigation";
-import { useAuthStore } from "@/stores/auth";
+import { usePathname } from "next/navigation";
+import { useAdminAuth } from "@/contexts/admin-auth-context";
+import { redirectToAdminHome } from "@/lib/admin-auth-navigation";
 import { canViewAdminPath } from "@/lib/permissions";
 
 interface AdminRouteGuardProps {
@@ -11,22 +12,20 @@ interface AdminRouteGuardProps {
 }
 
 export function AdminRouteGuard({ children }: AdminRouteGuardProps) {
-  const router = useRouter();
   const pathname = usePathname();
-  const user = useAuthStore((state) => state.user);
-
-  const allowed = canViewAdminPath(user, pathname);
+  const { adminUser } = useAdminAuth();
+  const allowed = canViewAdminPath(adminUser, pathname);
 
   useEffect(() => {
     if (!allowed) {
-      router.replace("/dashboard");
+      redirectToAdminHome();
     }
-  }, [allowed, router]);
+  }, [allowed]);
 
   if (!allowed) {
     return (
       <p className="text-sm text-muted-foreground" role="status">
-        You do not have permission to view this admin section.
+        Redirecting…
       </p>
     );
   }

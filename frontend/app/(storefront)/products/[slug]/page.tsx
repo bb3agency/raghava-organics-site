@@ -4,9 +4,9 @@ import { Leaf, ShieldCheck, Truck, RotateCcw, Package, ChevronRight } from "luci
 import { apiClient } from "@/lib/api";
 import { mapProduct } from "@/lib/product-adapters";
 import { ProductGallery } from "@/components/product/ProductGallery";
-import { PriceDisplay } from "@/components/shared/PriceDisplay";
 import { Rating } from "@/components/shared/Rating";
-import { AddToCartButton } from "@/components/cart/AddToCartButton";
+import { ProductVariantSelector } from "@/components/product/ProductVariantSelector";
+import { ProductReviewsSection } from "@/components/product/ProductReviewsSection";
 import type { Product } from "@/types/product";
 
 interface ProductDetailPageProps {
@@ -44,9 +44,6 @@ export default async function ProductDetailPage({ params }: ProductDetailPagePro
 
   const activeVariant =
     product.variants.find((v) => v.isActive) ?? product.variants[0];
-  const hasDiscount =
-    typeof activeVariant?.compareAtPrice === "number" &&
-    activeVariant.compareAtPrice > activeVariant.price;
 
   return (
     <div className="bg-[#eff5ee] min-h-screen pb-16">
@@ -89,21 +86,6 @@ export default async function ProductDetailPage({ params }: ProductDetailPagePro
 
             <hr className="border-[#efe8e4]" />
 
-            {/* Price */}
-            <div className="flex items-center gap-4">
-              <div className="text-2xl">
-                <PriceDisplay
-                  pricePaise={activeVariant?.price ?? 0}
-                  originalPricePaise={hasDiscount ? (activeVariant?.compareAtPrice ?? undefined) : undefined}
-                />
-              </div>
-              {hasDiscount && activeVariant?.compareAtPrice && (
-                <span className="rounded-full bg-[#ec6e55] px-3 py-1 text-xs font-bold text-white uppercase tracking-wider">
-                  Save {Math.round((1 - activeVariant.price / activeVariant.compareAtPrice) * 100)}%
-                </span>
-              )}
-            </div>
-
             {/* Description */}
             {product.description ? (
               <p className="text-sm font-medium leading-relaxed text-[#767676]">
@@ -126,51 +108,10 @@ export default async function ProductDetailPage({ params }: ProductDetailPagePro
               )}
             </div>
 
-            {/* Variants (if multiple) */}
-            {product.variants.length > 1 && (
-              <div className="flex flex-col gap-3 pt-2">
-                <p className="text-xs font-bold uppercase tracking-wider text-[#23403d]">
-                  Select Size
-                </p>
-                <div className="flex flex-wrap gap-3">
-                  {product.variants.map((v) => (
-                    <span
-                      key={v.id}
-                      className={`cursor-pointer rounded-full border-2 px-5 py-2 text-sm font-bold transition-all ${
-                        v.id === activeVariant?.id
-                          ? "border-[#23403d] bg-[#23403d] text-white"
-                          : "border-[#efe8e4] text-[#767676] hover:border-[#23403d] hover:text-[#23403d]"
-                      }`}
-                    >
-                      {v.name}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            <hr className="border-[#efe8e4]" />
-
-            {/* CTAs */}
-            {product.inStock && activeVariant ? (
-              <div className="flex flex-col gap-4 sm:flex-row pt-2">
-                <AddToCartButton
-                  variantId={activeVariant.id}
-                  className="flex h-14 flex-1 items-center justify-center rounded-full bg-[#eff5ee] text-sm font-bold text-[#23403d] transition-colors hover:bg-[#c5dac2]"
-                  label="Add to cart"
-                />
-                <AddToCartButton
-                  variantId={activeVariant.id}
-                  className="flex h-14 flex-1 items-center justify-center rounded-full bg-[#23403d] text-sm font-bold text-white transition-colors hover:bg-[#ec6e55]"
-                  label="Buy now"
-                  redirectTo="/checkout"
-                />
-              </div>
-            ) : (
-              <p className="rounded-full bg-[#faf3ef] py-4 text-center text-sm font-bold text-[#767676]">
-                Currently out of stock
-              </p>
-            )}
+            <ProductVariantSelector
+              product={product}
+              defaultVariant={activeVariant}
+            />
 
             {/* Trust signals */}
             <div className="mt-4 grid grid-cols-2 gap-4 rounded-[20px] bg-[#faf3ef] p-6">
@@ -203,6 +144,9 @@ export default async function ProductDetailPage({ params }: ProductDetailPagePro
             )}
           </section>
         </div>
+
+        {/* Reviews Section */}
+        <ProductReviewsSection productSlug={product.slug} />
       </div>
     </div>
   );

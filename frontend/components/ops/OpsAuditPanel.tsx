@@ -47,7 +47,6 @@ export function OpsAuditPanel() {
   }, [statusFilter, actionTypeFilter]);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- async API bootstrap
     void load(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- initial fetch only
   }, []);

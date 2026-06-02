@@ -1,4 +1,5 @@
 import dotenv from 'dotenv';
+import { validateAuthDevBypassEnv } from '@common/auth/auth-dev-bypass';
 
 dotenv.config();
 
@@ -145,6 +146,12 @@ function validateProductionProviderSafetyEnv(): void {
     );
   }
 
+  if ((process.env.AUTH_DEV_BYPASS ?? '').trim().toLowerCase() === 'true') {
+    throw new Error(
+      `AUTH_DEV_BYPASS cannot be enabled when NODE_ENV=${nodeEnv}. Remove it from production environment configuration.`
+    );
+  }
+
   if (paymentProviderRaw && !['razorpay', 'cod'].includes(paymentProviderRaw)) {
     throw new Error(`Unsupported PAYMENT_PROVIDER in production-like profile: ${paymentProviderRaw}`);
   }
@@ -190,11 +197,25 @@ function validateProductionProviderSafetyEnv(): void {
     assertEnvNotPlaceholderIfPresent('META_WHATSAPP_WEBHOOK_VERIFY_TOKEN');
     assertEnvNotPlaceholderIfPresent('META_WHATSAPP_APP_SECRET');
   }
+
+  // Turnstile must be configured in production — if it is absent, all auth endpoints
+  // skip bot-challenge verification, which is a security gap.
+  // Set TURNSTILE_SECRET_KEY to a real Cloudflare secret. To explicitly opt out
+  // (not recommended), set TURNSTILE_SKIP_PRODUCTION_CHECK=true.
+  if (!envVarPresent('TURNSTILE_SECRET_KEY') && !isEnabled(process.env.TURNSTILE_SKIP_PRODUCTION_CHECK)) {
+    throw new Error(
+      'TURNSTILE_SECRET_KEY is required in production-like profiles. ' +
+      'Bot challenge verification will be skipped without it. ' +
+      'Set TURNSTILE_SKIP_PRODUCTION_CHECK=true only if you are intentionally running without Turnstile.'
+    );
+  }
+  assertEnvNotPlaceholderIfPresent('TURNSTILE_SECRET_KEY');
 }
 
 export function validateRuntimeEnv(): void {
   requireEnv('JWT_SECRET');
   requireEnv('JWT_REFRESH_SECRET');
+  validateAuthDevBypassEnv();
   validateSecureFlowEnv();
   validateConditionalEnv();
   validateProductionProviderSafetyEnv();

@@ -33,7 +33,7 @@ export default function AccountOrdersPage() {
       try {
         const data = await getMyOrders(accessToken);
         if (!cancelled) {
-          setOrders(data as UserOrder[]);
+          setOrders(data);
         }
       } catch (err) {
         if (!cancelled) {

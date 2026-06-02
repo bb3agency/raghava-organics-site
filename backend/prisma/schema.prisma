@@ -195,6 +195,7 @@ model User {
   cart         Cart?
   reviews      Review[]
   refreshTokens RefreshToken[]
+  passwordResetTokens PasswordResetToken[]
   adminPermissionGrants AdminPermissionGrant[]
   adminAuditLogs AdminAuditLog[]
   returnRequests ReturnRequest[]
@@ -388,6 +389,18 @@ model RefreshToken {
 
   @@index([sessionId])
   @@index([jti])
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model PasswordResetToken {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
   @@index([userId])
   @@index([expiresAt])
 }

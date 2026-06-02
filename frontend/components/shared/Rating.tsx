@@ -2,7 +2,7 @@ import { Star } from "lucide-react";
 
 interface RatingProps {
   rating: number;
-  reviewCount: number;
+  reviewCount?: number;
 }
 
 export function Rating({ rating, reviewCount }: RatingProps) {
@@ -14,12 +14,12 @@ export function Rating({ rating, reviewCount }: RatingProps) {
         {Array.from({ length: 5 }).map((_, idx) => (
           <Star
             key={idx}
-            className={`size-3.5 ${idx < rounded ? "fill-current text-accent" : "text-muted-foreground/30"}`}
+            className={`size-3.5 ${idx < rounded ? "fill-[#ec6e55] text-[#ec6e55]" : "text-[#efe8e4]"}`}
             aria-hidden
           />
         ))}
       </div>
-      <span>({reviewCount})</span>
+      {reviewCount !== undefined && <span>({reviewCount})</span>}
     </div>
   );
 }

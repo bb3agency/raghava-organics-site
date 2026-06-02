@@ -17,6 +17,7 @@
     "typecheck": "node scripts/typecheck.js",
     "verify:bootstrap-env": "node scripts/verify-client-bootstrap-env.mjs",
     "verify:vps-preflight": "node scripts/verify-vps-deploy-preflight.mjs",
+    "verify:integration": "node scripts/verify-integration-readiness.mjs",
     "lint": "node scripts/lint.js",
     "test": "npm run test:unit && npm run test:e2e",
     "test:unit": "vitest run -c vitest.config.ts",

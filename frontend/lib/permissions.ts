@@ -175,6 +175,9 @@ export function resolveAdminRouteFromPathname(pathname: string): AdminRouteKey |
   if (pathname.startsWith("/admin/reliability")) {
     return "reliability";
   }
+  if (pathname.startsWith("/admin/analytics")) {
+    return "dashboard";
+  }
   if (pathname.startsWith("/admin/settings")) {
     return "settings";
   }

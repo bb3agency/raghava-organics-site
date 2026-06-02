@@ -17,6 +17,7 @@ import type {
 
 interface AdminOrderFulfillmentPanelProps {
   initialOrderId?: string;
+  hideOrderPicker?: boolean;
 }
 
 function DetailRowItem({ label, value }: { label: string; value: string }) {
@@ -47,6 +48,7 @@ function codCollectionCopy(
 
 export function AdminOrderFulfillmentPanel({
   initialOrderId,
+  hideOrderPicker = false,
 }: AdminOrderFulfillmentPanelProps) {
   const api = useAuthenticatedApi();
   const accessToken = useAuthStore((s) => s.accessToken);
@@ -92,6 +94,10 @@ export function AdminOrderFulfillmentPanel({
   );
 
   useEffect(() => {
+    if (hideOrderPicker || initialOrderId) {
+      return;
+    }
+
     let cancelled = false;
 
     async function loadOrderList() {
@@ -111,7 +117,13 @@ export function AdminOrderFulfillmentPanel({
     return () => {
       cancelled = true;
     };
-  }, [api]);
+  }, [api, hideOrderPicker, initialOrderId]);
+
+  useEffect(() => {
+    if (initialOrderId) {
+      setSelectedOrderId(initialOrderId);
+    }
+  }, [initialOrderId]);
 
   useEffect(() => {
     if (!selectedOrderId) {
@@ -283,28 +295,37 @@ export function AdminOrderFulfillmentPanel({
       </header>
 
       <label className="grid gap-1 text-sm">
-        Select order
-        <select
-          className="h-10 rounded-md border border-border bg-background px-3 text-sm"
-          value={selectedOrderId}
-          onChange={(event) => {
-            const value = event.target.value;
-            setSelectedOrderId(value);
-            if (!value) {
-              setDetail(null);
-            }
-          }}
-        >
-          <option value="">Select</option>
-          {orders.map((order) => (
-            <option key={order.id} value={order.id}>
-              {order.orderNumber} · {order.paymentMode} · {order.status}
-            </option>
-          ))}
-        </select>
+        {!hideOrderPicker ? (
+          <>
+            Select order
+            <select
+              className="h-10 rounded-md border border-border bg-background px-3 text-sm"
+              value={selectedOrderId}
+              onChange={(event) => {
+                const value = event.target.value;
+                setSelectedOrderId(value);
+                if (!value) {
+                  setDetail(null);
+                }
+              }}
+            >
+              <option value="">Select</option>
+              {orders.map((order) => (
+                <option key={order.id} value={order.id}>
+                  {order.orderNumber} · {order.paymentMode} · {order.status}
+                </option>
+              ))}
+            </select>
+          </>
+        ) : (
+          <>
+            Order
+            <p className="font-medium">{detail?.orderNumber ?? selectedOrderId}</p>
+          </>
+        )}
       </label>
 
-      {selectedOrderId ? (
+      {!hideOrderPicker && selectedOrderId ? (
         <p className="text-sm">
           <Link className="underline" href={`/admin/orders/${selectedOrderId}`}>
             Open order detail page

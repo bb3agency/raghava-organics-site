@@ -9,11 +9,19 @@ import {
   requestAdminLoginOtp,
   verifyAdminLoginOtp,
 } from "@/lib/admin-auth-api";
-import { getAdminLoginErrorMessage, isApiErrorWithCode } from "@/lib/error-messages";
+import {
+  getAdminLoginErrorMessage,
+  getApiErrorMessageWithHint,
+  isApiErrorWithCode,
+} from "@/lib/error-messages";
 import { emailSchema, otpSchema, passwordSchema } from "@/lib/validators";
 import { AuthErrorBanner } from "@/components/auth/AuthErrorBanner";
+import { TurnstileChallenge } from "@/components/auth/TurnstileChallenge";
+import { useAuthTurnstile } from "@/hooks/use-auth-turnstile";
 import { Eye, EyeOff, Loader2, Send } from "lucide-react";
+import { isTurnstileConfigured } from "@/lib/turnstile-config";
 import type { AuthSession } from "@/types/user";
+import { getAuthDevOtpHint, isAuthDevBypassUiEnabled } from "@/lib/dev-auth";
 
 const credentialsSchema = z.object({
   email: emailSchema,
@@ -48,6 +56,28 @@ export function AdminLoginForm({ onSuccess, enrollmentHint }: AdminLoginFormProp
     defaultValues: { email: "", password: "" },
   });
   const [otp, setOtp] = useState("");
+  const [devOtpHint, setDevOtpHint] = useState<string | null>(null);
+  const {
+    required: turnstileRequired,
+    ready: turnstileReady,
+    turnstileField,
+    onTurnstileTokenChange,
+    turnstileLoadError,
+    setTurnstileLoadError,
+  } = useAuthTurnstile();
+
+  const applyDevOtpHint = useCallback((apiDevOtp?: string) => {
+    if (apiDevOtp) {
+      setDevOtpHint(apiDevOtp);
+      setOtp(apiDevOtp);
+      return;
+    }
+    if (isAuthDevBypassUiEnabled()) {
+      const hint = getAuthDevOtpHint();
+      setDevOtpHint(hint);
+      setOtp((current) => current || hint);
+    }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -71,6 +101,12 @@ export function AdminLoginForm({ onSuccess, enrollmentHint }: AdminLoginFormProp
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (step === "otp") {
+      applyDevOtpHint();
+    }
+  }, [step, applyDevOtpHint]);
 
   const startResendCooldown = useCallback(() => {
     setResendCooldown(RESEND_COOLDOWN_SEC);
@@ -103,10 +139,19 @@ export function AdminLoginForm({ onSuccess, enrollmentHint }: AdminLoginFormProp
   }, []);
 
   const handleRequestOtp = credentialsForm.handleSubmit(async (values) => {
+    if (turnstileRequired && !turnstileReady) {
+      setError(
+        isTurnstileConfigured()
+          ? "Complete the security check below, then try again."
+          : "Security check is required by the API. Configure NEXT_PUBLIC_TURNSTILE_SITE_KEY or disable TURNSTILE_SECRET_KEY on the backend for local dev.",
+      );
+      return;
+    }
     try {
       setError(null);
-      const response = await requestAdminLoginOtp(values);
+      const response = await requestAdminLoginOtp({ ...values, ...turnstileField });
       setExpiresAt(response.expiresAt);
+      applyDevOtpHint(response.devOtp);
       setStep("otp");
       startResendCooldown();
       startOtpCountdown(response.expiresAt);
@@ -122,19 +167,24 @@ export function AdminLoginForm({ onSuccess, enrollmentHint }: AdminLoginFormProp
         setOtp("");
         setError(getAdminLoginErrorMessage(err));
       } else {
-        setError(getAdminLoginErrorMessage(err));
+        setError(getApiErrorMessageWithHint(err) || getAdminLoginErrorMessage(err));
       }
     }
   });
 
   async function handleResendOtp() {
     if (resendCooldown > 0) return;
+    if (turnstileRequired && !turnstileReady) {
+      setError("Complete the security check below before resending the code.");
+      return;
+    }
     const email = credentialsForm.getValues("email");
     const password = credentialsForm.getValues("password");
     try {
       setError(null);
-      const response = await requestAdminLoginOtp({ email, password });
+      const response = await requestAdminLoginOtp({ email, password, ...turnstileField });
       setExpiresAt(response.expiresAt);
+      applyDevOtpHint(response.devOtp);
       startResendCooldown();
       startOtpCountdown(response.expiresAt);
     } catch (err) {
@@ -149,7 +199,7 @@ export function AdminLoginForm({ onSuccess, enrollmentHint }: AdminLoginFormProp
         setOtp("");
         setError(getAdminLoginErrorMessage(err));
       } else {
-        setError(getAdminLoginErrorMessage(err));
+        setError(getApiErrorMessageWithHint(err) || getAdminLoginErrorMessage(err));
       }
     }
   }
@@ -200,8 +250,14 @@ export function AdminLoginForm({ onSuccess, enrollmentHint }: AdminLoginFormProp
               type="email"
               autoComplete="username"
               className="h-11 rounded-md border border-border bg-background px-3 text-sm"
+              aria-invalid={Boolean(credentialsForm.formState.errors.email)}
               {...credentialsForm.register("email")}
             />
+            {credentialsForm.formState.errors.email ? (
+              <p className="text-xs text-destructive">
+                {credentialsForm.formState.errors.email.message}
+              </p>
+            ) : null}
           </div>
           <div className="grid gap-1">
             <label htmlFor="admin-password" className="text-sm font-medium">
@@ -213,6 +269,7 @@ export function AdminLoginForm({ onSuccess, enrollmentHint }: AdminLoginFormProp
                 type={showPassword ? "text" : "password"}
                 autoComplete="current-password"
                 className="h-11 w-full rounded-md border border-border bg-background px-3 pr-10 text-sm"
+                aria-invalid={Boolean(credentialsForm.formState.errors.password)}
                 {...credentialsForm.register("password")}
               />
               <button
@@ -229,11 +286,29 @@ export function AdminLoginForm({ onSuccess, enrollmentHint }: AdminLoginFormProp
                 )}
               </button>
             </div>
+            {credentialsForm.formState.errors.password ? (
+              <p className="text-xs text-destructive">
+                {credentialsForm.formState.errors.password.message}
+              </p>
+            ) : null}
           </div>
+          <TurnstileChallenge
+            onTokenChange={onTurnstileTokenChange}
+            onLoadError={setTurnstileLoadError}
+          />
+          {turnstileLoadError ? (
+            <p className="text-xs text-destructive" role="alert">
+              {turnstileLoadError}
+            </p>
+          ) : null}
           <button
             type="submit"
             className="inline-flex h-11 items-center justify-center gap-2 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground disabled:opacity-60"
-            disabled={credentialsForm.formState.isSubmitting || loadingChannel}
+            disabled={
+              credentialsForm.formState.isSubmitting ||
+              loadingChannel ||
+              (turnstileRequired && !turnstileReady)
+            }
           >
             {credentialsForm.formState.isSubmitting ? (
               <>
@@ -250,6 +325,18 @@ export function AdminLoginForm({ onSuccess, enrollmentHint }: AdminLoginFormProp
         </form>
       ) : (
         <form onSubmit={handleVerifyOtp} className="grid gap-4">
+          {devOtpHint ? (
+            <p
+              className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900"
+              role="status"
+            >
+              Development mode: use OTP{" "}
+              <span className="font-mono font-semibold">{devOtpHint}</span> (no email/SMS
+              sent). Ensure the API is running with{" "}
+              <code className="text-xs">AUTH_DEV_BYPASS=true</code> and restart it after
+              changing <code className="text-xs">backend/.env</code>.
+            </p>
+          ) : null}
           <p className="text-sm text-muted-foreground">
             Enter the 6-digit code sent via{" "}
             {otpChannel === "sms" ? "SMS" : otpChannel === "whatsapp" ? "WhatsApp" : "email"} to{" "}

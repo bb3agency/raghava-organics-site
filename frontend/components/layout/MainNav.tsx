@@ -8,12 +8,14 @@ import { canAccessAdmin } from "@/lib/permissions";
 import { logoutSession } from "@/lib/auth-api";
 import { useCartStore } from "@/stores/cart";
 import { useCartSync } from "@/hooks/use-cart-sync";
+import { useWishlistSync } from "@/hooks/use-wishlist-sync";
 import { useSessionBootstrap } from "@/hooks/use-session-bootstrap";
 import { PriceDisplay } from "@/components/shared/PriceDisplay";
 
 export function MainNav() {
   useSessionBootstrap();
   useCartSync();
+  useWishlistSync();
   const router = useRouter();
   const user = useAuthStore((s) => s.user);
   const accessToken = useAuthStore((s) => s.accessToken);

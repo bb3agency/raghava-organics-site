@@ -39,7 +39,6 @@ export function OpsRuntimeReadinessCard({
   }, []);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- async health poll bootstrap
     void loadReadiness(false);
   }, [loadReadiness, refreshSignal]);
 

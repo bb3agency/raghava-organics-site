@@ -18,5 +18,5 @@ interface UseAdminSessionRestoreResult {
 
 export function useAdminSessionRestore(): UseAdminSessionRestoreResult {
   const validateUser = useCallback((candidate: User) => isAdminUser(candidate), []);
-  return useAuthSessionRestore({ validateUser });
+  return useAuthSessionRestore({ validateUser, audience: "admin" });
 }

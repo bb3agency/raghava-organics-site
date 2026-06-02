@@ -8,6 +8,8 @@ import { getApiErrorMessage } from "@/lib/error-messages";
 import { sendOtp, verifyOtpAndSignup, getOtpChannelConfig, type OtpChannelConfigResponse } from "@/lib/auth-api";
 import { signupPhoneInputSchema } from "@/lib/validators";
 import { AuthErrorBanner } from "@/components/auth/AuthErrorBanner";
+import { TurnstileChallenge } from "@/components/auth/TurnstileChallenge";
+import { useAuthTurnstile } from "@/hooks/use-auth-turnstile";
 import type { AuthSession } from "@/types/user";
 
 type FormValues = z.infer<typeof signupPhoneInputSchema>;
@@ -21,6 +23,14 @@ export function SignupPhoneForm({ onSuccess }: SignupPhoneFormProps) {
   const [otpInfo, setOtpInfo] = useState<string | null>(null);
   const [config, setConfig] = useState<OtpChannelConfigResponse | null>(null);
   const [loadingConfig, setLoadingConfig] = useState(true);
+  const {
+    required: turnstileRequired,
+    ready: turnstileReady,
+    turnstileField,
+    onTurnstileTokenChange,
+    turnstileLoadError,
+    setTurnstileLoadError,
+  } = useAuthTurnstile();
 
   useEffect(() => {
     async function loadConfig() {
@@ -48,12 +58,15 @@ export function SignupPhoneForm({ onSuccess }: SignupPhoneFormProps) {
   });
 
   const send = async () => {
-    const effectiveChannel = config?.channel || "sms";
+    if (turnstileRequired && !turnstileReady) {
+      setError("Complete the security check below before requesting an OTP.");
+      return;
+    }
 
-    // Validate phone and email fields before sending OTP
+    const effectiveChannel = config?.channel || "sms";
     const fieldsToValidate: (keyof FormValues)[] = ["phone"];
     if (effectiveChannel === "email") fieldsToValidate.push("email");
-    
+
     const isValid = await form.trigger(fieldsToValidate);
     if (!isValid) return;
 
@@ -67,6 +80,7 @@ export function SignupPhoneForm({ onSuccess }: SignupPhoneFormProps) {
         phone,
         channel: effectiveChannel,
         ...(effectiveChannel === "email" && email ? { email } : {}),
+        ...turnstileField,
       });
       setOtpInfo(result.message);
     } catch (err) {
@@ -97,11 +111,11 @@ export function SignupPhoneForm({ onSuccess }: SignupPhoneFormProps) {
     <form onSubmit={submit} className="grid gap-5">
       <div className="grid gap-1.5">
         <label className="text-sm font-bold text-[#23403d]">
-          {effectiveChannel === "whatsapp" 
-            ? "Enter your details to receive OTP via WhatsApp" 
+          {effectiveChannel === "whatsapp"
+            ? "Enter your details to receive OTP via WhatsApp"
             : effectiveChannel === "email"
-            ? "Enter your details to receive OTP via Email"
-            : "Enter your details to receive OTP via SMS"}
+              ? "Enter your details to receive OTP via Email"
+              : "Enter your details to receive OTP via SMS"}
         </label>
       </div>
 
@@ -115,9 +129,7 @@ export function SignupPhoneForm({ onSuccess }: SignupPhoneFormProps) {
           className="h-12 w-full rounded-full border border-[#efe8e4] bg-[#faf3ef] px-4 text-sm font-medium text-[#23403d] placeholder:text-[#767676] focus:border-[#23403d] focus:outline-none focus:ring-1 focus:ring-[#23403d]"
           {...form.register("phone")}
         />
-        <p className="text-xs font-bold text-red-500">
-          {form.formState.errors.phone?.message}
-        </p>
+        <p className="text-xs font-bold text-red-500">{form.formState.errors.phone?.message}</p>
       </div>
 
       <div className="grid gap-1.5">
@@ -132,9 +144,7 @@ export function SignupPhoneForm({ onSuccess }: SignupPhoneFormProps) {
           className="h-12 w-full rounded-full border border-[#efe8e4] bg-[#faf3ef] px-4 text-center text-lg font-bold tracking-[0.5em] text-[#23403d] focus:border-[#23403d] focus:outline-none focus:ring-1 focus:ring-[#23403d]"
           {...form.register("otp")}
         />
-        <p className="text-xs font-bold text-red-500">
-          {form.formState.errors.otp?.message}
-        </p>
+        <p className="text-xs font-bold text-red-500">{form.formState.errors.otp?.message}</p>
       </div>
 
       <div className="grid gap-4 md:grid-cols-2">
@@ -154,7 +164,10 @@ export function SignupPhoneForm({ onSuccess }: SignupPhoneFormProps) {
 
       <div className="grid gap-1.5">
         <label htmlFor="email" className="text-sm font-bold text-[#23403d]">
-          Email <span className="text-[#767676] font-medium">{effectiveChannel === "email" ? "(required for OTP)" : "(optional)"}</span>
+          Email{" "}
+          <span className="font-medium text-[#767676]">
+            {effectiveChannel === "email" ? "(required for OTP)" : "(optional)"}
+          </span>
         </label>
         <input
           id="email"
@@ -163,16 +176,26 @@ export function SignupPhoneForm({ onSuccess }: SignupPhoneFormProps) {
           {...form.register("email")}
           required={effectiveChannel === "email"}
         />
-        <p className="text-xs font-bold text-red-500">
-          {form.formState.errors.email?.message}
-        </p>
+        <p className="text-xs font-bold text-red-500">{form.formState.errors.email?.message}</p>
       </div>
+
+      <TurnstileChallenge
+        onTokenChange={onTurnstileTokenChange}
+        onLoadError={setTurnstileLoadError}
+      />
+      {turnstileLoadError ? (
+        <p className="text-xs font-bold text-red-500" role="alert">
+          {turnstileLoadError}
+        </p>
+      ) : null}
 
       <button
         type="button"
         className="h-12 w-full rounded-full border-2 border-[#efe8e4] bg-white px-6 text-sm font-bold text-[#23403d] transition-colors hover:border-[#23403d] disabled:cursor-not-allowed disabled:opacity-60"
         onClick={() => void send()}
-        disabled={form.formState.isSubmitting || loadingConfig}
+        disabled={
+          form.formState.isSubmitting || loadingConfig || (turnstileRequired && !turnstileReady)
+        }
       >
         {loadingConfig ? "Loading..." : "Send OTP"}
       </button>

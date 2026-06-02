@@ -9,15 +9,20 @@ export function ReliabilityReplayPanel() {
   const api = useAuthenticatedApi();
   const [outboxId, setOutboxId] = useState("");
   const [inboxId, setInboxId] = useState("");
+  const [reason, setReason] = useState("");
   const [approvalToken, setApprovalToken] = useState("");
   const [preview, setPreview] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const run = async (endpoint: string) => {
+  const run = async (endpoint: string, isReplay: boolean) => {
     try {
       setError(null);
-      const payload = approvalToken.trim()
-        ? { approvalToken: approvalToken.trim() }
+      if (isReplay && (reason.trim().length < 8 || !approvalToken.trim())) {
+        setError("Replay requires a reason (min 8 chars) and approval token.");
+        return;
+      }
+      const payload = isReplay
+        ? { reason: reason.trim(), approvalToken: approvalToken.trim() }
         : {};
       const result = await api<unknown>(endpoint, {
         method: "POST",
@@ -31,9 +36,9 @@ export function ReliabilityReplayPanel() {
   };
 
   return (
-    <section className="grid gap-4 rounded-lg border border-border p-4">
-      <h3 className="font-medium">Replay preview / replay</h3>
-      <div className="grid gap-2 md:grid-cols-2">
+    <details className="rounded-lg border border-border p-4">
+      <summary className="cursor-pointer font-medium">Advanced replay (manual IDs)</summary>
+      <div className="mt-4 grid gap-2 md:grid-cols-2">
         <label className="grid gap-1 text-sm">
           Outbox dead-letter ID
           <input
@@ -53,20 +58,27 @@ export function ReliabilityReplayPanel() {
           />
         </label>
         <label className="grid gap-1 text-sm md:col-span-2">
-          Approval token (optional)
+          Replay reason (min 8 chars)
+          <input
+            className="h-10 rounded-md border border-border bg-background px-3 text-sm"
+            value={reason}
+            onChange={(event) => setReason(event.target.value)}
+          />
+        </label>
+        <label className="grid gap-1 text-sm md:col-span-2">
+          Approval token
           <input
             className="h-10 rounded-md border border-border bg-background px-3 text-sm"
             value={approvalToken}
             onChange={(event) => setApprovalToken(event.target.value)}
-            placeholder="approval token when replay approval is enforced"
           />
         </label>
       </div>
-      <div className="grid gap-2 md:grid-cols-2">
+      <div className="mt-3 grid gap-2 md:grid-cols-2">
         <button
           type="button"
           className="h-10 rounded-md border border-border text-sm"
-          onClick={() => run(`/admin/analytics/outbox-dead-letter/${outboxId}/replay-preview`)}
+          onClick={() => void run(`/admin/analytics/outbox-dead-letter/${outboxId}/replay-preview`, false)}
           disabled={!outboxId}
         >
           Outbox replay-preview
@@ -74,7 +86,7 @@ export function ReliabilityReplayPanel() {
         <button
           type="button"
           className="h-10 rounded-md bg-primary text-sm text-primary-foreground"
-          onClick={() => run(`/admin/analytics/outbox-dead-letter/${outboxId}/replay`)}
+          onClick={() => void run(`/admin/analytics/outbox-dead-letter/${outboxId}/replay`, true)}
           disabled={!outboxId}
         >
           Outbox replay
@@ -82,7 +94,7 @@ export function ReliabilityReplayPanel() {
         <button
           type="button"
           className="h-10 rounded-md border border-border text-sm"
-          onClick={() => run(`/admin/analytics/inbox-failures/${inboxId}/replay-preview`)}
+          onClick={() => void run(`/admin/analytics/inbox-failures/${inboxId}/replay-preview`, false)}
           disabled={!inboxId}
         >
           Inbox replay-preview
@@ -90,16 +102,16 @@ export function ReliabilityReplayPanel() {
         <button
           type="button"
           className="h-10 rounded-md bg-primary text-sm text-primary-foreground"
-          onClick={() => run(`/admin/analytics/inbox-failures/${inboxId}/replay`)}
+          onClick={() => void run(`/admin/analytics/inbox-failures/${inboxId}/replay`, true)}
           disabled={!inboxId}
         >
           Inbox replay
         </button>
       </div>
-      {error ? <p className="text-sm text-destructive">{error}</p> : null}
+      {error ? <p className="mt-2 text-sm text-destructive">{error}</p> : null}
       {preview ? (
-        <pre className="max-h-56 overflow-auto rounded bg-muted/40 p-3 text-xs">{preview}</pre>
+        <pre className="mt-3 overflow-x-auto rounded-md bg-muted/40 p-3 text-xs">{preview}</pre>
       ) : null}
-    </section>
+    </details>
   );
 }

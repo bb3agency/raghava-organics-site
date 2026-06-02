@@ -1313,7 +1313,8 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
           additionalProperties: false,
           required: ['email'],
           properties: {
-            email: { type: 'string', format: 'email', maxLength: 254 }
+            email: { type: 'string', format: 'email', maxLength: 254 },
+            turnstileToken: { type: 'string', maxLength: 4096 }
           }
         },
         response: {
@@ -1330,8 +1331,12 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
       }
     },
     async (request) => {
-      const { email } = request.body as { email: string };
-      return opsService.requestLoginOtp({ email, requestIp: request.ip });
+      const { email, turnstileToken } = request.body as { email: string; turnstileToken?: string };
+      return opsService.requestLoginOtp({
+        email,
+        requestIp: request.ip,
+        ...(turnstileToken ? { turnstileToken } : {})
+      });
     }
   );
 

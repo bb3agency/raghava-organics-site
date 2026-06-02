@@ -6,7 +6,7 @@ export type UpdateShippingSettingsInput = {
 export type ShippingSettingsResponse = {
   pickupPincode: string;
   minOrderValuePaise: number;
-  source: 'database' | 'environment';
+  source: 'database' | 'environment' | 'default';
 };
 
 export type StoreProfileResponse = {

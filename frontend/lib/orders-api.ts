@@ -20,15 +20,42 @@ export interface CreateOrderInput {
   paymentMode?: CheckoutPaymentMode;
 }
 
+export interface OrderLineItem {
+  id: string;
+  variantId: string;
+  productName: string;
+  variantName: string;
+  sku: string;
+  quantity: number;
+  unitPrice: number;
+  totalPrice: number;
+}
+
 export interface OrderSummary {
   id: string;
   orderNumber: string;
   status: string;
   paymentMode: CheckoutPaymentMode;
+  shippingAddress: CheckoutShippingAddressInput;
   subtotal: number;
   shippingCharge: number;
   discountAmount: number;
   total: number;
+  items?: OrderLineItem[];
+  invoice?: { hasPdf: boolean; invoiceNumber: string; issuedAt: string } | null;
+  shipment?: {
+    id: string;
+    provider: string;
+    status: string;
+    awb: string | null;
+    trackingUrl: string | null;
+    events: Array<{
+      status: string;
+      location: string | null;
+      description: string;
+      occurredAt: string;
+    }>;
+  } | null;
 }
 
 export interface InitiatePaymentResponse {
@@ -101,5 +128,42 @@ export async function getMyOrder(id: string, accessToken: string): Promise<Order
   return apiClient<OrderSummary>(`/orders/${id}`, {
     method: "GET",
     accessToken,
+  });
+}
+
+export async function cancelMyOrder(
+  id: string,
+  accessToken: string,
+  reason?: string,
+): Promise<{ message: string }> {
+  return apiClient<{ message: string }>(`/orders/${id}/cancel`, {
+    method: "POST",
+    accessToken,
+    idempotencyKey: createIdempotencyKey(),
+    body: JSON.stringify({ reason }),
+  });
+}
+
+export interface ReturnRequestItemInput {
+  orderItemId: string;
+  quantity: number;
+  reason?: string;
+}
+
+export interface CreateReturnRequestInput {
+  items: ReturnRequestItemInput[];
+  reason: string;
+}
+
+export async function createReturnRequest(
+  orderId: string,
+  input: CreateReturnRequestInput,
+  accessToken: string,
+): Promise<{ id: string; status: string }> {
+  return apiClient<{ id: string; status: string }>(`/orders/${orderId}/return-requests`, {
+    method: "POST",
+    accessToken,
+    idempotencyKey: createIdempotencyKey(),
+    body: JSON.stringify(input),
   });
 }

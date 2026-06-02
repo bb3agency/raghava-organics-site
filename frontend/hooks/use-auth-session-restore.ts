@@ -1,11 +1,13 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useAuthStore } from "@/stores/auth";
 import {
   buildUserFromAccessToken,
+  resetAuthSessionRestoreCache,
   restoreAuthSessionFromCookie,
 } from "@/lib/restore-auth-session";
+import { isAccessTokenUsable } from "@/lib/jwt-utils";
 import type { User } from "@/types/user";
 
 export type AuthSessionRestoreStatus =
@@ -14,9 +16,13 @@ export type AuthSessionRestoreStatus =
   | "ready"
   | "failed";
 
+export type AuthSessionRestoreAudience = "admin" | "customer";
+
 interface UseAuthSessionRestoreOptions {
   /** Return true when the restored user may access this surface. */
   validateUser: (user: User) => boolean;
+  /** Isolates admin vs customer restore blocked/in-progress flags. */
+  audience?: AuthSessionRestoreAudience;
 }
 
 interface UseAuthSessionRestoreResult {
@@ -30,7 +36,7 @@ function hasValidSession(
   user: User | null,
   validateUser: (user: User) => boolean,
 ): boolean {
-  if (!accessToken) {
+  if (!accessToken || !isAccessTokenUsable(accessToken)) {
     return false;
   }
   if (user && validateUser(user)) {
@@ -42,17 +48,41 @@ function hasValidSession(
 
 type RestorePhase = "idle" | "restoring" | "failed";
 
+type RestoreRuntime = {
+  blocked: boolean;
+  inProgress: boolean;
+};
+
+const restoreRuntimeByAudience: Record<AuthSessionRestoreAudience, RestoreRuntime> = {
+  admin: { blocked: false, inProgress: false },
+  customer: { blocked: false, inProgress: false },
+};
+
+function getRuntime(audience: AuthSessionRestoreAudience): RestoreRuntime {
+  return restoreRuntimeByAudience[audience];
+}
+
+export function resetAuthSessionRestoreState(
+  audience?: AuthSessionRestoreAudience,
+): void {
+  resetAuthSessionRestoreCache();
+  if (audience) {
+    restoreRuntimeByAudience[audience] = { blocked: false, inProgress: false };
+    return;
+  }
+  for (const key of Object.keys(restoreRuntimeByAudience) as AuthSessionRestoreAudience[]) {
+    restoreRuntimeByAudience[key] = { blocked: false, inProgress: false };
+  }
+}
+
 export function useAuthSessionRestore(
   options: UseAuthSessionRestoreOptions,
 ): UseAuthSessionRestoreResult {
-  const { validateUser } = options;
+  const { validateUser, audience = "customer" } = options;
   const accessToken = useAuthStore((s) => s.accessToken);
   const user = useAuthStore((s) => s.user);
   const setSession = useAuthStore((s) => s.setSession);
   const clearSession = useAuthStore((s) => s.clearSession);
-  const restoreBlockedRef = useRef(false);
-  const restoreInProgressRef = useRef(false);
-
   const sessionValid = hasValidSession(accessToken, user, validateUser);
 
   const [restorePhase, setRestorePhase] = useState<RestorePhase>("idle");
@@ -66,9 +96,11 @@ export function useAuthSessionRestore(
         : "checking";
 
   useEffect(() => {
+    const runtime = getRuntime(audience);
+
     if (sessionValid) {
-      restoreBlockedRef.current = false;
-      restoreInProgressRef.current = false;
+      runtime.blocked = false;
+      runtime.inProgress = false;
       if (accessToken && (!user || !validateUser(user))) {
         const fromToken = buildUserFromAccessToken(accessToken);
         if (fromToken && validateUser(fromToken)) {
@@ -78,25 +110,28 @@ export function useAuthSessionRestore(
       return;
     }
 
-    if (restoreBlockedRef.current || restoreInProgressRef.current) {
-      if (restoreBlockedRef.current) {
-        setRestorePhase("failed");
-      }
+    if (runtime.blocked) {
+      setRestorePhase("failed");
       return;
     }
 
-    restoreInProgressRef.current = true;
+    if (runtime.inProgress) {
+      setRestorePhase("restoring");
+      return;
+    }
+
+    runtime.inProgress = true;
     setRestorePhase("restoring");
 
     void restoreAuthSessionFromCookie().then((result) => {
-      restoreInProgressRef.current = false;
+      runtime.inProgress = false;
       if (result.ok && validateUser(result.user)) {
-        restoreBlockedRef.current = false;
+        runtime.blocked = false;
         setSession(result.accessToken, result.user);
         setRestorePhase("idle");
         return;
       }
-      restoreBlockedRef.current = true;
+      runtime.blocked = true;
       clearSession();
       setRestorePhase("failed");
     });
@@ -107,6 +142,7 @@ export function useAuthSessionRestore(
     setSession,
     clearSession,
     validateUser,
+    audience,
   ]);
 
   return { status, accessToken, user };

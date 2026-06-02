@@ -58,11 +58,49 @@ export function LowStockAlertEmail(items: Array<{ sku: string; quantity: number;
   });
 }
 
-export function PasswordResetEmail(email: string, resetToken: string): ReactElement {
-  return BaseEmailTemplate({
-    title: 'Password Reset',
-    message: `Use your reset flow to update password for account ${email}. Reset token: ${resetToken}`
-  });
+export function PasswordResetEmail(email: string, resetUrl: string): ReactElement {
+  return createElement(
+    'html',
+    null,
+    createElement(
+      'body',
+      {
+        style: {
+          fontFamily: 'Arial, sans-serif',
+          color: '#111827',
+          lineHeight: 1.5,
+          padding: '24px'
+        }
+      },
+      createElement('h2', null, 'Password Reset'),
+      createElement('p', null, `A password reset was requested for ${email}. Click the button below to reset your password. This link expires in 1 hour.`),
+      createElement(
+        'p',
+        null,
+        createElement(
+          'a',
+          {
+            href: resetUrl,
+            style: {
+              display: 'inline-block',
+              padding: '12px 24px',
+              backgroundColor: '#23403d',
+              color: '#ffffff',
+              textDecoration: 'none',
+              borderRadius: '6px',
+              fontWeight: 'bold'
+            }
+          },
+          'Reset Password'
+        )
+      ),
+      createElement(
+        'p',
+        { style: { fontSize: '12px', color: '#6b7280', marginTop: '16px' } },
+        `If the button does not work, copy and paste this link into your browser: ${resetUrl}`
+      )
+    )
+  );
 }
 
 export function OtpVerificationEmail(otp: string): ReactElement {

@@ -170,7 +170,9 @@
                 "exec": [
                   "pm.test('status 200', () => pm.response.to.have.status(200));",
                   "const j = pm.response.json();",
+                  "pm.test('has accessToken', () => pm.expect(j.accessToken).to.be.a('string'));",
                   "pm.test('user email matches', () => pm.expect(j.user.email).to.eql('raj.kumar.sim001@example.com'));",
+                  "pm.environment.set('rajToken', j.accessToken);",
                   "console.log('Raj registered:', j.user.email);"
                 ]
               }
@@ -447,7 +449,9 @@
                 "exec": [
                   "pm.test('status 200', () => pm.response.to.have.status(200));",
                   "const j = pm.response.json();",
+                  "pm.test('has accessToken', () => pm.expect(j.accessToken).to.be.a('string'));",
                   "pm.test('user email matches', () => pm.expect(j.user.email).to.eql('ramu.sharma.sim001@example.com'));",
+                  "pm.environment.set('ramuToken', j.accessToken);",
                   "console.log('Ramu registered:', j.user.email);"
                 ]
               }

@@ -104,13 +104,6 @@ export const ADMIN_NAV_ITEMS: AdminNavItem[] = [
     routeKey: "dashboard", // Tied to dashboard for now
   },
   {
-    href: "/admin/mutations",
-    label: "Mutations Data",
-    description: "Direct backend actions",
-    icon: Layers,
-    routeKey: "mutations",
-  },
-  {
     href: "/admin/reliability",
     label: "Reliability",
     description: "System health tools",
@@ -125,6 +118,30 @@ export const ADMIN_NAV_ITEMS: AdminNavItem[] = [
     routeKey: "settings",
   },
 ];
+
+const DEV_NAV_ITEMS: AdminNavItem[] = [
+  {
+    href: "/admin/catalog-write",
+    label: "Catalog write",
+    description: "JSON catalog mutations",
+    icon: Layers,
+    routeKey: "products",
+  },
+  {
+    href: "/admin/mutations",
+    label: "Mutations Data",
+    description: "Direct backend actions",
+    icon: Layers,
+    routeKey: "mutations",
+  },
+];
+
+export function getAdminNavItems(): AdminNavItem[] {
+  if (process.env.NEXT_PUBLIC_ADMIN_DEV_TOOLS === "true") {
+    return [...ADMIN_NAV_ITEMS, ...DEV_NAV_ITEMS];
+  }
+  return ADMIN_NAV_ITEMS;
+}
 
 export function isAdminNavActive(pathname: string, href: string): boolean {
   if (href === "/admin") {

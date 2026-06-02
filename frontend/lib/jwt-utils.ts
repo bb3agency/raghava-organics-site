@@ -27,3 +27,15 @@ export function getAccessTokenExpiryMs(token: string): number | null {
   }
   return claims.exp * 1000;
 }
+
+/** True when the JWT is not expired (small clock skew for refresh timing). */
+export function isAccessTokenUsable(
+  token: string,
+  nowMs: number = Date.now(),
+): boolean {
+  const expMs = getAccessTokenExpiryMs(token);
+  if (expMs === null) {
+    return false;
+  }
+  return expMs > nowMs + 5_000;
+}

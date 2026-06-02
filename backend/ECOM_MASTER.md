@@ -935,7 +935,7 @@ PCI scope, caller-class JSON minimisation (public vs customer vs admin vs ops), 
 
 | Method | Endpoint | Auth | Description |
 |---|---|---|---|
-| POST | `/api/v1/auth/register` | Public | Customer registration |
+| POST | `/api/v1/auth/register` | Public | Customer registration → JWT pair + refresh cookie |
 | POST | `/api/v1/auth/send-otp` | Public | Send OTP to phone (MSG91 or Fast2SMS per `SMS_PROVIDER`) |
 | POST | `/api/v1/auth/verify-otp` | Public | Verify OTP → JWT pair |
 | POST | `/api/v1/auth/forgot-password` | Public | Request password reset email |

@@ -1,3 +1,4 @@
+import { isDevelopmentLikeNodeEnv } from '@common/auth/auth-dev-bypass';
 import { AppError } from '@common/errors/app-error';
 import { ERROR_CODES } from '@common/errors/error-codes';
 
@@ -55,6 +56,10 @@ export function getAvailableOtpChannels(flags?: OtpChannelFlags): OtpChannel[] {
   }
   if (emailEnabled && (flags?.emailEnabled !== undefined || Boolean((process.env.RESEND_API_KEY ?? '').trim()))) {
     channels.push('email');
+  }
+  // Local dev: allow admin/customer OTP routing without Resend keys (delivery may still noop/fail in workers).
+  if (channels.length === 0 && isDevelopmentLikeNodeEnv()) {
+    return ['email'];
   }
   return channels;
 }

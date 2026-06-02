@@ -18,5 +18,5 @@ interface UseAccountSessionRestoreResult {
 /** Customer account area — any authenticated user with a valid JWT subject. */
 export function useAccountSessionRestore(): UseAccountSessionRestoreResult {
   const validateUser = useCallback((candidate: User) => Boolean(candidate.id), []);
-  return useAuthSessionRestore({ validateUser });
+  return useAuthSessionRestore({ validateUser, audience: "customer" });
 }

@@ -1,4 +1,5 @@
 import { ApiError } from "@/lib/api";
+import { isTurnstileConfigured } from "@/lib/turnstile-config";
 
 /** User-facing copy keyed by backend `error.code` — never branch on message text. */
 const ERROR_MESSAGES: Record<string, string> = {
@@ -50,6 +51,10 @@ export function getErrorMessage(code: string): string {
 export function getAdminLoginErrorMessage(error: unknown): string {
   if (error instanceof ApiError) {
     if (error.code === "INVALID_CREDENTIALS") {
+      const message = (error.message ?? "").toLowerCase();
+      if (message.includes("otp") || message.includes("login code") || message.includes("one-time")) {
+        return "That login code is invalid or has expired. Request a new code and try again.";
+      }
       return "Incorrect password.";
     }
     if (
@@ -71,8 +76,30 @@ export function getAdminLoginErrorMessage(error: unknown): string {
   return getApiErrorMessage(error);
 }
 
+function getAuthChallengeErrorMessage(error: ApiError): string | null {
+  const message = (error.message ?? "").toLowerCase();
+  if (
+    error.code !== "VALIDATION_ERROR" ||
+    (!message.includes("challenge") && !message.includes("turnstile"))
+  ) {
+    return null;
+  }
+  if (!isTurnstileConfigured()) {
+    return (
+      "The API requires a security check, but NEXT_PUBLIC_TURNSTILE_SITE_KEY is not set. " +
+      "Add the Cloudflare site key to frontend/.env.local (must pair with backend TURNSTILE_SECRET_KEY), " +
+      "or clear TURNSTILE_SECRET_KEY in backend/.env for local development."
+    );
+  }
+  return "Complete the security check below, then try again.";
+}
+
 export function getApiErrorMessage(error: unknown): string {
   if (error instanceof ApiError) {
+    const challengeMessage = getAuthChallengeErrorMessage(error);
+    if (challengeMessage) {
+      return challengeMessage;
+    }
     return getErrorMessage(error.code);
   }
   if (error instanceof Error) {

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { APP_NAME } from "@/lib/constants";
 import type { AuthSession } from "@/types/user";
 import { useAuthStore } from "@/stores/auth";
@@ -15,10 +15,12 @@ type LoginMode = "otp" | "email";
 
 export default function LoginPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const setSession = useAuthStore((s) => s.setSession);
   const pendingMerge = useCartStore((s) => s.pendingMerge);
   const clearPendingMerge = useCartStore((s) => s.clearPendingMerge);
   const [mode, setMode] = useState<LoginMode>("otp");
+  const justReset = searchParams.get("reset") === "success";
 
   const handleSuccess = async (session: AuthSession) => {
     setSession(session.accessToken, session.user);
@@ -31,6 +33,11 @@ export default function LoginPage() {
 
   return (
     <div className="flex flex-col gap-8 p-8 lg:p-12">
+      {justReset ? (
+        <p className="rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-950/30 dark:text-emerald-300">
+          Password reset successful. Please sign in with your new password.
+        </p>
+      ) : null}
       <div className="text-center">
         <h1 className="font-heading text-3xl font-bold text-[#23403d]">Welcome Back</h1>
         <p className="mt-3 text-sm font-medium text-[#767676]">

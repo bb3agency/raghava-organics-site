@@ -3,6 +3,13 @@ import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import { FastifyInstance } from 'fastify';
 import jwt from 'jsonwebtoken';
+import {
+  getAuthDevOtp,
+  isAuthDevBypassEnabled,
+  isDevelopmentLikeNodeEnv,
+  withDevOtpField
+} from '@common/auth/auth-dev-bypass';
+import { isTurnstileVerificationEnabled } from '@common/auth/auth-turnstile';
 import { AppError } from '@common/errors/app-error';
 import { ERROR_CODES } from '@common/errors/error-codes';
 import { recordAuthAbuseEscalation, recordAuthChallenge, recordAuthRiskSignal } from '@common/observability/metrics';
@@ -47,6 +54,12 @@ type ForgotPasswordInput = {
   turnstileToken?: string;
 };
 
+type ResetPasswordInput = {
+  token: string;
+  password: string;
+  confirmPassword: string;
+};
+
 type VerifyOtpInput = {
   phone: string;
   otp: string;
@@ -73,6 +86,7 @@ const OTP_ATTEMPT_WINDOW_SECONDS = 15 * 60;
 const ACCESS_TOKEN_TTL = '15m';
 const REFRESH_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const PASSWORD_RESET_TOKEN_BYTES = 24;
+const PASSWORD_RESET_TOKEN_TTL_MS = 60 * 60 * 1000;
 const LOGIN_ATTEMPT_WINDOW_SECONDS = 15 * 60;
 const LOGIN_LOCK_THRESHOLD = 5;
 const LOGIN_LOCK_BASE_SECONDS = 5 * 60;
@@ -242,6 +256,10 @@ export class AuthService {
           retryAfterSeconds: riskLock
         });
       }
+    }
+    if (!isTurnstileVerificationEnabled()) {
+      recordAuthChallenge(args.action, 'skipped');
+      return;
     }
     const secret = process.env.TURNSTILE_SECRET_KEY?.trim();
     if (!secret) {
@@ -480,24 +498,25 @@ export class AuthService {
     return `${input.phone}:${clientIp}:${device}:${session}`;
   }
 
-  async register(input: RegisterInput, context?: { clientIp?: string; risk?: AbuseRiskContext }): Promise<{ user: PublicUser }> {
+  async register(input: RegisterInput, context?: { clientIp?: string; risk?: AbuseRiskContext }): Promise<AuthResult> {
+    const emailNorm = input.email.trim().toLowerCase();
     await this.validateAuthChallenge({
       action: 'register',
       ...(input.turnstileToken ? { token: input.turnstileToken } : {}),
       ...(context?.clientIp ? { clientIp: context.clientIp } : {}),
-      subject: input.email,
+      subject: emailNorm,
       ...(context?.risk ? { risk: context.risk } : {})
     });
     const existingUser = await this.fastify.prisma.user.findFirst({
       where: {
-        OR: [{ email: input.email }, { phone: input.phone }]
+        OR: [{ email: emailNorm }, { phone: input.phone }]
       }
     });
     if (existingUser) {
       throw new AppError(ERROR_CODES.CONFLICT, 'User already exists', 409);
     }
 
-    const existingOpsUser = await this.fastify.prisma.opsUser.findUnique({ where: { email: input.email } });
+    const existingOpsUser = await this.fastify.prisma.opsUser.findUnique({ where: { email: emailNorm } });
     if (existingOpsUser) {
       throw new AppError(ERROR_CODES.CONFLICT, 'Email is already in use', 409);
     }
@@ -508,15 +527,25 @@ export class AuthService {
         firstName: input.firstName,
         lastName: input.lastName,
         phone: input.phone,
-        email: input.email,
+        email: emailNorm,
         passwordHash
       }
     });
 
-    return { user: sanitizeUser(user) };
+    return this.issueTokensForUser(
+      user,
+      this.deriveTokenIssueContext({
+        audience: 'customer',
+        ...(context?.clientIp ? { clientIp: context.clientIp } : {}),
+        ...(context?.risk ? { risk: context.risk } : {})
+      })
+    );
   }
 
-  async sendOtp(input: OtpInput, context?: { clientIp?: string; risk?: AbuseRiskContext }): Promise<{ message: string }> {
+  async sendOtp(
+    input: OtpInput,
+    context?: { clientIp?: string; risk?: AbuseRiskContext }
+  ): Promise<{ message: string; devOtp?: string }> {
     await this.validateAuthChallenge({
       action: 'send-otp',
       ...(input.turnstileToken ? { token: input.turnstileToken } : {}),
@@ -538,6 +567,18 @@ export class AuthService {
     const attempts = Number((await this.fastify.redis.get(attemptsKey)) ?? '0');
     if (attempts >= OTP_MAX_ATTEMPTS) {
       throw new AppError(ERROR_CODES.RATE_LIMIT_EXCEEDED, 'OTP attempt limit exceeded', 429);
+    }
+
+    if (isAuthDevBypassEnabled()) {
+      const devOtp = getAuthDevOtp();
+      const devOtpHash = hashOtp(devOtp);
+      await this.fastify.redis.set(otpKey, devOtpHash, 'EX', OTP_TTL_SECONDS);
+      await this.fastify.redis.set(cooldownKey, '1', 'EX', OTP_RESEND_SECONDS);
+      await this.fastify.redis.set(globalCooldownKey, '1', 'EX', OTP_RESEND_SECONDS);
+      return withDevOtpField(
+        { message: `Development mode: use OTP ${devOtp} (no SMS/email sent).` },
+        devOtp
+      );
     }
 
     const otp = generateOtp();
@@ -747,9 +788,10 @@ export class AuthService {
     }
 
     let user: User | null = null;
+    const emailNorm = input.email.trim().toLowerCase();
     try {
       user = await this.fastify.prisma.user.findUnique({
-        where: { email: input.email }
+        where: { email: emailNorm }
       });
     } catch {
       return genericResponse;
@@ -757,6 +799,26 @@ export class AuthService {
 
     if (user) {
       const resetToken = crypto.randomBytes(PASSWORD_RESET_TOKEN_BYTES).toString('hex');
+      const tokenHash = stableHash(resetToken);
+      const expiresAt = new Date(Date.now() + PASSWORD_RESET_TOKEN_TTL_MS);
+
+      try {
+        await this.fastify.prisma.passwordResetToken.deleteMany({
+          where: { userId: user.id }
+        });
+        await this.fastify.prisma.passwordResetToken.create({
+          data: {
+            userId: user.id,
+            tokenHash,
+            expiresAt
+          }
+        });
+      } catch {
+        return genericResponse;
+      }
+
+      const storefrontUrl = process.env.STOREFRONT_URL?.trim() ?? 'http://localhost:3101';
+      const resetUrl = `${storefrontUrl}/reset-password?token=${encodeURIComponent(resetToken)}`;
       const jobId = `password-reset:${user.id}:${Date.now()}`;
       try {
         await this.enqueueOutboxMessage('notifications', 'send-email', {
@@ -765,7 +827,8 @@ export class AuthService {
           data: {
             email: user.email,
             userId: user.id,
-            resetToken
+            resetToken,
+            resetUrl
           }
         }, jobId);
       } catch (error) {
@@ -790,25 +853,67 @@ export class AuthService {
     return genericResponse;
   }
 
+  async resetPassword(input: ResetPasswordInput): Promise<{ message: string }> {
+    if (input.password !== input.confirmPassword) {
+      throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Passwords do not match', 400);
+    }
+    if (input.password.length < 8 || input.password.length > 128) {
+      throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Password must be 8–128 characters', 400);
+    }
+
+    const trimmedToken = input.token.trim();
+    const tokenHash = stableHash(trimmedToken);
+
+    const tokenRecord = await this.fastify.prisma.passwordResetToken.findUnique({
+      where: { tokenHash }
+    });
+
+    if (!tokenRecord) {
+      throw new AppError(ERROR_CODES.INVALID_CREDENTIALS, 'Invalid or expired reset token', 401);
+    }
+
+    if (tokenRecord.expiresAt < new Date()) {
+      await this.fastify.prisma.passwordResetToken.delete({
+        where: { id: tokenRecord.id }
+      });
+      throw new AppError(ERROR_CODES.TOKEN_EXPIRED, 'Reset token has expired', 401);
+    }
+
+    const passwordHash = await bcrypt.hash(input.password, 10);
+
+    await this.fastify.prisma.$transaction(async (tx) => {
+      await tx.user.update({
+        where: { id: tokenRecord.userId },
+        data: { passwordHash }
+      });
+      await tx.passwordResetToken.deleteMany({
+        where: { userId: tokenRecord.userId }
+      });
+    });
+
+    return { message: 'Password has been reset successfully' };
+  }
+
   async login(input: LoginInput, context?: LoginContext): Promise<AuthResult> {
     const clientIp = context?.clientIp ?? 'unknown';
     const audience = context?.audience ?? 'customer';
+    const emailNorm = input.email.trim().toLowerCase();
     if (audience === 'customer') {
       await this.validateAuthChallenge({
         action: 'login',
         ...(input.turnstileToken ? { token: input.turnstileToken } : {}),
         clientIp,
-        subject: input.email,
+        subject: emailNorm,
         ...(context?.risk ? { risk: context.risk } : {})
       });
     }
-    await this.assertAuthNotTemporarilyLocked(input.email, clientIp, audience);
+    await this.assertAuthNotTemporarilyLocked(emailNorm, clientIp, audience);
 
     const user = await this.fastify.prisma.user.findUnique({
-      where: { email: input.email }
+      where: { email: emailNorm }
     });
     if (!user) {
-      const retryAfterSeconds = await this.registerFailedAuthAttempt(input.email, clientIp, audience);
+      const retryAfterSeconds = await this.registerFailedAuthAttempt(emailNorm, clientIp, audience);
       if (retryAfterSeconds !== null) {
         throw new AppError(ERROR_CODES.RATE_LIMIT_EXCEEDED, 'Too many attempts. Try again later.', 429, {
           retryAfterSeconds
@@ -819,7 +924,7 @@ export class AuthService {
 
     const validPassword = await bcrypt.compare(input.password, user.passwordHash);
     if (!validPassword) {
-      const retryAfterSeconds = await this.registerFailedAuthAttempt(input.email, clientIp, audience);
+      const retryAfterSeconds = await this.registerFailedAuthAttempt(emailNorm, clientIp, audience);
       if (retryAfterSeconds !== null) {
         throw new AppError(ERROR_CODES.RATE_LIMIT_EXCEEDED, 'Too many attempts. Try again later.', 429, {
           retryAfterSeconds
@@ -828,7 +933,7 @@ export class AuthService {
       throw new AppError(ERROR_CODES.INVALID_CREDENTIALS, 'Invalid credentials', 401);
     }
     if (user.role === Role.ADMIN && audience === 'customer') {
-      const retryAfterSeconds = await this.registerFailedAuthAttempt(input.email, clientIp, audience);
+      const retryAfterSeconds = await this.registerFailedAuthAttempt(emailNorm, clientIp, audience);
       if (retryAfterSeconds !== null) {
         throw new AppError(ERROR_CODES.RATE_LIMIT_EXCEEDED, 'Too many attempts. Try again later.', 429, {
           retryAfterSeconds
@@ -838,7 +943,7 @@ export class AuthService {
     }
 
     if (!context?.skipClearOnSuccess) {
-      await this.clearFailedAuthAttempts(input.email, clientIp, audience);
+      await this.clearFailedAuthAttempts(emailNorm, clientIp, audience);
     }
     return this.issueTokensForUser(user, this.deriveTokenIssueContext(context));
   }
@@ -857,7 +962,7 @@ export class AuthService {
     clientIp: string;
     turnstileToken?: string;
     risk?: AbuseRiskContext;
-  }): Promise<{ message: string; expiresAt: string }> {
+  }): Promise<{ message: string; expiresAt: string; devOtp?: string }> {
     const clientIp = input.clientIp ?? 'unknown';
     const emailNorm = input.email.trim().toLowerCase();
     const emailHash = stableHash(emailNorm);
@@ -873,7 +978,7 @@ export class AuthService {
     });
     await this.assertAuthNotTemporarilyLocked(input.email, clientIp, 'admin');
 
-    const user = await this.fastify.prisma.user.findUnique({ where: { email: input.email } });
+    const user = await this.fastify.prisma.user.findUnique({ where: { email: emailNorm } });
     const genericMessage = 'If a registered admin account exists for this email, an OTP has been sent.';
 
     if (!user || user.role !== Role.ADMIN) {
@@ -895,15 +1000,33 @@ export class AuthService {
       throw new AppError(ERROR_CODES.UNAUTHORISED, 'Admin account not found or inactive', 401);
     }
 
+    const expiresAt = new Date(Date.now() + AuthService.ADMIN_LOGIN_OTP_TTL_SECONDS * 1000).toISOString();
+
+    if (isAuthDevBypassEnabled()) {
+      const devOtp = getAuthDevOtp();
+      const devOtpHash = hashOtp(devOtp);
+      await this.fastify.redis.set(otpKey, `${user.id}||${devOtpHash}`, 'EX', AuthService.ADMIN_LOGIN_OTP_TTL_SECONDS);
+      await this.fastify.redis.del(attemptKey);
+      const ciKey = `auth:admin:login-otp:ci-plaintext:${emailHash}`;
+      await this.fastify.redis.set(ciKey, devOtp, 'EX', AuthService.ADMIN_LOGIN_OTP_TTL_SECONDS);
+      return withDevOtpField(
+        {
+          message: `Development mode: use OTP ${devOtp} (no email/SMS sent).`,
+          expiresAt
+        },
+        devOtp
+      );
+    }
+
     const otpConfig = await this.getAdminOtpChannelConfig();
+
     const otp = generateOtp();
     const otpHash = hashOtp(otp);
-    const expiresAt = new Date(Date.now() + AuthService.ADMIN_LOGIN_OTP_TTL_SECONDS * 1000).toISOString();
 
     await this.fastify.redis.set(otpKey, `${user.id}||${otpHash}`, 'EX', AuthService.ADMIN_LOGIN_OTP_TTL_SECONDS);
     await this.fastify.redis.del(attemptKey);
 
-    if (process.env.NODE_ENV !== 'production') {
+    if (isDevelopmentLikeNodeEnv()) {
       const ciKey = `auth:admin:login-otp:ci-plaintext:${emailHash}`;
       await this.fastify.redis.set(ciKey, otp, 'EX', AuthService.ADMIN_LOGIN_OTP_TTL_SECONDS);
     }
@@ -977,6 +1100,23 @@ export class AuthService {
     const emailNorm = input.email.trim().toLowerCase();
     const otpKey = `auth:admin:login-otp:${stableHash(emailNorm)}`;
     const attemptKey = `auth:admin:login-otp-attempts:${stableHash(emailNorm)}`;
+
+    if (isAuthDevBypassEnabled() && input.otp.trim() === getAuthDevOtp()) {
+      const user = await this.fastify.prisma.user.findUnique({ where: { email: emailNorm } });
+      if (!user || user.role !== Role.ADMIN || user.isBanned) {
+        throw new AppError(ERROR_CODES.INVALID_CREDENTIALS, 'Invalid or expired login OTP', 401);
+      }
+      await this.fastify.redis.del(otpKey, attemptKey);
+      await this.clearFailedAuthAttempts(input.email, input.clientIp, 'admin');
+      return this.issueTokensForUser(
+        user,
+        this.deriveTokenIssueContext({
+          clientIp: input.clientIp,
+          audience: 'admin',
+          ...(input.risk ? { risk: input.risk } : {})
+        })
+      );
+    }
 
     const stored = await this.fastify.redis.get(otpKey);
     if (!stored) {

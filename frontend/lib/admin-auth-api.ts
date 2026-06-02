@@ -60,7 +60,7 @@ function mapAdminUser(admin: AdminLoginApiUser, accessToken: string): User {
  */
 export async function requestAdminLoginOtp(
   input: z.infer<typeof adminLoginRequestSchema>,
-): Promise<{ expiresAt: string; message?: string }> {
+): Promise<{ expiresAt: string; message?: string; devOtp?: string }> {
   const body = adminLoginRequestSchema.parse(input);
   return apiClient("/auth/admin/login/request-otp", {
     method: "POST",

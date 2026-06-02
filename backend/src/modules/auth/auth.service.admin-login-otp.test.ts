@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import bcrypt from 'bcryptjs';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { AuthService } from './auth.service';
 
@@ -86,6 +86,32 @@ function createHarness(overrides: {
 }
 
 describe('AuthService.requestAdminLoginOtp', () => {
+  beforeEach(() => {
+    vi.stubEnv('AUTH_DEV_BYPASS', 'false');
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('returns devOtp and skips notification queue when AUTH_DEV_BYPASS is enabled', async () => {
+    vi.stubEnv('NODE_ENV', 'development');
+    vi.stubEnv('AUTH_DEV_BYPASS', 'true');
+    vi.stubEnv('AUTH_DEV_OTP', '000000');
+
+    const { service, mocks } = createHarness();
+
+    const result = await service.requestAdminLoginOtp({
+      email: 'admin@example.com',
+      password: 'correctpass',
+      clientIp: '127.0.0.1'
+    });
+
+    expect(result.devOtp).toBe('000000');
+    expect(result.message).toContain('Development mode');
+    expect(mocks.notificationsAdd).not.toHaveBeenCalled();
+  });
+
   it('returns generic message and sends OTP email on valid admin credentials', async () => {
     const { service, mocks } = createHarness();
 
@@ -143,7 +169,6 @@ describe('AuthService.requestAdminLoginOtp', () => {
       expect.objectContaining({ phone: '+911234567890', template: 'OtpVerification' }),
       expect.any(Object)
     );
-    vi.unstubAllEnvs();
   });
 
   it('returns generic message without sending OTP when user is not found (anti-enumeration)', async () => {
@@ -222,6 +247,30 @@ describe('AuthService.requestAdminLoginOtp', () => {
 });
 
 describe('AuthService.verifyAdminLoginOtp', () => {
+  it('issues tokens on correct dev OTP without Redis when AUTH_DEV_BYPASS is enabled', async () => {
+    vi.stubEnv('NODE_ENV', 'development');
+    vi.stubEnv('AUTH_DEV_BYPASS', 'true');
+    vi.stubEnv('AUTH_DEV_OTP', '000000');
+
+    process.env.JWT_SECRET = 'test-jwt-secret';
+    process.env.JWT_REFRESH_SECRET = 'test-refresh-secret';
+
+    const { service, mocks } = createHarness({ redisGetValue: null });
+
+    const result = await service.verifyAdminLoginOtp({
+      email: 'admin@example.com',
+      otp: '000000',
+      clientIp: '127.0.0.1'
+    });
+
+    expect(result).toHaveProperty('accessToken');
+    expect(mocks.redisDel).toHaveBeenCalled();
+
+    delete process.env.JWT_SECRET;
+    delete process.env.JWT_REFRESH_SECRET;
+    vi.unstubAllEnvs();
+  });
+
   it('throws on missing OTP in Redis (expired or not requested)', async () => {
     const { service } = createHarness({ redisGetValue: null });
 

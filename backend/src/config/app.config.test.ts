@@ -8,15 +8,21 @@ describe('validateRuntimeEnv', () => {
     vi.resetModules();
   });
 
+  const baseProductionEnv = {
+    NODE_ENV: 'production',
+    JWT_SECRET: 'jwt-secret-value-32chars-minimum-xx',
+    JWT_REFRESH_SECRET: 'jwt-refresh-secret-value-32chars-min',
+    OPS_DB_ENCRYPTION_KEY: '0123456789abcdef0123456789abcdef',
+    DATABASE_URL: 'postgresql://u:p@127.0.0.1:5432/raghava_organics',
+    REDIS_URL: 'redis://:password@127.0.0.1:6379',
+    AUTH_DEV_BYPASS: 'false',
+    TURNSTILE_SECRET_KEY: 'prod-turnstile-secret-key',
+  };
+
   it('allows boot when provider selectors are set without full dependency keys (incremental Ops save)', async () => {
     process.env = {
       ...originalEnv,
-      NODE_ENV: 'production',
-      JWT_SECRET: 'jwt-secret-value-32chars-minimum-xx',
-      JWT_REFRESH_SECRET: 'jwt-refresh-secret-value-32chars-min',
-      OPS_DB_ENCRYPTION_KEY: '0123456789abcdef0123456789abcdef',
-      DATABASE_URL: 'postgresql://u:p@127.0.0.1:5432/raghava_organics',
-      REDIS_URL: 'redis://:password@127.0.0.1:6379',
+      ...baseProductionEnv,
       PAYMENT_PROVIDER: 'razorpay',
       SHIPPING_PROVIDER: 'shiprocket',
       NOTIFY_EMAIL_ENABLED: 'true',
@@ -26,19 +32,41 @@ describe('validateRuntimeEnv', () => {
     expect(() => validateRuntimeEnv()).not.toThrow();
   });
 
+  it('rejects AUTH_DEV_BYPASS in production-like profiles', async () => {
+    process.env = {
+      ...originalEnv,
+      ...baseProductionEnv,
+      AUTH_DEV_BYPASS: 'true',
+    };
+
+    const { validateRuntimeEnv } = await import('./app.config');
+    expect(() => validateRuntimeEnv()).toThrow(/AUTH_DEV_BYPASS/);
+  });
+
   it('still rejects unsupported PAYMENT_PROVIDER at boot', async () => {
     process.env = {
       ...originalEnv,
-      NODE_ENV: 'production',
-      JWT_SECRET: 'jwt-secret-value-32chars-minimum-xx',
-      JWT_REFRESH_SECRET: 'jwt-refresh-secret-value-32chars-min',
-      OPS_DB_ENCRYPTION_KEY: '0123456789abcdef0123456789abcdef',
-      DATABASE_URL: 'postgresql://u:p@127.0.0.1:5432/raghava_organics',
-      REDIS_URL: 'redis://:password@127.0.0.1:6379',
+      ...baseProductionEnv,
       PAYMENT_PROVIDER: 'stripe',
     };
 
     const { validateRuntimeEnv } = await import('./app.config');
     expect(() => validateRuntimeEnv()).toThrow(/Unsupported PAYMENT_PROVIDER/);
+  });
+
+  it('rejects missing TURNSTILE_SECRET_KEY in production-like profiles', async () => {
+    const { TURNSTILE_SECRET_KEY: _removed, ...envWithoutTurnstile } = baseProductionEnv;
+    process.env = { ...originalEnv, ...envWithoutTurnstile };
+
+    const { validateRuntimeEnv } = await import('./app.config');
+    expect(() => validateRuntimeEnv()).toThrow(/TURNSTILE_SECRET_KEY/);
+  });
+
+  it('allows boot without TURNSTILE_SECRET_KEY when TURNSTILE_SKIP_PRODUCTION_CHECK=true', async () => {
+    const { TURNSTILE_SECRET_KEY: _removed, ...envWithoutTurnstile } = baseProductionEnv;
+    process.env = { ...originalEnv, ...envWithoutTurnstile, TURNSTILE_SKIP_PRODUCTION_CHECK: 'true' };
+
+    const { validateRuntimeEnv } = await import('./app.config');
+    expect(() => validateRuntimeEnv()).not.toThrow();
   });
 });

@@ -1,31 +1,40 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useMemo } from "react";
 import { useAdminSessionRestore } from "@/hooks/use-admin-session-restore";
+import { redirectToAdminLogin } from "@/lib/admin-auth-navigation";
 import { canAccessAdmin } from "@/lib/permissions";
+import { resolveAdminUser } from "@/lib/resolve-admin-user";
 import { AdminLoadingBlock } from "@/components/admin/ui/admin-ui";
+import { useAuthStore } from "@/stores/auth";
 
 interface AdminGuardProps {
   children: ReactNode;
 }
 
 export function AdminGuard({ children }: AdminGuardProps) {
-  const router = useRouter();
+  const accessToken = useAuthStore((s) => s.accessToken);
   const { status, user } = useAdminSessionRestore();
+
+  const adminUser = useMemo(
+    () => resolveAdminUser(accessToken, user),
+    [accessToken, user],
+  );
+
+  const sessionReady = status === "ready" && adminUser !== null;
 
   useEffect(() => {
     if (status === "failed") {
-      router.replace("/admin/login");
+      redirectToAdminLogin();
     }
-  }, [status, router]);
+  }, [status]);
 
   useEffect(() => {
     if (status === "ready" && user && !canAccessAdmin(user)) {
-      router.replace("/dashboard");
+      redirectToAdminLogin();
     }
-  }, [status, user, router]);
+  }, [status, user]);
 
   if (status === "checking" || status === "restoring") {
     return (
@@ -43,7 +52,7 @@ export function AdminGuard({ children }: AdminGuardProps) {
     );
   }
 
-  if (!user || !canAccessAdmin(user)) {
+  if (!sessionReady || !adminUser) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[#faf3ef]">
         <AdminLoadingBlock label="Checking permissions…" />

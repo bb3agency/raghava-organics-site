@@ -358,6 +358,7 @@ describe('auth routes admin login OTP (deactivated admin)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     delete process.env.TURNSTILE_SECRET_KEY;
+    vi.stubEnv('AUTH_DEV_BYPASS', 'false');
   });
 
   it('POST /auth/admin/login/request-otp returns 401 for ops-deactivated admin (isBanned)', async () => {
@@ -592,6 +593,215 @@ describe('auth routes admin login OTP (deactivated admin)', () => {
     expect(response.headers['set-cookie']).toContain('refresh_token=');
 
     verifySpy.mockRestore();
+    await app.close();
+  });
+});
+
+describe('auth routes password reset', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    delete process.env.TURNSTILE_SECRET_KEY;
+  });
+
+  function createPasswordResetApp(userExists: boolean) {
+    const notificationsAdd = vi.fn(async () => undefined);
+    const tokenRecords: Array<{ id: string; userId: string; tokenHash: string; expiresAt: Date }> = [];
+
+    const userRecord = userExists
+      ? { id: 'user_1', email: 'user@example.com', passwordHash: 'old-hash' }
+      : null;
+
+    const prismaMock = {
+      user: {
+        findUnique: vi.fn(async ({ where }: { where: Record<string, unknown> }) => {
+          if ('email' in where && where.email === 'user@example.com') return userRecord;
+          if ('id' in where && where.id === 'user_1') return userRecord;
+          return null;
+        }),
+        update: vi.fn(async () => userRecord)
+      },
+      passwordResetToken: {
+        deleteMany: vi.fn(async () => ({ count: 1 })),
+        create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
+          const record = {
+            id: 'prt_1',
+            userId: String(data.userId),
+            tokenHash: String(data.tokenHash),
+            expiresAt: data.expiresAt as Date
+          };
+          tokenRecords.push(record);
+          return record;
+        }),
+        findUnique: vi.fn(async ({ where }: { where: Record<string, unknown> }) => {
+          const found = tokenRecords.find((r) => r.tokenHash === where.tokenHash);
+          return found ?? null;
+        }),
+        delete: vi.fn(async () => ({ count: 1 }))
+      },
+      storeSettings: {
+        findUnique: vi.fn(async () => ({
+          notifyEmailEnabled: true,
+          notifySmsEnabled: false,
+          notifyWhatsappEnabled: false,
+          primaryNotificationChannels: {}
+        }))
+      },
+      refreshToken: {
+        findMany: vi.fn(async () => []),
+        updateMany: vi.fn(async () => ({ count: 1 })),
+        create: vi.fn(async () => ({}))
+      },
+      adminUserInvite: { findMany: vi.fn(async () => []), count: vi.fn(async () => 0) },
+      adminPermissionGrant: { findMany: vi.fn(async () => []) },
+      opsUser: { findMany: vi.fn(async () => []) },
+      opsConfigSecret: { findMany: vi.fn(async () => []) }
+    };
+
+    const app = Fastify();
+    app.setErrorHandler((err, _request, reply) => {
+      const error = err as MockError;
+      const statusCode = typeof error.statusCode === 'number' ? error.statusCode : 500;
+      reply.status(statusCode).send({
+        success: false,
+        error: {
+          code: error.code ?? 'INTERNAL_ERROR',
+          message: error.message,
+          statusCode,
+          details: { kind: 'internal', hintKey: 'unknown', retryable: false, remediation: '' }
+        }
+      });
+    });
+
+    app.decorate('prisma', {
+      ...prismaMock,
+      $transaction: vi.fn(async (cb: (tx: typeof prismaMock) => Promise<unknown>) => cb(prismaMock))
+    } as unknown as NonNullable<Parameters<typeof app.decorate>[1]>);
+
+    app.decorate('redis', {
+      get: vi.fn(async () => null),
+      set: vi.fn(async () => 'OK'),
+      del: vi.fn(async () => 1),
+      ttl: vi.fn(async () => -1),
+      incr: vi.fn(async () => 1),
+      expire: vi.fn(async () => 1)
+    } as unknown as NonNullable<Parameters<typeof app.decorate>[1]>);
+
+    app.decorate('queues', {
+      notifications: { add: notificationsAdd }
+    } as unknown as NonNullable<Parameters<typeof app.decorate>[1]>);
+
+    app.decorate('jwt', { sign: vi.fn(() => 'token') } as unknown as NonNullable<Parameters<typeof app.decorate>[1]>);
+
+    return { app, mocks: { notificationsAdd, tokenRecords, prismaMock } };
+  }
+
+  it('POST /auth/forgot-password returns generic success for unknown email (anti-enumeration)', async () => {
+    const { app } = createPasswordResetApp(false);
+    await registerAuthRoutes(app);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/forgot-password',
+      payload: { email: 'unknown@example.com' }
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as { message?: string };
+    expect(body.message).toContain('If the account exists');
+
+    await app.close();
+  });
+
+  it('POST /auth/forgot-password stores token and enqueues email for known user', async () => {
+    const { app, mocks } = createPasswordResetApp(true);
+    await registerAuthRoutes(app);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/forgot-password',
+      payload: { email: 'user@example.com' }
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as { message?: string };
+    expect(body.message).toContain('If the account exists');
+    expect(mocks.prismaMock.passwordResetToken.create).toHaveBeenCalled();
+    expect(mocks.notificationsAdd).toHaveBeenCalled();
+
+    await app.close();
+  });
+
+  it('POST /auth/reset-password returns 400 when passwords do not match', async () => {
+    const { app } = createPasswordResetApp(true);
+    await registerAuthRoutes(app);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/reset-password',
+      payload: {
+        token: 'any-token',
+        password: 'NewPass123!',
+        confirmPassword: 'Different123!'
+      }
+    });
+
+    expect(response.statusCode).toBe(400);
+    const body = response.json() as { error?: { code?: string; message?: string } };
+    expect(body.error?.code).toBe('VALIDATION_ERROR');
+
+    await app.close();
+  });
+
+  it('POST /auth/reset-password returns 401 for invalid token', async () => {
+    const { app } = createPasswordResetApp(true);
+    await registerAuthRoutes(app);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/reset-password',
+      payload: {
+        token: 'invalid-token',
+        password: 'NewPass123!',
+        confirmPassword: 'NewPass123!'
+      }
+    });
+
+    expect(response.statusCode).toBe(401);
+    const body = response.json() as { error?: { code?: string } };
+    expect(body.error?.code).toBe('INVALID_CREDENTIALS');
+
+    await app.close();
+  });
+
+  it('POST /auth/reset-password returns 200 and updates password for valid token', async () => {
+    const { app, mocks } = createPasswordResetApp(true);
+    await registerAuthRoutes(app);
+
+    // Seed a valid token
+    const tokenHash = crypto.createHash('sha256').update('valid-token').digest('hex');
+    mocks.tokenRecords.push({
+      id: 'prt_1',
+      userId: 'user_1',
+      tokenHash,
+      expiresAt: new Date(Date.now() + 60_000)
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/reset-password',
+      payload: {
+        token: 'valid-token',
+        password: 'NewPass123!',
+        confirmPassword: 'NewPass123!'
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as { message?: string };
+    expect(body.message).toContain('Password has been reset successfully');
+    expect(mocks.prismaMock.user.update).toHaveBeenCalled();
+    expect(mocks.prismaMock.passwordResetToken.deleteMany).toHaveBeenCalled();
+
     await app.close();
   });
 });

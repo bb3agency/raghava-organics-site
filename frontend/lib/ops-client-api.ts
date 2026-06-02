@@ -258,10 +258,11 @@ function normalizeOpsPermissions(values: string[] | undefined): OpsPermission[] 
 
 export async function requestOpsLoginOtp(input: {
   email: string;
+  turnstileToken?: string;
 }): Promise<{ expiresAt: string; message?: string }> {
   return opsFetch("/ops/auth/login/request-otp", {
     method: "POST",
-    body: JSON.stringify({ email: input.email }),
+    body: JSON.stringify(input),
   });
 }
 

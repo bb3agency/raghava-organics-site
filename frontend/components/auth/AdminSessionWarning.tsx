@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { useRouter } from "next/navigation";
+import { redirectToAdminLogin } from "@/lib/admin-auth-navigation";
 import { getAccessTokenExpiryMs, parseAccessTokenClaims } from "@/lib/jwt-utils";
 import { useAuthStore } from "@/stores/auth";
 import { refreshAccessToken } from "@/lib/auth-api";
@@ -10,7 +10,6 @@ import { Loader2 } from "lucide-react";
 const WARNING_LEAD_MS = 2 * 60 * 1000;
 
 export function AdminSessionWarning() {
-  const router = useRouter();
   const accessToken = useAuthStore((state) => state.accessToken);
   const setAccessToken = useAuthStore((state) => state.setAccessToken);
   const clearSession = useAuthStore((state) => state.clearSession);
@@ -61,8 +60,8 @@ export function AdminSessionWarning() {
 
   const handleSignInAgain = useCallback(() => {
     clearSession();
-    router.replace("/admin/login");
-  }, [clearSession, router]);
+    redirectToAdminLogin();
+  }, [clearSession]);
 
   const visible =
     expiryMs !== null && nowMs >= expiryMs - WARNING_LEAD_MS && nowMs < expiryMs;

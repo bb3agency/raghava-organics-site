@@ -164,7 +164,8 @@ set PAYMENT_PROVIDER=noop&& npx tsx watch queues/workers/index.ts
 | **Headers** | `Idempotency-Key: reg-raj-sim-001` |
 | **Body** | `firstName: Raj`, `lastName: Kumar`, `phone: 9111111111`, `email: raj.kumar.sim001@example.com`, `password: RajPass@123` |
 | **Expected status** | `200` |
-| **Assertions** | `j.user.email === 'raj.kumar.sim001@example.com'` |
+| **Assertions** | `j.accessToken` is a string; `j.user.email === 'raj.kumar.sim001@example.com'` |
+| **Side-effects** | Sets `rajToken` env var; sets HTTP-only refresh cookie |
 | **Notes** | Idempotency key makes re-runs safe |
 
 ---
@@ -277,7 +278,8 @@ const sig = CryptoJS.HmacSHA256(body, razorpayWebhookSecret).toString(CryptoJS.e
 | **Headers** | `Idempotency-Key: reg-ramu-sim-001` |
 | **Body** | `firstName: Ramu`, `lastName: Sharma`, `phone: 9222222222`, `email: ramu.sharma.sim001@example.com`, `password: RamuPass@123` |
 | **Expected status** | `200` |
-| **Assertions** | `j.user.email === 'ramu.sharma.sim001@example.com'` |
+| **Assertions** | `j.accessToken` is a string; `j.user.email === 'ramu.sharma.sim001@example.com'` |
+| **Side-effects** | Sets `ramuToken` env var; sets HTTP-only refresh cookie |
 
 ---
 

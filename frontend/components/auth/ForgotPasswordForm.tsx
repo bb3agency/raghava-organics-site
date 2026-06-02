@@ -8,21 +8,35 @@ import { requestPasswordReset } from "@/lib/auth-api";
 import { getApiErrorMessage } from "@/lib/error-messages";
 import { forgotPasswordInputSchema } from "@/lib/validators";
 import { AuthErrorBanner } from "@/components/auth/AuthErrorBanner";
+import { TurnstileChallenge } from "@/components/auth/TurnstileChallenge";
+import { useAuthTurnstile } from "@/hooks/use-auth-turnstile";
 
 type FormValues = z.infer<typeof forgotPasswordInputSchema>;
 
 export function ForgotPasswordForm() {
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const {
+    required: turnstileRequired,
+    ready: turnstileReady,
+    turnstileField,
+    onTurnstileTokenChange,
+    turnstileLoadError,
+    setTurnstileLoadError,
+  } = useAuthTurnstile();
   const form = useForm<FormValues>({
     resolver: zodResolver(forgotPasswordInputSchema),
     defaultValues: { email: "" },
   });
 
   const submit = form.handleSubmit(async (values) => {
+    if (turnstileRequired && !turnstileReady) {
+      setError("Complete the security check below, then try again.");
+      return;
+    }
     try {
       setError(null);
-      const result = await requestPasswordReset(values);
+      const result = await requestPasswordReset({ ...values, ...turnstileField });
       setSuccessMessage(result.message);
     } catch (err) {
       setSuccessMessage(null);
@@ -48,6 +62,16 @@ export function ForgotPasswordForm() {
         </p>
       </div>
 
+      <TurnstileChallenge
+        onTokenChange={onTurnstileTokenChange}
+        onLoadError={setTurnstileLoadError}
+      />
+      {turnstileLoadError ? (
+        <p className="text-xs text-destructive" role="alert">
+          {turnstileLoadError}
+        </p>
+      ) : null}
+
       <AuthErrorBanner message={error} />
 
       {successMessage ? (
@@ -59,7 +83,7 @@ export function ForgotPasswordForm() {
       <button
         type="submit"
         className="h-11 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground disabled:opacity-60"
-        disabled={form.formState.isSubmitting}
+        disabled={form.formState.isSubmitting || (turnstileRequired && !turnstileReady)}
       >
         {form.formState.isSubmitting ? "Submitting..." : "Send reset link"}
       </button>

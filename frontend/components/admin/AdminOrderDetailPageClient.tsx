@@ -1,0 +1,33 @@
+"use client";
+
+import Link from "next/link";
+import { useState } from "react";
+import { AdminOrderDetailPanel } from "@/components/admin/AdminOrderDetailPanel";
+import { AdminOrderFulfillmentPanel } from "@/components/admin/AdminOrderFulfillmentPanel";
+import { AdminOrderItemsPanel } from "@/components/admin/AdminOrderItemsPanel";
+import { AdminOrderStatusPanel } from "@/components/admin/AdminOrderStatusPanel";
+import { AdminOrderTimelinePanel } from "@/components/admin/AdminOrderTimelinePanel";
+
+export function AdminOrderDetailPageClient({ orderId }: { orderId: string }) {
+  const [refreshKey, setRefreshKey] = useState(0);
+
+  function bumpRefresh() {
+    setRefreshKey((value) => value + 1);
+  }
+
+  return (
+    <div className="grid gap-6">
+      <Link
+        href="/admin/orders"
+        className="text-sm text-muted-foreground hover:text-foreground"
+      >
+        ← Orders
+      </Link>
+      <AdminOrderDetailPanel key={`detail-${refreshKey}`} orderId={orderId} />
+      <AdminOrderTimelinePanel key={`timeline-${refreshKey}`} orderId={orderId} />
+      <AdminOrderItemsPanel orderId={orderId} onUpdated={bumpRefresh} />
+      <AdminOrderStatusPanel orderId={orderId} onUpdated={bumpRefresh} />
+      <AdminOrderFulfillmentPanel initialOrderId={orderId} hideOrderPicker />
+    </div>
+  );
+}

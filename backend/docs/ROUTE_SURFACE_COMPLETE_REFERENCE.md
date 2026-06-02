@@ -116,7 +116,7 @@ Verifies OTP for an existing customer account. Returns `{ accessToken, user }`. 
 Verifies OTP **and** creates a new customer account simultaneously (phone-first signup). Returns `{ accessToken, user }`. Sets refresh cookie. Idempotent.
 
 ### `POST /api/v1/auth/register`
-Email+password registration for customers. Idempotent.
+Email+password registration for customers. Returns `{ accessToken, user }`. Sets HTTP-only `refresh_token` cookie. Idempotent. Emails are normalized to lowercase before storage and lookup.
 
 ### `POST /api/v1/auth/login`
 Email+password login. Returns `{ accessToken, user }`. Sets refresh cookie.

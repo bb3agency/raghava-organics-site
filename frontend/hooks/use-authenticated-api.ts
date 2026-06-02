@@ -1,12 +1,11 @@
 "use client";
 
 import { useMemo } from "react";
-import { useRouter } from "next/navigation";
 import { createAuthenticatedApiClient } from "@/lib/authenticated-api";
+import { redirectToAdminLogin } from "@/lib/admin-auth-navigation";
 import { useAuthStore } from "@/stores/auth";
 
 export function useAuthenticatedApi() {
-  const router = useRouter();
   const setAccessToken = useAuthStore((s) => s.setAccessToken);
   const clearSession = useAuthStore((s) => s.clearSession);
 
@@ -19,12 +18,12 @@ export function useAuthenticatedApi() {
           clearSession();
           const path = window.location.pathname;
           if (path.startsWith("/admin")) {
-            router.push("/admin/login");
+            redirectToAdminLogin();
           } else {
-            router.push("/login");
+            window.location.assign("/login");
           }
         },
       }),
-    [setAccessToken, clearSession, router],
+    [setAccessToken, clearSession],
   );
 }

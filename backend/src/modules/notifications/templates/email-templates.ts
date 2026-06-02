@@ -178,11 +178,11 @@ export async function renderNotificationEmail(template: string, data: Record<str
     case 'PasswordReset':
       {
         const email = escapeHtml(data.email ?? 'N/A');
-        const resetToken = escapeHtml(data.resetToken ?? 'N/A');
-      return {
-        subject: 'Password reset request',
-        html: await render(PasswordResetEmail(email, resetToken))
-      };
+        const resetUrl = String(data.resetUrl ?? 'N/A');
+        return {
+          subject: 'Password reset request',
+          html: await render(PasswordResetEmail(email, resetUrl))
+        };
       }
     case 'OpsInviteSetup':
       {

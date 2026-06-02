@@ -25,6 +25,23 @@ describe('SettingsService', () => {
     });
   });
 
+  it('returns template defaults when shipping is not configured yet', async () => {
+    const fastify = {
+      prisma: {
+        storeSettings: {
+          findUnique: vi.fn().mockResolvedValue(null)
+        }
+      }
+    } as unknown as FastifyInstance;
+    const service = new SettingsService(fastify);
+
+    await expect(service.getShippingSettings()).resolves.toEqual({
+      pickupPincode: '500001',
+      minOrderValuePaise: 0,
+      source: 'default'
+    });
+  });
+
   it('updates pickup pincode through singleton upsert', async () => {
     const fastify = {
       prisma: {

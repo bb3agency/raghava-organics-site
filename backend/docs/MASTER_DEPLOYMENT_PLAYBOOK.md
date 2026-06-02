@@ -1147,12 +1147,13 @@ Repeat Phases 2–6 with a new project folder, new database, new ports, new doma
   "firstName": "string (max 100)",    // required
   "lastName": "string (max 100)",     // required
   "phone": "string (max 20)",         // required
-  "email": "string (max 255)",        // required
+  "email": "string (max 255)",        // required (normalized to lowercase)
   "password": "string (8–128 chars)", // required
   "turnstileToken": "string (max 4096)" // optional, CAPTCHA
 }
 // Response 200 → data
 {
+  "accessToken": "eyJhbG...",
   "user": {
     "id": "uuid",
     "email": "user@example.com",
@@ -1163,6 +1164,7 @@ Repeat Phases 2–6 with a new project folder, new database, new ports, new doma
     "isVerified": false
   }
 }
+// Side effect: sets httpOnly refresh_token cookie
 ```
 
 #### `POST /api/v1/auth/send-otp`
@@ -1202,7 +1204,7 @@ Repeat Phases 2–6 with a new project folder, new database, new ports, new doma
 // Request body
 { "email": "user@example.com", "turnstileToken": "optional" }
 // Response 200 → data
-{ "message": "Password reset email sent" }
+{ "message": "If the account exists, a password reset email has been queued." }
 ```
 
 #### `POST /api/v1/auth/refresh`

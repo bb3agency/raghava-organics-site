@@ -2,18 +2,17 @@
 
 import type { ReactNode } from "react";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
-import { useAdminSessionRestore } from "@/hooks/use-admin-session-restore";
+import { usePathname } from "next/navigation";
+import { useState } from "react";
+import { AdminAuthProvider, useAdminAuth } from "@/contexts/admin-auth-context";
 import { LogOut, Menu, X, Settings2 } from "lucide-react";
-import { ADMIN_NAV_ITEMS, isAdminNavActive } from "@/components/admin/admin-nav-config";
-import { AdminSessionProvider } from "@/components/admin/AdminSessionProvider";
+import { getAdminNavItems, isAdminNavActive } from "@/components/admin/admin-nav-config";
 import { AdminIdleTimeoutModal } from "@/components/auth/AdminIdleTimeoutModal";
-import { AdminLoadingBlock } from "@/components/admin/ui/admin-ui";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/stores/auth";
 import { canViewAdminRoute } from "@/lib/permissions";
+import { redirectToAdminLogin } from "@/lib/admin-auth-navigation";
 import { logoutSession } from "@/lib/auth-api";
 
 interface AdminConsoleShellProps {
@@ -21,19 +20,20 @@ interface AdminConsoleShellProps {
 }
 
 export function AdminConsoleShell({ children }: AdminConsoleShellProps) {
-  const router = useRouter();
+  return (
+    <AdminAuthProvider>
+      <AdminConsoleFrame>{children}</AdminConsoleFrame>
+    </AdminAuthProvider>
+  );
+}
+
+function AdminConsoleFrame({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
 
-  const { status, accessToken, user } = useAdminSessionRestore();
+  const { accessToken, adminUser } = useAdminAuth();
   const clearSession = useAuthStore((state) => state.clearSession);
-
-  useEffect(() => {
-    if (status === "failed") {
-      router.replace("/admin/login");
-    }
-  }, [status, router]);
 
   const closeMobileNav = () => setMobileNavOpen(false);
 
@@ -43,38 +43,19 @@ export function AdminConsoleShell({ children }: AdminConsoleShellProps) {
       await logoutSession(accessToken);
     } finally {
       clearSession();
-      router.replace("/admin/login");
-      setLoggingOut(false);
+      redirectToAdminLogin();
     }
   }
 
-  if (status === "checking" || status === "restoring") {
-    return (
-      <div className="admin-console flex min-h-screen items-center justify-center bg-[#faf3ef]">
-        <AdminLoadingBlock label="Restoring admin session…" />
-      </div>
-    );
-  }
-
-  if (status === "failed" || !user) {
-    return (
-      <div className="admin-console flex min-h-screen items-center justify-center bg-[#faf3ef]">
-        <AdminLoadingBlock label="Redirecting to sign in…" />
-      </div>
-    );
-  }
-
-  // Filter nav items based on user's admin permissions
-  const permittedNavItems = ADMIN_NAV_ITEMS.filter(item => 
-    canViewAdminRoute(user, item.routeKey)
+  const permittedNavItems = getAdminNavItems().filter((item) =>
+    canViewAdminRoute(adminUser, item.routeKey),
   );
 
   return (
-    <AdminSessionProvider>
-      <div className="admin-console flex min-h-screen bg-[#faf3ef] text-[#23403d]">
-        {/* Desktop sidebar */}
+    <>
+      <div className="admin-console flex min-h-screen bg-background text-foreground">
         <aside
-          className="hidden w-64 shrink-0 flex-col border-r border-[#efe8e4] bg-white lg:flex"
+          className="hidden w-64 shrink-0 flex-col border-r border-border bg-card lg:flex"
           aria-label="Admin navigation"
         >
           <AdminSidebarBrand />
@@ -88,38 +69,33 @@ export function AdminConsoleShell({ children }: AdminConsoleShellProps) {
                   className={cn(
                     "group flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
                     active
-                      ? "bg-[#23403d] text-white shadow-sm"
-                      : "text-[#4a6b68] hover:bg-[#faf3ef] hover:text-[#23403d]",
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:bg-muted hover:text-foreground",
                   )}
                 >
-                  <item.icon
-                    className={cn(
-                      "h-5 w-5 shrink-0",
-                      active ? "text-white" : "text-[#769b97] group-hover:text-[#23403d]",
-                    )}
-                    aria-hidden="true"
-                  />
-                  <div className="flex flex-col">
+                  <item.icon className="h-4 w-4 shrink-0" aria-hidden />
+                  <span className="flex flex-col">
                     <span>{item.label}</span>
                     <span
                       className={cn(
-                        "text-[10px] leading-tight",
-                        active ? "text-white/80" : "text-[#769b97]",
+                        "text-xs font-normal",
+                        active ? "text-primary-foreground/80" : "text-muted-foreground",
                       )}
                     >
                       {item.description}
                     </span>
-                  </div>
+                  </span>
                 </Link>
               );
             })}
           </nav>
-          <div className="border-t border-[#efe8e4] p-4">
+          <div className="border-t border-border p-3">
             <Button
+              type="button"
               variant="outline"
-              className="w-full justify-start gap-2 border-[#efe8e4] text-[#23403d] hover:bg-[#faf3ef] hover:text-[#ec6e55]"
-              onClick={() => void handleLogout()}
+              className="w-full justify-start gap-2"
               disabled={loggingOut}
+              onClick={() => void handleLogout()}
             >
               <LogOut className="h-4 w-4" />
               {loggingOut ? "Signing out…" : "Sign out"}
@@ -127,120 +103,98 @@ export function AdminConsoleShell({ children }: AdminConsoleShellProps) {
           </div>
         </aside>
 
-        {/* Mobile drawer backdrop */}
-        {mobileNavOpen && (
-          <div
-            className="fixed inset-0 z-40 bg-[#23403d]/40 backdrop-blur-sm lg:hidden"
-            onClick={closeMobileNav}
-            aria-hidden="true"
-          />
-        )}
-
-        {/* Mobile drawer */}
-        <div
-          className={cn(
-            "fixed inset-y-0 left-0 z-50 flex w-72 flex-col bg-white transition-transform duration-300 ease-in-out lg:hidden shadow-xl",
-            mobileNavOpen ? "translate-x-0" : "-translate-x-full",
-          )}
-        >
-          <div className="flex items-center justify-between border-b border-[#efe8e4] px-4 py-4">
-            <AdminSidebarBrand />
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={closeMobileNav}
-              className="h-8 w-8 text-[#769b97] hover:bg-[#faf3ef] hover:text-[#23403d]"
-            >
-              <X className="h-5 w-5" />
-              <span className="sr-only">Close sidebar</span>
-            </Button>
-          </div>
-          <nav className="flex flex-1 flex-col gap-1 overflow-y-auto px-3 py-4">
-            {permittedNavItems.map((item) => {
-              const active = isAdminNavActive(pathname, item.href);
-              return (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  onClick={closeMobileNav}
-                  className={cn(
-                    "group flex items-center gap-3 rounded-lg px-3 py-3 text-sm font-medium transition-colors",
-                    active
-                      ? "bg-[#23403d] text-white shadow-sm"
-                      : "text-[#4a6b68] hover:bg-[#faf3ef] hover:text-[#23403d]",
-                  )}
-                >
-                  <item.icon
-                    className={cn(
-                      "h-5 w-5 shrink-0",
-                      active ? "text-white" : "text-[#769b97] group-hover:text-[#23403d]",
-                    )}
-                    aria-hidden="true"
-                  />
-                  <div className="flex flex-col">
-                    <span>{item.label}</span>
-                    <span
-                      className={cn(
-                        "text-[10px] leading-tight",
-                        active ? "text-white/80" : "text-[#769b97]",
-                      )}
-                    >
-                      {item.description}
-                    </span>
-                  </div>
-                </Link>
-              );
-            })}
-          </nav>
-          <div className="border-t border-[#efe8e4] p-4">
-            <Button
-              variant="outline"
-              className="w-full justify-start gap-2 border-[#efe8e4] text-[#23403d] hover:bg-[#faf3ef] hover:text-[#ec6e55]"
-              onClick={() => void handleLogout()}
-              disabled={loggingOut}
-            >
-              <LogOut className="h-4 w-4" />
-              {loggingOut ? "Signing out…" : "Sign out"}
-            </Button>
-          </div>
-        </div>
-
-        {/* Main content area */}
         <div className="flex min-w-0 flex-1 flex-col">
-          {/* Mobile topbar */}
-          <header className="flex h-14 items-center gap-4 border-b border-[#efe8e4] bg-white px-4 lg:hidden">
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => setMobileNavOpen(true)}
-              className="-ml-2 h-9 w-9 text-[#4a6b68] hover:bg-[#faf3ef] hover:text-[#23403d]"
-            >
-              <Menu className="h-5 w-5" />
-              <span className="sr-only">Open sidebar</span>
-            </Button>
-            <div className="flex items-center gap-2 font-bold tracking-tight text-[#23403d]">
-              <Settings2 className="h-5 w-5 text-[#ec6e55]" />
-              <span>Admin Console</span>
+          <header className="flex items-center justify-between border-b border-border bg-card px-4 py-3 lg:px-6">
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-border lg:hidden"
+                onClick={() => setMobileNavOpen(true)}
+                aria-label="Open navigation menu"
+              >
+                <Menu className="h-5 w-5" />
+              </button>
+              <h1 className="font-heading text-lg font-semibold">Admin Console</h1>
             </div>
+            <Link
+              href="/admin/settings/store"
+              className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground"
+            >
+              <Settings2 className="h-4 w-4" />
+              Settings
+            </Link>
           </header>
 
-          {/* Page content */}
-          <main className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8">
-            <div className="mx-auto max-w-6xl">{children}</div>
-          </main>
+          <main className="flex-1 overflow-auto p-4 lg:p-6">{children}</main>
         </div>
 
-        <AdminIdleTimeoutModal />
+        {mobileNavOpen ? (
+          <div className="fixed inset-0 z-50 lg:hidden" role="dialog" aria-modal="true">
+            <button
+              type="button"
+              className="absolute inset-0 bg-black/40"
+              aria-label="Close navigation menu"
+              onClick={closeMobileNav}
+            />
+            <aside className="absolute left-0 top-0 flex h-full w-72 flex-col bg-card shadow-xl">
+              <div className="flex items-center justify-between border-b border-border px-4 py-3">
+                <AdminSidebarBrand />
+                <button
+                  type="button"
+                  onClick={closeMobileNav}
+                  aria-label="Close menu"
+                  className="rounded-md p-1"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+              <nav className="flex flex-1 flex-col gap-1 overflow-y-auto px-3 py-4">
+                {permittedNavItems.map((item) => (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    onClick={closeMobileNav}
+                    className={cn(
+                      "rounded-lg px-3 py-2 text-sm font-medium",
+                      isAdminNavActive(pathname, item.href)
+                        ? "bg-primary text-primary-foreground"
+                        : "text-muted-foreground hover:bg-muted",
+                    )}
+                  >
+                    {item.label}
+                  </Link>
+                ))}
+              </nav>
+              <div className="border-t border-border p-3">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full"
+                  disabled={loggingOut}
+                  onClick={() => void handleLogout()}
+                >
+                  {loggingOut ? "Signing out…" : "Sign out"}
+                </Button>
+              </div>
+            </aside>
+          </div>
+        ) : null}
       </div>
-    </AdminSessionProvider>
+      <AdminIdleTimeoutModal />
+    </>
   );
 }
 
 function AdminSidebarBrand() {
   return (
-    <div className="flex h-14 items-center gap-2 border-b border-[#efe8e4] px-6">
-      <Settings2 className="h-5 w-5 text-[#ec6e55]" />
-      <span className="font-bold tracking-tight text-[#23403d]">Admin Console</span>
+    <div className="flex items-center gap-2 border-b border-border px-4 py-4">
+      <div className="flex h-8 w-8 items-center justify-center rounded-md bg-primary text-primary-foreground text-xs font-bold">
+        RO
+      </div>
+      <div>
+        <p className="text-sm font-semibold leading-tight">Raghava Organics</p>
+        <p className="text-xs text-muted-foreground">Merchant admin</p>
+      </div>
     </div>
   );
 }

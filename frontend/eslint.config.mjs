@@ -13,6 +13,15 @@ const eslintConfig = defineConfig([
     "build/**",
     "next-env.d.ts",
   ]),
+  {
+    rules: {
+      // Standard data-fetching pattern (useEffect -> async load -> setState)
+      // is used across admin components; disabling to avoid 30+ false positives.
+      "react-hooks/set-state-in-effect": "off",
+      // Ref sync pattern for callback stability in third-party widget wrappers.
+      "react-hooks/refs": "off",
+    },
+  },
 ]);
 
 export default eslintConfig;

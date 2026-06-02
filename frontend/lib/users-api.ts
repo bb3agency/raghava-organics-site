@@ -54,3 +54,47 @@ export async function getMyOrders(accessToken: string): Promise<
     accessToken,
   });
 }
+
+export async function createMyAddress(
+  accessToken: string,
+  input: Omit<UserAddress, "id" | "createdAt" | "updatedAt">,
+): Promise<UserAddress> {
+  return apiClient<UserAddress>("/users/me/addresses", {
+    method: "POST",
+    accessToken,
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateMyAddress(
+  accessToken: string,
+  id: string,
+  input: Partial<Omit<UserAddress, "id" | "createdAt" | "updatedAt">>,
+): Promise<UserAddress> {
+  return apiClient<UserAddress>(`/users/me/addresses/${id}`, {
+    method: "PATCH",
+    accessToken,
+    body: JSON.stringify(input),
+  });
+}
+
+export async function deleteMyAddress(
+  accessToken: string,
+  id: string,
+): Promise<void> {
+  return apiClient<void>(`/users/me/addresses/${id}`, {
+    method: "DELETE",
+    accessToken,
+  });
+}
+
+export async function updateMyProfile(
+  accessToken: string,
+  input: { firstName?: string; lastName?: string; email?: string; phone?: string },
+): Promise<User> {
+  return apiClient<User>("/users/me", {
+    method: "PATCH",
+    accessToken,
+    body: JSON.stringify(input),
+  });
+}

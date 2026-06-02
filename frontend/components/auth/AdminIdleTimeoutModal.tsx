@@ -1,9 +1,9 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { useRouter } from "next/navigation";
 import { useAuthStore } from "@/stores/auth";
-import { refreshAccessToken } from "@/lib/auth-api";
+import { redirectToAdminLogin } from "@/lib/admin-auth-navigation";
+import { logoutSession, refreshAccessToken } from "@/lib/auth-api";
 import { parseAccessTokenClaims } from "@/lib/jwt-utils";
 import { LogOut, RefreshCw, Timer } from "lucide-react";
 import { useIdleTimeout } from "@/hooks/use-idle-timeout";
@@ -13,7 +13,6 @@ const LOGOUT_AFTER_WARNING_MS = 5 * 60 * 1000; // 5 minutes
 const LOGOUT_COUNTDOWN_SEC = Math.ceil(LOGOUT_AFTER_WARNING_MS / 1000);
 
 export function AdminIdleTimeoutModal() {
-  const router = useRouter();
   const accessToken = useAuthStore((s) => s.accessToken);
   const setAccessToken = useAuthStore((s) => s.setAccessToken);
   const clearSession = useAuthStore((s) => s.clearSession);
@@ -28,10 +27,16 @@ export function AdminIdleTimeoutModal() {
   const hideWarning = useCallback(() => setVisible(false), []);
 
   const handleLogout = useCallback(() => {
-    clearSession();
-    router.replace("/admin/login");
+    void (async () => {
+      try {
+        await logoutSession(accessToken);
+      } finally {
+        clearSession();
+        redirectToAdminLogin();
+      }
+    })();
     setVisible(false);
-  }, [clearSession, router]);
+  }, [accessToken, clearSession]);
 
   const handleExtend = useCallback(async () => {
     setExtending(true);

@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
+import { isAuthDevBypassEnabled } from '@common/auth/auth-dev-bypass';
 import { AuthService } from './auth.service';
 
 describe('AuthService sendOtp', () => {
   beforeEach(() => {
+    vi.stubEnv('AUTH_DEV_BYPASS', 'false');
     vi.stubEnv('NOTIFY_SMS_ENABLED', 'true');
     vi.stubEnv('SMS_PROVIDER', 'msg91');
     vi.stubEnv('MSG91_AUTH_KEY', 'msg91-auth-key');
@@ -14,8 +16,9 @@ describe('AuthService sendOtp', () => {
     vi.unstubAllGlobals();
   });
 
-  it('requires challenge token when turnstile secret is configured', async () => {
-    process.env.TURNSTILE_SECRET_KEY = 'turnstile-secret';
+  it('requires challenge token when turnstile secret is configured in production', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('TURNSTILE_SECRET_KEY', 'turnstile-secret');
     const redisGet = vi.fn().mockResolvedValue(null);
     const redisSet = vi.fn().mockResolvedValue('OK');
     const fastify = {
@@ -51,7 +54,31 @@ describe('AuthService sendOtp', () => {
       code: 'VALIDATION_ERROR',
       statusCode: 400
     });
-    delete process.env.TURNSTILE_SECRET_KEY;
+  });
+
+  it('skips turnstile in development even when TURNSTILE_SECRET_KEY is set', async () => {
+    vi.stubEnv('NODE_ENV', 'development');
+    vi.stubEnv('TURNSTILE_SECRET_KEY', 'turnstile-secret');
+    const notificationsAdd = vi.fn().mockResolvedValue(undefined);
+    const fastify = {
+      redis: {
+        get: vi.fn().mockResolvedValue(null),
+        set: vi.fn().mockResolvedValue('OK'),
+        del: vi.fn().mockResolvedValue(1),
+        ttl: vi.fn().mockResolvedValue(-1),
+        incr: vi.fn().mockResolvedValue(1),
+        expire: vi.fn().mockResolvedValue(1)
+      },
+      queues: { notifications: { add: notificationsAdd } },
+      prisma: {
+        user: { findFirst: vi.fn().mockResolvedValue(null) },
+        storeSettings: { findUnique: vi.fn().mockResolvedValue({ storeName: 'Test Store' }) }
+      }
+    } as unknown as FastifyInstance;
+    const service = new AuthService(fastify);
+    const result = await service.sendOtp({ phone: '9876543210', channel: 'sms' });
+    expect(result.message).toBe('OTP sent successfully');
+    expect(notificationsAdd).toHaveBeenCalled();
   });
 
   it('enqueues OTP via send-primary when cooldown and attempts allow', async () => {
@@ -256,7 +283,8 @@ describe('AuthService sendOtp', () => {
 
     const service = new AuthService(fastify);
 
-    process.env.TURNSTILE_SECRET_KEY = 'turnstile-secret';
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('TURNSTILE_SECRET_KEY', 'turnstile-secret');
     await expect(service.sendOtp({ phone: '9876543210', channel: 'sms', turnstileToken: 'ok-token' }, { clientIp: '127.0.0.1' })).rejects.toMatchObject({
       code: 'INTERNAL_ERROR',
       statusCode: 502
@@ -267,5 +295,66 @@ describe('AuthService sendOtp', () => {
       'otp:cooldown:9876543210'
     );
     delete process.env.TURNSTILE_SECRET_KEY;
+  });
+
+  it('skips notification queue and returns devOtp only when dev bypass is enabled', async () => {
+    vi.stubEnv('NODE_ENV', 'development');
+    vi.stubEnv('AUTH_DEV_BYPASS', 'true');
+    vi.stubEnv('AUTH_DEV_OTP', '000000');
+
+    const notificationsAdd = vi.fn().mockResolvedValue(undefined);
+    const fastify = {
+      redis: {
+        get: vi.fn().mockResolvedValue(null),
+        set: vi.fn().mockResolvedValue('OK'),
+        del: vi.fn().mockResolvedValue(1),
+        ttl: vi.fn().mockResolvedValue(-1),
+        incr: vi.fn().mockResolvedValue(1),
+        expire: vi.fn().mockResolvedValue(1)
+      },
+      queues: { notifications: { add: notificationsAdd } },
+      prisma: {
+        user: { findFirst: vi.fn().mockResolvedValue(null) },
+        storeSettings: { findUnique: vi.fn().mockResolvedValue({ storeName: 'Test Store' }) }
+      }
+    } as unknown as FastifyInstance;
+
+    const service = new AuthService(fastify);
+    const result = await service.sendOtp({ phone: '9876543210', channel: 'sms' });
+
+    expect(isAuthDevBypassEnabled()).toBe(true);
+    expect(result.devOtp).toBe('000000');
+    expect(result.message).toContain('Development mode');
+    expect(notificationsAdd).not.toHaveBeenCalled();
+  });
+
+  it('enqueues customer OTP in production even when AUTH_DEV_BYPASS=true is set', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('AUTH_DEV_BYPASS', 'true');
+
+    const notificationsAdd = vi.fn().mockResolvedValue(undefined);
+    const fastify = {
+      redis: {
+        get: vi.fn().mockResolvedValue(null),
+        set: vi.fn().mockResolvedValue('OK'),
+        del: vi.fn().mockResolvedValue(1),
+        ttl: vi.fn().mockResolvedValue(-1),
+        incr: vi.fn().mockResolvedValue(1),
+        expire: vi.fn().mockResolvedValue(1)
+      },
+      queues: { notifications: { add: notificationsAdd } },
+      prisma: {
+        user: { findFirst: vi.fn().mockResolvedValue(null) },
+        storeSettings: { findUnique: vi.fn().mockResolvedValue({ storeName: 'Test Store' }) }
+      }
+    } as unknown as FastifyInstance;
+
+    const service = new AuthService(fastify);
+    const result = await service.sendOtp({ phone: '9876543210', channel: 'sms' });
+
+    expect(isAuthDevBypassEnabled()).toBe(false);
+    expect('devOtp' in result).toBe(false);
+    expect(result.message).toBe('OTP sent successfully');
+    expect(notificationsAdd).toHaveBeenCalled();
   });
 });

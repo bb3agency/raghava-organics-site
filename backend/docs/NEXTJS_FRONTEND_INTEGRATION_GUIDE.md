@@ -254,7 +254,7 @@ For provider-facing retry/backoff boundaries (timeouts, retry eligibility, and n
 
 | Step | Endpoint | Notes |
 | --- | --- | --- |
-| Register | `POST /api/v1/auth/register` | Body per `TRD.md` §7.2 |
+| Register | `POST /api/v1/auth/register` | Returns `accessToken` + `user`; sets **refresh cookie** |
 | Forgot password | `POST /api/v1/auth/forgot-password` | Initiates reset flow; map errors via `error.code` |
 | OTP send | `POST /api/v1/auth/send-otp` | |
 | OTP verify | `POST /api/v1/auth/verify-otp` | Returns `accessToken` + `user`; sets **refresh cookie** |

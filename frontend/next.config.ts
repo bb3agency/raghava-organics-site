@@ -1,4 +1,9 @@
 import type { NextConfig } from "next";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+/** Keep Turbopack scoped to `frontend/` (avoids watching the whole monorepo). */
+const frontendRoot = path.dirname(fileURLToPath(import.meta.url));
 
 /** Upstream Fastify API for `/api/v1/*` rewrites (cookie auth requires same-site browser calls). */
 const backendProxyOrigin = (
@@ -8,6 +13,9 @@ const backendProxyOrigin = (
 ).replace(/\/$/, "");
 
 const nextConfig: NextConfig = {
+  turbopack: {
+    root: frontendRoot,
+  },
   async rewrites() {
     return [
       {

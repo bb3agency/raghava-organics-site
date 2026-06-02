@@ -20,6 +20,7 @@ declare global {
 }
 
 const schema = z.object({
+  fullName: z.string().min(2).max(100),
   email: z.string().email(),
   phone: z.string().min(10).max(15),
   address: z.string().min(10),
@@ -76,7 +77,7 @@ export function CheckoutForm({ isCodEnabled }: CheckoutFormProps) {
         {
           paymentMode: values.paymentMode,
           shippingAddress: {
-            fullName: values.email.split("@")[0] || "Customer",
+            fullName: values.fullName,
             phone: values.phone,
             line1: values.address,
             city: values.city,
@@ -160,6 +161,17 @@ export function CheckoutForm({ isCodEnabled }: CheckoutFormProps) {
   return (
     <form onSubmit={submit} className="grid gap-6 rounded-[20px] bg-white p-6 shadow-sm lg:p-8">
       <h2 className="font-heading text-xl font-bold text-[#23403d]">Billing Details</h2>
+      <div className="grid gap-1.5">
+        <label className="text-sm font-bold text-[#23403d]" htmlFor="fullName">
+          Full Name
+        </label>
+        <input
+          id="fullName"
+          className="h-12 w-full rounded-full border border-[#efe8e4] bg-[#faf3ef] px-4 text-sm font-medium text-[#23403d] placeholder:text-[#767676] focus:border-[#23403d] focus:outline-none focus:ring-1 focus:ring-[#23403d]"
+          placeholder="John Doe"
+          {...form.register("fullName")}
+        />
+      </div>
       <div className="grid gap-4 md:grid-cols-2">
         <div className="grid gap-1.5">
           <label className="text-sm font-bold text-[#23403d]" htmlFor="email">

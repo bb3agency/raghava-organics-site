@@ -27,6 +27,7 @@ import {
   adminLoginRequestOtpSchema,
   adminLoginVerifyOtpSchema,
   forgotPasswordSchema,
+  resetPasswordSchema,
   loginSchema,
   logoutSchema,
   otpChannelConfigSchema,
@@ -108,11 +109,17 @@ export async function registerAuthRoutes(fastify: FastifyInstance): Promise<void
         rateLimit: routeRateLimitProfiles.authSensitive
       }
     },
-    async (request) =>
-      authService.register(request.body as never, {
+    async (request, reply) => {
+      const auth = await authService.register(request.body as never, {
         clientIp: request.ip,
         risk: extractAbuseRiskContext(request.headers as Record<string, unknown>)
-      })
+      });
+      setRefreshTokenCookie(reply, auth.refreshToken);
+      return {
+        accessToken: auth.accessToken,
+        user: auth.user
+      };
+    }
   );
 
   fastify.get(
@@ -209,6 +216,18 @@ export async function registerAuthRoutes(fastify: FastifyInstance): Promise<void
         clientIp: request.ip,
         risk: extractAbuseRiskContext(request.headers as Record<string, unknown>)
       })
+  );
+
+  fastify.post(
+    '/api/v1/auth/reset-password',
+    {
+      schema: resetPasswordSchema,
+      preHandler: [idempotencyPreHandler],
+      config: {
+        rateLimit: routeRateLimitProfiles.authSensitive
+      }
+    },
+    async (request) => authService.resetPassword(request.body as never)
   );
 
   fastify.post(

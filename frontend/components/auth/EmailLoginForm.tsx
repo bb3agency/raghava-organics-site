@@ -8,6 +8,8 @@ import { loginWithEmail } from "@/lib/auth-api";
 import { getApiErrorMessage } from "@/lib/error-messages";
 import { emailLoginInputSchema } from "@/lib/validators";
 import { AuthErrorBanner } from "@/components/auth/AuthErrorBanner";
+import { TurnstileChallenge } from "@/components/auth/TurnstileChallenge";
+import { useAuthTurnstile } from "@/hooks/use-auth-turnstile";
 import type { AuthSession } from "@/types/user";
 
 const formSchema = emailLoginInputSchema;
@@ -19,6 +21,14 @@ interface EmailLoginFormProps {
 
 export function EmailLoginForm({ onSuccess }: EmailLoginFormProps) {
   const [error, setError] = useState<string | null>(null);
+  const {
+    required: turnstileRequired,
+    ready: turnstileReady,
+    turnstileField,
+    onTurnstileTokenChange,
+    turnstileLoadError,
+    setTurnstileLoadError,
+  } = useAuthTurnstile();
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema),
     defaultValues: {
@@ -28,9 +38,13 @@ export function EmailLoginForm({ onSuccess }: EmailLoginFormProps) {
   });
 
   const handleSubmit = form.handleSubmit(async (values) => {
+    if (turnstileRequired && !turnstileReady) {
+      setError("Complete the security check below, then try again.");
+      return;
+    }
     try {
       setError(null);
-      const session = await loginWithEmail(values);
+      const session = await loginWithEmail({ ...values, ...turnstileField });
       await onSuccess(session);
     } catch (err) {
       setError(getApiErrorMessage(err));
@@ -71,12 +85,22 @@ export function EmailLoginForm({ onSuccess }: EmailLoginFormProps) {
         </p>
       </div>
 
+      <TurnstileChallenge
+        onTokenChange={onTurnstileTokenChange}
+        onLoadError={setTurnstileLoadError}
+      />
+      {turnstileLoadError ? (
+        <p className="text-xs font-bold text-red-500" role="alert">
+          {turnstileLoadError}
+        </p>
+      ) : null}
+
       <AuthErrorBanner message={error} />
 
       <button
         type="submit"
         className="mt-2 h-12 w-full rounded-full bg-[#23403d] px-8 text-sm font-bold text-white transition-transform hover:-translate-y-1 hover:bg-[#ec6e55] hover:shadow-lg disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0"
-        disabled={form.formState.isSubmitting}
+        disabled={form.formState.isSubmitting || (turnstileRequired && !turnstileReady)}
       >
         {form.formState.isSubmitting ? "Signing in..." : "Sign in with email"}
       </button>

@@ -19,7 +19,7 @@ const shippingSettingsSchema = {
   properties: {
     pickupPincode: { type: 'string', minLength: 6, maxLength: 6, pattern: '^[0-9]{6}$' },
     minOrderValuePaise: { type: 'integer', minimum: 0, maximum: 1000000000 },
-    source: { type: 'string', enum: ['database', 'environment'], maxLength: 20 }
+    source: { type: 'string', enum: ['database', 'environment', 'default'], maxLength: 20 }
   }
 } as const;
 

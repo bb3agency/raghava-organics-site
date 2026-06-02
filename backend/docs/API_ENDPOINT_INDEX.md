@@ -38,7 +38,7 @@ Canonical low-noise index of backend HTTP endpoints. Route files and schemas rem
 
 | Method | Endpoint | Purpose | Notes |
 |---|---|---|---|
-| POST | `/api/v1/auth/register` | Customer registration | Idempotency guarded |
+| POST | `/api/v1/auth/register` | Customer registration | Sets refresh cookie. Idempotency guarded |
 | POST | `/api/v1/auth/send-otp` | Send OTP | Auth-sensitive rate limit |
 | POST | `/api/v1/auth/verify-otp` | Verify OTP and issue auth | Sets refresh cookie |
 | POST | `/api/v1/auth/signup-phone` | Phone signup flow | Idempotency guarded |

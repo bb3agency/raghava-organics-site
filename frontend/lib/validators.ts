@@ -66,6 +66,17 @@ export const forgotPasswordInputSchema = z.object({
   turnstileToken: z.string().max(4096).optional(),
 });
 
+export const resetPasswordInputSchema = z
+  .object({
+    token: z.string().min(1, "Reset token is required").max(255),
+    password: passwordSchema,
+    confirmPassword: passwordSchema,
+  })
+  .refine((data) => data.password === data.confirmPassword, {
+    message: "Passwords do not match",
+    path: ["confirmPassword"],
+  });
+
 export const addCartItemInputSchema = z.object({
   variantId: z.string().min(1).max(64),
   quantity: z.number().int().min(1).max(1000),

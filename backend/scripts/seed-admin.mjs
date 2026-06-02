@@ -22,12 +22,32 @@ const prisma = new PrismaClient();
 
 const EMAIL = process.env.SEED_ADMIN_EMAIL || 'admin@example.com';
 const PASSWORD = process.env.SEED_ADMIN_PASSWORD || 'Admin@12345';
+const forceReset =
+  process.argv.includes('--reset') ||
+  (process.env.SEED_ADMIN_RESET ?? '').trim().toLowerCase() === 'true';
+
+const allPermissions = [
+  'products:read','products:write','categories:read','categories:write',
+  'inventory:read','inventory:write','coupons:read','coupons:write',
+  'settings:read','settings:write','reviews:read','reviews:moderate',
+  'dashboard:read','analytics:read','orders:read','orders:write',
+  'orders:export','orders:refund','orders:notify','analytics:export',
+  'analytics:replay','users:read','users:write','shipments:read',
+  'payments:read','ops:read','ops:write'
+];
 
 async function main() {
   const existing = await prisma.user.findUnique({ where: { email: EMAIL } });
-  if (existing) {
-    logger.info(`Admin already exists: ${EMAIL}`);
+
+  if (existing && !forceReset) {
+    logger.info(`Admin already exists: ${EMAIL} (use --reset to recreate password + permissions)`);
     return;
+  }
+
+  if (existing && forceReset) {
+    await prisma.adminPermissionGrant.deleteMany({ where: { userId: existing.id } });
+    await prisma.user.delete({ where: { id: existing.id } });
+    logger.info(`Removed existing admin: ${EMAIL}`);
   }
 
   const hash = await bcrypt.hash(PASSWORD, 12);
@@ -39,18 +59,9 @@ async function main() {
       lastName: 'User',
       role: 'ADMIN',
       isVerified: true,
+      isBanned: false,
     }
   });
-
-  const allPermissions = [
-    'products:read','products:write','categories:read','categories:write',
-    'inventory:read','inventory:write','coupons:read','coupons:write',
-    'settings:read','settings:write','reviews:read','reviews:moderate',
-    'dashboard:read','analytics:read','orders:read','orders:write',
-    'orders:export','orders:refund','orders:notify','analytics:export',
-    'analytics:replay','users:read','users:write','shipments:read',
-    'payments:read','ops:read','ops:write'
-  ];
 
   await prisma.adminPermissionGrant.createMany({
     data: allPermissions.map(p => ({ userId: admin.id, permission: p }))

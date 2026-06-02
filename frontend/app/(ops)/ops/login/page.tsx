@@ -7,7 +7,9 @@ import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { OpsPublicLayout } from "@/components/ops/OpsPublicLayout";
 import { OpsAlert, OpsCard, OpsField, OpsInput } from "@/components/ops/ui/ops-ui";
+import { TurnstileChallenge } from "@/components/auth/TurnstileChallenge";
 import { Button } from "@/components/ui/button";
+import { useAuthTurnstile } from "@/hooks/use-auth-turnstile";
 import { getApiErrorMessage } from "@/lib/error-messages";
 import { requestOpsLoginOtp, verifyOpsLoginOtp } from "@/lib/ops-client-api";
 import { emailSchema, otpSchema } from "@/lib/validators";
@@ -21,15 +23,27 @@ export default function OpsLoginPage() {
   const [step, setStep] = useState<"email" | "otp">("email");
   const [error, setError] = useState<string | null>(null);
   const [otp, setOtp] = useState("");
+  const {
+    required: turnstileRequired,
+    ready: turnstileReady,
+    turnstileField,
+    onTurnstileTokenChange,
+    turnstileLoadError,
+    setTurnstileLoadError,
+  } = useAuthTurnstile();
   const form = useForm<z.infer<typeof emailStepSchema>>({
     resolver: zodResolver(emailStepSchema),
     defaultValues: { email: "" },
   });
 
   const handleRequestOtp = form.handleSubmit(async (values) => {
+    if (turnstileRequired && !turnstileReady) {
+      setError("Complete the security check below, then try again.");
+      return;
+    }
     try {
       setError(null);
-      await requestOpsLoginOtp(values);
+      await requestOpsLoginOtp({ ...values, ...turnstileField });
       setStep("otp");
     } catch (err) {
       setError(getApiErrorMessage(err));
@@ -70,7 +84,20 @@ export default function OpsLoginPage() {
                 {...form.register("email")}
               />
             </OpsField>
-            <Button type="submit" className="h-11 w-full" disabled={form.formState.isSubmitting}>
+            <TurnstileChallenge
+              onTokenChange={onTurnstileTokenChange}
+              onLoadError={setTurnstileLoadError}
+            />
+            {turnstileLoadError ? (
+              <p className="text-sm text-destructive" role="alert">
+                {turnstileLoadError}
+              </p>
+            ) : null}
+            <Button
+              type="submit"
+              className="h-11 w-full"
+              disabled={form.formState.isSubmitting || (turnstileRequired && !turnstileReady)}
+            >
               {form.formState.isSubmitting ? "Sending code…" : "Send verification code"}
             </Button>
           </form>
@@ -101,7 +128,11 @@ export default function OpsLoginPage() {
           </form>
         </OpsCard>
       )}
-      {error ? <OpsAlert tone="error" className="mt-4">{error}</OpsAlert> : null}
+      {error ? (
+        <OpsAlert tone="error" className="mt-4">
+          {error}
+        </OpsAlert>
+      ) : null}
     </OpsPublicLayout>
   );
 }

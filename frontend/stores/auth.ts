@@ -1,7 +1,7 @@
 "use client";
 
 import { create } from "zustand";
-import { resetAuthSessionRestoreCache } from "@/lib/restore-auth-session";
+import { resetAuthSessionRestoreState } from "@/hooks/use-auth-session-restore";
 import type { User } from "@/types/user";
 
 interface AuthState {
@@ -26,7 +26,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     }),
   setAccessToken: (accessToken) => set({ accessToken }),
   clearSession: () => {
-    resetAuthSessionRestoreCache();
+    resetAuthSessionRestoreState();
     set({ accessToken: null, user: null, permissions: [] });
   },
   hasPermission: (permission) => {
