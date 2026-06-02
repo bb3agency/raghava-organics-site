@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { APP_NAME } from "@/lib/constants";
 import type { AuthSession } from "@/types/user";
@@ -13,7 +13,7 @@ import { EmailLoginForm } from "@/components/auth/EmailLoginForm";
 
 type LoginMode = "otp" | "email";
 
-export default function LoginPage() {
+function LoginPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const setSession = useAuthStore((s) => s.setSession);
@@ -108,5 +108,19 @@ export default function LoginPage() {
         </Link>
       </div>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex flex-col gap-8 p-8 lg:p-12">
+          <p className="text-center text-sm text-muted-foreground">Loading sign in…</p>
+        </div>
+      }
+    >
+      <LoginPageContent />
+    </Suspense>
   );
 }
