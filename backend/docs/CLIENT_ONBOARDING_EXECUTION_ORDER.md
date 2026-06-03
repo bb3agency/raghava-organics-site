@@ -864,6 +864,7 @@ git push origin main
    - Confirm `DELHIVERY_WEBHOOK_ALLOWLIST_CIDR` in backend `.env` includes Delhivery egress IPs.
 
 3. **Shiprocket webhook** (if used):
+   - **CRITICAL:** Ensure an API User is active in Shiprocket (Settings → Additional Settings → API Users) before attempting to access the Webhooks page, otherwise the page will render blank.
    - Go to Shiprocket settings → Webhooks.
    - Register: `https://<domain>/api/v1/shipping/webhook`.
    - Confirm `SHIPROCKET_WEBHOOK_ALLOWLIST_CIDR` in backend `.env` includes Shiprocket egress IPs.

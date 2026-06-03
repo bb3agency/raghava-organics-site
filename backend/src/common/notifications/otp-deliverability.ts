@@ -23,7 +23,7 @@ function parseEnabledFlag(value: string | undefined, defaultValue: boolean): boo
 }
 
 export function resolveOtpNotifyToggles(
-  storeFlags?: OtpChannelFlags,
+  storeFlags?: OtpChannelFlags | undefined,
   runtime?: NodeJS.ProcessEnv
 ): OtpNotifyToggles {
   const env = runtime ?? process.env;
@@ -80,7 +80,7 @@ export function getDeliverableOtpChannels(
 
 export function resolveOtpChannelForTemplate(input: {
   templateKey: OtpTemplateKey;
-  storeFlags?: OtpChannelFlags;
+  storeFlags?: OtpChannelFlags | undefined;
   primaryChannels: unknown;
   runtime: NodeJS.ProcessEnv;
   /** Merchant admin login always uses email when it can be delivered. */

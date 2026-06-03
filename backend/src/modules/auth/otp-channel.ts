@@ -5,7 +5,7 @@ import { ERROR_CODES } from '@common/errors/error-codes';
 export type OtpChannel = 'sms' | 'whatsapp' | 'email';
 export type OtpTemplateKey = 'CustomerOtpVerification' | 'OtpVerification';
 
-type OtpChannelFlags = {
+export type OtpChannelFlags = {
   smsEnabled?: boolean;
   whatsappEnabled?: boolean;
   emailEnabled?: boolean;
