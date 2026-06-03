@@ -897,7 +897,7 @@ export const paymentWebhookSchema = {
     }
   },
   body: {
-    type: 'string',
+    type: ['string', 'object'],
     maxLength: 2000000
   },
   response: {
@@ -964,7 +964,7 @@ export const shippingWebhookSchema = {
     }
   },
   body: {
-    type: 'string',
+    type: ['string', 'object'],
     maxLength: 2000000
   },
   response: {
