@@ -4,7 +4,7 @@ import { useState } from "react";
 import { AdminSection } from "@/components/admin/AdminSection";
 import { useAdminAuth } from "@/contexts/admin-auth-context";
 import { useAuthenticatedApi } from "@/hooks/use-authenticated-api";
-import type { AdminProductImportResult } from "@/lib/admin-api";
+import { ensureArray, type AdminProductImportResult } from "@/lib/admin-api";
 import { getApiErrorMessage } from "@/lib/error-messages";
 import { createIdempotencyKey } from "@/lib/idempotency";
 import { ADMIN_PERMISSIONS, hasAdminPermission } from "@/lib/permissions";
@@ -81,9 +81,11 @@ export function AdminProductImportPanel() {
               Created {result.createdCount}, updated {result.updatedCount}, failed{" "}
               {result.failedCount}.
             </p>
-            {result.errors.length > 0 ? (
+            {ensureArray<AdminProductImportResult["errors"][number]>(result.errors).length > 0 ? (
               <ul className="mt-2 list-inside list-disc text-xs text-muted-foreground">
-                {result.errors.slice(0, 10).map((item) => (
+                {ensureArray<AdminProductImportResult["errors"][number]>(result.errors)
+                  .slice(0, 10)
+                  .map((item) => (
                   <li key={`${item.line}-${item.message}`}>
                     Line {item.line}: {item.message}
                   </li>

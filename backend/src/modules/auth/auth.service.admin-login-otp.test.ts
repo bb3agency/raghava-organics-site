@@ -61,7 +61,8 @@ function createHarness(overrides: {
         findMany: vi.fn().mockResolvedValue([]),
         updateMany: refreshUpdateMany
       },
-      storeSettings: { findUnique: storeSettingsFindUnique }
+      storeSettings: { findUnique: storeSettingsFindUnique },
+      opsConfigSecret: { findMany: vi.fn().mockResolvedValue([]) }
     },
     jwt: { sign: vi.fn().mockReturnValue('signed-token') }
   } as unknown as FastifyInstance;
@@ -88,6 +89,9 @@ function createHarness(overrides: {
 describe('AuthService.requestAdminLoginOtp', () => {
   beforeEach(() => {
     vi.stubEnv('AUTH_DEV_BYPASS', 'false');
+    vi.stubEnv('NOTIFY_EMAIL_ENABLED', 'true');
+    vi.stubEnv('RESEND_API_KEY', 're_test_key');
+    vi.stubEnv('RESEND_FROM', 'Test <onboarding@resend.dev>');
   });
 
   afterEach(() => {
@@ -136,7 +140,7 @@ describe('AuthService.requestAdminLoginOtp', () => {
     );
   });
 
-  it('sends admin login OTP over SMS when ops channel is set to SMS', async () => {
+  it('prefers email for admin login OTP even when store primary channel is SMS', async () => {
     const { service, mocks } = createHarness({
       userRecord: {
         id: 'admin_1',
@@ -165,8 +169,8 @@ describe('AuthService.requestAdminLoginOtp', () => {
     });
 
     expect(mocks.notificationsAdd).toHaveBeenCalledWith(
-      'send-sms',
-      expect.objectContaining({ phone: '+911234567890', template: 'OtpVerification' }),
+      'send-email',
+      expect.objectContaining({ template: 'OtpVerification', to: 'admin@example.com' }),
       expect.any(Object)
     );
   });

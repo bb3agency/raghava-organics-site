@@ -47,7 +47,8 @@ function createApp() {
       count: vi.fn(async () => 0)
     },
     storeSettings: { findUnique: vi.fn(async () => null) },
-    adminPermissionGrant: { findMany: vi.fn(async () => []) }
+    adminPermissionGrant: { findMany: vi.fn(async () => []) },
+    opsConfigSecret: { findMany: vi.fn(async () => []) }
   } as unknown as NonNullable<Parameters<typeof app.decorate>[1]>);
   app.decorate('redis', {
     get: vi.fn(async () => null),

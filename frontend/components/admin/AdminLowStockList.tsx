@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { AdminSection } from "@/components/admin/AdminSection";
 import { AdminStatusBadge } from "@/components/admin/AdminStatusBadge";
-import type { AdminInventoryListItem } from "@/lib/admin-api";
+import { ensureArray, type AdminInventoryListItem } from "@/lib/admin-api";
 import { getApiErrorMessage } from "@/lib/error-messages";
 import { useAuthenticatedApi } from "@/hooks/use-authenticated-api";
 
@@ -18,7 +18,7 @@ export function AdminLowStockList() {
     setError(null);
     try {
       const response = await api<AdminInventoryListItem[]>("/admin/inventory/low-stock");
-      setItems(response);
+      setItems(ensureArray(response));
     } catch (err) {
       setError(getApiErrorMessage(err));
       setItems([]);

@@ -42,6 +42,36 @@ interface AdminLoginFormProps {
 
 const RESEND_COOLDOWN_SEC = 60;
 
+function TurnstileField({
+  widgetKey,
+  onTokenChange,
+  loadError,
+  onLoadError,
+}: {
+  widgetKey: string;
+  onTokenChange: (token: string | null) => void;
+  onLoadError: (message: string) => void;
+  loadError: string | null;
+}) {
+  if (!isTurnstileConfigured()) {
+    return null;
+  }
+  return (
+    <>
+      <TurnstileChallenge
+        key={widgetKey}
+        onTokenChange={onTokenChange}
+        onLoadError={onLoadError}
+      />
+      {loadError ? (
+        <p className="text-xs text-destructive" role="alert">
+          {loadError}
+        </p>
+      ) : null}
+    </>
+  );
+}
+
 export function AdminLoginForm({ onSuccess, enrollmentHint }: AdminLoginFormProps) {
   const [step, setStep] = useState<"credentials" | "otp">("credentials");
   const [error, setError] = useState<string | null>(null);
@@ -51,6 +81,8 @@ export function AdminLoginForm({ onSuccess, enrollmentHint }: AdminLoginFormProp
   const [showPassword, setShowPassword] = useState(false);
   const [resendCooldown, setResendCooldown] = useState(0);
   const [otpRemainingSec, setOtpRemainingSec] = useState(0);
+  /** Bump to remount Turnstile (tokens are single-use; widget unmount clears state). */
+  const [turnstileWidgetKey, setTurnstileWidgetKey] = useState(0);
   const credentialsForm = useForm<CredentialsValues>({
     resolver: zodResolver(credentialsSchema),
     defaultValues: { email: "", password: "" },
@@ -107,6 +139,16 @@ export function AdminLoginForm({ onSuccess, enrollmentHint }: AdminLoginFormProp
       applyDevOtpHint();
     }
   }, [step, applyDevOtpHint]);
+
+  useEffect(() => {
+    if (turnstileRequired) {
+      setTurnstileWidgetKey((k) => k + 1);
+    }
+  }, [step, turnstileRequired]);
+
+  const bumpTurnstileWidget = useCallback(() => {
+    setTurnstileWidgetKey((k) => k + 1);
+  }, []);
 
   const startResendCooldown = useCallback(() => {
     setResendCooldown(RESEND_COOLDOWN_SEC);
@@ -185,6 +227,7 @@ export function AdminLoginForm({ onSuccess, enrollmentHint }: AdminLoginFormProp
       const response = await requestAdminLoginOtp({ email, password, ...turnstileField });
       setExpiresAt(response.expiresAt);
       applyDevOtpHint(response.devOtp);
+      bumpTurnstileWidget();
       startResendCooldown();
       startOtpCountdown(response.expiresAt);
     } catch (err) {
@@ -292,15 +335,12 @@ export function AdminLoginForm({ onSuccess, enrollmentHint }: AdminLoginFormProp
               </p>
             ) : null}
           </div>
-          <TurnstileChallenge
+          <TurnstileField
+            widgetKey={`admin-login-creds-${turnstileWidgetKey}`}
             onTokenChange={onTurnstileTokenChange}
             onLoadError={setTurnstileLoadError}
+            loadError={turnstileLoadError}
           />
-          {turnstileLoadError ? (
-            <p className="text-xs text-destructive" role="alert">
-              {turnstileLoadError}
-            </p>
-          ) : null}
           <button
             type="submit"
             className="inline-flex h-11 items-center justify-center gap-2 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground disabled:opacity-60"
@@ -363,6 +403,12 @@ export function AdminLoginForm({ onSuccess, enrollmentHint }: AdminLoginFormProp
               className="h-11 rounded-md border border-border bg-background px-3 text-center text-sm tracking-[0.3em]"
             />
           </label>
+          <TurnstileField
+            widgetKey={`admin-login-otp-${turnstileWidgetKey}`}
+            onTokenChange={onTurnstileTokenChange}
+            onLoadError={setTurnstileLoadError}
+            loadError={turnstileLoadError}
+          />
           <div className="flex items-center justify-between">
             <button
               type="button"
@@ -373,13 +419,15 @@ export function AdminLoginForm({ onSuccess, enrollmentHint }: AdminLoginFormProp
             </button>
             <button
               type="button"
-              disabled={resendCooldown > 0}
+              disabled={resendCooldown > 0 || (turnstileRequired && !turnstileReady)}
               onClick={() => void handleResendOtp()}
               className="text-sm text-primary underline-offset-4 hover:underline disabled:text-muted-foreground disabled:no-underline"
             >
               {resendCooldown > 0
                 ? `Resend in ${resendCooldown}s`
-                : "Resend code"}
+                : turnstileRequired && !turnstileReady
+                  ? "Complete security check to resend"
+                  : "Resend code"}
             </button>
           </div>
           <button

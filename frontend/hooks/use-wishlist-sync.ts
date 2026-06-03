@@ -21,7 +21,8 @@ export function useWishlistSync() {
       try {
         const wishlist = await getWishlist(accessToken, { limit: 100 });
         if (!cancelled) {
-          setItems(wishlist.items.map((i) => i.product.id));
+          const items = Array.isArray(wishlist.items) ? wishlist.items : [];
+          setItems(items.map((i) => i.product.id));
         }
       } catch {
         // Ignore failure, retain local state

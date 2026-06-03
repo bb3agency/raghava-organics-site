@@ -4,10 +4,11 @@ import { useState } from "react";
 import { AdminSection } from "@/components/admin/AdminSection";
 import { useAdminAuth } from "@/contexts/admin-auth-context";
 import { useAuthenticatedApi } from "@/hooks/use-authenticated-api";
-import type {
-  AdminCategoryListItem,
-  AdminCreateCategoryInput,
-  AdminUpdateCategoryInput,
+import {
+  ensureArray,
+  type AdminCategoryListItem,
+  type AdminCreateCategoryInput,
+  type AdminUpdateCategoryInput,
 } from "@/lib/admin-api";
 import { getApiErrorMessage } from "@/lib/error-messages";
 import { createIdempotencyKey } from "@/lib/idempotency";
@@ -31,6 +32,7 @@ interface AdminCategoryFormProps {
 }
 
 export function AdminCategoryForm({ categories, onSaved }: AdminCategoryFormProps) {
+  const categoryRows = ensureArray<AdminCategoryListItem>(categories);
   const api = useAuthenticatedApi();
   const { adminUser } = useAdminAuth();
   const canWrite = hasAdminPermission(adminUser, ADMIN_PERMISSIONS.productsWrite);
@@ -174,7 +176,7 @@ export function AdminCategoryForm({ categories, onSaved }: AdminCategoryFormProp
             onChange={(event) => setParentId(event.target.value)}
           >
             <option value="">None</option>
-            {categories
+            {categoryRows
               .filter((category) => category.id !== editingId)
               .map((category) => (
                 <option key={category.id} value={category.id}>
@@ -209,7 +211,7 @@ export function AdminCategoryForm({ categories, onSaved }: AdminCategoryFormProp
               </tr>
             </thead>
             <tbody>
-              {categories.map((category) => {
+              {categoryRows.map((category) => {
                 const parent = categories.find((item) => item.id === category.parentId);
                 return (
                   <tr key={category.id} className="border-b border-border last:border-0">

@@ -36,8 +36,8 @@ export function OpsAuditPanel() {
         ...(statusFilter ? { actionStatus: statusFilter } : {}),
         ...(actionTypeFilter.trim() ? { actionType: actionTypeFilter.trim() } : {}),
       });
-      setItems(result.items);
-      setTotal(result.total);
+      setItems(Array.isArray(result.items) ? result.items : []);
+      setTotal(result.total ?? 0);
       setError(null);
     } catch (err) {
       setError(getApiErrorMessageWithHint(err));

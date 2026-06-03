@@ -530,6 +530,31 @@ Optional **`RISK_VELOCITY_ENABLED`** may throttle initiate per user/hour (`TRD.m
 
 All list endpoints: **`page`** (default **1**), **`limit`** (default **20**, max **100**), plus **`meta`** (`TRD.md` §4.7, constraint C-10). Drive infinite scroll / page controls from **`meta.total`** and **`meta.totalPages`**.
 
+### 7.1 Frontend list-response helpers (Raghava Organics)
+
+Never call `.map()` / `.filter()` on a raw API response without confirming it is an array. Many routes return **`{ items, meta }`** (or flat `{ items, page, limit, total }` for a few admin routes).
+
+| Area | Helper / pattern | Location |
+| --- | --- | --- |
+| Admin lists | `getPaginatedItems`, `readPaginatedItems`, `coercePaginatedResponse`, `ensureArray` | `frontend/lib/admin-api.ts` |
+| Admin list hook | `useAdminListResource` normalizes all fetch results via `coercePaginatedResponse` | `frontend/hooks/use-admin-list-resource.ts` |
+| Storefront PLP/search | `mapProductListResponse` accepts array or `{ items }` | `frontend/lib/product-adapters.ts` |
+| Account addresses/orders | `unwrapItems()` in `getMyAddresses` / `getMyOrders` | `frontend/lib/users-api.ts` |
+
+**Account routes that are paginated (not bare arrays):**
+
+- `GET /users/me/addresses` → `{ items, meta }`
+- `GET /users/me/orders` → `{ items, meta }`
+
+**Public product catalog query params:**
+
+- Search: **`search`** (not `q`) — e.g. `/products?search=honey`
+- Sort enum: `newest` \| `popularity` \| `price_asc` \| `price_desc` (invalid values return **400** and empty UI if uncaught)
+
+**Admin-created products on the storefront:**
+
+Public `GET /products` and PDP require **`isActive: true`** and at least one **active variant with `inventory.quantity > 0`** (default `inStock=true`). There is no separate `isPublished` flag. When creating products in admin, set **Initial stock qty** per variant (maps to `variants[].quantity` on `POST /admin/products`) or add stock via inventory admin afterward — otherwise the product will not appear on `/products` or `/products/:slug`.
+
 ---
 
 ## 8. Feature flags (must align with backend `.env`)

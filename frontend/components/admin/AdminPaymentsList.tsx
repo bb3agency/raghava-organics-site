@@ -10,8 +10,10 @@ import { Button } from "@/components/ui/button";
 import {
   buildAdminQuery,
   PAYMENT_FILTER_STATUSES,
+  coercePaginatedResponse,
   type AdminPaymentDetail,
   type AdminPaymentListItem,
+  readPaginatedItems,
   type PaginatedResponse,
 } from "@/lib/admin-api";
 import { formatAdminDate, formatPaise, paymentStatusTone } from "@/lib/admin-format";
@@ -52,7 +54,7 @@ export function AdminPaymentsList() {
           to: toDate ? `${toDate}T23:59:59.999Z` : undefined,
         })}`,
       );
-      setData(response);
+      setData(coercePaginatedResponse(response));
     } catch (err) {
       setError(getApiErrorMessage(err));
       setData(null);
@@ -94,7 +96,7 @@ export function AdminPaymentsList() {
     setPage(1);
   }
 
-  const items = data?.items ?? [];
+  const items = readPaginatedItems(data);
 
   return (
     <>

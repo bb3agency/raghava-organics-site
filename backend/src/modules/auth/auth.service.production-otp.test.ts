@@ -39,7 +39,8 @@ function createHarness() {
           notifyWhatsappEnabled: false,
           primaryNotificationChannels: { OtpVerification: 'EMAIL' }
         }))
-      }
+      },
+      opsConfigSecret: { findMany: vi.fn(async () => []) }
     },
     jwt: { sign: vi.fn().mockReturnValue('token') }
   } as unknown as FastifyInstance;
@@ -51,6 +52,7 @@ describe('AuthService production OTP paths (no dev bypass)', () => {
   beforeEach(() => {
     vi.stubEnv('NODE_ENV', 'production');
     vi.stubEnv('AUTH_DEV_BYPASS', 'true');
+    vi.stubEnv('TURNSTILE_SECRET_KEY', '');
   });
 
   afterEach(() => {

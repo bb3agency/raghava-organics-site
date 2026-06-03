@@ -12,6 +12,81 @@ export interface PaginatedResponse<T> {
   meta: PaginationMeta;
 }
 
+/** Coerce unknown API values to arrays (prevents `.filter is not a function`). */
+export function ensureArray<T>(value: unknown): T[] {
+  return Array.isArray(value) ? value : [];
+}
+
+/** Payloads that expose a list under `items` (paginated or not). */
+export type AdminItemsPayload<T> =
+  | PaginatedResponse<T>
+  | FlatPaginatedResponse<T>
+  | T[]
+  | { items?: T[] | unknown }
+  | null
+  | undefined;
+
+/** Unwrap admin list endpoints that return `{ items, meta }` (or a bare array). */
+export function getPaginatedItems<T>(response: AdminItemsPayload<T>): T[] {
+  if (response == null) {
+    return [];
+  }
+  if (Array.isArray(response)) {
+    return response;
+  }
+  if (typeof response === "object") {
+    const items = (response as PaginatedResponse<T>).items;
+    return Array.isArray(items) ? items : [];
+  }
+  return [];
+}
+
+/** Read `items` from paginated list state (null-safe). */
+export function readPaginatedItems<T>(data: AdminItemsPayload<T>): T[] {
+  if (!data) {
+    return [];
+  }
+  return getPaginatedItems(data);
+}
+
+const EMPTY_META: PaginationMeta = {
+  page: 1,
+  limit: 20,
+  total: 0,
+  totalPages: 0,
+};
+
+/** Normalize any admin list payload into `{ items, meta }` for hooks and tables. */
+export function coercePaginatedResponse<T>(
+  response: PaginatedResponse<T> | FlatPaginatedResponse<T> | T[] | unknown,
+): PaginatedResponse<T> {
+  const items = getPaginatedItems(
+    response as PaginatedResponse<T> | FlatPaginatedResponse<T> | T[] | null | undefined,
+  );
+
+  if (response && typeof response === "object") {
+    if ("meta" in response && response.meta && typeof response.meta === "object") {
+      return { items, meta: response.meta as PaginationMeta };
+    }
+    if ("page" in response && "limit" in response && "total" in response) {
+      return {
+        items,
+        meta: normalizePagination(response as FlatPaginatedResponse<unknown>),
+      };
+    }
+  }
+
+  return {
+    items,
+    meta: {
+      ...EMPTY_META,
+      limit: Math.max(items.length, 1),
+      total: items.length,
+      totalPages: items.length > 0 ? 1 : 0,
+    },
+  };
+}
+
 /** Return-requests list uses flat pagination fields instead of meta. */
 export interface FlatPaginatedResponse<T> {
   items: T[];

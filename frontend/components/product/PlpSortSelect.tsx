@@ -4,10 +4,9 @@ import { useRouter, usePathname, useSearchParams } from "next/navigation";
 
 const SORT_OPTIONS = [
   { label: "Newest", value: "newest" },
-  { label: "Featured", value: "featured" },
+  { label: "Most Popular", value: "popularity" },
   { label: "Price: Low to High", value: "price_asc" },
   { label: "Price: High to Low", value: "price_desc" },
-  { label: "Best Rated", value: "rating" },
 ];
 
 interface PlpSortSelectProps {

@@ -31,10 +31,10 @@ export default function AccountLayout({ children }: AccountLayoutProps) {
         {/* ── Main Content ──────────────────────────────────────────────── */}
         <section className="mx-auto w-full max-w-[1440px] px-4 pt-12 lg:px-8">
           <div className="grid gap-8 lg:grid-cols-[250px_1fr] lg:items-start">
-            <nav className="flex flex-col gap-2 rounded-[20px] bg-white p-6 shadow-sm" aria-label="Account">
-              <Link href="/dashboard" className="rounded-lg px-4 py-3 text-sm font-bold text-[#23403d] transition-colors hover:bg-[#faf3ef] hover:text-[#ec6e55]">Dashboard</Link>
-              <Link href="/orders" className="rounded-lg px-4 py-3 text-sm font-bold text-[#23403d] transition-colors hover:bg-[#faf3ef] hover:text-[#ec6e55]">Orders</Link>
-              <Link href="/settings" className="rounded-lg px-4 py-3 text-sm font-bold text-[#23403d] transition-colors hover:bg-[#faf3ef] hover:text-[#ec6e55]">Settings</Link>
+            <nav className="flex flex-row lg:flex-col overflow-x-auto lg:overflow-x-visible gap-2 rounded-[20px] bg-white p-4 lg:p-6 shadow-sm scrollbar-none" aria-label="Account">
+              <Link href="/dashboard" className="rounded-lg px-4 py-3 text-sm font-bold text-[#23403d] transition-colors hover:bg-[#faf3ef] hover:text-[#ec6e55] whitespace-nowrap flex-1 text-center lg:text-left">Dashboard</Link>
+              <Link href="/orders" className="rounded-lg px-4 py-3 text-sm font-bold text-[#23403d] transition-colors hover:bg-[#faf3ef] hover:text-[#ec6e55] whitespace-nowrap flex-1 text-center lg:text-left">Orders</Link>
+              <Link href="/settings" className="rounded-lg px-4 py-3 text-sm font-bold text-[#23403d] transition-colors hover:bg-[#faf3ef] hover:text-[#ec6e55] whitespace-nowrap flex-1 text-center lg:text-left">Settings</Link>
             </nav>
             <div className="rounded-[20px] bg-white p-6 shadow-sm lg:p-8">
               {children}

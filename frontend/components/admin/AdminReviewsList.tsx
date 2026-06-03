@@ -7,7 +7,9 @@ import { AdminStatusBadge } from "@/components/admin/AdminStatusBadge";
 import { Button } from "@/components/ui/button";
 import {
   buildAdminQuery,
+  coercePaginatedResponse,
   type AdminReviewListItem,
+  readPaginatedItems,
   type PaginatedResponse,
 } from "@/lib/admin-api";
 import { formatAdminDate, reviewApprovalTone } from "@/lib/admin-format";
@@ -38,7 +40,7 @@ export function AdminReviewsList() {
             approvedFilter === "" ? undefined : approvedFilter === "true",
         })}`,
       );
-      setData(response);
+      setData(coercePaginatedResponse(response));
     } catch (err) {
       setError(getApiErrorMessage(err));
       setData(null);
@@ -86,7 +88,7 @@ export function AdminReviewsList() {
     }
   }
 
-  const items = data?.items ?? [];
+  const items = readPaginatedItems(data);
 
   return (
     <AdminSection

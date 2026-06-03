@@ -3,21 +3,11 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useAuthStore } from "@/stores/auth";
-import { getMyOrders } from "@/lib/users-api";
+import { getMyOrders, type UserOrder } from "@/lib/users-api";
 import { getBrowserApiBaseUrl } from "@/lib/api-base";
 import { getApiErrorMessage } from "@/lib/error-messages";
 import { formatPrice } from "@/lib/format-price";
 import { EmptyState } from "@/components/shared/EmptyState";
-
-interface UserOrder {
-  id: string;
-  orderNumber: string;
-  status: string;
-  paymentMode: "PREPAID" | "COD";
-  total: number;
-  createdAt: string;
-  invoice?: { hasPdf?: boolean } | null;
-}
 
 export default function AccountOrdersPage() {
   const accessToken = useAuthStore((s) => s.accessToken);

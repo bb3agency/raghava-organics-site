@@ -4,7 +4,11 @@ import { useCallback, useEffect, useState } from "react";
 import { AdminSection } from "@/components/admin/AdminSection";
 import { useAdminAuth } from "@/contexts/admin-auth-context";
 import { useAuthenticatedApi } from "@/hooks/use-authenticated-api";
-import type { AdminOrderDetailFull } from "@/lib/admin-api";
+import {
+  ensureArray,
+  type AdminOrderDetailFull,
+  type AdminOrderLineItem,
+} from "@/lib/admin-api";
 import { formatPaise } from "@/lib/admin-format";
 import { getApiErrorMessage } from "@/lib/error-messages";
 import { createIdempotencyKey } from "@/lib/idempotency";
@@ -34,9 +38,13 @@ export function AdminOrderItemsPanel({ orderId, onUpdated }: AdminOrderItemsPane
     setError(null);
     try {
       const detail = await api<AdminOrderDetailFull>(`/admin/orders/${orderId}`);
-      setOrder(detail);
+      const normalized = {
+        ...detail,
+        items: ensureArray<AdminOrderLineItem>(detail.items),
+      };
+      setOrder(normalized);
       const next: Record<string, string> = {};
-      for (const item of detail.items) {
+      for (const item of normalized.items) {
         next[item.id] = String(item.quantity);
       }
       setQuantities(next);

@@ -13,8 +13,15 @@ import type {
   AdminAnalyticsRevenue,
   AdminInventoryAlertItem,
   AdminNotificationDeliveryStats,
+  AdminSalesChartPoint,
 } from "@/lib/admin-api";
-import { buildAdminQuery, toIsoDateRange } from "@/lib/admin-api";
+import {
+  buildAdminQuery,
+  ensureArray,
+  getPaginatedItems,
+  readPaginatedItems,
+  toIsoDateRange,
+} from "@/lib/admin-api";
 import { formatAdminDate, formatPaise } from "@/lib/admin-format";
 import { getApiErrorMessage } from "@/lib/error-messages";
 import { useAuthenticatedApi } from "@/hooks/use-authenticated-api";
@@ -108,7 +115,7 @@ function AdminRevenueAnalyticsPanel({ from, to }: { from: string; to: string }) 
     void load();
   }, [load]);
 
-  const points = data?.points ?? [];
+  const points = ensureArray<AdminSalesChartPoint>(data?.points);
 
   return (
     <AdminSection
@@ -171,7 +178,7 @@ function AdminFunnelPanel({ from, to }: { from: string; to: string }) {
     };
   }, [api, from, to]);
 
-  const steps = data?.steps ?? [];
+  const steps = ensureArray<AdminAnalyticsFunnel["steps"][number]>(data?.steps);
 
   return (
     <AdminSection
@@ -233,7 +240,7 @@ function AdminCategoryBreakdownPanel({ from, to }: { from: string; to: string })
     };
   }, [api, from, to]);
 
-  const items = data?.items ?? [];
+  const items = ensureArray<AdminAnalyticsCategoryBreakdown["items"][number]>(data?.items);
 
   return (
     <AdminSection
@@ -277,7 +284,7 @@ function AdminInventoryAlertsPanel() {
     let cancelled = false;
     void api<{ items: AdminInventoryAlertItem[] }>("/admin/analytics/inventory-alerts")
       .then((response) => {
-        if (!cancelled) setItems(response.items);
+        if (!cancelled) setItems(getPaginatedItems(response));
       })
       .catch((err) => {
         if (!cancelled) setError(getApiErrorMessage(err));
@@ -360,7 +367,9 @@ function AdminNotificationStatsPanel({ from, to }: { from: string; to: string })
     };
   }, [api, from, to]);
 
-  const channels = data?.channels ?? [];
+  const channels = ensureArray<AdminNotificationDeliveryStats["channels"][number]>(
+    data?.channels,
+  );
 
   return (
     <AdminSection

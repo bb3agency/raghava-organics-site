@@ -9,6 +9,8 @@ import { useAdminAuth } from "@/contexts/admin-auth-context";
 import { useAdminListResource } from "@/hooks/use-admin-list-resource";
 import {
   buildAdminQuery,
+  ensureArray,
+  readPaginatedItems,
   type AdminProductListItem,
   type PaginatedResponse,
 } from "@/lib/admin-api";
@@ -34,7 +36,7 @@ export function AdminProductsList() {
   const { data, loading, error, setPage } =
     useAdminListResource<AdminProductListItem>(fetchPage);
 
-  const items = data?.items ?? [];
+  const items = readPaginatedItems(data);
 
   return (
     <AdminSection
@@ -70,7 +72,10 @@ export function AdminProductsList() {
               </thead>
               <tbody>
                 {items.map((product) => {
-                  const activeVariants = product.variants.filter((v) => v.isActive);
+                  const variants = ensureArray<AdminProductListItem["variants"][number]>(
+                    product.variants,
+                  );
+                  const activeVariants = variants.filter((v) => v.isActive);
                   const minPrice = activeVariants.length
                     ? Math.min(...activeVariants.map((v) => v.price))
                     : null;
@@ -86,7 +91,7 @@ export function AdminProductsList() {
                         <p className="text-xs text-muted-foreground">{product.slug}</p>
                       </td>
                       <td className="px-3 py-2">{product.category.name}</td>
-                      <td className="px-3 py-2">{product.variants.length}</td>
+                      <td className="px-3 py-2">{variants.length}</td>
                       <td className="px-3 py-2">
                         {minPrice !== null ? formatPaise(minPrice) : "—"}
                       </td>

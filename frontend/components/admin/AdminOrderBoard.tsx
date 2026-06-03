@@ -36,7 +36,15 @@ export function AdminOrderBoard() {
     setError(null);
     try {
       const response = await api<AdminOrderBoard>("/admin/orders/board");
-      setBoard(response);
+      const normalized: AdminOrderBoard = {
+        columns: Object.fromEntries(
+          ORDER_BOARD_COLUMNS.map((key) => [
+            key,
+            Array.isArray(response?.columns?.[key]) ? response.columns[key] : [],
+          ]),
+        ) as Record<OrderBoardColumnKey, AdminBoardOrderItem[]>,
+      };
+      setBoard(normalized);
       setLoadedAt(new Date().toISOString());
     } catch (err) {
       setError(getApiErrorMessage(err));

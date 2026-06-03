@@ -9,6 +9,7 @@ import {
   buildAdminQuery,
   normalizePagination,
   type AdminReturnRequestListItem,
+  readPaginatedItems,
   type FlatPaginatedResponse,
 } from "@/lib/admin-api";
 import { formatAdminDate, returnStatusTone } from "@/lib/admin-format";
@@ -56,7 +57,7 @@ export function AdminReturnsList() {
     setPage(1);
   }, [statusFilter]);
 
-  const items = data?.items ?? [];
+  const items = readPaginatedItems(data);
   const meta = data ? normalizePagination(data) : null;
 
   return (

@@ -56,9 +56,19 @@ describe('validateRuntimeEnv', () => {
 
   it('rejects missing TURNSTILE_SECRET_KEY in production-like profiles', async () => {
     const { TURNSTILE_SECRET_KEY: _removed, ...envWithoutTurnstile } = baseProductionEnv;
-    process.env = { ...originalEnv, ...envWithoutTurnstile };
+    process.env = {
+      ...originalEnv,
+      ...envWithoutTurnstile,
+      TURNSTILE_SKIP_PRODUCTION_CHECK: 'false',
+    };
+    delete process.env.TURNSTILE_SECRET_KEY;
 
     const { validateRuntimeEnv } = await import('./app.config');
+    // dotenv.config() on module load may re-inject TURNSTILE_SECRET_KEY from backend/.env
+    delete process.env.TURNSTILE_SECRET_KEY;
+    process.env.TURNSTILE_SKIP_PRODUCTION_CHECK = 'false';
+    process.env.NODE_ENV = 'production';
+
     expect(() => validateRuntimeEnv()).toThrow(/TURNSTILE_SECRET_KEY/);
   });
 

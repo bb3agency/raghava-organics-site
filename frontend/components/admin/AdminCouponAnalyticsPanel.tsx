@@ -6,7 +6,9 @@ import { AdminSection } from "@/components/admin/AdminSection";
 import { useAuthenticatedApi } from "@/hooks/use-authenticated-api";
 import {
   buildAdminQuery,
+  coercePaginatedResponse,
   type AdminCouponAnalyticsItem,
+  readPaginatedItems,
   type PaginatedResponse,
 } from "@/lib/admin-api";
 import { formatPaise } from "@/lib/admin-format";
@@ -26,7 +28,7 @@ export function AdminCouponAnalyticsPanel() {
       const response = await api<PaginatedResponse<AdminCouponAnalyticsItem>>(
         `/admin/coupons/analytics${buildAdminQuery({ page, limit: 20 })}`,
       );
-      setData(response);
+      setData(coercePaginatedResponse(response));
     } catch (err) {
       setError(getApiErrorMessage(err));
       setData(null);
@@ -39,7 +41,7 @@ export function AdminCouponAnalyticsPanel() {
     void load();
   }, [load]);
 
-  const items = data?.items ?? [];
+  const items = readPaginatedItems(data);
 
   return (
     <AdminSection

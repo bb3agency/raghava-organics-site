@@ -36,6 +36,7 @@ describe('AuthService sendOtp', () => {
         }
       },
       prisma: {
+        opsConfigSecret: { findMany: vi.fn().mockResolvedValue([]) },
         user: {
           findFirst: vi.fn().mockResolvedValue(null)
         },
@@ -71,6 +72,7 @@ describe('AuthService sendOtp', () => {
       },
       queues: { notifications: { add: notificationsAdd } },
       prisma: {
+        opsConfigSecret: { findMany: vi.fn().mockResolvedValue([]) },
         user: { findFirst: vi.fn().mockResolvedValue(null) },
         storeSettings: { findUnique: vi.fn().mockResolvedValue({ storeName: 'Test Store' }) }
       }
@@ -101,6 +103,7 @@ describe('AuthService sendOtp', () => {
         }
       },
       prisma: {
+        opsConfigSecret: { findMany: vi.fn().mockResolvedValue([]) },
         user: {
           findFirst: vi.fn().mockResolvedValue({ email: 'customer@example.com' })
         },
@@ -148,6 +151,7 @@ describe('AuthService sendOtp', () => {
       },
       queues: { notifications: { add: notificationsAdd } },
       prisma: {
+        opsConfigSecret: { findMany: vi.fn().mockResolvedValue([]) },
         user: { findFirst: vi.fn().mockResolvedValue(null) },
         storeSettings: { findUnique: vi.fn().mockResolvedValue(null) }
       }
@@ -185,6 +189,7 @@ describe('AuthService sendOtp', () => {
       },
       queues: { notifications: { add: notificationsAdd } },
       prisma: {
+        opsConfigSecret: { findMany: vi.fn().mockResolvedValue([]) },
         user: { findFirst: vi.fn().mockResolvedValue(null) },
         storeSettings: {
           findUnique: vi.fn().mockResolvedValue({
@@ -227,6 +232,7 @@ describe('AuthService sendOtp', () => {
       },
       queues: { notifications: { add: vi.fn().mockResolvedValue(undefined) } },
       prisma: {
+        opsConfigSecret: { findMany: vi.fn().mockResolvedValue([]) },
         user: { findFirst: vi.fn().mockResolvedValue(null) },
         storeSettings: {
           findUnique: vi.fn().mockResolvedValue({
@@ -272,6 +278,7 @@ describe('AuthService sendOtp', () => {
         }
       },
       prisma: {
+        opsConfigSecret: { findMany: vi.fn().mockResolvedValue([]) },
         user: {
           findFirst: vi.fn().mockResolvedValue(null)
         },
@@ -314,6 +321,7 @@ describe('AuthService sendOtp', () => {
       },
       queues: { notifications: { add: notificationsAdd } },
       prisma: {
+        opsConfigSecret: { findMany: vi.fn().mockResolvedValue([]) },
         user: { findFirst: vi.fn().mockResolvedValue(null) },
         storeSettings: { findUnique: vi.fn().mockResolvedValue({ storeName: 'Test Store' }) }
       }
@@ -331,6 +339,7 @@ describe('AuthService sendOtp', () => {
   it('enqueues customer OTP in production even when AUTH_DEV_BYPASS=true is set', async () => {
     vi.stubEnv('NODE_ENV', 'production');
     vi.stubEnv('AUTH_DEV_BYPASS', 'true');
+    vi.stubEnv('TURNSTILE_SECRET_KEY', '');
 
     const notificationsAdd = vi.fn().mockResolvedValue(undefined);
     const fastify = {
@@ -344,6 +353,7 @@ describe('AuthService sendOtp', () => {
       },
       queues: { notifications: { add: notificationsAdd } },
       prisma: {
+        opsConfigSecret: { findMany: vi.fn().mockResolvedValue([]) },
         user: { findFirst: vi.fn().mockResolvedValue(null) },
         storeSettings: { findUnique: vi.fn().mockResolvedValue({ storeName: 'Test Store' }) }
       }

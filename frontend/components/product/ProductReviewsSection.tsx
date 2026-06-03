@@ -20,7 +20,7 @@ export function ProductReviewsSection({ productSlug }: ProductReviewsSectionProp
       try {
         const result = await getProductReviews(productSlug, { limit: 5 });
         if (!cancelled) {
-          setReviews(result.items);
+          setReviews(Array.isArray(result.items) ? result.items : []);
         }
       } catch (err) {
         if (!cancelled) {

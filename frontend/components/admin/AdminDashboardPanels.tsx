@@ -6,10 +6,17 @@ import { Button } from "@/components/ui/button";
 import type {
   AdminDashboardKpis,
   AdminSalesChart,
+  AdminSalesChartPoint,
+  AdminTopProductItem,
   AdminTopProducts,
   DashboardKpiPeriod,
 } from "@/lib/admin-api";
-import { buildAdminQuery, DASHBOARD_KPI_PERIODS, toIsoDateRange } from "@/lib/admin-api";
+import {
+  buildAdminQuery,
+  DASHBOARD_KPI_PERIODS,
+  ensureArray,
+  toIsoDateRange,
+} from "@/lib/admin-api";
 import { formatPaise } from "@/lib/admin-format";
 import { getApiErrorMessage } from "@/lib/error-messages";
 import { useAuthenticatedApi } from "@/hooks/use-authenticated-api";
@@ -149,7 +156,7 @@ export function AdminSalesChartPanel() {
     void load();
   }, [load]);
 
-  const points = chart?.points ?? [];
+  const points = ensureArray<AdminSalesChartPoint>(chart?.points);
 
   return (
     <AdminSection
@@ -208,7 +215,7 @@ export function AdminTopProductsPanel() {
     void load();
   }, [load]);
 
-  const items = data?.items ?? [];
+  const items = ensureArray<AdminTopProductItem>(data?.items);
 
   return (
     <AdminSection

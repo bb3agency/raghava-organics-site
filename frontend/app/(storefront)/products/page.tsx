@@ -24,12 +24,13 @@ export const metadata = {
 
 export default async function ProductsPage({ searchParams }: ProductsPageProps) {
   const params = await searchParams;
+  const VALID_SORTS = new Set(["newest", "popularity", "price_asc", "price_desc"]);
   const page = params.page ?? "1";
-  const limit = params.limit ?? "16"; // Changed to 16 to fit 4x4 grid perfectly
-  const sort = params.sort ?? "newest";
+  const limit = params.limit ?? "16";
+  const sort = VALID_SORTS.has(params.sort ?? "") ? (params.sort as string) : "newest";
   const q = params.q ?? "";
   const category = params.category ?? "";
-  const query = new URLSearchParams({ page, limit, sort, ...(q && { q }), ...(category && { category }) }).toString();
+  const query = new URLSearchParams({ page, limit, sort, ...(q && { search: q }), ...(category && { category }) }).toString();
 
   let products: Product[] = [];
   try {

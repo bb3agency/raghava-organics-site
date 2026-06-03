@@ -59,8 +59,8 @@ export function OpsDashboard() {
         if (!cancelled) {
           setLoadShed(shed);
           setDlqTotal(dlq.total);
-          setPendingOtps(otps.items.length);
-          setRecentAudit(audit.items);
+          setPendingOtps(Array.isArray(otps.items) ? otps.items.length : 0);
+          setRecentAudit(Array.isArray(audit.items) ? audit.items : []);
           setError(null);
         }
       } catch (err) {

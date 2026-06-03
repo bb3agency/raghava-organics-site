@@ -8,7 +8,9 @@ import { AdminStatusBadge } from "@/components/admin/AdminStatusBadge";
 import { Button } from "@/components/ui/button";
 import {
   buildAdminQuery,
+  coercePaginatedResponse,
   type AdminReconciliationIssue,
+  readPaginatedItems,
   type PaginatedResponse,
 } from "@/lib/admin-api";
 import { formatAdminDate } from "@/lib/admin-format";
@@ -109,7 +111,7 @@ function ReconciliationIssuesPanel() {
       const response = await api<PaginatedResponse<AdminReconciliationIssue>>(
         `/admin/analytics/reconciliation-issues${buildAdminQuery({ page, limit: 20 })}`,
       );
-      setData(response);
+      setData(coercePaginatedResponse(response));
     } catch (err) {
       setError(getApiErrorMessage(err));
     } finally {
@@ -121,7 +123,7 @@ function ReconciliationIssuesPanel() {
     void load();
   }, [load]);
 
-  const items = data?.items ?? [];
+  const items = readPaginatedItems(data);
 
   return (
     <AdminSection
@@ -187,7 +189,7 @@ function OutboxDeadLetterPanel() {
       const response = await api<PaginatedResponse<OutboxDeadLetter>>(
         `/admin/analytics/outbox-dead-letter${buildAdminQuery({ page, limit: 20 })}`,
       );
-      setData(response);
+      setData(coercePaginatedResponse(response));
     } catch (err) {
       setError(getApiErrorMessage(err));
     } finally {
@@ -199,7 +201,7 @@ function OutboxDeadLetterPanel() {
     void load();
   }, [load]);
 
-  const items = data?.items ?? [];
+  const items = readPaginatedItems(data);
 
   return (
     <AdminSection
@@ -264,7 +266,7 @@ function InboxFailuresPanel() {
       const response = await api<PaginatedResponse<InboxFailure>>(
         `/admin/analytics/inbox-failures${buildAdminQuery({ page, limit: 20 })}`,
       );
-      setData(response);
+      setData(coercePaginatedResponse(response));
     } catch (err) {
       setError(getApiErrorMessage(err));
     } finally {
@@ -276,7 +278,7 @@ function InboxFailuresPanel() {
     void load();
   }, [load]);
 
-  const items = data?.items ?? [];
+  const items = readPaginatedItems(data);
 
   return (
     <AdminSection

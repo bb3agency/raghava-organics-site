@@ -235,7 +235,7 @@ export function createNotificationsWorker(
             jobName: job.name,
             jobId: String(job.id ?? 'unknown')
           });
-          return;
+          throw new Error(errorMessage);
         }
 
         try {

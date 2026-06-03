@@ -7,7 +7,9 @@ import { AdminSection } from "@/components/admin/AdminSection";
 import { AdminStatusBadge } from "@/components/admin/AdminStatusBadge";
 import {
   buildAdminQuery,
+  coercePaginatedResponse,
   type AdminUserListItem,
+  readPaginatedItems,
   type PaginatedResponse,
 } from "@/lib/admin-api";
 import { formatAdminDate, formatPaise } from "@/lib/admin-format";
@@ -32,7 +34,7 @@ export function AdminCustomersList() {
       const response = await api<PaginatedResponse<AdminUserListItem>>(
         `/admin/users${buildAdminQuery({ page, limit: PAGE_SIZE, search: search || undefined })}`,
       );
-      setData(response);
+      setData(coercePaginatedResponse(response));
     } catch (err) {
       setError(getApiErrorMessage(err));
       setData(null);
@@ -49,7 +51,7 @@ export function AdminCustomersList() {
     setPage(1);
   }, [search]);
 
-  const items = data?.items ?? [];
+  const items = readPaginatedItems(data);
 
   return (
     <AdminSection

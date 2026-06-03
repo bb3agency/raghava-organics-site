@@ -8,6 +8,7 @@ import { createIdempotencyKey } from "@/lib/idempotency";
 import { getApiErrorMessageWithHint } from "@/lib/error-messages";
 import { ADMIN_PERMISSIONS, hasAdminPermission } from "@/lib/permissions";
 import { useAuthStore } from "@/stores/auth";
+import { getPaginatedItems } from "@/lib/admin-api";
 import type {
   AdminOrderDetail,
   AdminOrdersListResponse,
@@ -66,7 +67,7 @@ export function AdminOrderFulfillmentPanel({
   const loadOrders = useCallback(async () => {
     try {
       const data = await api<AdminOrdersListResponse>("/admin/orders?page=1&limit=30");
-      setOrders(data.items ?? []);
+      setOrders(getPaginatedItems(data));
     } catch (err) {
       setError(getApiErrorMessageWithHint(err));
     }
@@ -104,7 +105,7 @@ export function AdminOrderFulfillmentPanel({
       try {
         const data = await api<AdminOrdersListResponse>("/admin/orders?page=1&limit=30");
         if (!cancelled) {
-          setOrders(data.items ?? []);
+          setOrders(getPaginatedItems(data));
         }
       } catch (err) {
         if (!cancelled) {

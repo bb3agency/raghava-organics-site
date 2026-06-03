@@ -11,9 +11,12 @@ export interface AdminOrderListItem {
 
 export interface AdminOrdersListResponse {
   items: AdminOrderListItem[];
-  page: number;
-  limit: number;
-  total: number;
+  meta: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+  };
 }
 
 export interface AdminOrderShipment {

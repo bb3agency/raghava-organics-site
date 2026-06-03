@@ -19,7 +19,7 @@
 | Backend repo path | `../backend` |
 | Frontend repo path | `.` |
 | Phase 4 start date | 2026-05-16 |
-| Last updated | 2026-06-02 (Password reset flow + Prisma migration fix + integration verification) |
+| Last updated | 2026-06-03 (List-response hardening, storefront catalog fixes, admin product stock on create) |
 
 ---
 
@@ -183,7 +183,7 @@ NEXT_PUBLIC_RAZORPAY_KEY_ID=(pending)
 |---|---|---|
 | Health + DB + Redis live | [x] | `GET /api/v1/health` verified |
 | Backend migrations up to date | [x] | `npx prisma migrate status` |
-| Frontend quality gates | [x] | `npm run typecheck && npm run lint && npm run test && npm run build` |
+| Frontend quality gates | [x] | Verified 2026-06-03: `typecheck`, `test` (70), `build` — see §2026-06-03 |
 | Integration coverage (`api`, `auth`, `cart`) | [x] | `lib/*.integration.test.ts` passing |
 | Frontend checklist reconciliation | [x] | This log updated for all tiers |
 | Backend go-live docs manual review | [~] | References present; manual final pass required |
@@ -388,4 +388,55 @@ NEXT_PUBLIC_RAZORPAY_KEY_ID=(pending)
 **Validation Gates:**
 - Backend: `npm run typecheck` zero errors, `npm run test:unit -- auth.service.password-reset.test.ts` all pass, `auth.routes.test.ts` all pass.
 - Frontend: `npm run typecheck`, `npm run lint`, `npm run build` all green.
+
+---
+
+### 2026-06-03 — List-response hardening, storefront catalog fixes, admin product visibility
+
+**Scope:** Eliminate runtime `TypeError` from calling array methods on paginated API payloads; fix storefront product discovery bugs; ensure admin-created products can appear on the public catalog when stock is set at create time.
+
+#### Admin / ops — paginated list safety
+
+- Added shared helpers in `lib/admin-api.ts`: `ensureArray`, `getPaginatedItems`, `readPaginatedItems`, `coercePaginatedResponse` (tests in `lib/admin-api.paginated.test.ts`).
+- `useAdminListResource` coerces all list fetch results to `{ items, meta }`; `fetchPage` typed as `Promise<unknown>`.
+- Applied helpers across admin panels (products, categories, orders, customers, inventory, returns, analytics, reliability, coupons, order board columns, etc.).
+- Ops panels: guarded `.items` with `Array.isArray` (`OpsAuditPanel`, `OpsUsersPanel`, `OpsAdminUsersPanel`, `OpsInvitesPanel`, `OpsDashboard`).
+- `AdminOrdersListResponse` type aligned with backend (`meta` instead of flat `page`/`limit`/`total`).
+
+#### Account (storefront) — P0 fixes
+
+- `GET /users/me/addresses` and `GET /users/me/orders` return `{ items, meta }` but were typed as bare arrays.
+- `lib/users-api.ts`: `unwrapItems()` unwraps paginated or array responses; `getMyAddresses` / `getMyOrders` always return `T[]`.
+- Prevents `addresses.map is not a function` on Settings and Order history pages.
+
+#### Storefront catalog
+
+- **PLP search:** `/products` page now sends `search=` (was `q=`, which the API ignored).
+- **Sort options:** `PlpSortSelect` uses API enum only (`newest`, `popularity`, `price_asc`, `price_desc`); removed invalid `featured` / `rating`.
+- **Home featured strip:** `sort=popularity` (was `sort=featured`).
+- **Invalid sort in URL:** PLP falls back to `newest` when sort param is not in the allowlist.
+
+#### Admin product → storefront visibility
+
+- Public catalog requires active product + variant with **inventory quantity > 0** (no `isPublished` field).
+- **Admin create form:** added **Initial stock qty** per variant on create; sent as `variants[].quantity` on `POST /admin/products`.
+- Operators must enter stock > 0 (or use inventory admin later) for the product to appear on `/products` and PDP.
+
+#### Auth / Turnstile (related hardening from same release window)
+
+- `AdminLoginForm`: Turnstile widget on OTP step and remount on resend (fresh token).
+- Backend tests: mocks for `prisma.opsConfigSecret.findMany` in OTP unit tests; `app.config.test` clears `TURNSTILE_SECRET_KEY` after `dotenv` load.
+
+**Validation gates (2026-06-03):**
+
+| Package | Command | Result |
+| --- | --- | --- |
+| Frontend | `npm run typecheck` | Pass |
+| Frontend | `npm test` | 70/70 pass |
+| Frontend | `npm run build` | Pass |
+| Backend | `npm run test:unit` | 865/865 pass |
+
+**Docs updated:** `frontend/docs/FRONTEND_DEV_LOG.md` (this entry), `backend/docs/NEXTJS_FRONTEND_INTEGRATION_GUIDE.md` §7.1.
+
+**Deploy note:** Safe to push and deploy via existing CD (`deploy.yml` / VPS scripts). No new env vars. After deploy, smoke-test: admin product create with stock > 0 → visible on `/products`; account Settings addresses list; admin `/admin/products` list; admin login OTP resend with Turnstile.
 

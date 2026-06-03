@@ -26,9 +26,15 @@ import {
 
   buildAdminQuery,
 
+  coercePaginatedResponse,
+
   type AdminCouponAuditEntry,
 
   type AdminCouponListItem,
+
+  getPaginatedItems,
+
+  readPaginatedItems,
 
   type PaginatedResponse,
 
@@ -113,7 +119,7 @@ export function AdminCouponsList() {
 
       );
 
-      setData(response);
+      setData(coercePaginatedResponse(response));
 
     } catch (err) {
 
@@ -293,7 +299,7 @@ export function AdminCouponsList() {
 
       );
 
-      setAuditItems(response.items);
+      setAuditItems(getPaginatedItems(response));
 
     } catch (err) {
 
@@ -311,7 +317,7 @@ export function AdminCouponsList() {
 
 
 
-  const items = data?.items ?? [];
+  const items = readPaginatedItems(data);
 
 
 

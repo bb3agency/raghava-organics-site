@@ -20,7 +20,11 @@ import {
 
   buildAdminQuery,
 
+  coercePaginatedResponse,
+
   type AdminInventoryListItem,
+
+  readPaginatedItems,
 
   type PaginatedResponse,
 
@@ -92,7 +96,7 @@ export function AdminInventoryList({ onViewHistory }: AdminInventoryListProps) {
 
       );
 
-      setData(response);
+      setData(coercePaginatedResponse(response));
 
     } catch (err) {
 
@@ -176,7 +180,7 @@ export function AdminInventoryList({ onViewHistory }: AdminInventoryListProps) {
 
 
 
-  const items = data?.items ?? [];
+  const items = readPaginatedItems(data);
 
 
 

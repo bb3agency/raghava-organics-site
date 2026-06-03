@@ -7,6 +7,7 @@ import { useAuthenticatedApi } from "@/hooks/use-authenticated-api";
 import {
   buildAdminQuery,
   normalizePagination,
+  readPaginatedItems,
   type AdminInventoryHistoryResponse,
 } from "@/lib/admin-api";
 import { formatAdminDate } from "@/lib/admin-format";
@@ -63,7 +64,7 @@ export function AdminInventoryHistoryPanel({
   }, [initialVariantId, load]);
 
   const meta = history ? normalizePagination(history) : null;
-  const items = history?.items ?? [];
+  const items = readPaginatedItems(history);
 
   return (
     <AdminSection

@@ -14,8 +14,14 @@ import { AppError } from '@common/errors/app-error';
 import { ERROR_CODES } from '@common/errors/error-codes';
 import { recordAuthAbuseEscalation, recordAuthChallenge, recordAuthRiskSignal } from '@common/observability/metrics';
 import { resolveAdminPermissions } from '@common/auth/admin-permissions';
+import { resolveNotificationRuntimeConfig } from '@common/notifications/notification-runtime-config';
+import {
+  assertOtpChannelDeliverable,
+  resolveOtpChannelForTemplate,
+  resolveOtpNotifyToggles
+} from '@common/notifications/otp-deliverability';
 import { sendNotificationFailureAlert } from '@modules/notifications/notification-failure-alert';
-import { getAvailableOtpChannels, OtpChannel, resolveEffectiveOtpChannel, resolvePrimaryOtpChannel } from './otp-channel';
+import { OtpChannel } from './otp-channel';
 
 type PublicUser = {
   id: string;
@@ -154,17 +160,21 @@ export class AuthService {
         primaryNotificationChannels: true
       }
     });
-
-    const availableChannels = getAvailableOtpChannels({
-      ...(settings ? {
-        emailEnabled: settings.notifyEmailEnabled,
-        smsEnabled: settings.notifySmsEnabled,
-        whatsappEnabled: settings.notifyWhatsappEnabled
-      } : {})
+    const runtime = await resolveNotificationRuntimeConfig(this.fastify.prisma);
+    const storeFlags = settings
+      ? {
+          emailEnabled: settings.notifyEmailEnabled,
+          smsEnabled: settings.notifySmsEnabled,
+          whatsappEnabled: settings.notifyWhatsappEnabled
+        }
+      : undefined;
+    const resolved = resolveOtpChannelForTemplate({
+      templateKey: 'CustomerOtpVerification',
+      storeFlags,
+      primaryChannels: settings?.primaryNotificationChannels,
+      runtime
     });
-    const primary = resolvePrimaryOtpChannel(settings?.primaryNotificationChannels, 'CustomerOtpVerification');
-    const channel = resolveEffectiveOtpChannel(availableChannels, primary);
-    return { channel, availableChannels };
+    return { channel: resolved.channel, availableChannels: resolved.availableChannels };
   }
 
   async getAdminOtpChannelConfig(): Promise<{ channel: OtpChannel; availableChannels: OtpChannel[] }> {
@@ -177,19 +187,22 @@ export class AuthService {
         primaryNotificationChannels: true
       }
     });
-
-    const availableChannels = getAvailableOtpChannels({
-      ...(settings
-        ? {
-            emailEnabled: settings.notifyEmailEnabled,
-            smsEnabled: settings.notifySmsEnabled,
-            whatsappEnabled: settings.notifyWhatsappEnabled
-          }
-        : {})
+    const runtime = await resolveNotificationRuntimeConfig(this.fastify.prisma);
+    const storeFlags = settings
+      ? {
+          emailEnabled: settings.notifyEmailEnabled,
+          smsEnabled: settings.notifySmsEnabled,
+          whatsappEnabled: settings.notifyWhatsappEnabled
+        }
+      : undefined;
+    const resolved = resolveOtpChannelForTemplate({
+      templateKey: 'OtpVerification',
+      storeFlags,
+      primaryChannels: settings?.primaryNotificationChannels,
+      runtime,
+      preferEmail: true
     });
-    const primary = resolvePrimaryOtpChannel(settings?.primaryNotificationChannels, 'OtpVerification');
-    const channel = resolveEffectiveOtpChannel(availableChannels, primary);
-    return { channel, availableChannels };
+    return { channel: resolved.channel, availableChannels: resolved.availableChannels };
   }
 
   private resolveRefreshSecret(): string {
@@ -594,15 +607,21 @@ export class AuthService {
         primaryNotificationChannels: true
       }
     });
-    const availableChannels = getAvailableOtpChannels({
-      ...(storeSettings ? {
-        emailEnabled: storeSettings.notifyEmailEnabled,
-        smsEnabled: storeSettings.notifySmsEnabled,
-        whatsappEnabled: storeSettings.notifyWhatsappEnabled
-      } : {})
+    const runtime = await resolveNotificationRuntimeConfig(this.fastify.prisma);
+    const storeFlags = storeSettings
+      ? {
+          emailEnabled: storeSettings.notifyEmailEnabled,
+          smsEnabled: storeSettings.notifySmsEnabled,
+          whatsappEnabled: storeSettings.notifyWhatsappEnabled
+        }
+      : undefined;
+    const { channel, toggles } = resolveOtpChannelForTemplate({
+      templateKey: 'CustomerOtpVerification',
+      storeFlags,
+      primaryChannels: storeSettings?.primaryNotificationChannels,
+      runtime
     });
-    const primaryChannel = resolvePrimaryOtpChannel(storeSettings?.primaryNotificationChannels, 'CustomerOtpVerification');
-    const channel = resolveEffectiveOtpChannel(availableChannels, primaryChannel);
+    assertOtpChannelDeliverable(channel, toggles, runtime);
 
     let recipientEmail: string | undefined;
     if (customerEmail) {
@@ -1019,6 +1038,26 @@ export class AuthService {
     }
 
     const otpConfig = await this.getAdminOtpChannelConfig();
+    const runtime = await resolveNotificationRuntimeConfig(this.fastify.prisma);
+    const storeSettingsForFlags = await this.fastify.prisma.storeSettings.findUnique({
+      where: { singletonKey: 'default' },
+      select: {
+        notifyEmailEnabled: true,
+        notifySmsEnabled: true,
+        notifyWhatsappEnabled: true
+      }
+    });
+    const toggles = resolveOtpNotifyToggles(
+      storeSettingsForFlags
+        ? {
+            emailEnabled: storeSettingsForFlags.notifyEmailEnabled,
+            smsEnabled: storeSettingsForFlags.notifySmsEnabled,
+            whatsappEnabled: storeSettingsForFlags.notifyWhatsappEnabled
+          }
+        : undefined,
+      runtime
+    );
+    assertOtpChannelDeliverable(otpConfig.channel, toggles, runtime);
 
     const otp = generateOtp();
     const otpHash = hashOtp(otp);

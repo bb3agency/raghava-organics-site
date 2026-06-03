@@ -1,6 +1,20 @@
 import { apiClient } from "@/lib/api";
 import type { User } from "@/types/user";
 
+/** Safe unwrap for `{ items, meta }` or bare-array API responses. */
+function unwrapItems<T>(response: unknown): T[] {
+  if (Array.isArray(response)) return response as T[];
+  if (
+    response !== null &&
+    typeof response === "object" &&
+    "items" in response &&
+    Array.isArray((response as { items: unknown }).items)
+  ) {
+    return (response as { items: T[] }).items;
+  }
+  return [];
+}
+
 export interface UserAddress {
   id: string;
   fullName: string;
@@ -22,37 +36,29 @@ export async function getCurrentUser(accessToken: string): Promise<User> {
 }
 
 export async function getMyAddresses(accessToken: string): Promise<UserAddress[]> {
-  return apiClient<UserAddress[]>("/users/me/addresses", {
+  const response = await apiClient<unknown>("/users/me/addresses", {
     method: "GET",
     accessToken,
   });
+  return unwrapItems<UserAddress>(response);
 }
 
-export async function getMyOrders(accessToken: string): Promise<
-  Array<{
-    id: string;
-    orderNumber: string;
-    status: string;
-    paymentMode: "PREPAID" | "COD";
-    total: number;
-    createdAt: string;
-    invoice?: { hasPdf?: boolean } | null;
-  }>
-> {
-  return apiClient<
-    Array<{
-      id: string;
-      orderNumber: string;
-      status: string;
-      paymentMode: "PREPAID" | "COD";
-      total: number;
-      createdAt: string;
-      invoice?: { hasPdf?: boolean } | null;
-    }>
-  >("/users/me/orders", {
+export interface UserOrder {
+  id: string;
+  orderNumber: string;
+  status: string;
+  paymentMode: "PREPAID" | "COD";
+  total: number;
+  createdAt: string;
+  invoice?: { hasPdf?: boolean } | null;
+}
+
+export async function getMyOrders(accessToken: string): Promise<UserOrder[]> {
+  const response = await apiClient<unknown>("/users/me/orders", {
     method: "GET",
     accessToken,
   });
+  return unwrapItems<UserOrder>(response);
 }
 
 export async function createMyAddress(

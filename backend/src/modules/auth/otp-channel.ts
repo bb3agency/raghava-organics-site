@@ -57,9 +57,9 @@ export function getAvailableOtpChannels(flags?: OtpChannelFlags): OtpChannel[] {
   if (emailEnabled && (flags?.emailEnabled !== undefined || Boolean((process.env.RESEND_API_KEY ?? '').trim()))) {
     channels.push('email');
   }
-  // Local dev: allow admin/customer OTP routing without Resend keys (delivery may still noop/fail in workers).
+  // No dev fallback here — use getDeliverableOtpChannels() so OTP is never routed to a channel that cannot send.
   if (channels.length === 0 && isDevelopmentLikeNodeEnv()) {
-    return ['email'];
+    return [];
   }
   return channels;
 }

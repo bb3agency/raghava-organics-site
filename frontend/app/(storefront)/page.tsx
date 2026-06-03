@@ -11,7 +11,7 @@ import type { Product } from "@/types/product";
 
 async function getFeaturedProducts(): Promise<Product[]> {
   try {
-    const payload = await apiClient<unknown>("/products?limit=10&sort=featured");
+    const payload = await apiClient<unknown>("/products?limit=10&sort=popularity");
     return mapProductListResponse(payload);
   } catch {
     return [];

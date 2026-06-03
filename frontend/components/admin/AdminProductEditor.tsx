@@ -8,12 +8,16 @@ import { AdminSection } from "@/components/admin/AdminSection";
 import { AdminStatusBadge } from "@/components/admin/AdminStatusBadge";
 import { useAdminAuth } from "@/contexts/admin-auth-context";
 import { useAuthenticatedApi } from "@/hooks/use-authenticated-api";
-import type {
-  AdminCategoryListItem,
-  AdminCreateProductInput,
-  AdminProductDetail,
-  AdminProductImage,
-  AdminProductVariant,
+import {
+  buildAdminQuery,
+  ensureArray,
+  getPaginatedItems,
+  type AdminCategoryListItem,
+  type AdminCreateProductInput,
+  type AdminProductDetail,
+  type AdminProductImage,
+  type AdminProductVariant,
+  type PaginatedResponse,
 } from "@/lib/admin-api";
 import { formatPaise } from "@/lib/admin-format";
 import { getApiErrorMessage } from "@/lib/error-messages";
@@ -39,6 +43,7 @@ interface VariantDraft {
   name: string;
   pricePaise: string;
   compareAtPricePaise: string;
+  initialQuantity: string;
   isActive: boolean;
 }
 
@@ -48,12 +53,22 @@ interface ImageDraft {
   sortOrder: string;
 }
 
+function normalizeProductDetail(detail: AdminProductDetail): AdminProductDetail {
+  return {
+    ...detail,
+    tags: ensureArray(detail.tags),
+    variants: ensureArray(detail.variants),
+    images: ensureArray(detail.images),
+  };
+}
+
 function emptyVariant(): VariantDraft {
   return {
     sku: "",
     name: "Default",
     pricePaise: "",
     compareAtPricePaise: "",
+    initialQuantity: "",
     isActive: true,
   };
 }
@@ -106,10 +121,13 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
   });
 
   const loadCategories = useCallback(async () => {
-    const response = await api<AdminCategoryListItem[]>("/admin/categories");
-    setCategories(response);
-    if (isCreate && response.length > 0 && !categoryId) {
-      setCategoryId(response[0].id);
+    const response = await api<PaginatedResponse<AdminCategoryListItem>>(
+      `/admin/categories${buildAdminQuery({ page: 1, limit: 100 })}`,
+    );
+    const items = getPaginatedItems(response);
+    setCategories(items);
+    if (isCreate && items.length > 0 && !categoryId) {
+      setCategoryId(items[0].id);
     }
   }, [api, categoryId, isCreate]);
 
@@ -119,14 +137,15 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
     setError(null);
     try {
       const detail = await api<AdminProductDetail>(`/admin/products/${productId}`);
-      setProduct(detail);
-      setName(detail.name);
-      setSlug(detail.slug);
+      const normalized = normalizeProductDetail(detail);
+      setProduct(normalized);
+      setName(normalized.name);
+      setSlug(normalized.slug);
       setSlugTouched(true);
-      setDescription(detail.description);
-      setCategoryId(detail.category.id);
-      setTagsText(detail.tags.join(", "));
-      setIsFeatured(detail.isFeatured);
+      setDescription(normalized.description);
+      setCategoryId(normalized.category.id);
+      setTagsText(normalized.tags.join(", "));
+      setIsFeatured(normalized.isFeatured);
     } catch (err) {
       setError(getApiErrorMessage(err));
     } finally {
@@ -169,11 +188,16 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
               return null;
             }
             const compareAtPrice = parsePaiseInput(variant.compareAtPricePaise);
+            const qtyStr = variant.initialQuantity.trim();
+            const quantity = qtyStr !== "" && Number.isFinite(Number(qtyStr)) && Number(qtyStr) >= 0
+              ? Math.floor(Number(qtyStr))
+              : 0;
             return {
               sku: variant.sku.trim(),
               name: variant.name.trim(),
               price,
               ...(compareAtPrice !== undefined ? { compareAtPrice } : {}),
+              quantity,
               isActive: variant.isActive,
             };
           })
@@ -229,7 +253,7 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
           isFeatured,
         }),
       });
-      setProduct(updated);
+      setProduct(normalizeProductDetail(updated));
       setSuccess("Product saved.");
     } catch (err) {
       setError(getApiErrorMessage(err));
@@ -557,7 +581,7 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
               {createVariants.map((variant, index) => (
                 <div
                   key={index}
-                  className="grid gap-2 rounded-md border border-border p-3 md:grid-cols-5"
+                  className="grid gap-2 rounded-md border border-border p-3 md:grid-cols-6"
                 >
                   <input
                     className={inputClass}
@@ -602,6 +626,20 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
                         ...variant,
                         compareAtPricePaise: event.target.value,
                       };
+                      setCreateVariants(next);
+                    }}
+                    disabled={!canWrite}
+                  />
+                  <input
+                    className={inputClass}
+                    placeholder="Initial stock qty"
+                    type="number"
+                    min="0"
+                    step="1"
+                    value={variant.initialQuantity}
+                    onChange={(event) => {
+                      const next = [...createVariants];
+                      next[index] = { ...variant, initialQuantity: event.target.value };
                       setCreateVariants(next);
                     }}
                     disabled={!canWrite}
@@ -905,6 +943,7 @@ function VariantEditRow({
     pricePaise: String(variant.price),
     compareAtPricePaise:
       variant.compareAtPrice !== null ? String(variant.compareAtPrice) : "",
+    initialQuantity: "",
     isActive: variant.isActive,
   });
 
@@ -915,6 +954,7 @@ function VariantEditRow({
       pricePaise: String(variant.price),
       compareAtPricePaise:
         variant.compareAtPrice !== null ? String(variant.compareAtPrice) : "",
+      initialQuantity: "",
       isActive: variant.isActive,
     });
   }, [variant]);

@@ -22,9 +22,13 @@ import {
 
   buildOrdersExportQuery,
 
+  coercePaginatedResponse,
+
   ORDER_FILTER_STATUSES,
 
   type AdminOrderListItem,
+
+  readPaginatedItems,
 
   type PaginatedResponse,
 
@@ -126,7 +130,7 @@ export function AdminOrdersList() {
 
       );
 
-      setData(response);
+      setData(coercePaginatedResponse(response));
 
     } catch (err) {
 
@@ -214,7 +218,7 @@ export function AdminOrdersList() {
 
 
 
-  const items = data?.items ?? [];
+  const items = readPaginatedItems(data);
 
 
 

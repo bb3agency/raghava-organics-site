@@ -6,7 +6,7 @@ import { AdminSection } from "@/components/admin/AdminSection";
 import { AdminStatusBadge } from "@/components/admin/AdminStatusBadge";
 import { Button } from "@/components/ui/button";
 import { AdminLoadingBlock } from "@/components/admin/ui/admin-ui";
-import type { AdminReturnRequestDetail } from "@/lib/admin-api";
+import { ensureArray, type AdminReturnRequestDetail } from "@/lib/admin-api";
 import { formatAdminDate, returnStatusTone } from "@/lib/admin-format";
 import { getApiErrorMessageWithHint } from "@/lib/error-messages";
 import { useAuthenticatedApi } from "@/hooks/use-authenticated-api";
@@ -35,7 +35,7 @@ export function AdminReturnDetailPanel({ returnId }: AdminReturnDetailPanelProps
       const response = await api<AdminReturnRequestDetail>(
         `/admin/return-requests/${returnId}`,
       );
-      setDetail(response);
+      setDetail({ ...response, items: ensureArray(response.items) });
       setAdminNote(response.adminNote ?? "");
       setNextStatus(response.status);
     } catch (err) {

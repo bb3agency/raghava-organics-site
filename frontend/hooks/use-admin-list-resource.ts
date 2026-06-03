@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import type { PaginatedResponse } from "@/lib/admin-api";
+import { coercePaginatedResponse, type PaginatedResponse } from "@/lib/admin-api";
 import { getApiErrorMessage } from "@/lib/error-messages";
 
 interface UseAdminListResourceResult<T> {
@@ -14,7 +14,7 @@ interface UseAdminListResourceResult<T> {
 }
 
 export function useAdminListResource<T>(
-  fetchPage: (page: number) => Promise<PaginatedResponse<T>>,
+  fetchPage: (page: number) => Promise<unknown>,
 ): UseAdminListResourceResult<T> {
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
@@ -35,7 +35,7 @@ export function useAdminListResource<T>(
       try {
         const response = await fetchPage(page);
         if (!cancelled) {
-          setData(response);
+          setData(coercePaginatedResponse(response));
         }
       } catch (err) {
         if (!cancelled) {

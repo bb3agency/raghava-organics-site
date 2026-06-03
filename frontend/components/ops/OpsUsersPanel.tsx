@@ -34,7 +34,7 @@ export function OpsUsersPanel() {
 
   async function reload() {
     const result = await listOpsUsersClient({ limit: 50 });
-    setUsers(result.items);
+    setUsers(Array.isArray(result.items) ? result.items : []);
   }
 
   useEffect(() => {
@@ -43,7 +43,7 @@ export function OpsUsersPanel() {
     async function loadUsers() {
       try {
         const result = await listOpsUsersClient({ limit: 50 });
-        if (active) setUsers(result.items);
+        if (active) setUsers(Array.isArray(result.items) ? result.items : []);
       } catch (err) {
         if (active) setError(getApiErrorMessageWithHint(err));
       } finally {

@@ -63,7 +63,7 @@ export function OpsInvitesPanel() {
   async function reloadOpsInvites() {
     try {
       const opsList = await listOpsInvitesClient({ limit: 50 });
-      setOpsItems(opsList.items);
+      setOpsItems(Array.isArray(opsList.items) ? opsList.items : []);
     } catch (err) {
       if (isOpsUnauthorisedError(err)) {
         router.replace("/ops/login");
@@ -76,7 +76,7 @@ export function OpsInvitesPanel() {
   async function reloadAdminInvites() {
     try {
       const adminList = await listAdminInvitesClient({ limit: 50 });
-      setAdminItems(adminList.items);
+      setAdminItems(Array.isArray(adminList.items) ? adminList.items : []);
     } catch (err) {
       if (isOpsUnauthorisedError(err)) {
         router.replace("/ops/login");

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { AdminSection } from "@/components/admin/AdminSection";
 import { AdminStatusBadge } from "@/components/admin/AdminStatusBadge";
 import { useAuthenticatedApi } from "@/hooks/use-authenticated-api";
-import type { AdminOrderTimeline } from "@/lib/admin-api";
+import { ensureArray, type AdminOrderTimeline } from "@/lib/admin-api";
 import { formatAdminDate, orderStatusTone } from "@/lib/admin-format";
 import { getApiErrorMessage } from "@/lib/error-messages";
 
@@ -36,7 +36,7 @@ export function AdminOrderTimelinePanel({ orderId }: AdminOrderTimelinePanelProp
     void load();
   }, [load]);
 
-  const events = data?.timeline ?? [];
+  const events = ensureArray<AdminOrderTimeline["timeline"][number]>(data?.timeline);
 
   return (
     <AdminSection

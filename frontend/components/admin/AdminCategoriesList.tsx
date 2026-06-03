@@ -6,7 +6,12 @@ import { useCallback, useEffect, useState } from "react";
 
 import { AdminCategoryForm } from "@/components/admin/AdminCategoryForm";
 
-import type { AdminCategoryListItem } from "@/lib/admin-api";
+import {
+  buildAdminQuery,
+  getPaginatedItems,
+  type AdminCategoryListItem,
+  type PaginatedResponse,
+} from "@/lib/admin-api";
 
 import { getApiErrorMessage } from "@/lib/error-messages";
 
@@ -30,9 +35,11 @@ export function AdminCategoriesList() {
 
     try {
 
-      const response = await api<AdminCategoryListItem[]>("/admin/categories");
+      const response = await api<PaginatedResponse<AdminCategoryListItem>>(
+        `/admin/categories${buildAdminQuery({ page: 1, limit: 100 })}`,
+      );
 
-      setItems(response);
+      setItems(getPaginatedItems(response));
 
     } catch (err) {
 

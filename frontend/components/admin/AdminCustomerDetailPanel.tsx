@@ -7,11 +7,14 @@ import { AdminStatusBadge } from "@/components/admin/AdminStatusBadge";
 import { Button } from "@/components/ui/button";
 import { useAuthenticatedApi } from "@/hooks/use-authenticated-api";
 import { createIdempotencyKey } from "@/lib/idempotency";
-import type {
-  AdminCustomerOrderSummary,
-  AdminCustomerProfile,
-  AdminUserNote,
-  PaginatedResponse,
+import {
+  ensureArray,
+  getPaginatedItems,
+  type AdminCustomerAddress,
+  type AdminCustomerOrderSummary,
+  type AdminCustomerProfile,
+  type AdminUserNote,
+  type PaginatedResponse,
 } from "@/lib/admin-api";
 import { formatAdminDate, formatPaise, orderStatusTone } from "@/lib/admin-format";
 import { getApiErrorMessageWithHint } from "@/lib/error-messages";
@@ -48,9 +51,12 @@ export function AdminCustomerDetailPanel({ customerId }: AdminCustomerDetailPane
         ),
         api<AdminUserNote[]>(`/admin/users/${customerId}/notes`),
       ]);
-      setProfile(nextProfile);
-      setOrders(nextOrders.items);
-      setNotes(nextNotes);
+      setProfile({
+        ...nextProfile,
+        addresses: ensureArray<AdminCustomerAddress>(nextProfile.addresses),
+      });
+      setOrders(getPaginatedItems(nextOrders));
+      setNotes(ensureArray<AdminUserNote>(nextNotes));
     } catch (err) {
       setError(getApiErrorMessageWithHint(err));
     } finally {
