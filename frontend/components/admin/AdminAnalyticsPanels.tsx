@@ -1,12 +1,25 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { AdminPageHeader } from "@/components/admin/AdminPageHeader";
 import { AdminSection } from "@/components/admin/AdminSection";
 import {
   AdminDashboardKpisPanel,
   AdminSalesChartPanel,
   AdminTopProductsPanel,
 } from "@/components/admin/AdminDashboardPanels";
+import {
+  defaultDateRange,
+  rangeToISO,
+  trendPeriodLabel,
+  type DateRange,
+} from "@/components/admin/AdminDateRangePicker";
+import { useAuthStore } from "@/stores/auth";
+import { resolveApiBaseUrl } from "@/lib/api-base";
+import { useAdminDataRefreshEffect } from "@/hooks/use-admin-data-refresh-effect";
+import { ADMIN_DASHBOARD_REFRESH_SCOPES } from "@/lib/admin-data-refresh";
+import { useAdminAuth } from "@/contexts/admin-auth-context";
+import { hasAdminPermission, ADMIN_PERMISSIONS } from "@/lib/permissions";
 import type {
   AdminAnalyticsCategoryBreakdown,
   AdminAnalyticsFunnel,
@@ -19,74 +32,85 @@ import {
   buildAdminQuery,
   ensureArray,
   getPaginatedItems,
-  readPaginatedItems,
   toIsoDateRange,
 } from "@/lib/admin-api";
 import { formatAdminDate, formatPaise } from "@/lib/admin-format";
 import { getApiErrorMessage } from "@/lib/error-messages";
 import { useAuthenticatedApi } from "@/hooks/use-authenticated-api";
+import { useAdminShell } from "@/contexts/admin-shell-context";
 
-function defaultRange() {
-  const to = new Date();
-  const from = new Date();
-  from.setDate(from.getDate() - 30);
-  return {
-    from: from.toISOString().slice(0, 10),
-    to: to.toISOString().slice(0, 10),
-  };
+export function AdminAnalyticsPageContent() {
+  const [range, setRange] = useState<DateRange>(defaultDateRange);
+  const trendLabel = trendPeriodLabel(range.from, range.to);
+  const accessToken = useAuthStore((s) => s.accessToken);
+  const { adminUser } = useAdminAuth();
+  const canExport = hasAdminPermission(adminUser, ADMIN_PERMISSIONS.analyticsExport);
+  const [exporting, setExporting] = useState(false);
+  const { registerExportHandler } = useAdminShell();
+
+  const handleExport = useCallback(async () => {
+    if (exporting) return;
+    setExporting(true);
+    try {
+      const base = resolveApiBaseUrl();
+      if (!base) throw new Error("API base URL not configured");
+      const { fromISO, toISO } = rangeToISO(range.from, range.to);
+      const url = `${base}/admin/analytics/revenue/export?from=${encodeURIComponent(fromISO)}&to=${encodeURIComponent(toISO)}`;
+      const response = await fetch(url, {
+        headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
+        credentials: "include",
+      });
+      if (!response.ok) throw new Error("Export failed");
+      const blob = await response.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = objectUrl;
+      anchor.download = `analytics-revenue-${range.from}-to-${range.to}.csv`;
+      anchor.click();
+      URL.revokeObjectURL(objectUrl);
+    } catch {
+      // user can retry
+    } finally {
+      setExporting(false);
+    }
+  }, [exporting, range.from, range.to, accessToken]);
+
+  useEffect(() => {
+    if (!canExport) return;
+    return registerExportHandler(() => void handleExport());
+  }, [registerExportHandler, handleExport, canExport]);
+
+  return (
+    <div className="flex flex-col gap-6">
+      <AdminPageHeader
+        title="Analytics"
+        description="Revenue, funnel, category performance, inventory alerts, and notification delivery."
+        range={range}
+        onRangeChange={setRange}
+      />
+      <AdminDashboardKpisPanel
+        from={range.from}
+        to={range.to}
+        trendLabel={trendLabel}
+      />
+      <AdminRevenueAnalyticsPanel from={range.from} to={range.to} />
+      <AdminFunnelPanel from={range.from} to={range.to} />
+      <AdminCategoryBreakdownPanel from={range.from} to={range.to} />
+      <AdminInventoryAlertsPanel />
+      <AdminNotificationStatsPanel from={range.from} to={range.to} />
+      <AdminSalesChartPanel from={range.from} to={range.to} />
+      <AdminTopProductsPanel from={range.from} to={range.to} />
+    </div>
+  );
 }
 
-const inputClass =
-  "h-9 rounded-md border border-border bg-background px-2 text-sm";
-
-function DateRangeFilters({
+function AdminRevenueAnalyticsPanel({
   from,
   to,
-  onFromChange,
-  onToChange,
 }: {
   from: string;
   to: string;
-  onFromChange: (value: string) => void;
-  onToChange: (value: string) => void;
 }) {
-  return (
-    <div className="mb-3 flex flex-wrap gap-2">
-      <input type="date" className={inputClass} value={from} onChange={(e) => onFromChange(e.target.value)} />
-      <input type="date" className={inputClass} value={to} onChange={(e) => onToChange(e.target.value)} />
-    </div>
-  );
-}
-
-export function AdminAnalyticsPageContent() {
-  const range = defaultRange();
-  const [from, setFrom] = useState(range.from);
-  const [to, setTo] = useState(range.to);
-
-  return (
-    <div className="grid gap-6">
-      <header>
-        <h2 className="font-heading text-xl font-semibold">Analytics</h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Revenue, funnel, category performance, inventory alerts, and notification delivery.
-        </p>
-        <div className="mt-3">
-          <DateRangeFilters from={from} to={to} onFromChange={setFrom} onToChange={setTo} />
-        </div>
-      </header>
-      <AdminDashboardKpisPanel />
-      <AdminRevenueAnalyticsPanel from={from} to={to} />
-      <AdminFunnelPanel from={from} to={to} />
-      <AdminCategoryBreakdownPanel from={from} to={to} />
-      <AdminInventoryAlertsPanel />
-      <AdminNotificationStatsPanel from={from} to={to} />
-      <AdminSalesChartPanel />
-      <AdminTopProductsPanel />
-    </div>
-  );
-}
-
-function AdminRevenueAnalyticsPanel({ from, to }: { from: string; to: string }) {
   const api = useAuthenticatedApi();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -115,6 +139,8 @@ function AdminRevenueAnalyticsPanel({ from, to }: { from: string; to: string }) 
     void load();
   }, [load]);
 
+  useAdminDataRefreshEffect(load, ADMIN_DASHBOARD_REFRESH_SCOPES);
+
   const points = ensureArray<AdminSalesChartPoint>(data?.points);
 
   return (
@@ -137,7 +163,10 @@ function AdminRevenueAnalyticsPanel({ from, to }: { from: string; to: string }) 
           </thead>
           <tbody>
             {points.map((point) => (
-              <tr key={point.bucket} className="border-b border-border last:border-0">
+              <tr
+                key={point.bucket}
+                className="border-b border-border last:border-0"
+              >
                 <td className="px-3 py-2 text-xs">{point.bucket}</td>
                 <td className="px-3 py-2">{point.ordersCount}</td>
                 <td className="px-3 py-2">{formatPaise(point.revenuePaise)}</td>
@@ -199,7 +228,10 @@ function AdminFunnelPanel({ from, to }: { from: string; to: string }) {
           </thead>
           <tbody>
             {steps.map((step) => (
-              <tr key={step.eventType} className="border-b border-border last:border-0">
+              <tr
+                key={step.eventType}
+                className="border-b border-border last:border-0"
+              >
                 <td className="px-3 py-2">{step.eventType}</td>
                 <td className="px-3 py-2">{step.count}</td>
                 <td className="px-3 py-2">{step.conversionRatePercent}%</td>
@@ -212,11 +244,19 @@ function AdminFunnelPanel({ from, to }: { from: string; to: string }) {
   );
 }
 
-function AdminCategoryBreakdownPanel({ from, to }: { from: string; to: string }) {
+function AdminCategoryBreakdownPanel({
+  from,
+  to,
+}: {
+  from: string;
+  to: string;
+}) {
   const api = useAuthenticatedApi();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [data, setData] = useState<AdminAnalyticsCategoryBreakdown | null>(null);
+  const [data, setData] = useState<AdminAnalyticsCategoryBreakdown | null>(
+    null,
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -240,7 +280,9 @@ function AdminCategoryBreakdownPanel({ from, to }: { from: string; to: string })
     };
   }, [api, from, to]);
 
-  const items = ensureArray<AdminAnalyticsCategoryBreakdown["items"][number]>(data?.items);
+  const items = ensureArray<AdminAnalyticsCategoryBreakdown["items"][number]>(
+    data?.items,
+  );
 
   return (
     <AdminSection
@@ -261,7 +303,10 @@ function AdminCategoryBreakdownPanel({ from, to }: { from: string; to: string })
           </thead>
           <tbody>
             {items.map((item) => (
-              <tr key={item.categoryId} className="border-b border-border last:border-0">
+              <tr
+                key={item.categoryId}
+                className="border-b border-border last:border-0"
+              >
                 <td className="px-3 py-2">{item.categoryName}</td>
                 <td className="px-3 py-2">{formatPaise(item.revenuePaise)}</td>
                 <td className="px-3 py-2">{item.sharePercent}%</td>
@@ -282,7 +327,9 @@ function AdminInventoryAlertsPanel() {
 
   useEffect(() => {
     let cancelled = false;
-    void api<{ items: AdminInventoryAlertItem[] }>("/admin/analytics/inventory-alerts")
+    void api<{ items: AdminInventoryAlertItem[] }>(
+      "/admin/analytics/inventory-alerts",
+    )
       .then((response) => {
         if (!cancelled) setItems(getPaginatedItems(response));
       })
@@ -319,10 +366,15 @@ function AdminInventoryAlertsPanel() {
           </thead>
           <tbody>
             {items.map((item) => (
-              <tr key={item.variantId} className="border-b border-border last:border-0">
+              <tr
+                key={item.variantId}
+                className="border-b border-border last:border-0"
+              >
                 <td className="px-3 py-2">
                   <p className="font-medium">{item.productName}</p>
-                  <p className="text-xs text-muted-foreground">{item.variantName}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {item.variantName}
+                  </p>
                 </td>
                 <td className="px-3 py-2 font-mono text-xs">{item.sku}</td>
                 <td className="px-3 py-2">{item.quantity}</td>
@@ -339,7 +391,13 @@ function AdminInventoryAlertsPanel() {
   );
 }
 
-function AdminNotificationStatsPanel({ from, to }: { from: string; to: string }) {
+function AdminNotificationStatsPanel({
+  from,
+  to,
+}: {
+  from: string;
+  to: string;
+}) {
   const api = useAuthenticatedApi();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -367,9 +425,9 @@ function AdminNotificationStatsPanel({ from, to }: { from: string; to: string })
     };
   }, [api, from, to]);
 
-  const channels = ensureArray<AdminNotificationDeliveryStats["channels"][number]>(
-    data?.channels,
-  );
+  const channels = ensureArray<
+    AdminNotificationDeliveryStats["channels"][number]
+  >(data?.channels);
 
   return (
     <AdminSection
@@ -392,7 +450,10 @@ function AdminNotificationStatsPanel({ from, to }: { from: string; to: string })
           </thead>
           <tbody>
             {channels.map((channel) => (
-              <tr key={channel.channel} className="border-b border-border last:border-0">
+              <tr
+                key={channel.channel}
+                className="border-b border-border last:border-0"
+              >
                 <td className="px-3 py-2">{channel.channel}</td>
                 <td className="px-3 py-2">{channel.total}</td>
                 <td className="px-3 py-2">{channel.sent}</td>

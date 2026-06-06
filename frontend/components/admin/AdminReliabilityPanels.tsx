@@ -18,6 +18,8 @@ import { getApiErrorMessage } from "@/lib/error-messages";
 import { useAuthenticatedApi } from "@/hooks/use-authenticated-api";
 import { useAuthStore } from "@/stores/auth";
 import { resolveApiBaseUrl } from "@/lib/api-base";
+import { useAdminAuth } from "@/contexts/admin-auth-context";
+import { hasAdminPermission, ADMIN_PERMISSIONS } from "@/lib/permissions";
 
 interface OutboxDeadLetter {
   id: string;
@@ -59,8 +61,12 @@ export function AdminReliabilityPanels() {
 
 function RevenueCsvDownloadButton() {
   const accessToken = useAuthStore((s) => s.accessToken);
+  const { adminUser } = useAdminAuth();
+  const canExport = hasAdminPermission(adminUser, ADMIN_PERMISSIONS.analyticsExport);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  if (!canExport) return null;
 
   async function download() {
     setLoading(true);
@@ -177,6 +183,8 @@ function ReconciliationIssuesPanel() {
 
 function OutboxDeadLetterPanel() {
   const api = useAuthenticatedApi();
+  const { adminUser } = useAdminAuth();
+  const canReplay = hasAdminPermission(adminUser, ADMIN_PERMISSIONS.analyticsReplay);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -234,11 +242,15 @@ function OutboxDeadLetterPanel() {
                       {formatAdminDate(item.updatedAt)}
                     </td>
                     <td className="px-3 py-2">
-                      <AdminReplayActions
-                        previewEndpoint={`/admin/analytics/outbox-dead-letter/${item.id}/replay-preview`}
-                        replayEndpoint={`/admin/analytics/outbox-dead-letter/${item.id}/replay`}
-                        onComplete={() => void load()}
-                      />
+                      {canReplay ? (
+                        <AdminReplayActions
+                          previewEndpoint={`/admin/analytics/outbox-dead-letter/${item.id}/replay-preview`}
+                          replayEndpoint={`/admin/analytics/outbox-dead-letter/${item.id}/replay`}
+                          onComplete={() => void load()}
+                        />
+                      ) : (
+                        <span className="text-xs text-muted-foreground">No permission</span>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -254,6 +266,8 @@ function OutboxDeadLetterPanel() {
 
 function InboxFailuresPanel() {
   const api = useAuthenticatedApi();
+  const { adminUser } = useAdminAuth();
+  const canReplay = hasAdminPermission(adminUser, ADMIN_PERMISSIONS.analyticsReplay);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -313,11 +327,15 @@ function InboxFailuresPanel() {
                       {formatAdminDate(item.updatedAt)}
                     </td>
                     <td className="px-3 py-2">
-                      <AdminReplayActions
-                        previewEndpoint={`/admin/analytics/inbox-failures/${item.id}/replay-preview`}
-                        replayEndpoint={`/admin/analytics/inbox-failures/${item.id}/replay`}
-                        onComplete={() => void load()}
-                      />
+                      {canReplay ? (
+                        <AdminReplayActions
+                          previewEndpoint={`/admin/analytics/inbox-failures/${item.id}/replay-preview`}
+                          replayEndpoint={`/admin/analytics/inbox-failures/${item.id}/replay`}
+                          onComplete={() => void load()}
+                        />
+                      ) : (
+                        <span className="text-xs text-muted-foreground">No permission</span>
+                      )}
                     </td>
                   </tr>
                 ))}

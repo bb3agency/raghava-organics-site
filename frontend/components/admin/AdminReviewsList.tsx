@@ -2,42 +2,68 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { AdminPagination } from "@/components/admin/AdminPagination";
-import { AdminSection } from "@/components/admin/AdminSection";
-import { AdminStatusBadge } from "@/components/admin/AdminStatusBadge";
+import { AdminTableScroll } from "@/components/admin/AdminTableScroll";
 import { Button } from "@/components/ui/button";
 import {
   buildAdminQuery,
   coercePaginatedResponse,
+  toIsoDateRange,
   type AdminReviewListItem,
   readPaginatedItems,
   type PaginatedResponse,
 } from "@/lib/admin-api";
-import { formatAdminDate, reviewApprovalTone } from "@/lib/admin-format";
+import { formatAdminDate } from "@/lib/admin-format";
 import { getApiErrorMessage } from "@/lib/error-messages";
 import { useAuthenticatedApi } from "@/hooks/use-authenticated-api";
+import { useAdminDataRefreshEffect } from "@/hooks/use-admin-data-refresh-effect";
+import { notifyAdminDataChanged } from "@/lib/admin-data-refresh";
 import { createIdempotencyKey } from "@/lib/idempotency";
+import { useAdminAuth } from "@/contexts/admin-auth-context";
+import { hasAdminPermission, ADMIN_PERMISSIONS } from "@/lib/permissions";
+import Image from "next/image";
+import Link from "next/link";
 
 const PAGE_SIZE = 20;
 
-export function AdminReviewsList() {
+export function AdminReviewsList({
+  from,
+  to,
+}: {
+  from?: string;
+  to?: string;
+} = {}) {
   const api = useAuthenticatedApi();
+  const { adminUser } = useAdminAuth();
+  const canModerate = hasAdminPermission(adminUser, ADMIN_PERMISSIONS.reviewsModerate);
   const [page, setPage] = useState(1);
   const [approvedFilter, setApprovedFilter] = useState<string>("");
+  const [ratingFilter, setRatingFilter] = useState("");
+  const [searchInput, setSearchInput] = useState("");
+  const [search, setSearch] = useState("");
+  const [selectedIds, setSelectedIds] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [data, setData] = useState<PaginatedResponse<AdminReviewListItem> | null>(null);
+  const [data, setData] =
+    useState<PaginatedResponse<AdminReviewListItem> | null>(null);
   const [actionId, setActionId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
+      const rating =
+        ratingFilter !== "" ? Number(ratingFilter) : undefined;
       const response = await api<PaginatedResponse<AdminReviewListItem>>(
         `/admin/reviews${buildAdminQuery({
           page,
           limit: PAGE_SIZE,
           approved:
             approvedFilter === "" ? undefined : approvedFilter === "true",
+          ratingGte: rating,
+          ratingLte: rating,
+          search: search.trim() || undefined,
+          from: from ? toIsoDateRange(from) : undefined,
+          to: to ? toIsoDateRange(to, true) : undefined,
         })}`,
       );
       setData(coercePaginatedResponse(response));
@@ -47,15 +73,17 @@ export function AdminReviewsList() {
     } finally {
       setLoading(false);
     }
-  }, [api, page, approvedFilter]);
+  }, [api, page, approvedFilter, ratingFilter, search, from, to]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
+  useAdminDataRefreshEffect(load, ["reviews"]);
+
   useEffect(() => {
     setPage(1);
-  }, [approvedFilter]);
+  }, [approvedFilter, ratingFilter, search, from, to]);
 
   async function moderate(reviewId: string, approved: boolean) {
     setActionId(reviewId);
@@ -66,6 +94,7 @@ export function AdminReviewsList() {
         body: JSON.stringify({ approved }),
       });
       await load();
+      notifyAdminDataChanged(["reviews", "dashboard"]);
     } catch (err) {
       setError(getApiErrorMessage(err));
     } finally {
@@ -81,6 +110,7 @@ export function AdminReviewsList() {
     try {
       await api(`/admin/reviews/${reviewId}`, { method: "DELETE" });
       await load();
+      notifyAdminDataChanged(["reviews", "dashboard"]);
     } catch (err) {
       setError(getApiErrorMessage(err));
     } finally {
@@ -88,105 +118,357 @@ export function AdminReviewsList() {
     }
   }
 
-  const items = readPaginatedItems(data);
+  const rawItems = readPaginatedItems(data);
+  const items = rawItems;
 
   return (
-    <AdminSection
-      title="Review moderation"
-      description="Approve or reject customer product reviews."
-      loading={loading}
-      error={error}
-      empty={!loading && !error && items.length === 0}
-      emptyMessage="No reviews in the queue."
-      actions={
-        <select
-          value={approvedFilter}
-          onChange={(event) => setApprovedFilter(event.target.value)}
-          className="h-9 rounded-md border border-border bg-background px-2 text-sm"
-          aria-label="Filter by approval"
+    <>
+      <div className="mb-4 grid grid-cols-2 gap-3 rounded-xl border border-border/40 bg-card p-4 shadow-sm sm:flex sm:flex-row sm:flex-wrap sm:items-center sm:justify-between sm:gap-4">
+        <div className="col-span-2 flex w-full min-w-0 flex-col gap-3 sm:flex-1 sm:flex-row sm:flex-wrap sm:items-center">
+          <div className="relative w-full min-w-0 sm:max-w-sm sm:flex-1">
+            <div className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
+              <svg
+                className="w-4 h-4 text-muted-foreground"
+                aria-hidden="true"
+                xmlns="http://www.w3.org/2000/svg"
+                fill="none"
+                viewBox="0 0 20 20"
+              >
+                <path
+                  stroke="currentColor"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth="2"
+                  d="m19 19-4-4m0-7A7 7 0 1 1 1 8a7 7 0 0 1 14 0Z"
+                />
+              </svg>
+            </div>
+            <input
+              className="h-9 w-full rounded-md border border-border/50 bg-muted/20 pl-9 pr-3 text-sm focus:border-zinc-900 focus:outline-none"
+              placeholder="Search reviews by product or customer..."
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  setSearch(searchInput.trim());
+                  setPage(1);
+                }
+              }}
+            />
+          </div>
+
+          <select
+            className="h-9 w-full rounded-md border border-border/50 bg-muted/20 px-3 text-sm font-medium text-foreground focus:border-zinc-900 focus:outline-none sm:w-auto sm:min-w-32"
+            value={ratingFilter}
+            onChange={(e) => setRatingFilter(e.target.value)}
+          >
+            <option value="">All Ratings</option>
+            <option value="5">5 Stars</option>
+            <option value="4">4 Stars</option>
+            <option value="3">3 Stars</option>
+            <option value="2">2 Stars</option>
+            <option value="1">1 Star</option>
+          </select>
+
+          <select
+            className="h-9 w-full rounded-md border border-border/50 bg-muted/20 px-3 text-sm font-medium text-foreground focus:border-zinc-900 focus:outline-none sm:w-auto sm:min-w-32"
+            value={approvedFilter}
+            onChange={(event) => setApprovedFilter(event.target.value)}
+          >
+            <option value="">All Status</option>
+            <option value="true">Published</option>
+            <option value="false">Pending</option>
+          </select>
+        </div>
+
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="h-9 w-full col-span-2 gap-2 font-medium sm:w-auto sm:col-span-1"
+          onClick={() => {
+            setSearch(searchInput.trim());
+            setPage(1);
+          }}
         >
-          <option value="">All reviews</option>
-          <option value="false">Pending</option>
-          <option value="true">Approved</option>
-        </select>
-      }
-    >
-      {data ? (
-        <>
-          <div className="overflow-x-auto rounded-md border border-border">
-            <table className="w-full min-w-[720px] text-left text-sm">
-              <thead className="border-b border-border bg-muted/50 text-xs uppercase text-muted-foreground">
+          Filter
+        </Button>
+      </div>
+
+      {loading ? (
+        <div className="flex h-[300px] w-full items-center justify-center">
+          <div className="h-8 w-8 animate-spin rounded-full border-4 border-zinc-900 border-t-transparent"></div>
+        </div>
+      ) : error ? (
+        <div className="rounded-xl border border-destructive/20 bg-destructive/10 p-4 text-sm text-destructive font-medium">
+          {error}
+        </div>
+      ) : data ? (
+        <div className="rounded-xl border border-border/40 bg-card p-5 shadow-sm min-w-0 overflow-hidden">
+          <AdminTableScroll>
+            <table className="w-full min-w-[900px] text-left text-sm">
+              <thead className="border-b border-border/40 text-xs font-medium text-muted-foreground">
                 <tr>
-                  <th className="px-3 py-2 font-medium">Author</th>
-                  <th className="px-3 py-2 font-medium">Rating</th>
-                  <th className="px-3 py-2 font-medium">Review</th>
-                  <th className="px-3 py-2 font-medium">Status</th>
-                  <th className="px-3 py-2 font-medium">Actions</th>
+                  <th className="px-3 py-4 w-10">
+                    <input
+                      type="checkbox"
+                      className="rounded border-border text-zinc-900 focus:ring-zinc-900"
+                      checked={
+                        items.length > 0 &&
+                        items.every((r) => selectedIds[r.id])
+                      }
+                      onChange={(e) => {
+                        const next: Record<string, boolean> = {};
+                        items.forEach((r) => {
+                          next[r.id] = e.target.checked;
+                        });
+                        setSelectedIds(next);
+                      }}
+                    />
+                  </th>
+                  <th className="px-3 py-4 font-medium w-1/3">Review</th>
+                  <th className="px-3 py-4 font-medium">Product</th>
+                  <th className="px-3 py-4 font-medium">Customer</th>
+                  <th className="px-3 py-4 font-medium">Rating</th>
+                  <th className="px-3 py-4 font-medium">Date</th>
+                  <th className="px-3 py-4 font-medium">Status</th>
+                  <th className="px-3 py-4 font-medium text-right">Actions</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="divide-y divide-border/20">
+                {items.length === 0 ? (
+                  <tr>
+                    <td
+                      colSpan={8}
+                      className="py-8 text-center text-sm text-muted-foreground"
+                    >
+                      No reviews found.
+                    </td>
+                  </tr>
+                ) : null}
                 {items.map((review) => (
-                  <tr key={review.id} className="border-b border-border last:border-0">
-                    <td className="px-3 py-2">
-                      <p>
-                        {review.author.firstName} {review.author.lastName}
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        {formatAdminDate(review.createdAt)}
-                      </p>
-                    </td>
-                    <td className="px-3 py-2">{review.rating}/5</td>
-                    <td className="max-w-xs px-3 py-2 text-xs">
-                      {review.body ?? <span className="text-muted-foreground">No text</span>}
-                    </td>
-                    <td className="px-3 py-2">
-                      <AdminStatusBadge
-                        label={review.approved ? "Approved" : "Pending"}
-                        tone={reviewApprovalTone(review.approved)}
+                  <tr key={review.id} className="group hover:bg-muted/20">
+                    <td className="px-3 py-4">
+                      <input
+                        type="checkbox"
+                        className="rounded border-border text-zinc-900 focus:ring-zinc-900"
+                        checked={Boolean(selectedIds[review.id])}
+                        onChange={(e) =>
+                          setSelectedIds((prev) => ({
+                            ...prev,
+                            [review.id]: e.target.checked,
+                          }))
+                        }
                       />
                     </td>
-                    <td className="px-3 py-2">
-                      <div className="flex flex-wrap gap-1">
-                        {!review.approved ? (
-                          <Button
+                    <td className="px-3 py-4">
+                      <div className="flex gap-3">
+                        <div className="h-10 w-10 shrink-0 overflow-hidden rounded-md border border-border/50 bg-muted">
+                          {review.images && review.images.length > 0 ? (
+                            <Image
+                              src={review.images[0]}
+                              alt="Review image"
+                              width={40}
+                              height={40}
+                              className="h-full w-full object-cover"
+                            />
+                          ) : (
+                            <div className="flex h-full w-full items-center justify-center bg-zinc-100 text-zinc-900">
+                              <svg
+                                className="h-5 w-5"
+                                fill="none"
+                                viewBox="0 0 24 24"
+                                stroke="currentColor"
+                              >
+                                <path
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  strokeWidth={1.5}
+                                  d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
+                                />
+                              </svg>
+                            </div>
+                          )}
+                        </div>
+                        <div className="flex flex-col gap-0.5">
+                          <p className="font-semibold text-foreground text-sm line-clamp-1">
+                            {review.body
+                              ? review.body.split("\n")[0]
+                              : "No Title"}
+                          </p>
+                          <p className="text-[11px] text-muted-foreground line-clamp-1">
+                            {review.body
+                              ? review.body
+                              : "No review text provided."}
+                          </p>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-3 py-4">
+                      {review.productSlug ? (
+                        <Link
+                          href={`/products/${review.productSlug}`}
+                          className="font-medium text-foreground text-sm hover:text-zinc-900 hover:underline"
+                        >
+                          {review.productName ?? review.productId.slice(0, 8)}
+                        </Link>
+                      ) : (
+                        <span className="font-medium text-foreground text-sm">
+                          {review.productName ?? review.productId.slice(0, 8)}
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-3 py-4">
+                      <div className="flex items-center gap-2">
+                        <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-blue-100 text-[9px] font-bold text-blue-700 uppercase">
+                          {review.author.firstName?.charAt(0)}
+                          {review.author.lastName?.charAt(0)}
+                        </div>
+                        <p className="font-medium text-foreground text-xs">
+                          {review.author.firstName} {review.author.lastName}
+                        </p>
+                      </div>
+                    </td>
+                    <td className="px-3 py-4">
+                      <div className="flex items-center gap-0.5 text-amber-400">
+                        {[1, 2, 3, 4, 5].map((star) => (
+                          <svg
+                            key={star}
+                            className={`h-3.5 w-3.5 ${star <= review.rating ? "fill-current text-amber-400" : "fill-none text-muted-foreground/30 stroke-current"}`}
+                            viewBox="0 0 24 24"
+                            strokeWidth={star <= review.rating ? 0 : 2}
+                          >
+                            <path d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
+                          </svg>
+                        ))}
+                      </div>
+                    </td>
+                    <td className="px-3 py-4 text-xs text-muted-foreground whitespace-pre-wrap leading-tight">
+                      {formatAdminDate(review.createdAt).replace(", ", "\n")}
+                    </td>
+                    <td className="px-3 py-4">
+                      <div
+                        className={`inline-flex rounded-full px-2.5 py-0.5 text-[11px] font-medium border ${
+                          review.approved
+                            ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                            : "bg-amber-50 text-amber-600 border-amber-100"
+                        }`}
+                      >
+                        {review.approved ? "Published" : "Pending"}
+                      </div>
+                    </td>
+                    <td className="px-3 py-4 text-right">
+                      <div className="flex items-center justify-end gap-2">
+                        <Link
+                          href={
+                            review.productSlug
+                              ? `/products/${review.productSlug}`
+                              : `/admin`
+                          }
+                          className="flex h-7 w-7 items-center justify-center rounded border border-border/50 text-muted-foreground hover:bg-muted hover:text-foreground"
+                          title="View product"
+                          target="_blank"
+                        >
+                          <svg
+                            className="h-4 w-4"
+                            fill="none"
+                            viewBox="0 0 20 14"
+                            stroke="currentColor"
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth={2}
+                              d="M10 10a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"
+                            />
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth={2}
+                              d="M10 13c-4.97 0-9-2.686-9-6s4.03-6 9-6 9 2.686 9 6-4.03 6-9 6Z"
+                            />
+                          </svg>
+                        </Link>
+
+                        {canModerate && (!review.approved ? (
+                          <button
                             type="button"
-                            size="sm"
-                            variant="outline"
+                            className="flex h-7 w-7 items-center justify-center rounded border border-zinc-900/50 text-zinc-900 bg-zinc-100 hover:bg-zinc-200 transition-colors"
                             disabled={actionId === review.id}
                             onClick={() => void moderate(review.id, true)}
+                            title="Approve Review"
                           >
-                            Approve
-                          </Button>
+                            <svg
+                              className="h-4 w-4"
+                              fill="none"
+                              viewBox="0 0 24 24"
+                              stroke="currentColor"
+                            >
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth={2}
+                                d="M5 13l4 4L19 7"
+                              />
+                            </svg>
+                          </button>
                         ) : (
-                          <Button
+                          <button
                             type="button"
-                            size="sm"
-                            variant="outline"
+                            className="flex h-7 w-7 items-center justify-center rounded border border-amber-500/50 text-amber-600 bg-amber-50 hover:bg-amber-100 transition-colors"
                             disabled={actionId === review.id}
                             onClick={() => void moderate(review.id, false)}
+                            title="Reject Review"
                           >
-                            Reject
-                          </Button>
-                        )}
-                        <Button
+                            <svg
+                              className="h-4 w-4"
+                              fill="none"
+                              viewBox="0 0 24 24"
+                              stroke="currentColor"
+                            >
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth={2}
+                                d="M6 18L18 6M6 6l12 12"
+                              />
+                            </svg>
+                          </button>
+                        ))}
+
+                        {canModerate && <button
                           type="button"
-                          size="sm"
-                          variant="destructive"
+                          className="flex h-7 w-7 items-center justify-center rounded border border-rose-200 bg-rose-50 text-rose-600 hover:bg-rose-100 transition-colors"
+                          title="Delete review"
                           disabled={actionId === review.id}
                           onClick={() => void remove(review.id)}
                         >
-                          Delete
-                        </Button>
+                          <svg
+                            className="h-4 w-4"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            stroke="currentColor"
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth={2}
+                              d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                            />
+                          </svg>
+                        </button>}
                       </div>
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
+          </AdminTableScroll>
+          <div className="mt-6 border-t border-border/40 pt-4">
+            <AdminPagination meta={data.meta} onPageChange={setPage} />
           </div>
-          <AdminPagination meta={data.meta} onPageChange={setPage} />
-        </>
+        </div>
       ) : null}
-    </AdminSection>
+    </>
   );
 }

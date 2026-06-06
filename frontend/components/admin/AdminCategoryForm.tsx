@@ -35,7 +35,7 @@ export function AdminCategoryForm({ categories, onSaved }: AdminCategoryFormProp
   const categoryRows = ensureArray<AdminCategoryListItem>(categories);
   const api = useAuthenticatedApi();
   const { adminUser } = useAdminAuth();
-  const canWrite = hasAdminPermission(adminUser, ADMIN_PERMISSIONS.productsWrite);
+  const canWrite = hasAdminPermission(adminUser, ADMIN_PERMISSIONS.categoriesWrite);
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [name, setName] = useState("");
@@ -191,7 +191,7 @@ export function AdminCategoryForm({ categories, onSaved }: AdminCategoryFormProp
           type="button"
           onClick={() => void onSubmit()}
           disabled={saving || !name.trim() || !slug.trim()}
-          className="h-9 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground disabled:opacity-60"
+          className="h-9 rounded-md bg-zinc-900 px-4 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-60"
         >
           {saving ? "Saving…" : editingId ? "Update category" : "Create category"}
         </button>
@@ -224,14 +224,14 @@ export function AdminCategoryForm({ categories, onSaved }: AdminCategoryFormProp
                       <div className="flex gap-2">
                         <button
                           type="button"
-                          className="text-xs text-primary"
+                          className="h-7 rounded-md bg-zinc-900 px-3 text-xs font-medium text-white hover:bg-zinc-800 disabled:opacity-60"
                           onClick={() => startEdit(category)}
                         >
                           Edit
                         </button>
                         <button
                           type="button"
-                          className="text-xs text-destructive"
+                          className="h-7 rounded-md bg-zinc-900 px-3 text-xs font-medium text-white hover:bg-zinc-800 disabled:opacity-60"
                           disabled={saving}
                           onClick={() => void onDelete(category.id)}
                         >
