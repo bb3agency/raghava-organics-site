@@ -33,7 +33,11 @@ export default async function CartPage() {
 
       {/* ── Cart Workspace ────────────────────────────────────────────── */}
       <section className="mx-auto w-full max-w-[1440px] px-4 pt-6 sm:pt-12 lg:px-8">
-        <CartWorkspace minOrderValuePaise={storeConfig.minOrderValuePaise} />
+        <CartWorkspace
+          minOrderValuePaise={storeConfig.minOrderValuePaise}
+          couponsEnabled={storeConfig.couponsEnabled}
+          configAvailable={storeConfig.configAvailable}
+        />
       </section>
     </div>
   );

@@ -245,6 +245,7 @@ export async function registerProductsRoutes(fastify: FastifyInstance): Promise<
       const params = request.params as { id: string };
       const files: Array<{ buffer: Buffer; mimeType: string | null }> = [];
       let altText = '';
+      let sortOrderOverride: number | undefined;
 
       for await (const part of request.parts()) {
         if (part.type === 'file' && (part.fieldname === 'file' || part.fieldname === 'files')) {
@@ -265,6 +266,12 @@ export async function registerProductsRoutes(fastify: FastifyInstance): Promise<
             typeof raw === 'string' ? raw : Buffer.isBuffer(raw) ? raw.toString('utf8') : ''
           ).trim();
           if (part.fieldname === 'altText') altText = value;
+          if (part.fieldname === 'sortOrder') {
+            const parsed = Number(value);
+            if (Number.isFinite(parsed) && parsed >= 0) {
+              sortOrderOverride = Math.floor(parsed);
+            }
+          }
         }
       }
 
@@ -276,7 +283,8 @@ export async function registerProductsRoutes(fastify: FastifyInstance): Promise<
       const uploads = files.map((file) => ({
         buffer: file.buffer,
         mimeType: file.mimeType,
-        altText: defaultAlt
+        altText: defaultAlt,
+        ...(sortOrderOverride !== undefined ? { sortOrderHint: sortOrderOverride } : {})
       }));
 
       const items = await productsService.adminUploadProductImages(params.id, uploads);

@@ -3,6 +3,7 @@ import {
   standardErrorResponses
 } from '@common/errors/error-response.schema';
 import { adminUploadProductImageSchema } from '@modules/media/media.schemas';
+import { PRODUCT_MAX_IMAGES_PER_PRODUCT } from '@modules/media/product-media.constants';
 
 /** HTTPS CDN URL or VPS-hosted media path served via Cloudflare origin. */
 const productImageUrlProperty = {
@@ -60,7 +61,7 @@ const productListItemSchema = {
         required: ['id', 'url', 'altText', 'sortOrder'],
         properties: {
           id: { type: 'string', maxLength: 64 },
-          url: { type: 'string', format: 'uri', maxLength: 1000 },
+          url: { ...productImageUrlProperty, maxLength: 1000 },
           altText: { type: 'string', maxLength: 200 },
           sortOrder: { type: 'integer', minimum: 0, maximum: 1000 }
         }
@@ -107,7 +108,8 @@ const publicCategorySchema = {
     id: { type: 'string', maxLength: 64 },
     name: { type: 'string', maxLength: 100 },
     slug: { type: 'string', maxLength: 100 },
-    parentId: { type: ['string', 'null'], maxLength: 64 }
+    parentId: { type: ['string', 'null'], maxLength: 64 },
+    imageUrl: { type: ['string', 'null'], maxLength: 500 }
   }
 } as const;
 
@@ -278,7 +280,7 @@ const adminProductInputProperties = {
   isActive: { type: 'boolean' },
   images: {
     type: 'array',
-    maxItems: 30,
+    maxItems: PRODUCT_MAX_IMAGES_PER_PRODUCT,
     items: {
       type: 'object',
       additionalProperties: false,
@@ -363,7 +365,7 @@ export const adminReorderProductImagesSchema = {
       images: {
         type: 'array',
         minItems: 1,
-        maxItems: 30,
+        maxItems: PRODUCT_MAX_IMAGES_PER_PRODUCT,
         items: {
           type: 'object',
           additionalProperties: false,

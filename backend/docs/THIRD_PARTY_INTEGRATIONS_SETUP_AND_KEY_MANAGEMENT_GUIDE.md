@@ -94,7 +94,7 @@ Dispatch policy (applies regardless of provider):
   - `NOTIFY_SMS_ENABLED` — defaults to `false` if unset (opt-in channel — enable only after configuring provider credentials)
   - `NOTIFY_WHATSAPP_ENABLED` — defaults to `false` if unset (opt-in channel)
 - Provider adapters are instantiated in `createNotificationProviders()` with unavailable adapters returned for disabled channels
-- Notification worker (`queues/workers/notifications.worker.ts`) logs provider as `'meta-whatsapp'` for WhatsApp messages
+- Notification worker (`queues/workers/notifications.worker.ts`) logs provider as `'meta-whatsapp'` for WhatsApp messages; calls `onProviderSuccess` / `onProviderFailure` on each send attempt to track systematic provider outages and emit `sendNotificationFailureAlert` when failure thresholds are exceeded
 - Meta WhatsApp credentials are required only when `NOTIFY_WHATSAPP_ENABLED=true` (enforced in both `app.config.ts` and `ops-config-contract.ts`)
 
 **Provider-specific notes:**

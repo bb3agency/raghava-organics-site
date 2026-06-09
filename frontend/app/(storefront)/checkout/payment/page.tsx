@@ -143,6 +143,10 @@ function PaymentContent() {
     return <p className="text-sm text-muted-foreground">Loading order details...</p>;
   }
 
+  const canRetry =
+    order.paymentMode !== "COD" &&
+    (order.status === "PENDING_PAYMENT" || order.status === "PAYMENT_FAILED");
+
   if (order.paymentMode === "COD") {
     return (
       <p className="text-sm text-muted-foreground">
@@ -151,6 +155,20 @@ function PaymentContent() {
           View order details
         </a>
       </p>
+    );
+  }
+
+  if (!canRetry) {
+    return (
+      <div className="mx-auto max-w-md rounded-2xl border border-[#efe8e4] bg-white p-6 shadow-sm">
+        <h1 className="mb-4 font-heading text-2xl font-bold text-[#23403d]">Payment unavailable</h1>
+        <p className="text-sm text-[#767676]">
+          This order is in <span className="font-semibold text-[#23403d]">{order.status}</span> status and cannot accept payment here.
+        </p>
+        <a href={`/orders/${order.id}`} className="mt-4 inline-block text-sm underline text-[#23403d]">
+          View order details
+        </a>
+      </div>
     );
   }
 

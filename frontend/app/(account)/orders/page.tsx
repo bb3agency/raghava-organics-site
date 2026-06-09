@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useAuthStore } from "@/stores/auth";
 import { getMyOrders, type UserOrder } from "@/lib/users-api";
-import { getBrowserApiBaseUrl } from "@/lib/api-base";
+import { downloadCustomerInvoicePdf } from "@/lib/orders-api";
 import { getApiErrorMessage } from "@/lib/error-messages";
 import { formatPrice } from "@/lib/format-price";
 import { formatPaymentModeLabel } from "@/lib/format-payment-mode";
@@ -15,6 +15,23 @@ export default function AccountOrdersPage() {
   const [orders, setOrders] = useState<UserOrder[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [invoiceBusyId, setInvoiceBusyId] = useState<string | null>(null);
+
+  async function handleDownloadInvoice(order: UserOrder) {
+    if (!accessToken || !order.invoice?.hasPdf) return;
+    setInvoiceBusyId(order.id);
+    try {
+      await downloadCustomerInvoicePdf(
+        order.id,
+        accessToken,
+        `${order.orderNumber}-invoice.pdf`,
+      );
+    } catch (err) {
+      setError(getApiErrorMessage(err));
+    } finally {
+      setInvoiceBusyId(null);
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -91,14 +108,14 @@ export default function AccountOrdersPage() {
               View
             </Link>
             {order.invoice?.hasPdf ? (
-              <a
-                href={`${getBrowserApiBaseUrl()}/orders/${order.id}/invoice.pdf`}
-                target="_blank"
-                rel="noreferrer"
-                className="text-sm underline"
+              <button
+                type="button"
+                className="text-sm underline disabled:opacity-50"
+                disabled={invoiceBusyId === order.id}
+                onClick={() => void handleDownloadInvoice(order)}
               >
-                Invoice
-              </a>
+                {invoiceBusyId === order.id ? "Downloading…" : "Invoice"}
+              </button>
             ) : null}
           </div>
         </article>

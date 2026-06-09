@@ -1,3 +1,4 @@
+import { getPublicStoreConfig } from "@/lib/storefront-settings";
 import Link from "next/link";
 import Image from "next/image";
 import { ChevronRight, Leaf, Heart, Shield, Users, Sprout, Truck, Star } from "lucide-react";
@@ -36,14 +37,19 @@ const VALUES = [
   },
 ];
 
-const STATS = [
+const BASE_STATS = [
   { value: "120+", label: "Partner Farmers" },
   { value: "300+", label: "Pesticide Tests per Batch" },
   { value: "48 hrs", label: "Farm to Door" },
-  { value: "4.8 ★", label: "Average Rating" },
-];
+] as const;
 
-export default function AboutPage() {
+const REVIEWS_STAT = { value: "4.8 ★", label: "Average Rating" } as const;
+
+export default async function AboutPage() {
+  const storeConfig = await getPublicStoreConfig();
+  const stats = storeConfig.reviewsEnabled
+    ? [...BASE_STATS, REVIEWS_STAT]
+    : [...BASE_STATS];
   return (
     <div className="flex flex-col bg-[#eff5ee] min-h-screen pb-16">
       {/* ── Page Header Banner ──────────────────────────────────────────── */}
@@ -123,7 +129,7 @@ export default function AboutPage() {
 
           {/* Impact stats */}
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-4 sm:gap-6">
-            {STATS.map(({ value, label }) => (
+            {stats.map(({ value, label }) => (
               <div
                 key={label}
                 className="flex flex-col items-center justify-center rounded-[20px] bg-[#23403d] px-4 py-6 text-center sm:py-8"

@@ -8,15 +8,23 @@ import { useAuthStore } from "@/stores/auth";
 import { useCartSync } from "@/hooks/use-cart-sync";
 import { formatPrice } from "@/lib/format-price";
 import { ShoppingCart, Plus, Minus, X, Trash2, ArrowRight, AlertTriangle } from "lucide-react";
-import { clearCart, removeCartItem, updateCartItem } from "@/lib/cart-api";
-import { getApiErrorMessage } from "@/lib/error-messages";
+import { clearCart, removeCartItem, updateCartItem, applyCartCoupon, removeCartCoupon } from "@/lib/cart-api";
+import { getApiErrorMessage, getApiErrorMessageWithHint } from "@/lib/error-messages";
 
 interface CartWorkspaceProps {
-  /** Minimum cart total in paise (from backend DB). 0 = no minimum enforced. */
+  /** Minimum cart subtotal in paise (from backend DB). 0 = no minimum enforced. */
   minOrderValuePaise?: number;
+  /** From GET /store/config — matches backend FEATURE_COUPONS_ENABLED. */
+  couponsEnabled?: boolean;
+  /** False when GET /store/config failed — block checkout until settings load. */
+  configAvailable?: boolean;
 }
 
-export function CartWorkspace({ minOrderValuePaise = 0 }: CartWorkspaceProps) {
+export function CartWorkspace({
+  minOrderValuePaise = 0,
+  couponsEnabled = false,
+  configAvailable = true,
+}: CartWorkspaceProps) {
   useCartSync();
   const cart = useCartStore((s) => s.cart);
   const items = useCartStore((s) => s.items);
@@ -24,6 +32,8 @@ export function CartWorkspace({ minOrderValuePaise = 0 }: CartWorkspaceProps) {
   const accessToken = useAuthStore((s) => s.accessToken);
   const [error, setError] = useState<string | null>(null);
   const [loadingItemId, setLoadingItemId] = useState<string | null>(null);
+  const [couponCode, setCouponCode] = useState("");
+  const [couponLoading, setCouponLoading] = useState(false);
 
   const summary = useMemo(() => {
     if (!cart) {
@@ -39,6 +49,11 @@ export function CartWorkspace({ minOrderValuePaise = 0 }: CartWorkspaceProps) {
       total: cart.total,
     };
   }, [cart]);
+
+  const effectiveMinOrderPaise = cart?.minOrderValuePaise ?? minOrderValuePaise;
+  const meetsMinimumOrder =
+    cart?.meetsMinimumOrder ??
+    (effectiveMinOrderPaise === 0 || summary.subtotal >= effectiveMinOrderPaise);
 
   if (items.length === 0) {
     return (
@@ -96,6 +111,35 @@ export function CartWorkspace({ minOrderValuePaise = 0 }: CartWorkspaceProps) {
       setCart(next);
     } catch (err) {
       setError(getApiErrorMessage(err));
+    }
+  };
+
+  const handleApplyCoupon = async () => {
+    const trimmed = couponCode.trim();
+    if (!trimmed) return;
+    try {
+      setError(null);
+      setCouponLoading(true);
+      const next = await applyCartCoupon(trimmed, accessToken);
+      setCart(next);
+      setCouponCode("");
+    } catch (err) {
+      setError(getApiErrorMessageWithHint(err));
+    } finally {
+      setCouponLoading(false);
+    }
+  };
+
+  const handleRemoveCoupon = async () => {
+    try {
+      setError(null);
+      setCouponLoading(true);
+      const next = await removeCartCoupon(accessToken);
+      setCart(next);
+    } catch (err) {
+      setError(getApiErrorMessageWithHint(err));
+    } finally {
+      setCouponLoading(false);
     }
   };
 
@@ -233,6 +277,46 @@ export function CartWorkspace({ minOrderValuePaise = 0 }: CartWorkspaceProps) {
           <h2 className="mb-6 font-heading text-2xl font-bold text-[#23403d]">Cart Totals</h2>
 
           <div className="flex flex-col gap-4 text-sm font-bold">
+            {couponsEnabled ? (
+              <div className="flex flex-col gap-2 border-b border-[#efe8e4] pb-4">
+                {cart?.coupon ? (
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs text-[#767676]">
+                      Coupon{" "}
+                      <span className="font-bold text-[#23403d]">{cart.coupon.code}</span> applied
+                    </span>
+                    <button
+                      type="button"
+                      disabled={couponLoading}
+                      onClick={handleRemoveCoupon}
+                      className="text-xs font-bold text-[#ec6e55] hover:underline disabled:opacity-50"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <input
+                      type="text"
+                      value={couponCode}
+                      onChange={(event) => setCouponCode(event.target.value.toUpperCase())}
+                      placeholder="Coupon code"
+                      aria-label="Coupon code"
+                      className="h-10 flex-1 rounded-full border border-[#efe8e4] px-4 text-xs font-bold uppercase text-[#23403d] outline-none focus:border-[#23403d]"
+                    />
+                    <button
+                      type="button"
+                      disabled={couponLoading || couponCode.trim().length === 0}
+                      onClick={handleApplyCoupon}
+                      className="h-10 rounded-full bg-[#23403d] px-5 text-xs font-bold text-white transition-colors hover:bg-[#ec6e55] disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Apply
+                    </button>
+                  </div>
+                )}
+              </div>
+            ) : null}
+
             <div className="flex items-center justify-between border-b border-[#efe8e4] pb-4">
               <span className="text-[#767676]">Subtotal</span>
               <span className="text-[#23403d]">{formatPrice(summary.subtotal)}</span>
@@ -240,7 +324,11 @@ export function CartWorkspace({ minOrderValuePaise = 0 }: CartWorkspaceProps) {
 
             <div className="flex items-center justify-between border-b border-[#efe8e4] pb-4">
               <span className="text-[#767676]">Discount</span>
-              <span className="text-[#00aa63]">-{formatPrice(summary.discountAmount)}</span>
+              <span className="text-[#00aa63]">
+                {couponsEnabled || summary.discountAmount > 0
+                  ? `-${formatPrice(summary.discountAmount)}`
+                  : formatPrice(0)}
+              </span>
             </div>
 
             <div className="flex items-center justify-between pt-2">
@@ -249,24 +337,40 @@ export function CartWorkspace({ minOrderValuePaise = 0 }: CartWorkspaceProps) {
             </div>
 
             {/* Minimum order indicator */}
-            {minOrderValuePaise > 0 && (
+            {effectiveMinOrderPaise > 0 && (
               <div className="flex items-center justify-between border-t border-[#efe8e4] pt-3">
                 <span className="text-xs text-[#767676]">Minimum order</span>
                 <span className="text-xs font-bold text-[#23403d]">
-                  {formatPrice(minOrderValuePaise)}
+                  {formatPrice(effectiveMinOrderPaise)}
                 </span>
               </div>
             )}
           </div>
 
-          {/* Min-order gate: show warning + disable button when cart is below threshold */}
-          {minOrderValuePaise > 0 && summary.total < minOrderValuePaise ? (
+          {/* Min-order / config gate */}
+          {!configAvailable ? (
             <div className="mt-6 flex flex-col gap-3">
               <div className="flex items-start gap-2 rounded-[12px] border border-amber-200 bg-amber-50 px-3 py-2.5">
                 <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-600" aria-hidden />
                 <p className="text-xs font-bold text-amber-800">
-                  Add {formatPrice(minOrderValuePaise - summary.total)} more to reach the{" "}
-                  {formatPrice(minOrderValuePaise)} minimum order value.
+                  Store settings are temporarily unavailable. Refresh the page before checkout.
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled
+                className="flex h-12 w-full cursor-not-allowed items-center justify-center gap-2 rounded-full bg-[#23403d]/30 text-sm font-bold text-white sm:h-14"
+              >
+                Proceed to checkout <ArrowRight className="size-4" aria-hidden />
+              </button>
+            </div>
+          ) : !meetsMinimumOrder && effectiveMinOrderPaise > 0 ? (
+            <div className="mt-6 flex flex-col gap-3">
+              <div className="flex items-start gap-2 rounded-[12px] border border-amber-200 bg-amber-50 px-3 py-2.5">
+                <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-600" aria-hidden />
+                <p className="text-xs font-bold text-amber-800">
+                  Add {formatPrice(effectiveMinOrderPaise - summary.subtotal)} more to reach the{" "}
+                  {formatPrice(effectiveMinOrderPaise)} minimum order value.
                 </p>
               </div>
               <button

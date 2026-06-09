@@ -117,4 +117,19 @@ describe('DelhiveryAdapter', () => {
       estimatedDays: 2
     });
   });
+
+  it('throws when Delhivery returns invalid JSON on success response', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => 'not-json'
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new DelhiveryAdapter({ apiKey: 'delhivery_key', baseUrl: 'https://track.delhivery.com/api' });
+    await expect(adapter.checkServiceability('560001')).rejects.toMatchObject({
+      statusCode: 502,
+      message: 'Delhivery returned invalid JSON'
+    });
+  });
 });

@@ -18,6 +18,7 @@ export interface ProductCategory {
   id: string;
   name: string;
   slug: string;
+  imageUrl?: string | null;
 }
 
 export interface Product {

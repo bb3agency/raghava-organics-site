@@ -84,14 +84,35 @@ export default class DelhiveryAdapter implements ShippingProviderAdapter {
   }
 
   async cancelShipment(awbNumber: string): Promise<{ cancelled: boolean; providerPayload: Record<string, unknown> }> {
-    const payload = await this.trackShipment(awbNumber);
+    const payload = await this.request('/api/p/edit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        waybill: awbNumber,
+        cancellation: 'true'
+      })
+    });
+    const statusText = (
+      this.pickString(payload, [['status'], ['remark'], ['message']]) ?? ''
+    ).toLowerCase();
+    const cancelled =
+      statusText.includes('cancel') ||
+      statusText.includes('success') ||
+      this.pickString(payload, [['waybill']]) === awbNumber;
+    if (!cancelled) {
+      throw new AppError(
+        ERROR_CODES.INTERNAL_ERROR,
+        `Delhivery did not confirm cancellation for AWB ${awbNumber}`,
+        502
+      );
+    }
     return {
-      cancelled: false,
-      providerPayload: payload.providerPayload
+      cancelled: true,
+      providerPayload: payload
     };
   }
 
-  async checkServiceability(pincode: string): Promise<ServiceabilityResult> {
+  async checkServiceability(pincode: string, _originPincode?: string): Promise<ServiceabilityResult> {
     const payload = await this.request(`/c/api/pin-codes/json/?filter_codes=${encodeURIComponent(pincode)}`);
     const serviceable = this.pickArrayLength(payload, [['delivery_codes']]) > 0;
     return {
@@ -102,14 +123,15 @@ export default class DelhiveryAdapter implements ShippingProviderAdapter {
   }
 
   async calculateDeliveryRate(input: DeliveryRateInput): Promise<DeliveryRateResult> {
+    const isCod = input.paymentMode === 'COD';
     const query = new URLSearchParams({
       md: 'S',
       ss: 'Delivered',
       d_pin: input.destinationPincode,
       o_pin: input.originPincode,
       cgm: String(Math.max(1, Math.floor(input.totalWeightGrams))),
-      pt: 'Pre-paid',
-      cod: '0'
+      pt: isCod ? 'COD' : 'Pre-paid',
+      cod: isCod ? '1' : '0'
     });
 
     const payload = await this.request(`/api/kinko/v1/invoice/charges/?${query.toString()}`);
@@ -165,7 +187,7 @@ export default class DelhiveryAdapter implements ShippingProviderAdapter {
     try {
       return JSON.parse(text) as Record<string, unknown>;
     } catch {
-      return { raw: text };
+      throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Delhivery returned invalid JSON', 502);
     }
   }
 

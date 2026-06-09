@@ -35,6 +35,7 @@ import {
 } from "@/lib/admin-api";
 import { formatPaise } from "@/lib/admin-format";
 import { cn } from "@/lib/utils";
+import { resolveProductImageUrl } from "@/lib/media-url";
 
 interface AdminSearchPanelProps {
   onClose: () => void;
@@ -562,7 +563,7 @@ export function AdminSearchPanel({ onClose }: AdminSearchPanelProps) {
                   </div>
                   {results.products.map((product) => {
                     const idx = flatIndex++;
-                    const img = product.images?.[0]?.url;
+                    const img = resolveProductImageUrl(product.images?.[0]?.url);
                     return (
                       <Link
                         key={product.id}
@@ -574,7 +575,7 @@ export function AdminSearchPanel({ onClose }: AdminSearchPanelProps) {
                         )}
                       >
                         <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border/50 bg-muted/40 overflow-hidden">
-                          {img ? (
+                          {img && img !== "/next.svg" ? (
                             // eslint-disable-next-line @next/next/no-img-element
                             <img src={img} alt="" className="h-full w-full object-cover" />
                           ) : (

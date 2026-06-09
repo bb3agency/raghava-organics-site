@@ -11,6 +11,7 @@ import { useAuthStore } from "@/stores/auth";
 import { useWishlistStore } from "@/stores/wishlist";
 import { addToWishlist, removeFromWishlist } from "@/lib/wishlist-api";
 import { cn } from "@/lib/utils";
+import { useStoreConfig } from "@/components/providers/StoreConfigProvider";
 
 const PLACEHOLDER_IMAGE = "/images/product-placeholder.svg";
 
@@ -27,6 +28,7 @@ export function ProductCard({
 }: ProductCardProps) {
   const image = product.images[0];
   const accessToken = useAuthStore((s) => s.accessToken);
+  const { wishlistEnabled } = useStoreConfig();
   const items = useWishlistStore((s) => s.items);
   const toggleItem = useWishlistStore((s) => s.toggleItem);
   const [loading, setLoading] = useState(false);
@@ -117,19 +119,21 @@ export function ProductCard({
         </div>
 
         <div className="absolute right-3 top-3 flex flex-col gap-2 opacity-100 transition-all duration-300 lg:translate-x-2 lg:opacity-0 lg:group-hover:translate-x-0 lg:group-hover:opacity-100">
-          <button
-            type="button"
-            className={cn(
-              "flex size-9 items-center justify-center rounded-full border border-white/80 bg-white/95 text-[#23403d] shadow-md backdrop-blur-sm transition-colors hover:bg-[#ec6e55] hover:text-white",
-              inWishlist && "bg-[#ec6e55] text-white",
-              loading && "opacity-60",
-            )}
-            aria-label={inWishlist ? "Remove from wishlist" : "Add to wishlist"}
-            onClick={handleWishlistToggle}
-            disabled={loading}
-          >
-            <Heart className={cn("size-4", inWishlist && "fill-current")} />
-          </button>
+          {wishlistEnabled ? (
+            <button
+              type="button"
+              className={cn(
+                "flex size-9 items-center justify-center rounded-full border border-white/80 bg-white/95 text-[#23403d] shadow-md backdrop-blur-sm transition-colors hover:bg-[#ec6e55] hover:text-white",
+                inWishlist && "bg-[#ec6e55] text-white",
+                loading && "opacity-60",
+              )}
+              aria-label={inWishlist ? "Remove from wishlist" : "Add to wishlist"}
+              onClick={handleWishlistToggle}
+              disabled={loading}
+            >
+              <Heart className={cn("size-4", inWishlist && "fill-current")} />
+            </button>
+          ) : null}
           <Link
             href={`/products/${product.slug}`}
             className="flex size-9 items-center justify-center rounded-full border border-white/80 bg-white/95 text-[#23403d] shadow-md backdrop-blur-sm transition-colors hover:bg-[#23403d] hover:text-white"

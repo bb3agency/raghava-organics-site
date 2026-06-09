@@ -1,4 +1,5 @@
 import { apiClient } from "./api";
+import { resolveProductImageUrl } from "./media-url";
 import type { ProductCategory } from "@/types/product";
 
 export interface CategoryWithMeta extends ProductCategory {
@@ -36,9 +37,11 @@ export async function getStoreCategories(): Promise<CategoryWithMeta[]> {
     
     return categories.map((cat) => {
       const meta = CATEGORY_META_FALLBACKS[cat.slug] || DEFAULT_META;
+      const apiImage = cat.imageUrl?.trim();
       return {
         ...cat,
-        ...meta,
+        image: apiImage ? resolveProductImageUrl(apiImage) : meta.image,
+        color: meta.color,
       };
     });
   } catch (error) {

@@ -1,5 +1,21 @@
 import { standardAdminErrorResponses, standardErrorResponses } from '@common/errors/error-response.schema';
 
+export const serveCategoryImageSchema = {
+  params: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['categoryId', 'filename'],
+    properties: {
+      categoryId: { type: 'string', maxLength: 64 },
+      filename: { type: 'string', maxLength: 128 }
+    }
+  },
+  response: {
+    200: { type: 'string', contentEncoding: 'binary', contentMediaType: 'image/*' },
+    ...standardErrorResponses
+  }
+} as const;
+
 export const serveProductImageSchema = {
   params: {
     type: 'object',

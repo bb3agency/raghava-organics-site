@@ -1,5 +1,8 @@
 const MAX_PRODUCT_IMAGE_BYTES = 5 * 1024 * 1024;
 
+/** Maximum images allowed per product — must match backend PRODUCT_MAX_IMAGES_PER_PRODUCT. */
+export const MAX_PRODUCT_IMAGES = 8;
+
 export const PRODUCT_IMAGE_ACCEPT = "image/jpeg,image/png,image/webp,image/gif";
 
 export function getProductImageMaxBytes(): number {
@@ -19,10 +22,11 @@ export function resolveProductImageUrl(url: string | undefined | null): string {
   if (trimmed.startsWith("/")) {
     if (cdnBase) return `${cdnBase}${trimmed}`;
     if (typeof window === "undefined") {
-      const site = (
-        process.env.NEXT_PUBLIC_STOREFRONT_URL ?? "http://localhost:3101"
-      ).replace(/\/$/, "");
-      return `${site}${trimmed}`;
+      // SSR: build an absolute URL only when NEXT_PUBLIC_STOREFRONT_URL is
+      // explicitly set. Never fall back to localhost in production — a missing
+      // env var would embed localhost URLs in SSR-rendered HTML.
+      const site = process.env.NEXT_PUBLIC_STOREFRONT_URL?.trim().replace(/\/$/, "");
+      if (site) return `${site}${trimmed}`;
     }
     return trimmed;
   }

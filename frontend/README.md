@@ -22,7 +22,9 @@ Dev server: **http://localhost:3101** (also shown as Network URL, e.g. `http://1
 
 `npm run dev` runs `scripts/ensure-backend-dev.mjs` automatically (`predev`). It probes `BACKEND_PROXY_URL` (default `http://127.0.0.1:3000`) and **exits with instructions** if the Fastify API is not reachable — avoiding broken `/api/v1/*` rewrites and `ECONNREFUSED` spam.
 
-Copy `frontend/.env.example` → `.env.local`. For **phone testing on the same Wi‑Fi**:
+Copy `frontend/.env.example` → `.env.local`. Production template: `.env.production.example` — `https://raghavaorganics.com` API/storefront and `NEXT_PUBLIC_IMAGE_CDN_URL=https://cdn.raghavaorganics.com` (Cloudflare R2; must match Ops `R2_PUBLIC_BASE_URL`). Brand logo: `public/images/raghava-organics-logo.png` — use `BRAND_LOGO_SRC` from `lib/constants.ts`. Ops/R2 setup: `docs/clients/raghava-organics/CLOUDFLARE_R2_MEDIA.md`.
+
+For **phone testing on the same Wi‑Fi**:
 
 ```env
 ALLOWED_DEV_ORIGINS=192.168.1.4

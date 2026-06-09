@@ -3,8 +3,7 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useAuthStore } from "@/stores/auth";
-import { getMyOrder, cancelMyOrder, retryPayment, createReturnRequest, type OrderSummary } from "@/lib/orders-api";
-import { getBrowserApiBaseUrl } from "@/lib/api-base";
+import { getMyOrder, cancelMyOrder, createReturnRequest, downloadCustomerInvoicePdf, type OrderSummary } from "@/lib/orders-api";
 import { getApiErrorMessage } from "@/lib/error-messages";
 import { formatPrice } from "@/lib/format-price";
 import { formatPaymentModeLabel } from "@/lib/format-payment-mode";
@@ -17,6 +16,7 @@ export default function AccountOrderDetailPage() {
   const [order, setOrder] = useState<OrderSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
+  const [downloadingInvoice, setDownloadingInvoice] = useState(false);
   
   // Return request states
   const [showReturnForm, setShowReturnForm] = useState(false);
@@ -72,19 +72,25 @@ export default function AccountOrderDetailPage() {
     }
   };
 
-  const handleRetryPayment = async () => {
-    if (!accessToken || !order) return;
-    setBusyAction("retry");
+  const handleRetryPayment = () => {
+    if (!order) return;
+    router.push(`/checkout/payment?orderId=${order.id}`);
+  };
+
+  const handleDownloadInvoice = async () => {
+    if (!accessToken || !order?.invoice?.hasPdf) return;
+    setDownloadingInvoice(true);
     setError(null);
     try {
-      await retryPayment(order.id, accessToken);
-      // Let checkout form/modal handle razorpay redirect logic, for now redirect to checkout or dedicated retry
-      // This is a minimal implementation, ideally it opens Razorpay right here
-      router.push(`/checkout/payment?orderId=${order.id}`);
+      await downloadCustomerInvoicePdf(
+        order.id,
+        accessToken,
+        `${order.invoice.invoiceNumber}.pdf`,
+      );
     } catch (err) {
       setError(getApiErrorMessage(err));
     } finally {
-      setBusyAction(null);
+      setDownloadingInvoice(false);
     }
   };
 
@@ -139,7 +145,7 @@ export default function AccountOrderDetailPage() {
     return <p className="text-sm text-muted-foreground">Loading order...</p>;
   }
 
-  const canCancel = ["PENDING_PAYMENT", "CONFIRMED", "PROCESSING"].includes(order.status);
+  const canCancel = ["CONFIRMED", "PROCESSING"].includes(order.status);
   const canRetry =
     order.paymentMode !== "COD" &&
     (order.status === "PENDING_PAYMENT" || order.status === "PAYMENT_FAILED");
@@ -157,23 +163,24 @@ export default function AccountOrderDetailPage() {
           </div>
           <div className="flex flex-wrap gap-2">
              {order.invoice?.hasPdf ? (
-              <a
-                href={`${getBrowserApiBaseUrl()}/orders/${order.id}/invoice.pdf`}
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex h-9 items-center justify-center rounded-md border border-border px-3 text-sm font-medium transition-colors hover:bg-muted"
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={downloadingInvoice || busyAction !== null}
+                onClick={() => void handleDownloadInvoice()}
               >
-                Invoice
-              </a>
+                {downloadingInvoice ? "Downloading…" : "Invoice"}
+              </Button>
             ) : null}
             {canRetry && (
               <Button
                 variant="default"
                 size="sm"
                 disabled={busyAction !== null}
-                onClick={handleRetryPayment}
+                onClick={() => handleRetryPayment()}
               >
-                {busyAction === "retry" ? "Processing..." : "Retry Payment"}
+                Retry Payment
               </Button>
             )}
             {canCancel && (

@@ -24,7 +24,7 @@ if [ ! -d "$FRONTEND_PATH" ]; then
 fi
 
 if [ ! -f "$FRONTEND_PATH/.env.production.local" ]; then
-  echo "Copy frontend/.env.production.example to .env.production.local and set PRODUCTION_DOMAIN"
+  echo "Copy frontend/.env.production.example to .env.production.local (raghavaorganics.com + cdn.raghavaorganics.com)"
   exit 1
 fi
 

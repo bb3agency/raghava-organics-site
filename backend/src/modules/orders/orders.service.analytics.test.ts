@@ -13,7 +13,9 @@ describe('OrdersService analytics producers', () => {
             id: 'order_1',
             userId: 'user_1',
             total: 10000,
-            orderNumber: 'ORD-2026-00001'
+            orderNumber: 'ORD-2026-00001',
+            paymentMode: 'PREPAID',
+            status: OrderStatus.PENDING_PAYMENT
           })
         },
         payment: {

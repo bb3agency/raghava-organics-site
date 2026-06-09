@@ -7,6 +7,7 @@ import { ProductGallery } from "@/components/product/ProductGallery";
 import { Rating } from "@/components/shared/Rating";
 import { ProductVariantSelector } from "@/components/product/ProductVariantSelector";
 import { ProductReviewsSection } from "@/components/product/ProductReviewsSection";
+import { getPublicStoreConfig } from "@/lib/storefront-settings";
 import type { Product } from "@/types/product";
 
 interface ProductDetailPageProps {
@@ -44,6 +45,7 @@ export default async function ProductDetailPage({ params }: ProductDetailPagePro
 
   const activeVariant =
     product.variants.find((v) => v.isActive) ?? product.variants[0];
+  const storeConfig = await getPublicStoreConfig();
 
   return (
     <div className="bg-[#eff5ee] min-h-screen pb-16">
@@ -79,8 +81,14 @@ export default async function ProductDetailPage({ params }: ProductDetailPagePro
                 {product.name}
               </h1>
               <div className="flex flex-wrap items-center gap-2 sm:gap-4">
-                <Rating rating={product.rating} reviewCount={product.reviewCount} />
-                <span className="text-sm font-bold text-[#767676]">({product.reviewCount} reviews)</span>
+                {storeConfig.reviewsEnabled ? (
+                  <>
+                    <Rating rating={product.rating} reviewCount={product.reviewCount} />
+                    <span className="text-sm font-bold text-[#767676]">
+                      ({product.reviewCount} reviews)
+                    </span>
+                  </>
+                ) : null}
               </div>
             </div>
 
@@ -146,7 +154,7 @@ export default async function ProductDetailPage({ params }: ProductDetailPagePro
         </div>
 
         {/* Reviews Section */}
-        <ProductReviewsSection productSlug={product.slug} />
+        {storeConfig.reviewsEnabled ? <ProductReviewsSection productSlug={product.slug} /> : null}
       </div>
     </div>
   );

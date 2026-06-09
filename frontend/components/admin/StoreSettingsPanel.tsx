@@ -7,6 +7,7 @@ import { ADMIN_PERMISSIONS, hasAdminPermission } from "@/lib/permissions";
 import { createIdempotencyKey } from "@/lib/idempotency";
 import type { AdminStoreProfile } from "@/lib/admin-api";
 import { getApiErrorMessage } from "@/lib/error-messages";
+import { fetchPublicStoreConfigClient } from "@/lib/storefront-settings";
 import {
   Store,
   FileText,
@@ -31,10 +32,26 @@ export function StoreSettingsPanel() {
 
   const [gstin, setGstin] = useState("");
   const [fssaiNumber, setFssaiNumber] = useState("");
+  const [sellerLegalName, setSellerLegalName] = useState("");
+  const [sellerAddress, setSellerAddress] = useState("");
+  const [sellerState, setSellerState] = useState("");
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [gstInvoicingEnabled, setGstInvoicingEnabled] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetchPublicStoreConfigClient().then((config) => {
+      if (!cancelled) {
+        setGstInvoicingEnabled(config.gstInvoicingEnabled);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -43,6 +60,9 @@ export function StoreSettingsPanel() {
         if (!cancelled) {
           setGstin(result.gstin ?? "");
           setFssaiNumber(result.fssaiNumber ?? "");
+          setSellerLegalName(result.sellerLegalName ?? "");
+          setSellerAddress(result.sellerAddress ?? "");
+          setSellerState(result.sellerState ?? "");
           setLoaded(true);
         }
       })
@@ -64,9 +84,11 @@ export function StoreSettingsPanel() {
         method: "PATCH",
         idempotencyKey: createIdempotencyKey(),
         body: JSON.stringify({
-          // Only send GSTIN and FSSAI — other fields are deployment config
           gstin: gstin.trim() || undefined,
           fssaiNumber: fssaiNumber.trim() || undefined,
+          sellerLegalName: sellerLegalName.trim() || undefined,
+          sellerAddress: sellerAddress.trim() || undefined,
+          sellerState: sellerState.trim() ? sellerState.trim() : null,
         }),
       });
       setSuccess("Compliance IDs saved successfully.");
@@ -81,7 +103,8 @@ export function StoreSettingsPanel() {
   const inputClass =
     "block w-full rounded-lg border border-border bg-background/50 px-3.5 py-2 text-sm text-foreground placeholder-muted-foreground/60 transition-all focus:border-primary focus:bg-background focus:ring-2 focus:ring-primary/20 focus:outline-hidden disabled:opacity-50";
 
-  const gstInvoicingEnabled = process.env.NEXT_PUBLIC_FEATURE_GST_INVOICING_ENABLED !== "false";
+  const missingSellerDetails =
+    !sellerLegalName.trim() || !sellerAddress.trim() || !sellerState.trim();
 
   return (
     <div className="space-y-6">
@@ -165,18 +188,16 @@ export function StoreSettingsPanel() {
         }}
         className="space-y-6"
       >
+        {gstInvoicingEnabled ? (
+          <>
         {/* Fail-case warning when GST invoicing is on but IDs are missing */}
-        {loaded && gstInvoicingEnabled && (!gstin.trim() || !fssaiNumber.trim()) && (
+        {loaded && (!gstin.trim() || !fssaiNumber.trim() || missingSellerDetails) && (
           <div className="flex min-w-0 items-start gap-2.5 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3.5 text-xs text-amber-800 overflow-hidden">
             <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5 text-amber-600" aria-hidden />
             <span>
-              <strong>GST invoicing is enabled</strong> but{" "}
-              {!gstin.trim() && !fssaiNumber.trim()
-                ? "GSTIN and FSSAI License Number are"
-                : !gstin.trim()
-                ? "GSTIN is"
-                : "FSSAI License Number is"}{" "}
-              not set. Invoice PDF generation will fail for all orders until these are filled in.
+              <strong>GST invoicing is enabled</strong> but required invoice fields are missing.
+              Invoice PDF generation will fail until GSTIN, FSSAI, seller legal name, address, and
+              operating state are filled in.
             </span>
           </div>
         )}
@@ -197,6 +218,48 @@ export function StoreSettingsPanel() {
             </div>
           ) : (
             <div className="grid gap-4 sm:grid-cols-2">
+              <label className="grid gap-1.5 text-sm font-medium text-foreground sm:col-span-2">
+                Seller Legal Name
+                <input
+                  type="text"
+                  placeholder="Registered business name on GST certificate"
+                  maxLength={200}
+                  className={inputClass}
+                  value={sellerLegalName}
+                  onChange={(e) => setSellerLegalName(e.target.value)}
+                  disabled={!canWrite}
+                />
+              </label>
+
+              <label className="grid gap-1.5 text-sm font-medium text-foreground sm:col-span-2">
+                Seller Address
+                <textarea
+                  rows={3}
+                  placeholder="Full registered address printed on tax invoices"
+                  maxLength={500}
+                  className={inputClass}
+                  value={sellerAddress}
+                  onChange={(e) => setSellerAddress(e.target.value)}
+                  disabled={!canWrite}
+                />
+              </label>
+
+              <label className="grid gap-1.5 text-sm font-medium text-foreground">
+                Operating State
+                <input
+                  type="text"
+                  placeholder="Telangana"
+                  maxLength={100}
+                  className={inputClass}
+                  value={sellerState}
+                  onChange={(e) => setSellerState(e.target.value)}
+                  disabled={!canWrite}
+                />
+                <span className="text-xs text-muted-foreground/80">
+                  State where the business is registered — used for GST place-of-supply on invoices.
+                </span>
+              </label>
+
               <label className="grid gap-1.5 text-sm font-medium text-foreground">
                 GSTIN
                 <input
@@ -235,6 +298,13 @@ export function StoreSettingsPanel() {
             </div>
           )}
         </div>
+          </>
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            GST invoicing fields are hidden because{" "}
+            GST invoice fields are hidden because GST invoicing is disabled in backend store config.
+          </p>
+        )}
 
         {error && (
           <div className="flex min-w-0 items-start gap-2.5 rounded-lg border border-destructive/20 bg-destructive/10 p-3.5 text-xs text-destructive overflow-hidden">

@@ -20,6 +20,13 @@ export interface ProductMediaStorage {
     content: Buffer;
   }): Promise<SaveProductImageResult>;
 
+  saveCategoryImage(input: {
+    categoryId: string;
+    imageId: string;
+    mime: ProductImageMimeType;
+    content: Buffer;
+  }): Promise<SaveProductImageResult>;
+
   deleteProductImage(storageReference: string): Promise<void>;
 
   /** Local filesystem only — used by GET /api/v1/media/... */

@@ -22,10 +22,24 @@ const state = {
       updateMany: vi.fn()
     },
     orderStatusHistory: {
-      create: vi.fn()
+      create: vi.fn(),
+      findFirst: vi.fn()
     },
     coupon: {
-      update: vi.fn()
+      update: vi.fn(),
+      updateMany: vi.fn().mockResolvedValue({ count: 1 })
+    },
+    couponUsage: {
+      findUnique: vi.fn().mockResolvedValue(null),
+      create: vi.fn().mockResolvedValue(undefined),
+      findMany: vi.fn().mockResolvedValue([]),
+      delete: vi.fn().mockResolvedValue(undefined)
+    },
+    cart: {
+      findFirst: vi.fn().mockResolvedValue({ id: 'cart_1' })
+    },
+    cartReservation: {
+      deleteMany: vi.fn().mockResolvedValue({ count: 1 })
     },
     invoice: {
       findUnique: vi.fn(),
@@ -91,10 +105,22 @@ describe('order-processing worker error and retry behavior', () => {
     state.tx.order.update.mockReset();
     state.tx.order.updateMany.mockReset();
     state.tx.orderStatusHistory.create.mockReset();
+    state.tx.orderStatusHistory.findFirst.mockReset();
     state.tx.coupon.update.mockReset();
+    state.tx.coupon.updateMany.mockReset();
+    state.tx.couponUsage.findUnique.mockReset();
+    state.tx.couponUsage.create.mockReset();
+    state.tx.couponUsage.findMany.mockReset();
+    state.tx.couponUsage.delete.mockReset();
+    state.tx.cart.findFirst.mockReset();
+    state.tx.cartReservation.deleteMany.mockReset();
     state.tx.invoice.findUnique.mockReset();
     state.tx.invoice.create.mockReset();
     state.notificationsAdd.mockReset();
+    state.tx.couponUsage.findUnique.mockResolvedValue(null);
+    state.tx.couponUsage.findMany.mockResolvedValue([]);
+    state.tx.cart.findFirst.mockResolvedValue({ id: 'cart_1' });
+    state.tx.cartReservation.deleteMany.mockResolvedValue({ count: 1 });
     state.tx.$executeRaw.mockResolvedValue(undefined);
     state.tx.$queryRaw.mockResolvedValue([{ nextval: 1n }]);
     vi.unstubAllEnvs();
@@ -180,6 +206,7 @@ describe('order-processing worker error and retry behavior', () => {
       id: 'order_1',
       userId: 'user_1',
       status: 'PENDING_PAYMENT',
+      discountAmount: 500,
       coupons: [],
       user: { email: 'customer@example.com', phone: '9999999999' },
       items: [{ variantId: 'variant_1', quantity: 2 }],
@@ -196,7 +223,12 @@ describe('order-processing worker error and retry behavior', () => {
     });
 
     expect(state.tx.order.updateMany).toHaveBeenCalledWith({
-      where: { id: 'order_1', status: 'PENDING_PAYMENT' },
+      where: {
+        id: 'order_1',
+        status: {
+          in: ['PENDING_PAYMENT', 'PAYMENT_FAILED']
+        }
+      },
       data: { status: 'CONFIRMED' }
     });
     expect(state.tx.inventory.updateMany).toHaveBeenCalledWith({
@@ -219,8 +251,77 @@ describe('order-processing worker error and retry behavior', () => {
     );
   });
 
-  it('process-order-update is idempotent when order is already CONFIRMED', async () => {
+  it('process-order-update confirms order from PAYMENT_FAILED when payment succeeds', async () => {
     boot();
+    state.tx.order.findUnique.mockResolvedValue({
+      id: 'order_1',
+      userId: 'user_1',
+      status: 'PAYMENT_FAILED',
+      discountAmount: 0,
+      coupons: [],
+      user: { email: 'customer@example.com', phone: '9999999999' },
+      items: [{ variantId: 'variant_1', quantity: 1 }],
+      payment: { id: 'payment_1', status: 'FAILED' }
+    });
+    state.tx.order.updateMany.mockResolvedValue({ count: 1 });
+    state.tx.inventory.updateMany.mockResolvedValue({ count: 1 });
+    state.tx.payment.update.mockResolvedValue(undefined);
+    state.tx.orderStatusHistory.create.mockResolvedValue(undefined);
+
+    await state.processor?.({
+      name: 'process-order-update',
+      data: { orderId: 'order_1', toStatus: 'CONFIRMED', triggeredBy: 'PAYMENT_WEBHOOK', providerPaymentId: 'pay_1' }
+    });
+
+    expect(state.tx.order.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: 'order_1',
+        status: {
+          in: ['PENDING_PAYMENT', 'PAYMENT_FAILED']
+        }
+      },
+      data: { status: 'CONFIRMED' }
+    });
+  });
+
+  it('process-order-update marks coupon usage only after successful payment confirmation', async () => {
+    boot();
+    state.tx.orderStatusHistory.findFirst.mockResolvedValue(null);
+    state.tx.order.findUnique.mockResolvedValue({
+      id: 'order_1',
+      userId: 'user_1',
+      status: 'PENDING_PAYMENT',
+      discountAmount: 500,
+      coupons: [{ id: 'coupon_1', usesCount: 2 }],
+      user: { email: 'customer@example.com', phone: '9999999999' },
+      items: [{ variantId: 'variant_1', quantity: 1 }],
+      payment: { id: 'payment_1', status: 'CREATED' }
+    });
+    state.tx.order.updateMany.mockResolvedValue({ count: 1 });
+    state.tx.inventory.updateMany.mockResolvedValue({ count: 1 });
+    state.tx.payment.update.mockResolvedValue(undefined);
+    state.tx.orderStatusHistory.create.mockResolvedValue(undefined);
+    state.tx.coupon.update.mockResolvedValue(undefined);
+
+    await state.processor?.({
+      name: 'process-order-update',
+      data: { orderId: 'order_1', toStatus: 'CONFIRMED', triggeredBy: 'PAYMENT_WEBHOOK', providerPaymentId: 'pay_1' }
+    });
+
+    expect(state.tx.coupon.update).toHaveBeenCalledOnce();
+    expect(state.tx.couponUsage.create).toHaveBeenCalledWith({
+      data: {
+        couponId: 'coupon_1',
+        orderId: 'order_1',
+        userId: 'user_1',
+        discountAmount: 500
+      }
+    });
+  });
+
+  it('process-order-update is idempotent when prepaid order is already CONFIRMED', async () => {
+    boot();
+    state.tx.orderStatusHistory.findFirst.mockResolvedValue(null);
     state.tx.order.findUnique.mockResolvedValue({
       id: 'order_1',
       userId: 'user_1',
@@ -239,6 +340,116 @@ describe('order-processing worker error and retry behavior', () => {
     expect(state.tx.order.updateMany).not.toHaveBeenCalled();
     expect(state.tx.inventory.updateMany).not.toHaveBeenCalled();
     expect(state.notificationsAdd).not.toHaveBeenCalledWith('generate-invoice', expect.anything(), expect.anything());
+  });
+
+  it('process-order-update runs side effects for COD orders already at CONFIRMED', async () => {
+    boot();
+    state.tx.orderStatusHistory.findFirst.mockResolvedValue(null);
+    state.tx.order.findUnique.mockResolvedValue({
+      id: 'order_cod_1',
+      userId: 'user_1',
+      status: 'CONFIRMED',
+      coupons: [],
+      user: { email: 'customer@example.com', phone: '9999999999' },
+      items: [{ variantId: 'variant_1', quantity: 1 }],
+      payment: { id: 'payment_cod_1', status: 'CREATED' }
+    });
+    state.tx.inventory.updateMany.mockResolvedValue({ count: 1 });
+    state.tx.orderStatusHistory.create.mockResolvedValue(undefined);
+
+    await state.processor?.({
+      name: 'process-order-update',
+      data: {
+        orderId: 'order_cod_1',
+        toStatus: 'CONFIRMED',
+        triggeredBy: 'COD_ORDER_CREATED',
+        note: 'COD order placed'
+      }
+    });
+
+    expect(state.tx.order.updateMany).not.toHaveBeenCalled();
+    expect(state.tx.inventory.updateMany).toHaveBeenCalledWith({
+      where: { variantId: 'variant_1', quantity: { gte: 1 } },
+      data: { quantity: { decrement: 1 } }
+    });
+    expect(state.tx.orderStatusHistory.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        orderId: 'order_cod_1',
+        triggeredBy: 'COD_ORDER_CREATED'
+      })
+    });
+    expect(state.notificationsAdd).toHaveBeenCalledWith(
+      'generate-invoice',
+      expect.objectContaining({ orderId: 'order_cod_1' }),
+      expect.objectContaining({ jobId: 'generate-invoice:order_cod_1' })
+    );
+  });
+
+  it('process-order-update skips duplicate COD side-effect jobs', async () => {
+    boot();
+    state.tx.orderStatusHistory.findFirst.mockResolvedValue({ id: 'history_1' });
+    state.tx.order.findUnique.mockResolvedValue({
+      id: 'order_cod_1',
+      userId: 'user_1',
+      status: 'CONFIRMED',
+      coupons: [],
+      user: { email: 'customer@example.com', phone: null },
+      items: [{ variantId: 'variant_1', quantity: 1 }],
+      payment: { id: 'payment_cod_1', status: 'CREATED' }
+    });
+
+    await state.processor?.({
+      name: 'process-order-update',
+      data: {
+        orderId: 'order_cod_1',
+        toStatus: 'CONFIRMED',
+        triggeredBy: 'COD_ORDER_CREATED'
+      }
+    });
+
+    expect(state.tx.inventory.updateMany).not.toHaveBeenCalled();
+    expect(state.notificationsAdd).not.toHaveBeenCalledWith('generate-invoice', expect.anything(), expect.anything());
+  });
+
+  it('cancels COD order without capturing payment when inventory deduction fails', async () => {
+    boot();
+    state.tx.orderStatusHistory.findFirst.mockResolvedValue(null);
+    state.tx.order.findUnique.mockResolvedValue({
+      id: 'order_cod_1',
+      userId: 'user_1',
+      status: 'CONFIRMED',
+      discountAmount: 500,
+      coupons: [{ id: 'coupon_1', usesCount: 1 }],
+      user: { email: 'customer@example.com', phone: null },
+      items: [{ variantId: 'variant_1', quantity: 1 }],
+      payment: { id: 'payment_cod_1', status: 'CREATED' }
+    });
+    state.tx.inventory.updateMany.mockResolvedValue({ count: 0 });
+    state.tx.order.updateMany.mockResolvedValue({ count: 1 });
+    state.tx.couponUsage.findMany.mockResolvedValue([
+      { id: 'usage_1', couponId: 'coupon_1', orderId: 'order_cod_1', userId: 'user_1' }
+    ]);
+
+    await state.processor?.({
+      name: 'process-order-update',
+      data: {
+        orderId: 'order_cod_1',
+        toStatus: 'CONFIRMED',
+        triggeredBy: 'COD_ORDER_CREATED'
+      }
+    });
+
+    expect(state.tx.payment.update).not.toHaveBeenCalled();
+    expect(state.tx.order.updateMany).toHaveBeenCalledWith({
+      where: { id: 'order_cod_1', status: 'CONFIRMED' },
+      data: { status: 'CANCELLED' }
+    });
+    expect(state.notificationsAdd).not.toHaveBeenCalledWith(
+      'initiate-razorpay-refund',
+      expect.anything(),
+      expect.anything()
+    );
+    expect(state.tx.couponUsage.delete).toHaveBeenCalled();
   });
 
   it('skips deduct-inventory when no payment record is found for providerOrderId', async () => {
@@ -262,14 +473,19 @@ describe('order-processing worker error and retry behavior', () => {
       providerPaymentId: null,
       status: 'CREATED'
     });
-    state.tx.order.findUnique.mockResolvedValue({
-      id: 'order_1',
-      status: 'PENDING_PAYMENT',
-      user: {
-        email: 'customer@example.com',
-        phone: '9999999999'
-      }
-    });
+    state.tx.order.findUnique
+      .mockResolvedValueOnce({
+        id: 'order_1',
+        status: 'PENDING_PAYMENT',
+        user: {
+          email: 'customer@example.com',
+          phone: '9999999999'
+        }
+      })
+      .mockResolvedValueOnce({
+        userId: 'user_1',
+        items: [{ variantId: 'variant_1' }]
+      });
     state.tx.payment.update.mockResolvedValue(undefined);
     state.tx.order.update.mockResolvedValue(undefined);
     state.tx.orderStatusHistory.create.mockResolvedValue(undefined);
@@ -283,6 +499,47 @@ describe('order-processing worker error and retry behavior', () => {
       'send-primary',
       expect.objectContaining({
         email: 'customer@example.com',
+        phone: '9999999999',
+        template: 'PaymentFailed'
+      })
+    );
+    expect(state.tx.cartReservation.deleteMany).toHaveBeenCalled();
+  });
+
+  it('releases reservations on payment failure for phone-only customers', async () => {
+    boot();
+    state.tx.payment.findFirst.mockResolvedValue({
+      id: 'payment_1',
+      orderId: 'order_1',
+      providerPaymentId: null,
+      status: 'CREATED'
+    });
+    state.tx.order.findUnique
+      .mockResolvedValueOnce({
+        id: 'order_1',
+        status: 'PENDING_PAYMENT',
+        user: {
+          email: null,
+          phone: '9999999999'
+        }
+      })
+      .mockResolvedValueOnce({
+        userId: 'user_1',
+        items: [{ variantId: 'variant_1' }]
+      });
+    state.tx.payment.update.mockResolvedValue(undefined);
+    state.tx.order.update.mockResolvedValue(undefined);
+    state.tx.orderStatusHistory.create.mockResolvedValue(undefined);
+
+    await state.processor?.({
+      name: 'payment-webhook',
+      data: { providerOrderId: 'order_1', providerPaymentId: 'pay_1', event: 'payment.failed', payload: '{}' }
+    });
+
+    expect(state.tx.cartReservation.deleteMany).toHaveBeenCalled();
+    expect(state.notificationsAdd).toHaveBeenCalledWith(
+      'send-primary',
+      expect.objectContaining({
         phone: '9999999999',
         template: 'PaymentFailed'
       })
@@ -350,6 +607,16 @@ describe('order-processing worker error and retry behavior', () => {
       expect.objectContaining({ orderId: 'order_1' }),
       expect.objectContaining({ jobId: 'generate-invoice:order_1' })
     );
+  });
+
+  it('skips generate-invoice when GST invoicing feature flag is disabled', async () => {
+    featureFlags.gstInvoicing = false;
+    boot();
+    await state.processor?.({
+      name: 'generate-invoice',
+      data: { orderId: 'order_1' }
+    });
+    expect(state.tx.invoice.create).not.toHaveBeenCalled();
   });
 
   it('creates invoice record for generate-invoice job', async () => {

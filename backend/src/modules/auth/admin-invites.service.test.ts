@@ -732,4 +732,22 @@ describe('AdminInvitesService', () => {
 
     expect(mocks.adminUserInviteCreate).not.toHaveBeenCalled();
   });
+
+  it('rejects createAdminInvite when setupBaseUrl points to localhost (SSRF guard)', async () => {
+    const { service, mocks } = createHarness();
+
+    await expect(
+      service.createAdminInvite({
+        inviteEmail: 'merchant@example.com',
+        inviteName: 'Merchant Owner',
+        setupBaseUrl: 'https://127.0.0.1',
+        permissions: ['products:read']
+      })
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      message: expect.stringContaining('not permitted')
+    });
+
+    expect(mocks.adminUserInviteCreate).not.toHaveBeenCalled();
+  });
 });

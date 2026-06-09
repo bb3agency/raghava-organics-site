@@ -4,6 +4,113 @@
 
 ---
 
+## [2026-06-10] STOREFRONT_URL fail-fast at boot in production-like profiles
+
+**Context:** `auth.service.ts` uses `process.env.STOREFRONT_URL ?? 'http://localhost:3101'` when building password-reset links. A missing bootstrap value would silently send customers localhost URLs in production.
+
+**Decision:** In `app.config.ts`, production-like profiles (`NODE_ENV` not `development` or `test`) throw at boot if `STOREFRONT_URL` is absent or still a placeholder. CORS plugin already fail-fast for missing origins; this closes the email-link gap.
+
+**Alternatives considered:**
+- *Remove localhost fallback in auth.service only.* Rejected — boot-time guard catches misconfiguration before any email is sent; service-layer fallback remains as dev convenience.
+
+**Affected files:** `src/config/app.config.ts`, `src/modules/auth/auth.service.ts` (unchanged fallback for dev), `docs/PRODUCTION_FIRST_DEPLOY_CHECKLIST.md`, `docs/ENV_VS_DB_CONFIG_REFERENCE.md`.
+
+---
+
+## [2026-06-10] Canonical brand logo in Next.js `public/` + `BRAND_LOGO_SRC`
+
+**Context:** Logo file lived at repo root and in duplicate `frontend/public/logo.png` with hardcoded paths in header/admin components.
+
+**Decision:**
+1. Single asset: `frontend/public/images/raghava-organics-logo.png`.
+2. Export `BRAND_LOGO_SRC = "/images/raghava-organics-logo.png"` from `frontend/lib/constants.ts`.
+3. All storefront header, mobile nav, and admin shell components import the constant — never hardcode paths or store logos at repo root.
+
+**Affected files:** `frontend/lib/constants.ts`, `frontend/components/layout/Header.tsx`, `MobileNav.tsx`, `AdminConsoleShell.tsx`, `ECOM_MASTER.md` §12.5.
+
+---
+
+## [2026-06-10] Runtime storefront config — `GET /api/v1/store/config` (supersedes build-time feature flags for customer UI)
+
+**Context:** Storefront COD, min order, and module flags (`FEATURE_*`) were mirrored in Next.js build-time env vars. Changing backend flags or admin COD settings required a frontend redeploy to reach customers. Admin GST field visibility also used `NEXT_PUBLIC_FEATURE_GST_INVOICING_ENABLED`.
+
+**Decision:**
+1. Add public **`GET /api/v1/store/config`** returning `isCodEnabled`, `minOrderValuePaise`, `mobileOtpSignupEnabled`, `couponsEnabled`, `reviewsEnabled`, `wishlistEnabled`, `gstInvoicingEnabled` (DB fields + backend feature flags).
+2. Storefront wraps routes in **`StoreConfigProvider`** (`lib/storefront-settings.ts`, ISR `revalidate: 60`). Fail-closed when fetch fails (`configAvailable: false` — block checkout).
+3. Admin GST panels (`StoreSettingsPanel`, `AdminProductEditor`) fetch the same endpoint client-side for `gstInvoicingEnabled`.
+4. **`NEXT_PUBLIC_FEATURE_*`** env vars are legacy/fallback only — do not rely on them for storefront or admin GST visibility in new work.
+
+**Alternatives considered:**
+- *Keep build-time flags only.* Rejected — ops cannot toggle COD/modules without redeploying Next.js.
+
+**Affected files:** `settings.service.ts`, `settings.routes.ts`, `frontend/lib/storefront-settings.ts`, `StoreConfigProvider.tsx`, `CheckoutForm.tsx`, admin GST panels, `NEXTJS_FRONTEND_INTEGRATION_GUIDE.md`, `ENV_VS_DB_CONFIG_REFERENCE.md`.
+
+---
+
+## [2026-06-10] Coupon checkout reservation includes `PAYMENT_FAILED`
+
+**Context:** `COUPON_RESERVED_ORDER_STATUSES` counted only `PENDING_PAYMENT`. A failed prepaid checkout released cart reservations but the order still held the coupon slot in usage-limit math, allowing another customer to exceed `maxUsesTotal` / per-user caps while the first customer could retry.
+
+**Decision:** Reserve coupon capacity for both `PENDING_PAYMENT` and `PAYMENT_FAILED` until finalize (`usesCount` + `CouponUsage` row) or explicit release (`releaseCouponUsageForOrder`, stale cancel, reconciliation). Centralize in `src/common/coupons/coupon-usage.ts`.
+
+**Affected files:** `coupon-usage.ts`, `cart.service.ts`, `orders.service.ts`, `order-processing.worker.ts`, `reconciliation.worker.ts`, `BRD.md` BR-CPN rules.
+
+---
+
+## [2026-06-10] Reconciliation auto-heal defaults — three safe types; shipment mismatch manual
+
+**Context:** Default auto-heal included `ORDER_SHIPPED_WITHOUT_SHIPMENT`, which could auto-transition orders without operator review. Refund mismatch heal did not restore inventory or clear coupon links. Stale abandoned `PAYMENT_FAILED` orders were detected but not consistently cleaned up.
+
+**Decision:**
+1. Default `RECONCILIATION_AUTO_HEAL_ISSUES` (unset) = `PAYMENT_CAPTURED_ORDER_NOT_CONFIRMED`, `REFUNDED_STATUS_MISMATCH`, `STALE_PENDING_PAYMENT`.
+2. `ORDER_SHIPPED_WITHOUT_SHIPMENT` remains detected; heal policy = manual review. Open issues auto-resolve when a shipment row exists.
+3. `REFUNDED_STATUS_MISMATCH` heal restores inventory (when applicable), releases coupon usage, clears unfinalized coupon links.
+4. Stale `PAYMENT_FAILED` cleanup runs under the `STALE_PENDING_PAYMENT` heal key; issue logged as `STALE_PAYMENT_FAILED`.
+
+**Affected files:** `reconciliation.worker.ts`, `ENV_VS_DB_CONFIG_REFERENCE.md`, `BACKEND_GO_LIVE_CHECKLIST.md`.
+
+---
+
+## [2026-06-10] COD inventory restore guard — `COD_ORDER_CREATED` history
+
+**Context:** COD orders return `CONFIRMED` synchronously but inventory deducts asynchronously in the worker (`triggeredBy: COD_ORDER_CREATED`). Cancel before worker completion incorrectly restored stock that was never decremented, inflating inventory.
+
+**Decision:** `restore-inventory-on-cancel.ts` skips COD inventory restore until `COD_ORDER_CREATED` appears in order status history (or is present on the loaded snapshot).
+
+**Affected files:** `restore-inventory-on-cancel.ts`, cancel paths in `orders.service.ts`, `reconciliation.worker.ts`.
+
+---
+
+## [2026-06-10] Frontend GST invoicing UI — runtime `/store/config` (supersedes build-time-only decision)
+
+**Supersedes:** earlier same-day entry that documented `NEXT_PUBLIC_FEATURE_GST_INVOICING_ENABLED` as the admin GST visibility source.
+
+**Decision:** Admin GSTIN/FSSAI and product GST fields use **`gstInvoicingEnabled` from `GET /store/config`**. Env var remains in templates for backward compatibility but is not authoritative. Customer invoice download uses **`invoice.hasPdf`** on order payloads, not the GST flag.
+
+**Affected files:** `StoreSettingsPanel.tsx`, `AdminProductEditor.tsx`, `orders-api.ts`, `frontend/.env.example`.
+
+---
+
+## [2026-06-10] SSR product image URLs — no implicit localhost fallback
+
+**Context:** `resolveProductImageUrl()` could prefix relative `/api/v1/media/...` paths with `http://localhost:3101` during SSR when `NEXT_PUBLIC_IMAGE_CDN_URL` was unset, baking localhost into production HTML if env vars were missing at build time.
+
+**Decision:** SSR absolute-URL prefix applies only when `NEXT_PUBLIC_STOREFRONT_URL` is explicitly set. Otherwise return the relative path (browser resolves against page origin). Production must set `NEXT_PUBLIC_IMAGE_CDN_URL` to match Ops `R2_PUBLIC_BASE_URL`.
+
+**Affected files:** `frontend/lib/media-url.ts`, `frontend/.env.production.example`, `NEXTJS_FRONTEND_INTEGRATION_GUIDE.md` §7.2.
+
+---
+
+## [2026-06-10] Notification worker provider failure counters — wire success/failure hooks
+
+**Context:** `onProviderSuccess` and `onProviderFailure` in `notifications.worker.ts` were implemented but never invoked — TypeScript reported them as unused; systematic provider outage alerting did not run.
+
+**Decision:** Call `onProviderSuccess` after each successful email/SMS/WhatsApp send (direct and primary-channel paths); call `onProviderFailure` in catch blocks before rethrowing. Preserves existing `notificationLog` writes and `sendNotificationFailureAlert` behaviour.
+
+**Affected files:** `queues/workers/notifications.worker.ts`, `docs/THIRD_PARTY_INTEGRATIONS_SETUP_AND_KEY_MANAGEMENT_GUIDE.md`.
+
+---
+
 ## [2026-06-03] Product media on Cloudflare R2 — Ops DB overlay, not bootstrap `.env`
 
 **Context:** Admin product images needed automatic upload to R2 in production, batch multipart, and CDN URLs in `ProductImage.url`, without storing R2 secrets in VPS `backend/.env`.
@@ -178,8 +285,9 @@
 2. Publish Redis port `6379` only in base `docker-compose.yml` for local host dev; strip it in `docker-compose.prod.yml`.
 3. Omit `body` from route schemas when the HTTP method has no payload — never use `emptyBodySchema` on DELETE.
 4. Register `DELETE /api/v1/admin/categories/:id/permanent` in the admin endpoint policy registry.
+5. Supplement `parseGuardedRoutesFromWorkspace()` with static records for routes added after last `dist/` build (COD settings, category permanent delete) so registry integrity tests pass against stale compiled output until next production build.
 
-**Affected files:** `src/common/redis/redis-connection.ts`, `docker-compose.yml`, `docker-compose.prod.yml`, `coupons.schemas.ts`, `users.schemas.ts`, `admin-endpoint-policy-registry.ts`, worker/API Redis boot paths.
+**Affected files:** `src/common/redis/redis-connection.ts`, `docker-compose.yml`, `docker-compose.prod.yml`, `coupons.schemas.ts`, `users.schemas.ts`, `admin-endpoint-policy-registry.ts`, `admin-policy-registry.validation.ts`, worker/API Redis boot paths.
 
 ---
 

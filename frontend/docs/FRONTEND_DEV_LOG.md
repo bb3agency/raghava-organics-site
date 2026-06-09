@@ -19,7 +19,10 @@
 | Backend repo path | `../backend` |
 | Frontend repo path | `.` |
 | Phase 4 start date | 2026-05-16 |
-| Last updated | 2026-06-10 (Backend: Fixed ISE on product creation (P2002 SKU duplicate handling), added permanent category delete route with product-count guard. Frontend: New `AdminCategoryForm.tsx` slide-over modal with permanent delete button, wired to `AdminCategoriesList`; tidied `AdminInventoryList` (removed `AdminSection`, clean card layout), `AdminPaymentsList` (Lucide icons, proper empty state), `AdminReviewsList` (Lucide icons, cleaner filter bar)) |
+| Production storefront | `https://raghavaorganics.com` |
+| Production image CDN | `https://cdn.raghavaorganics.com` (Cloudflare R2 custom domain) |
+| DNS | Cloudflare authoritative (Namecheap NS updated) |
+| Last updated | 2026-06-11 (Cloudflare R2 + CDN env; frontend production template finalized; see `docs/clients/raghava-organics/CLOUDFLARE_R2_MEDIA.md`) |
 
 ---
 
@@ -38,7 +41,7 @@
 - [ ] Postman E2E baseline passed (Phase 2 gate)
 
 **Current tier:** Sprint G — Go-live sign-off  
-**Next incomplete slice:** Execute VPS scripts on server ([docs/clients/raghava-organics/README.md](../../docs/clients/raghava-organics/README.md)) + Postman 0→3
+**Next incomplete slice:** VPS Phase 10 deploy + Ops Product Media save on server ([CLOUDFLARE_R2_MEDIA.md](../../docs/clients/raghava-organics/CLOUDFLARE_R2_MEDIA.md)) + Postman 0→3
 
 ---
 
@@ -70,6 +73,14 @@ INTERNAL_API_BASE_URL=http://127.0.0.1:3000/api/v1
 NEXT_PUBLIC_STORE_NAME=Raghava Organics
 NEXT_PUBLIC_STOREFRONT_URL=http://localhost:3101
 NEXT_PUBLIC_RAZORPAY_KEY_ID=(pending)
+```
+
+Production VPS (from `.env.production.example`):
+
+```
+NEXT_PUBLIC_API_BASE_URL=https://raghavaorganics.com/api/v1
+NEXT_PUBLIC_STOREFRONT_URL=https://raghavaorganics.com
+NEXT_PUBLIC_IMAGE_CDN_URL=https://cdn.raghavaorganics.com
 ```
 
 ---
@@ -1106,9 +1117,48 @@ Documented in §2026-06-03; still required: sign in on the **network URL** from 
 - Docs: `backend/docs/API_ENDPOINT_INDEX.md`, `frontend/docs/FRONTEND_DEV_LOG.md`
 
 **Next steps:**
-- Commit all changes (backend + frontend + docs)
-- Test the full admin flow: create/edit/delete categories, create products with duplicate SKU handling
-- Deploy to VPS and verify via browser testing
+- Deploy to VPS and verify via browser testing (storefront, admin, ops smoke checklist)
+
+---
+
+### 2026-06-10 — Production readiness pass (assets, env, SSR, CI)
+
+**Scope:** Align codebase and docs for production deploy; fix remaining audit items; verify CI reliability gates.
+
+**Changes:**
+
+1. **Brand logo consolidation**
+   - Canonical asset: `public/images/raghava-organics-logo.png`
+   - Constant: `BRAND_LOGO_SRC` in `lib/constants.ts`
+   - Updated: `Header.tsx`, `MobileNav.tsx`, `AdminConsoleShell.tsx`
+   - Removed: repo-root logo and orphaned `public/logo.png`
+
+2. **Environment documentation**
+   - `NEXT_PUBLIC_FEATURE_GST_INVOICING_ENABLED` added to `.env.example` and `.env.production.example` (admin Store Settings GSTIN/FSSAI visibility)
+
+3. **SSR product images (`lib/media-url.ts`)**
+   - SSR absolute URLs only when `NEXT_PUBLIC_STOREFRONT_URL` is explicitly set
+   - No implicit `localhost` fallback in production SSR HTML when CDN URL missing
+
+4. **Backend (paired)**
+   - `STOREFRONT_URL` fail-fast in production-like profiles (`app.config.ts`) — password-reset email safety
+   - Notification worker: wired `onProviderSuccess` / `onProviderFailure` for systematic provider outage alerts
+   - Redis connection TypeScript fixes; admin policy registry validation static route for stale `dist/`
+
+5. **Lint / dead code**
+   - Removed unused imports across admin/storefront components
+   - Deleted unreferenced `TrustStrip.tsx` stub
+
+**CI verification (2026-06-10):**
+
+| Gate | Result |
+|------|--------|
+| Backend `npx vitest run` | 935/935 pass |
+| Backend `tsc --noEmit` | clean |
+| Frontend `npm run lint` | clean |
+| Frontend `npm run build` | clean |
+
+**Docs updated:** `HARDENING_HISTORY.md`, `DECISIONS.md`, `ENV_VS_DB_CONFIG_REFERENCE.md`, `NEXTJS_FRONTEND_INTEGRATION_GUIDE.md`, go-live checklists, this log.
 
 ### 2026-06-08 — Update Storefront FAQ Section Questions
 
@@ -1131,9 +1181,49 @@ Documented in §2026-06-03; still required: sign in on the **network URL** from 
 **Scope:** Update the mobile header layout by replacing the leaf icon with a new logo image, placing the logo and store name on the far left, removing the profile icon from mobile view, and placing the cart icon followed by the hamburger menu icon on the far right.
 
 **Details:**
-1. **Public Assets:** Added `raghava-organics-logo.png` to the `public/images/` directory.
-2. **Header.tsx:** Replaced the Lucide Leaf icon with the `next/image` component loading the new logo. Rearranged the layout structure to place the logo on the far left and the hamburger menu toggle on the far right.
+1. **Public Assets:** Logo at `public/images/raghava-organics-logo.png`; reference via `BRAND_LOGO_SRC` in `lib/constants.ts` (not hardcoded paths).
+2. **Header.tsx:** Replaced the Lucide Leaf icon with the `next/image` component loading `BRAND_LOGO_SRC`. Rearranged the layout structure to place the logo on the far left and the hamburger menu toggle on the far right.
 3. **MainNav.tsx:** Added `hidden lg:flex` to the profile/account icon container so it is only visible on the desktop, leaving the cart icon as the only `MainNav` element visible on mobile (which correctly places it second from the right).
 4. **Build Verification:** Ran `npx tsc --noEmit` and verified the build succeeds successfully.
 
+
+---
+
+## 2026-06-10 — Order/payment/coupon/storefront integration hardening (pass 2)
+
+**Scope:** Align storefront and admin UI with backend order/payment/coupon/shipping semantics; runtime public store config; checkout/cancel/retry/invoice correctness; test coverage for all changed backend paths.
+
+### Backend (documented in `backend/docs/HARDENING_HISTORY.md`)
+
+- **`GET /api/v1/store/config`** — public runtime flags + COD/min order
+- **Coupon reservation** — `PENDING_PAYMENT` + `PAYMENT_FAILED`; shared `coupon-usage.ts` helpers
+- **Shipping** — `paymentMode` on delivery rates; TOCTOU re-quote in `createOrder`; `cancel-shipment` job
+- **Workers** — `payment.captured` + `PAYMENT_FAILED` CAS; COD side-effect failure compensation; reconciliation heal set (3 defaults, not `ORDER_SHIPPED_WITHOUT_SHIPMENT`)
+- **COD cancel** — inventory restore gated on `COD_ORDER_CREATED` history
+- **`retryPayment`** — restores checkout reservations
+
+### Frontend
+
+| Area | Module / component | Behaviour |
+| --- | --- | --- |
+| Runtime config | `lib/storefront-settings.ts`, `StoreConfigProvider` | ISR 60s; fail-closed; replaces build-time feature flags on storefront |
+| Checkout | `CheckoutForm.tsx`, `cart-api.ts` | Live `getDeliveryRates(..., paymentMode)`; no false “Free” on error |
+| Cancel | `app/(account)/orders/[id]/page.tsx` | Cancel only `CONFIRMED` / `PROCESSING` |
+| Retry payment | order detail + `checkout/payment/page.tsx` | Navigate then single `retryPayment` call |
+| Invoice | `orders-api.ts`, order pages, `AdminOrderFulfillmentPanel` | CTA when `invoice?.hasPdf`; `ApiError` parsing |
+| Admin GST | `StoreSettingsPanel`, `AdminProductEditor` | `gstInvoicingEnabled` from `/store/config` |
+| Admin nav | `admin-nav-config.ts` | Coupons + Reviews always visible |
+
+### Tests / CI
+
+- Backend unit: **1012/1012**; e2e **16/16**
+- Frontend unit: **114/114**; typecheck + build clean
+
+### Deferred (not implemented — do not document as fixed)
+
+- `retryPayment` reservation restore without live stock re-validation
+- `adminUpdateOrderItems` coupon/discount recalculation
+- Dedicated `release-reservations.ts` unit tests; full shipping `cancel-shipment` worker test coverage
+
+**Docs updated:** `HARDENING_HISTORY.md`, `DECISIONS.md`, `NEXTJS_FRONTEND_INTEGRATION_GUIDE.md`, `ENV_VS_DB_CONFIG_REFERENCE.md`, `DOC_CONTEXT_MAP.md`, `API_ENDPOINT_INDEX.md`, `ROUTE_SURFACE_COMPLETE_REFERENCE.md`, `BACKEND_GO_LIVE_CHECKLIST.md`, `FRONTEND_AI_GO_LIVE_CHECKLIST.md`, `MASTER_DEPLOYMENT_PLAYBOOK.md`, `ECOM_MASTER.md`, `BRD.md` (BR-CPN-04), deployment signoffs, this log.
 

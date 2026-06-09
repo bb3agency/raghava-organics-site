@@ -37,7 +37,7 @@ If `diff` output is non-empty, re-sync and commit the updated `.agents/rules/dev
    - Backend server (`npm run dev:e2e`) and workers (`npm run dev:e2e:workers`) are running
    - **Health check passes:** `curl http://localhost:3000/api/v1/health` returns `{"success":true,"data":{"status":"ok","db":"connected","redis":"connected"}}`
    - **Database is migrated:** `npx prisma migrate status --schema prisma/schema.prisma` shows "Database schema is up to date"
-   - **Feature flags are set** in backend `.env` (ask which are enabled: `FEATURE_COUPONS_ENABLED`, `FEATURE_REVIEWS_ENABLED`, `FEATURE_WISHLIST_ENABLED`, `FEATURE_GST_INVOICING_ENABLED`, `FEATURE_RESPONSE_ENVELOPE_ENABLED`)
+   - **Feature flags are set** in backend `.env` (ask which are enabled: `FEATURE_COUPONS_ENABLED`, `FEATURE_REVIEWS_ENABLED`, `FEATURE_WISHLIST_ENABLED`, `FEATURE_GST_INVOICING_ENABLED`, `FEATURE_RESPONSE_ENVELOPE_ENABLED`). **Storefront reads flags at runtime** via `GET /store/config` (`useStoreConfig()`) — not build-time `NEXT_PUBLIC_FEATURE_*`.
    - **Backend `.env` has valid `DATABASE_URL`** — if you see P1000 errors, the DB password in `.env` doesn't match the container; fix per `docs/MASTER_DEPLOYMENT_PLAYBOOK.md` Appendix H.4
    - If backend is not fully ready, STOP and guide the user through backend setup first per `README.md` §Local Development Quickstart
 4. **Do not ask questions already answered in the project docs/checklists** (e.g. API URL, feature flags, or agreed delivery sequence).

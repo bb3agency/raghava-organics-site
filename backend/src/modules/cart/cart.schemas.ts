@@ -45,13 +45,15 @@ const emptyBodySchema = {
 const cartResponseSchema = {
   type: 'object',
   additionalProperties: false,
-  required: ['id', 'items', 'subtotal', 'discountAmount', 'total', 'coupon', 'meta'],
+  required: ['id', 'items', 'subtotal', 'discountAmount', 'total', 'coupon', 'meta', 'minOrderValuePaise', 'meetsMinimumOrder'],
   properties: {
     id: { type: 'string', maxLength: 64 },
     items: { type: 'array', items: cartItemSchema },
     subtotal: { type: 'integer', minimum: 0, maximum: 1000000000 },
     discountAmount: { type: 'integer', minimum: 0, maximum: 1000000000 },
     total: { type: 'integer', minimum: 0, maximum: 1000000000 },
+    minOrderValuePaise: { type: 'integer', minimum: 0, maximum: 1000000000 },
+    meetsMinimumOrder: { type: 'boolean' },
     coupon: {
       anyOf: [
         {
@@ -222,7 +224,8 @@ export const deliveryRatesSchema = {
     additionalProperties: false,
     required: ['pincode'],
     properties: {
-      pincode: { type: 'string', minLength: 6, maxLength: 6 }
+      pincode: { type: 'string', minLength: 6, maxLength: 6 },
+      paymentMode: { type: 'string', enum: ['COD', 'PREPAID'] }
     }
   },
   response: {

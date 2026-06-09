@@ -26,7 +26,7 @@ const shippingSettingsSchema = {
 const storeProfileSchema = {
   type: 'object',
   additionalProperties: false,
-  required: ['storeName', 'websiteUrl', 'logoUrl', 'contactEmail', 'contactPhone', 'gstin', 'fssaiNumber'],
+  required: ['storeName', 'websiteUrl', 'logoUrl', 'contactEmail', 'contactPhone', 'gstin', 'fssaiNumber', 'sellerLegalName', 'sellerAddress', 'sellerState'],
   properties: {
     storeName: { anyOf: [{ type: 'string', maxLength: 150 }, { type: 'null' }] },
     websiteUrl: { anyOf: [{ type: 'string', maxLength: 1000 }, { type: 'null' }] },
@@ -34,7 +34,10 @@ const storeProfileSchema = {
     contactEmail: { anyOf: [{ type: 'string', maxLength: 200 }, { type: 'null' }] },
     contactPhone: { anyOf: [{ type: 'string', maxLength: 30 }, { type: 'null' }] },
     gstin: { anyOf: [{ type: 'string', maxLength: 30 }, { type: 'null' }] },
-    fssaiNumber: { anyOf: [{ type: 'string', maxLength: 30 }, { type: 'null' }] }
+    fssaiNumber: { anyOf: [{ type: 'string', maxLength: 30 }, { type: 'null' }] },
+    sellerLegalName: { anyOf: [{ type: 'string', maxLength: 200 }, { type: 'null' }] },
+    sellerAddress: { anyOf: [{ type: 'string', maxLength: 500 }, { type: 'null' }] },
+    sellerState: { anyOf: [{ type: 'string', maxLength: 100 }, { type: 'null' }] }
   }
 } as const;
 
@@ -142,7 +145,10 @@ export const updateStoreProfileSchema = {
       contactEmail: { type: 'string', format: 'email', maxLength: 200 },
       contactPhone: { type: 'string', maxLength: 30 },
       gstin: { type: 'string', maxLength: 30 },
-      fssaiNumber: { type: 'string', maxLength: 30 }
+      fssaiNumber: { type: 'string', maxLength: 30 },
+      sellerLegalName: { type: 'string', maxLength: 200 },
+      sellerAddress: { type: 'string', maxLength: 500 },
+      sellerState: { anyOf: [{ type: 'string', maxLength: 100 }, { type: 'null' }] }
     }
   },
   response: {
@@ -277,11 +283,23 @@ export const getPublicStoreConfigSchema = {
     200: {
       type: 'object',
       additionalProperties: false,
-      required: ['isCodEnabled', 'minOrderValuePaise', 'mobileOtpSignupEnabled'],
+      required: [
+        'isCodEnabled',
+        'minOrderValuePaise',
+        'mobileOtpSignupEnabled',
+        'couponsEnabled',
+        'reviewsEnabled',
+        'wishlistEnabled',
+        'gstInvoicingEnabled'
+      ],
       properties: {
         isCodEnabled: { type: 'boolean' },
         minOrderValuePaise: { type: 'integer', minimum: 0 },
-        mobileOtpSignupEnabled: { type: 'boolean' }
+        mobileOtpSignupEnabled: { type: 'boolean' },
+        couponsEnabled: { type: 'boolean' },
+        reviewsEnabled: { type: 'boolean' },
+        wishlistEnabled: { type: 'boolean' },
+        gstInvoicingEnabled: { type: 'boolean' }
       }
     }
   }

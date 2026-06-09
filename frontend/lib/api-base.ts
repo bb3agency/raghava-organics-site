@@ -13,8 +13,15 @@ function normalizeBase(url: string): string {
 }
 
 export function getConfiguredPublicApiBaseUrl(): string {
-  return normalizeBase(
-    process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3000/api/v1",
+  const configured = process.env.NEXT_PUBLIC_API_BASE_URL?.trim();
+  if (configured) {
+    return normalizeBase(configured);
+  }
+  if (process.env.NODE_ENV === "development") {
+    return normalizeBase("http://localhost:3000/api/v1");
+  }
+  throw new Error(
+    "NEXT_PUBLIC_API_BASE_URL is required in production builds. Set it in .env.production.local before npm run build.",
   );
 }
 

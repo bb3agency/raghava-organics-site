@@ -7,6 +7,9 @@ describe('CartService price snapshot behavior', () => {
     const cartItemUpdate = vi.fn().mockResolvedValue(undefined);
     const fastify = {
       prisma: {
+        storeSettings: {
+          findUnique: vi.fn().mockResolvedValue({ minOrderValuePaise: 0 })
+        },
         cart: {
           upsert: vi.fn().mockResolvedValue({
             id: 'cart_1',
@@ -62,6 +65,9 @@ describe('CartService price snapshot behavior', () => {
     const cartItemUpdate = vi.fn().mockResolvedValue(undefined);
     const fastify = {
       prisma: {
+        storeSettings: {
+          findUnique: vi.fn().mockResolvedValue({ minOrderValuePaise: 0 })
+        },
         cart: {
           upsert: vi.fn().mockResolvedValue({
             id: 'cart_1',

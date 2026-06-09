@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
@@ -20,6 +21,7 @@ import { ADMIN_PERMISSIONS, hasAdminPermission } from "@/lib/permissions";
 import { useAdminDataRefreshEffect } from "@/hooks/use-admin-data-refresh-effect";
 import { AdminFormField } from "@/components/admin/AdminFormField";
 import { useAdminFormValidation } from "@/hooks/use-admin-form-validation";
+import { resolveProductImageUrl } from "@/lib/media-url";
 
 const inputClass =
   "h-10 w-full rounded-md border border-border bg-background px-3 text-sm focus:border-zinc-900 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60";
@@ -57,6 +59,7 @@ export function AdminCategoryEditor({ categoryId }: AdminCategoryEditorProps) {
     getFieldError,
     validateRequired,
     handleSubmitError,
+    applyFieldErrors,
   } = useAdminFormValidation();
 
   const [name, setName] = useState("");
@@ -150,6 +153,23 @@ export function AdminCategoryEditor({ categoryId }: AdminCategoryEditorProps) {
       ]);
     if (!requiredResult.valid) {
       setError(requiredResult.message);
+      setSaving(false);
+      return;
+    }
+
+    const trimmedImageUrl = imageUrl.trim();
+    if (
+      trimmedImageUrl &&
+      !trimmedImageUrl.startsWith("https://") &&
+      !trimmedImageUrl.startsWith("/api/v1/media/categories/")
+    ) {
+      applyFieldErrors({
+        imageUrl:
+          "Image URL must be https:// or a hosted /api/v1/media/categories/ path.",
+      });
+      setError(
+        "Image URL must be https:// or a hosted /api/v1/media/categories/ path.",
+      );
       setSaving(false);
       return;
     }
@@ -367,6 +387,23 @@ export function AdminCategoryEditor({ categoryId }: AdminCategoryEditorProps) {
               }}
             />
           </AdminFormField>
+
+          {imageUrl.trim() ? (
+            <div className="sm:col-span-2">
+              <p className="mb-2 text-xs font-semibold text-muted-foreground">
+                Image preview (saved to CDN after submit)
+              </p>
+              <div className="relative h-24 w-24 overflow-hidden rounded-lg border border-border/50">
+                <Image
+                  src={resolveProductImageUrl(imageUrl.trim())}
+                  alt={name || "Category image preview"}
+                  fill
+                  className="object-cover"
+                  unoptimized={imageUrl.trim().startsWith("blob:")}
+                />
+              </div>
+            </div>
+          ) : null}
 
           <div className="sm:col-span-2">
             <label className="flex items-center gap-3 cursor-pointer">

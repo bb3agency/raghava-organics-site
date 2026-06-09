@@ -1,5 +1,7 @@
 import { FastifyInstance } from 'fastify';
+import { featureFlags } from '@config/feature-flags';
 import { resolveNotificationRuntimeConfig } from '@common/notifications/notification-runtime-config';
+import { resolvePickupPincode } from '@common/shipping/resolve-pickup-pincode';
 import { SmsTemplateRegistry } from '@modules/notifications/sms-template-registry';
 import { supportedEmailTemplates } from '@modules/notifications/templates/email-templates';
 import {
@@ -23,6 +25,14 @@ export class SettingsService {
   private static readonly defaultPickupPincode = '500001';
 
   constructor(private readonly fastify: FastifyInstance) {}
+
+  private async resolveDefaultPickupPincodeForCreate(): Promise<string> {
+    return (
+      (await resolvePickupPincode(this.fastify.prisma, {
+        noopFallback: SettingsService.defaultPickupPincode
+      })) ?? SettingsService.defaultPickupPincode
+    );
+  }
 
   /**
    * Resolves ops-layer provider availability without exposing any key values.
@@ -109,10 +119,10 @@ export class SettingsService {
       };
     }
 
-    const envPickup = (process.env.SHIPROCKET_PICKUP_PINCODE ?? process.env.DELHIVERY_PICKUP_PINCODE)?.trim();
-    if (envPickup && envPickup.length === 6) {
+    const resolved = await resolvePickupPincode(this.fastify.prisma, { noopFallback: null });
+    if (resolved && resolved.length === 6) {
       return {
-        pickupPincode: envPickup,
+        pickupPincode: resolved,
         minOrderValuePaise: 0,
         source: 'environment'
       };
@@ -157,7 +167,10 @@ export class SettingsService {
         contactEmail: true,
         contactPhone: true,
         gstin: true,
-        fssaiNumber: true
+        fssaiNumber: true,
+        sellerLegalName: true,
+        sellerAddress: true,
+        sellerState: true
       }
     });
 
@@ -168,11 +181,15 @@ export class SettingsService {
       contactEmail: settings?.contactEmail ?? null,
       contactPhone: settings?.contactPhone ?? null,
       gstin: settings?.gstin ?? null,
-      fssaiNumber: settings?.fssaiNumber ?? null
+      fssaiNumber: settings?.fssaiNumber ?? null,
+      sellerLegalName: settings?.sellerLegalName ?? null,
+      sellerAddress: settings?.sellerAddress ?? null,
+      sellerState: settings?.sellerState ?? null
     };
   }
 
   async updateStoreProfile(input: UpdateStoreProfileInput): Promise<StoreProfileResponse> {
+    const defaultPickupPincode = await this.resolveDefaultPickupPincodeForCreate();
     const updated = await this.fastify.prisma.storeSettings.upsert({
       where: { singletonKey: SettingsService.singletonKey },
       update: {
@@ -182,11 +199,14 @@ export class SettingsService {
         ...(input.contactEmail !== undefined ? { contactEmail: input.contactEmail } : {}),
         ...(input.contactPhone !== undefined ? { contactPhone: input.contactPhone } : {}),
         ...(input.gstin !== undefined ? { gstin: input.gstin } : {}),
-        ...(input.fssaiNumber !== undefined ? { fssaiNumber: input.fssaiNumber } : {})
+        ...(input.fssaiNumber !== undefined ? { fssaiNumber: input.fssaiNumber } : {}),
+        ...(input.sellerLegalName !== undefined ? { sellerLegalName: input.sellerLegalName } : {}),
+        ...(input.sellerAddress !== undefined ? { sellerAddress: input.sellerAddress } : {}),
+        ...(input.sellerState !== undefined ? { sellerState: input.sellerState } : {})
       },
       create: {
         singletonKey: SettingsService.singletonKey,
-        pickupPincode: process.env.SHIPROCKET_PICKUP_PINCODE ?? process.env.DELHIVERY_PICKUP_PINCODE ?? '500001',
+        pickupPincode: defaultPickupPincode,
         defaultLowStockThreshold: 5,
         ...(input.storeName !== undefined ? { storeName: input.storeName } : {}),
         ...(input.websiteUrl !== undefined ? { websiteUrl: input.websiteUrl } : {}),
@@ -194,7 +214,10 @@ export class SettingsService {
         ...(input.contactEmail !== undefined ? { contactEmail: input.contactEmail } : {}),
         ...(input.contactPhone !== undefined ? { contactPhone: input.contactPhone } : {}),
         ...(input.gstin !== undefined ? { gstin: input.gstin } : {}),
-        ...(input.fssaiNumber !== undefined ? { fssaiNumber: input.fssaiNumber } : {})
+        ...(input.fssaiNumber !== undefined ? { fssaiNumber: input.fssaiNumber } : {}),
+        ...(input.sellerLegalName !== undefined ? { sellerLegalName: input.sellerLegalName } : {}),
+        ...(input.sellerAddress !== undefined ? { sellerAddress: input.sellerAddress } : {}),
+        ...(input.sellerState !== undefined ? { sellerState: input.sellerState } : {})
       },
       select: {
         storeName: true,
@@ -203,7 +226,10 @@ export class SettingsService {
         contactEmail: true,
         contactPhone: true,
         gstin: true,
-        fssaiNumber: true
+        fssaiNumber: true,
+        sellerLegalName: true,
+        sellerAddress: true,
+        sellerState: true
       }
     });
 
@@ -214,7 +240,10 @@ export class SettingsService {
       contactEmail: updated.contactEmail,
       contactPhone: updated.contactPhone,
       gstin: updated.gstin,
-      fssaiNumber: updated.fssaiNumber
+      fssaiNumber: updated.fssaiNumber,
+      sellerLegalName: updated.sellerLegalName,
+      sellerAddress: updated.sellerAddress,
+      sellerState: updated.sellerState
     };
   }
 
@@ -246,6 +275,7 @@ export class SettingsService {
   async updateNotificationSettings(input: UpdateNotificationSettingsInput): Promise<NotificationSettingsResponse> {
     const normalizedSmsTemplates =
       input.smsTemplates !== undefined ? SmsTemplateRegistry.normalizeTemplateOverrides(input.smsTemplates) : undefined;
+    const defaultPickupPincode = await this.resolveDefaultPickupPincodeForCreate();
 
     const updated = await this.fastify.prisma.storeSettings.upsert({
       where: { singletonKey: SettingsService.singletonKey },
@@ -260,7 +290,7 @@ export class SettingsService {
       },
       create: {
         singletonKey: SettingsService.singletonKey,
-        pickupPincode: process.env.SHIPROCKET_PICKUP_PINCODE ?? process.env.DELHIVERY_PICKUP_PINCODE ?? '500001',
+        pickupPincode: defaultPickupPincode,
         defaultLowStockThreshold: 5,
         ...(input.emailEnabled !== undefined ? { notifyEmailEnabled: input.emailEnabled } : {}),
         ...(input.smsEnabled !== undefined ? { notifySmsEnabled: input.smsEnabled } : {}),
@@ -332,6 +362,7 @@ export class SettingsService {
 
   async updateInventorySettings(input: UpdateInventorySettingsInput): Promise<InventorySettingsResponse> {
     const threshold = Math.floor(input.defaultLowStockThreshold);
+    const defaultPickupPincode = await this.resolveDefaultPickupPincodeForCreate();
     const updated = await this.fastify.prisma.storeSettings.upsert({
       where: { singletonKey: SettingsService.singletonKey },
       update: {
@@ -339,7 +370,7 @@ export class SettingsService {
       },
       create: {
         singletonKey: SettingsService.singletonKey,
-        pickupPincode: process.env.SHIPROCKET_PICKUP_PINCODE ?? process.env.DELHIVERY_PICKUP_PINCODE ?? '500001',
+        pickupPincode: defaultPickupPincode,
         defaultLowStockThreshold: threshold
       },
       select: {
@@ -371,13 +402,14 @@ export class SettingsService {
     if (input.mobileOtpSignupEnabled !== undefined) updateData['mobileOtpSignupEnabled'] = input.mobileOtpSignupEnabled;
     if (input.cancellationWindowHours !== undefined) updateData['cancellationWindowHours'] = Math.max(1, Math.floor(input.cancellationWindowHours));
     if (input.sellerState !== undefined) updateData['sellerState'] = input.sellerState;
+    const defaultPickupPincode = await this.resolveDefaultPickupPincodeForCreate();
 
     const updated = await this.fastify.prisma.storeSettings.upsert({
       where: { singletonKey: SettingsService.singletonKey },
       update: updateData,
       create: {
         singletonKey: SettingsService.singletonKey,
-        pickupPincode: process.env.SHIPROCKET_PICKUP_PINCODE ?? process.env.DELHIVERY_PICKUP_PINCODE ?? '500001',
+        pickupPincode: defaultPickupPincode,
         defaultLowStockThreshold: 5,
         ...updateData
       },
@@ -399,7 +431,15 @@ export class SettingsService {
    * Returns only the fields the customer-facing UI needs to render correctly.
    * Never exposes sensitive fields (GSTIN, contact details, notification keys).
    */
-  async getPublicStoreConfig(): Promise<{ isCodEnabled: boolean; minOrderValuePaise: number; mobileOtpSignupEnabled: boolean }> {
+  async getPublicStoreConfig(): Promise<{
+    isCodEnabled: boolean;
+    minOrderValuePaise: number;
+    mobileOtpSignupEnabled: boolean;
+    couponsEnabled: boolean;
+    reviewsEnabled: boolean;
+    wishlistEnabled: boolean;
+    gstInvoicingEnabled: boolean;
+  }> {
     const settings = await this.fastify.prisma.storeSettings.findUnique({
       where: { singletonKey: SettingsService.singletonKey },
       select: { isCodEnabled: true, minOrderValuePaise: true, mobileOtpSignupEnabled: true }
@@ -407,7 +447,11 @@ export class SettingsService {
     return {
       isCodEnabled: settings?.isCodEnabled ?? false,
       minOrderValuePaise: settings?.minOrderValuePaise ?? 0,
-      mobileOtpSignupEnabled: settings?.mobileOtpSignupEnabled ?? false
+      mobileOtpSignupEnabled: settings?.mobileOtpSignupEnabled ?? false,
+      couponsEnabled: featureFlags.coupons,
+      reviewsEnabled: featureFlags.reviews,
+      wishlistEnabled: featureFlags.wishlist,
+      gstInvoicingEnabled: featureFlags.gstInvoicing
     };
   }
 }

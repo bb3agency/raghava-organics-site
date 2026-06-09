@@ -19,8 +19,10 @@
 | Git repo | `https://github.com/bb3agency/raghava-organics-site` |
 | Backend path | `/var/www/raghava-organics/backend` |
 | Frontend path | `/var/www/raghava-organics/frontend` |
+| Image CDN | `https://cdn.raghavaorganics.com` (Cloudflare R2) |
+| DNS | Cloudflare (nameservers updated at Namecheap) |
 | Phase 5 (local) | 2026-05-23 |
-| Last updated | 2026-05-23 |
+| Last updated | 2026-06-11 |
 
 ---
 
@@ -70,10 +72,21 @@
 
 ## Phase 10 — Frontend
 
-**Status:** `[~]` template ready
+**Status:** `[~]` production-ready locally — deploy on VPS
 
-- [ ] `.env.production.local` from [frontend/.env.production.example](../../../frontend/.env.production.example)
+- [x] [frontend/.env.production.example](../../../frontend/.env.production.example) — `raghavaorganics.com` + `cdn.raghavaorganics.com` CDN
+- [ ] Copy to `.env.production.local` on VPS and run [phase10-frontend-deploy.sh](./scripts/phase10-frontend-deploy.sh)
 - [ ] `pm2` process `raghava-organics-frontend`
+
+## Cloudflare R2 — Product media
+
+**Status:** `[~]` bucket + CDN hostname live; Ops save pending on VPS
+
+- [x] R2 bucket `raghava-organics-product-images`
+- [x] Custom domain `cdn.raghavaorganics.com`
+- [x] Credentials documented in [VPS_INPUTS.md](./VPS_INPUTS.md) + [CLOUDFLARE_R2_MEDIA.md](./CLOUDFLARE_R2_MEDIA.md)
+- [ ] Ops UI → Product Media → save + restart API/workers on VPS
+- [ ] Admin upload smoke → image URL on `cdn.raghavaorganics.com`
 
 ---
 

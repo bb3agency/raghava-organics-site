@@ -8,6 +8,9 @@ describe('CartService analytics producer', () => {
 
     const fastify = {
       prisma: {
+        storeSettings: {
+          findUnique: vi.fn().mockResolvedValue({ minOrderValuePaise: 0 })
+        },
         cart: {
           upsert: vi.fn().mockResolvedValue({
             id: 'cart_1',
@@ -82,6 +85,9 @@ describe('CartService analytics producer', () => {
 
     const fastify = {
       prisma: {
+        storeSettings: {
+          findUnique: vi.fn().mockResolvedValue({ minOrderValuePaise: 0 })
+        },
         cart: {
           upsert: vi.fn().mockResolvedValue({
             id: 'cart_1',

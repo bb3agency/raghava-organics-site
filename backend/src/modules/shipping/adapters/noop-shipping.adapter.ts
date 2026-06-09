@@ -25,7 +25,7 @@ export class NoopShippingAdapter implements ShippingProviderAdapter {
     return { cancelled: false, providerPayload: { reason: NOOP_MSG } };
   }
 
-  async checkServiceability(pincode: string): Promise<ServiceabilityResult> {
+  async checkServiceability(pincode: string, _originPincode?: string): Promise<ServiceabilityResult> {
     return { pincode, serviceable: true, providerPayload: { reason: 'noop-mock' } };
   }
 

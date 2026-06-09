@@ -1,5 +1,5 @@
-function getBoolEnv(name: string, fallback = false): boolean {
-  const value = process.env[name];
+function getBoolEnv(name: string, fallback = false, env: Record<string, string | undefined> = process.env): boolean {
+  const value = env[name];
   if (!value) {
     return fallback;
   }
@@ -23,11 +23,11 @@ export function refreshFeatureFlags(): void {
   Object.assign(notifyFlags, resolveNotifyFlags());
 }
 
-export function resolveNotifyFlags() {
+export function resolveNotifyFlags(env: Record<string, string | undefined> = process.env) {
   return {
-    email: getBoolEnv('NOTIFY_EMAIL_ENABLED', true),
-    sms: getBoolEnv('NOTIFY_SMS_ENABLED', true),
-    whatsapp: getBoolEnv('NOTIFY_WHATSAPP_ENABLED', false)
+    email: getBoolEnv('NOTIFY_EMAIL_ENABLED', true, env),
+    sms: getBoolEnv('NOTIFY_SMS_ENABLED', false, env),
+    whatsapp: getBoolEnv('NOTIFY_WHATSAPP_ENABLED', false, env)
   };
 }
 

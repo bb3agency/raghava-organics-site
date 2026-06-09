@@ -29,16 +29,25 @@ const STEPS: Step[] = [
     description:
       "Produce is sorted, packed in food-grade boxes, and routed within hours of arriving at our Hyderabad facility.",
   },
-  {
+];
+
+function buildDeliveryStep(isCodEnabled: boolean): Step {
+  return {
     icon: Truck,
     step: "Step 04",
     title: "Delivered within 48 hours",
-    description:
-      "Cold-chain logistics across major cities. COD available where supported.",
-  },
-];
+    description: isCodEnabled
+      ? "Cold-chain logistics across major cities. COD available where supported."
+      : "Cold-chain logistics across major cities. Prepaid checkout available everywhere we ship.",
+  };
+}
 
-export function FarmProcess() {
+interface FarmProcessProps {
+  isCodEnabled?: boolean;
+}
+
+export function FarmProcess({ isCodEnabled = false }: FarmProcessProps) {
+  const steps = [...STEPS, buildDeliveryStep(isCodEnabled)];
   return (
     <section className="relative overflow-hidden bg-[#23403d] text-white">
       {/* Decorative pattern */}
@@ -75,7 +84,7 @@ export function FarmProcess() {
           />
 
           <div className="grid gap-6 sm:gap-8 md:grid-cols-2 lg:grid-cols-4">
-            {STEPS.map(({ icon: Icon, step, title, description }) => (
+            {steps.map(({ icon: Icon, step, title, description }) => (
               <div key={step} className="relative">
                 {/* Step number badge */}
                 <div className="relative z-10 mb-6 flex size-14 items-center justify-center rounded-2xl bg-[#ec6e55] text-white shadow-lg shadow-[#ec6e55]/30">

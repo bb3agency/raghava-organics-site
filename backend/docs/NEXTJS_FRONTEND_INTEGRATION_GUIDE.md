@@ -10,10 +10,37 @@ This guide describes how a **single Next.js frontend app** serving storefront an
 
 | Variable | Example | Use |
 | --- | --- | --- |
-| `NEXT_PUBLIC_STOREFRONT_URL` | `https://client1.com` | Canonical browser origin; redirects, links, Razorpay `callback_url` context |
+| `NEXT_PUBLIC_STOREFRONT_URL` | `https://client1.com` | Canonical browser origin; redirects, links, Razorpay `callback_url` context; SSR image absolute URLs when CDN unset (**must be set in production**) |
 | `NEXT_PUBLIC_API_BASE_URL` | `https://client1.com/api/v1` **or** dedicated API host | Browser-facing API prefix (**must** include `/api/v1`) |
+| `NEXT_PUBLIC_IMAGE_CDN_URL` | `https://cdn.client1.com` | Product image CDN prefix — must match Ops `R2_PUBLIC_BASE_URL` in production |
 | `NEXT_PUBLIC_RAZORPAY_KEY_ID` | `rzp_live_xxx` | **Public** key only — never put key secret in Next bundle |
 | Server-only `INTERNAL_API_BASE_URL` | `http://127.0.0.1:<BACKEND_PORT>/api/v1` | Optional SSR/server-actions bypass of public DNS (same machine as Nginx/backend) |
+
+**Do not use build-time env vars for storefront module flags or COD.** Fetch **`GET /api/v1/store/config`** instead (see §1.2). Legacy `NEXT_PUBLIC_FEATURE_*` keys in `.env.example` are not authoritative for customer UI.
+
+### 1.2 Runtime public store config (`GET /api/v1/store/config`)
+
+Public, no auth. Returns only customer-safe fields:
+
+| Field | Source | Storefront use |
+| --- | --- | --- |
+| `isCodEnabled` | DB `StoreSettings` | Show/hide COD at checkout |
+| `minOrderValuePaise` | DB `StoreSettings` | Block checkout below minimum (0 = none) |
+| `mobileOtpSignupEnabled` | DB `StoreSettings` | Show mobile OTP signup tab |
+| `couponsEnabled` | Backend `FEATURE_COUPONS_ENABLED` | Cart coupon UI, PDP promos |
+| `reviewsEnabled` | Backend `FEATURE_REVIEWS_ENABLED` | PDP reviews, homepage testimonials |
+| `wishlistEnabled` | Backend `FEATURE_WISHLIST_ENABLED` | Wishlist buttons |
+| `gstInvoicingEnabled` | Backend `FEATURE_GST_INVOICING_ENABLED` | Admin GST field visibility (also fetched client-side in admin panels) |
+
+**This repo wiring:**
+- RSC: `getPublicStoreConfig()` in `lib/storefront-settings.ts` with `next: { revalidate: 60 }`.
+- Client: `fetchPublicStoreConfigClient()` for admin GST panels and register page.
+- Provider: `StoreConfigProvider` in `app/(storefront)/layout.tsx`; hooks via `useStoreConfig()`.
+- **Fail-closed:** When fetch fails, `configAvailable: false` — disable COD, coupons, wishlist, and block checkout until config loads.
+
+**Invoice download (customer + admin):** Use `order.invoice?.hasPdf === true` from `GET /orders/:id` — not `gstInvoicingEnabled` and not a direct `pdfUrl` field.
+
+**Admin nav:** Coupons and Reviews nav items are always shown so merchants can moderate/configure even when storefront modules are disabled via feature flags.
 
 **Cookie domains:** backend sets **`refresh_token`** and **`cart_session`** with `httpOnly`, `sameSite: 'strict'`, and `Secure` in production-like profiles (`TRD.md` §8.3, constraint C-20). Development/test omits `Secure` on `refresh_token` (`auth-cookies.ts`). The refresh cookie uses **`Path=/api/v1`** (not site-wide `/`) so it is only sent to API routes. Frontends **must** call the API on the **same site** as the browser UI so cookies are stored and sent on `credentials: 'include'` requests.
 
@@ -471,7 +498,8 @@ Storefront rendering model (`TRD.md` §12.1): use ISR patterns (`generateStaticP
 
 - `GET /cart`, `POST /cart/items`, `PATCH /cart/items/:id`, `DELETE /cart/items/:id`, `DELETE /cart`, `POST /cart/merge` (**after login**), `POST /cart/coupon`, `DELETE /cart/coupon`
 - `POST /cart/check-pincode` (public) — `{ pincode }`
-- `GET /cart/delivery-rates` — needs cart + destination context per API schema
+- `GET /cart/delivery-rates?pincode=<6-digit>&paymentMode=PREPAID|COD` — authenticated cart + destination; **`paymentMode` defaults to `PREPAID`**; COD quotes may differ from prepaid. On error (`503`, `422`, etc.) show shipping unavailable — **never** display a false “Free” fallback.
+- `GET /store/config` (public) — runtime storefront flags + COD/min order (see §1.2). No auth.
 
 ### 5.4 Reviews (`§7.7`) — if `FEATURE_REVIEWS_ENABLED`
 
@@ -491,13 +519,13 @@ When `FEATURE_REVIEWS_ENABLED=false`, `/reviews/recent` and `/reviews/product/:s
 
 ### 5.5 Orders & payments (`§7.8`)
 
-- `POST /orders` — single DB transaction; body accepts optional `paymentMode: 'PREPAID' | 'COD'` (default `PREPAID`)
+- `POST /orders` — single DB transaction; body accepts optional `paymentMode: 'PREPAID' | 'COD'` (default `PREPAID`); re-validates shipping inside transaction (TOCTOU guard vs cart preview)
 - `GET /orders/:id` — **own orders only**; response includes `paymentMode` field
 - `GET /orders/:id/invoice.pdf` — authenticated customer invoice PDF download (attachment response)
-- `POST /orders/:id/cancel` — allowed states per business rules; enforces `cancellationWindowHours` from store settings
+- `POST /orders/:id/cancel` — **customer:** only from `CONFIRMED` or `PROCESSING` (not `PENDING_PAYMENT` / `PAYMENT_FAILED`); enforces `cancellationWindowHours` from store settings; enqueues shipment cancel when AWB exists
 - `POST /payments/initiate` — `{ orderId }` → Razorpay order id (**PREPAID only**)
 - `POST /payments/verify` — `{ orderId, razorpayPaymentId, razorpaySignature }` after checkout
-- `POST /payments/retry` — retry for `PAYMENT_FAILED` / `PENDING_PAYMENT` orders; returns `409` for COD orders
+- `POST /payments/retry` — retry for `PAYMENT_FAILED` / `PENDING_PAYMENT` orders; restores checkout reservations server-side; returns `409`/`400` for COD orders
 - `POST /orders/:id/return-requests` — create return request for `DELIVERED` orders; body: `{ items: [{ orderItemId, quantity, reason? }], reason }`
 - `GET /shipping/track/:awb` — tracking for **customer-owned** orders only
 
@@ -551,14 +579,17 @@ Optional **`RISK_VELOCITY_ENABLED`** may throttle initiate per user/hour (`TRD.m
 
 ### 6.2 COD (Cash on Delivery) sequence
 
-1. Check `GET /api/v1/admin/settings/cod` (or rely on feature-flag derived from settings at storefront build) to decide whether to show the COD option at checkout.
-2. **`POST /orders`** with `paymentMode: 'COD'` and `addressId` or `shippingAddress` → order immediately returns in **`CONFIRMED`** status — **no Razorpay steps needed**.
-3. Redirect to storefront **`/checkout/success?orderId=`** (confirmation page); worker sends **OrderConfirmed** email asynchronously.
-4. COD payment record semantics: backend creates COD payment as `CREATED`; it transitions to `CAPTURED` when collection is confirmed in backend flows.
-5. Shipment booking remains manual-only for COD and PREPAID: admin must trigger `POST /api/v1/admin/orders/:id/ship`.
-6. On error **`VALIDATION_ERROR`** with message mentioning COD disabled → hide COD option and prompt for prepaid.
+1. Fetch **`GET /api/v1/store/config`** (or `useStoreConfig()` after layout load) — show COD only when `isCodEnabled === true`.
+2. Pass selected **`paymentMode`** to **`GET /cart/delivery-rates`** so shipping quote matches COD tariff.
+3. **`POST /orders`** with `paymentMode: 'COD'` and `addressId` or `shippingAddress` → order immediately returns in **`CONFIRMED`** status — **no Razorpay steps needed**.
+4. Redirect to storefront **`/checkout/success?orderId=`** (confirmation page); worker runs **`process-order-update`** with `triggeredBy: COD_ORDER_CREATED` (inventory, coupon finalize, notifications, invoice).
+5. COD payment record semantics: backend creates COD payment as `CREATED`; it transitions to `CAPTURED` when collection is confirmed in backend flows.
+6. Shipment booking remains manual-only for COD and PREPAID: admin must trigger `POST /api/v1/admin/orders/:id/ship`.
+7. On error **`VALIDATION_ERROR`** with message mentioning COD disabled → hide COD option and prompt for prepaid.
 
 **Payment retry for COD:** not applicable — `POST /payments/retry` returns `400 VALIDATION_ERROR` for COD orders. Do not render the retry UI affordance for orders where `paymentMode === 'COD'`.
+
+**Payment retry for PREPAID:** Order detail page navigates to `/checkout/payment?orderId=`; payment page calls **`POST /payments/retry` once** (guards: status `PENDING_PAYMENT` or `PAYMENT_FAILED`, not COD). Do not call retry from both pages.
 
 ---
 
@@ -602,7 +633,7 @@ Public `GET /products` and PDP require **`isActive: true`** and at least one **a
 | External URL | `POST /api/v1/admin/products/:id/images` — JSON `{ url, altText, sortOrder }` for legacy `https://` URLs |
 | Public serve (prod) | R2 bucket + `R2_PUBLIC_BASE_URL` (custom domain on bucket recommended) |
 | Public serve (local) | `GET /api/v1/media/products/:productId/:filename` — no auth; cache headers for Cloudflare |
-| Frontend resolve | `resolveProductImageUrl()` in `frontend/lib/media-url.ts`; catalog via `mapProduct()` |
+| Frontend resolve | `resolveProductImageUrl()` in `frontend/lib/media-url.ts`; catalog via `mapProduct()` — SSR uses `NEXT_PUBLIC_IMAGE_CDN_URL` first, then `NEXT_PUBLIC_STOREFRONT_URL` if set; **never** implicit `localhost` in production SSR |
 | Admin UI | `AdminProductEditor` + `lib/admin-product-media.ts` — multi-select file picker on product edit |
 | Ops config | Ops console → **Product Media** domain (`media`) — `MEDIA_STORAGE_PROVIDER`, `R2_*` (DB overlay, restart required) |
 | Admin shell | `AdminConsoleShell` + `contexts/admin-shell-context.tsx` — layout + export pub/sub only; **no** global date range |
@@ -617,15 +648,23 @@ Public `GET /products` and PDP require **`isActive: true`** and at least one **a
 
 ## 8. Feature flags (must align with backend `.env`)
 
-Mirror backend toggles (`ECOM_MASTER.md` §12.2, `.env.example`):
+Backend bootstrap toggles (`ECOM_MASTER.md` §12.2, `.env.example`):
 
 - `FEATURE_COUPONS_ENABLED`
 - `FEATURE_REVIEWS_ENABLED`
 - `FEATURE_WISHLIST_ENABLED`
-- `FEATURE_GST_INVOICING_ENABLED`
+- `FEATURE_GST_INVOICING_ENABLED` — backend PDF invoice generation
 - `FEATURE_RESPONSE_ENVELOPE_ENABLED` — when `true`, all success JSON is wrapped in `{ success, data, meta? }`
 
-Hide UI affordances when disabled; backend still returns safe defaults (e.g. empty review lists). For reviews specifically: homepage `TestimonialsSection` and PDP `ProductReviewsSection` both degrade gracefully to hidden/empty states without client-side flag checks.
+**Storefront + admin GST visibility (runtime — preferred):**
+
+Fetch **`GET /api/v1/store/config`** (§1.2). Fields `couponsEnabled`, `reviewsEnabled`, `wishlistEnabled`, `gstInvoicingEnabled` mirror the backend `FEATURE_*` flags. `isCodEnabled` and `minOrderValuePaise` come from DB `StoreSettings`.
+
+**Legacy build-time keys (`frontend/.env.example`):** `NEXT_PUBLIC_FEATURE_*` — not authoritative in this repo; kept for backward compatibility only.
+
+Hide UI affordances when disabled; backend still returns safe defaults (e.g. empty review lists). For reviews specifically: homepage `TestimonialsSection` and PDP `ProductReviewsSection` both degrade gracefully to hidden/empty states when `reviewsEnabled === false` from store config.
+
+**Brand assets:** Use `BRAND_LOGO_SRC` from `frontend/lib/constants.ts` (`/images/raghava-organics-logo.png`) — do not reference repo-root logos or duplicate `public/logo.png`.
 
 ---
 

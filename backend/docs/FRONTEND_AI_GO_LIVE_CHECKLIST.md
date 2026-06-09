@@ -8,6 +8,10 @@ Pair this with `docs/BACKEND_GO_LIVE_CHECKLIST.md` for final go-live sign-off. T
 
 - [ ] Frontend uses only `NEXT_PUBLIC_API_BASE_URL` and `NEXT_PUBLIC_STOREFRONT_URL`.
 - [ ] `NEXT_PUBLIC_API_BASE_URL` includes `/api/v1`.
+- [ ] `NEXT_PUBLIC_STOREFRONT_URL` and `NEXT_PUBLIC_IMAGE_CDN_URL` are set in production (CDN must match Ops `R2_PUBLIC_BASE_URL`; SSR never embeds implicit `localhost` — see `lib/media-url.ts`).
+- [ ] Storefront uses **`GET /api/v1/store/config`** (via `StoreConfigProvider` / `lib/storefront-settings.ts`) for COD, min order, and module flags — not build-time `NEXT_PUBLIC_FEATURE_*` env vars.
+- [ ] Admin GST panels fetch `gstInvoicingEnabled` from `/store/config` (legacy `NEXT_PUBLIC_FEATURE_GST_INVOICING_ENABLED` is not authoritative).
+- [ ] Brand logo served from `frontend/public/images/raghava-organics-logo.png` via `BRAND_LOGO_SRC` in `lib/constants.ts` — no repo-root or duplicate `public/logo.png` paths.
 - [ ] No hardcoded API URLs in code.
 - [ ] No alternate env names (for example `NEXT_PUBLIC_API_URL`).
 - [ ] **Cookie auth / same-site:** Local dev uses `NEXT_PUBLIC_API_BASE_URL` on the **storefront origin** (e.g. `http://localhost:3101/api/v1`) with `BACKEND_PROXY_URL` + Next rewrite; `INTERNAL_API_BASE_URL` points at Fastify for SSR/tests. Production uses one public origin for UI + `/api/v1` (Nginx). After admin login, `refresh_token` cookie is on the UI origin (`Path=/api/v1`); hard refresh on `/admin` stays signed in (`AdminGuard` + `restore-auth-session.ts`). VPS: `TRUSTED_PROXY_ALLOWLIST_CIDR` set for stable client IP on refresh. See `NEXTJS_FRONTEND_INTEGRATION_GUIDE.md` §1.0.1–§1.0.2.
@@ -140,6 +144,11 @@ Pair this with `docs/BACKEND_GO_LIVE_CHECKLIST.md` for final go-live sign-off. T
 
 ## 5) Checkout Flow Split (Mandatory)
 
+- [ ] **`GET /api/v1/store/config`** loaded before checkout (fail-closed when `configAvailable === false`).
+- [ ] COD option gated on `isCodEnabled` from store config (not admin API or build-time env).
+- [ ] **`GET /api/v1/cart/delivery-rates?pincode=&paymentMode=`** called with the selected payment mode; shipping errors show unavailable (no false “Free”).
+- [ ] Customer cancel button only for `CONFIRMED` / `PROCESSING` — not `PENDING_PAYMENT` / `PAYMENT_FAILED`.
+- [ ] **`POST /payments/retry`** invoked from payment page only (single call); order detail navigates without duplicating retry.
 - [ ] PREPAID flow implemented exactly:
   1. `POST /api/v1/orders`
   2. `POST /api/v1/payments/initiate`

@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { featureFlags } from '@config/feature-flags';
 import { OrdersService } from './orders.service';
 
 function makeFastify(orderResult: unknown): FastifyInstance {
@@ -15,6 +16,10 @@ function makeFastify(orderResult: unknown): FastifyInstance {
 }
 
 describe('OrdersService adminGetInvoicePdf', () => {
+  beforeEach(() => {
+    featureFlags.gstInvoicing = true;
+  });
+
   it('throws 404 when order does not exist', async () => {
     const fastify = makeFastify(null);
     const service = new OrdersService(fastify);

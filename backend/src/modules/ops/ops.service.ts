@@ -17,6 +17,7 @@ import {
   type MaintenanceStateRecord
 } from '@common/reliability/maintenance-state';
 import { decryptOpsConfigValue, encryptOpsConfigValue, maskSecretValue, resolveOpsEncryptionKeyVersion } from '@common/security/ops-config-crypto';
+import { validateSetupBaseUrl } from '@common/security/setup-base-url';
 import { sendNotificationFailureAlert, sendTechnicalFailureAlert } from '@modules/notifications/notification-failure-alert';
 import {
   findMissingStrictOpsConfigKeys,
@@ -376,43 +377,6 @@ function hashOpaqueToken(value: string): string {
 }
 
 
-/**
- * Validates that a setupBaseUrl is safe to use as an invite link origin.
- * Rejects non-HTTPS URLs and RFC-1918 / link-local / loopback hostnames to
- * prevent SSRF vectors from a malicious ops operator.
- */
-function validateSetupBaseUrl(rawUrl: string): void {
-  let parsed: URL;
-  try {
-    parsed = new URL(rawUrl);
-  } catch {
-    throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'setupBaseUrl is not a valid URL', 400);
-  }
-  if (parsed.protocol !== 'https:') {
-    throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'setupBaseUrl must use HTTPS', 400);
-  }
-  const hostname = parsed.hostname.toLowerCase();
-  // Block loopback
-  if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1') {
-    throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'setupBaseUrl hostname is not permitted', 400);
-  }
-  // Block link-local (169.254.x.x)
-  if (/^169\.254\./.test(hostname)) {
-    throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'setupBaseUrl hostname is not permitted', 400);
-  }
-  // Block RFC-1918 private ranges
-  if (
-    /^10\./.test(hostname) ||
-    /^172\.(1[6-9]|2\d|3[01])\./.test(hostname) ||
-    /^192\.168\./.test(hostname)
-  ) {
-    throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'setupBaseUrl hostname is not permitted', 400);
-  }
-  // Block metadata/IMDS endpoints
-  if (hostname === '169.254.169.254' || hostname === 'metadata.google.internal') {
-    throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'setupBaseUrl hostname is not permitted', 400);
-  }
-}
 
 function toPrismaOpsConfigDomain(domain: OpsConfigDomain): 'CORE' | 'PAYMENTS' | 'SHIPPING' | 'NOTIFICATIONS' | 'OPS_SECURITY' {
   if (domain === 'core' || domain === 'media') return 'CORE';

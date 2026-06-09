@@ -51,4 +51,16 @@ describe("api-base", () => {
     process.env.INTERNAL_API_BASE_URL = "http://127.0.0.1:3000/api/v1";
     expect(getServerApiBaseUrl()).toBe("http://127.0.0.1:3000/api/v1");
   });
+
+  it("throws in production when NEXT_PUBLIC_API_BASE_URL is unset", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    delete process.env.NEXT_PUBLIC_API_BASE_URL;
+    expect(() => getConfiguredPublicApiBaseUrl()).toThrow(/NEXT_PUBLIC_API_BASE_URL/);
+  });
+
+  it("uses localhost fallback only in development", () => {
+    vi.stubEnv("NODE_ENV", "development");
+    delete process.env.NEXT_PUBLIC_API_BASE_URL;
+    expect(getConfiguredPublicApiBaseUrl()).toBe("http://localhost:3000/api/v1");
+  });
 });

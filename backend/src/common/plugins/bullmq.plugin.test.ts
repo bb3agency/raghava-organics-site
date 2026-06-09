@@ -41,7 +41,8 @@ describe('registerBullmqPlugin', () => {
     const fastify = {
       redis: {
         duplicate: () => ({
-          quit: state.quit
+          quit: state.quit,
+          on: vi.fn()
         })
       },
       log: {

@@ -17,6 +17,9 @@ export type StoreProfileResponse = {
   contactPhone: string | null;
   gstin: string | null;
   fssaiNumber: string | null;
+  sellerLegalName: string | null;
+  sellerAddress: string | null;
+  sellerState: string | null;
 };
 
 export type UpdateStoreProfileInput = {
@@ -27,6 +30,9 @@ export type UpdateStoreProfileInput = {
   contactPhone?: string;
   gstin?: string;
   fssaiNumber?: string;
+  sellerLegalName?: string;
+  sellerAddress?: string;
+  sellerState?: string | null;
 };
 
 /**

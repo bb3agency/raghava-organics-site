@@ -20,7 +20,7 @@ import {
   resolveOtpChannelForTemplate,
   resolveOtpNotifyToggles
 } from '@common/notifications/otp-deliverability';
-import { sendNotificationFailureAlert } from '@modules/notifications/notification-failure-alert';
+import { sendNotificationFailureAlert, sendTechnicalFailureAlert } from '@modules/notifications/notification-failure-alert';
 import { OtpChannel } from './otp-channel';
 
 type PublicUser = {
@@ -591,6 +591,20 @@ export class AuthService {
       throw new AppError(ERROR_CODES.RATE_LIMIT_EXCEEDED, 'OTP attempt limit exceeded', 429);
     }
 
+    const existingUser = await this.fastify.prisma.user.findFirst({
+      where: { phone: input.phone },
+      select: { id: true }
+    });
+    if (!existingUser) {
+      const signupSettings = await this.fastify.prisma.storeSettings.findUnique({
+        where: { singletonKey: 'default' },
+        select: { mobileOtpSignupEnabled: true }
+      });
+      if (!signupSettings?.mobileOtpSignupEnabled) {
+        throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Phone signup is not available', 400);
+      }
+    }
+
     if (isAuthDevBypassEnabled()) {
       const devOtp = getAuthDevOtp();
       const devOtpHash = hashOtp(devOtp);
@@ -758,6 +772,14 @@ export class AuthService {
       throw new AppError(ERROR_CODES.INVALID_CREDENTIALS, 'Invalid or expired OTP', 401);
     }
 
+    const signupSettings = await this.fastify.prisma.storeSettings.findUnique({
+      where: { singletonKey: 'default' },
+      select: { mobileOtpSignupEnabled: true }
+    });
+    if (!signupSettings?.mobileOtpSignupEnabled) {
+      throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Phone signup is not available', 400);
+    }
+
     const trimmedEmail = input.email?.trim().toLowerCase();
     const existingByPhone = await this.fastify.prisma.user.findFirst({ where: { phone: input.phone } });
     if (existingByPhone) {
@@ -845,7 +867,20 @@ export class AuthService {
         return genericResponse;
       }
 
-      const storefrontUrl = process.env.STOREFRONT_URL?.trim() ?? 'http://localhost:3101';
+      const storefrontUrl = process.env.STOREFRONT_URL?.trim();
+      if (!storefrontUrl) {
+        void sendTechnicalFailureAlert({
+          prisma: this.fastify.prisma,
+          template: 'PasswordReset',
+          channel: 'EMAIL',
+          recipient: user.email ?? input.email,
+          errorMessage: 'STOREFRONT_URL is not configured — password reset email skipped',
+          failureStage: 'CORE_LOGIC',
+          domain: 'auth',
+          component: 'requestPasswordReset'
+        });
+        return genericResponse;
+      }
       const resetUrl = `${storefrontUrl}/reset-password?token=${encodeURIComponent(resetToken)}`;
       const jobId = `password-reset:${user.id}:${Date.now()}`;
       try {

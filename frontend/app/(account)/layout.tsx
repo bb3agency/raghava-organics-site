@@ -2,6 +2,9 @@ import type { ReactNode } from "react";
 import Link from "next/link";
 import { ChevronRight } from "lucide-react";
 import { AccountGuard } from "@/components/auth/AccountGuard";
+import { NOINDEX_METADATA } from "@/lib/seo";
+
+export const metadata = NOINDEX_METADATA;
 
 interface AccountLayoutProps {
   children: ReactNode;

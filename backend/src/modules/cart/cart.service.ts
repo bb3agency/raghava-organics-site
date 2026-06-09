@@ -1,11 +1,14 @@
-import { createHash, createHmac, randomUUID } from 'crypto'; 
-import { AnalyticsEventType, Coupon, CouponType, OrderStatus, Prisma, PrismaClient } from '@prisma/client';
+import { createHash, randomUUID } from 'crypto'; 
+import { AnalyticsEventType, Coupon, CouponType, Prisma, PrismaClient } from '@prisma/client';
 import { FastifyInstance } from 'fastify';
 import { AppError } from '@common/errors/app-error';
 import { ERROR_CODES } from '@common/errors/error-codes';
 import { recordFlashSaleAdmission, recordFlashSaleShardContention } from '@common/observability/metrics';
 import { redactSensitiveData } from '@common/security/redaction';
 import { ShippingProviderAdapter } from '@common/interfaces/shipping-provider.interface';
+import type { DeliveryRateResult } from '@common/interfaces/shipping-provider.interface';
+import { resolvePickupPincode } from '@common/shipping/resolve-pickup-pincode';
+import { assertCouponWithinUsageLimits } from '@common/coupons/coupon-usage';
 import { NoopShippingAdapter } from '@modules/shipping/adapters/noop-shipping.adapter';
 import { featureFlags } from '@config/feature-flags';
 import { createShippingProvider } from '@modules/shipping/shipping-provider';
@@ -77,7 +80,95 @@ export class CartService {
 
   async getCart(userId: string | undefined, sessionToken: string | undefined) {
     const cart = await this.resolveOrCreateCart(userId, sessionToken, true);
-    return this.serializeCart(cart, !userId);
+    return this.serializeCartForClient(cart, !userId);
+  }
+
+  /** Drop orphaned couponId when feature flag is off — matches serializeCart/createOrder. */
+  private async stripDisabledCouponFromCart<
+    T extends { id: string; coupon: Coupon | null }
+  >(cart: T, tx?: Prisma.TransactionClient): Promise<T> {
+    if (featureFlags.coupons || !cart.coupon) {
+      return cart;
+    }
+    const cartDelegate = tx?.cart ?? this.fastify.prisma.cart;
+    await cartDelegate.update({
+      where: { id: cart.id },
+      data: { couponId: null }
+    });
+    return { ...cart, coupon: null };
+  }
+
+  /** Clear coupons that no longer pass validation (expired, below min, usage limits). */
+  private async stripInvalidCouponFromCart<
+    T extends {
+      id: string;
+      userId?: string | null;
+      sessionToken: string | null;
+      coupon: Coupon | null;
+      items: Array<{
+        priceSnapshot: number;
+        quantity: number;
+        variant: { productId: string; product: { categoryId: string } };
+      }>;
+    }
+  >(cart: T, tx?: Prisma.TransactionClient): Promise<T> {
+    if (!featureFlags.coupons || !cart.coupon || cart.items.length === 0) {
+      return cart;
+    }
+
+    const subtotal = cart.items.reduce((sum, item) => sum + item.priceSnapshot * item.quantity, 0);
+    try {
+      await this.validateCoupon(
+        cart.coupon,
+        subtotal,
+        cart.userId ?? undefined,
+        cart.sessionToken,
+        cart.items
+      );
+      return cart;
+    } catch {
+      if (!cart.userId && cart.sessionToken) {
+        await this.decrementGuestCouponUsage(cart.coupon.id, cart.sessionToken);
+      }
+      const cartDelegate = tx?.cart ?? this.fastify.prisma.cart;
+      await cartDelegate.update({
+        where: { id: cart.id },
+        data: { couponId: null }
+      });
+      return { ...cart, coupon: null };
+    }
+  }
+
+  private async serializeCartForClient<
+    T extends {
+      id: string;
+      userId?: string | null;
+      sessionToken: string | null;
+      coupon: Coupon | null;
+      reservations?: Array<{ variantId: string; quantity: number; expiresAt: Date }>;
+      items: Array<{
+        id: string;
+        variantId: string;
+        quantity: number;
+        priceSnapshot: number;
+        variant: { id: string; name: string; sku: string; price: number; productId: string; product: { categoryId: string } };
+      }>;
+    }
+  >(cart: T, isGuest: boolean, tx?: Prisma.TransactionClient) {
+    const withoutDisabledCoupon = await this.stripDisabledCouponFromCart(cart, tx);
+    const normalized = await this.stripInvalidCouponFromCart(withoutDisabledCoupon, tx);
+    const serialized = this.serializeCart(normalized, isGuest);
+    const settingsClient = tx?.storeSettings ?? this.fastify.prisma.storeSettings;
+    const settings = await settingsClient.findUnique({
+      where: { singletonKey: 'default' },
+      select: { minOrderValuePaise: true }
+    });
+    const minOrderValuePaise = settings?.minOrderValuePaise ?? 0;
+    return {
+      ...serialized,
+      minOrderValuePaise,
+      meetsMinimumOrder: serialized.subtotal >= minOrderValuePaise
+    };
   }
 
   async addItem(userId: string | undefined, sessionToken: string | undefined, input: AddCartItemInput) {
@@ -127,7 +218,7 @@ export class CartService {
         quantity: input.quantity
       }
     );
-    return this.serializeCart(updated, !userId);
+    return this.serializeCartForClient(updated, !userId);
   }
 
   async updateItem(userId: string | undefined, sessionToken: string | undefined, itemId: string, input: UpdateCartItemInput) {
@@ -159,7 +250,7 @@ export class CartService {
     });
 
     const updated = await this.getCartWithItems(cart.id);
-    return this.serializeCart(updated, !userId);
+    return this.serializeCartForClient(updated, !userId);
   }
 
   async deleteItem(userId: string | undefined, sessionToken: string | undefined, itemId: string) {
@@ -194,11 +285,16 @@ export class CartService {
         quantity: item.quantity
       }
     );
-    return this.serializeCart(updated, !userId);
+    return this.serializeCartForClient(updated, !userId);
   }
 
   async clearCart(userId: string | undefined, sessionToken: string | undefined) {
     const cart = await this.resolveOrCreateCart(userId, sessionToken, true);
+    const fullCart = await this.getCartWithItems(cart.id);
+    const guestCouponRelease =
+      !userId && fullCart.coupon && fullCart.sessionToken
+        ? { couponId: fullCart.coupon.id, sessionToken: fullCart.sessionToken }
+        : null;
     await this.runInTransaction(async (tx) => {
       await tx.cartItem.deleteMany({ where: { cartId: cart.id } });
       const reservationDelegate = (tx as unknown as { cartReservation?: Prisma.TransactionClient['cartReservation'] })
@@ -209,17 +305,20 @@ export class CartService {
       await tx.cart.update({ where: { id: cart.id }, data: { couponId: null } });
       await this.extendCartReservationWindow(cart.id, tx);
     });
+    if (guestCouponRelease) {
+      await this.decrementGuestCouponUsage(guestCouponRelease.couponId, guestCouponRelease.sessionToken);
+    }
     const updated = await this.getCartWithItems(cart.id);
-    return this.serializeCart(updated, !userId);
+    return this.serializeCartForClient(updated, !userId);
   }
 
   async mergeGuestCart(userId: string, sessionToken: string | undefined) {
     if (!sessionToken) {
       const ownCart = await this.resolveOrCreateCart(userId, undefined);
-      return this.serializeCart(ownCart, false);
+      return this.serializeCartForClient(ownCart, false);
     }
 
-    return this.fastify.prisma.$transaction(async (tx) => {
+    const mergeResult = await this.fastify.prisma.$transaction(async (tx) => {
       const userCart = await tx.cart.upsert({
         where: { userId },
         update: { expiresAt: this.buildExpiryDate() },
@@ -233,8 +332,19 @@ export class CartService {
 
       if (!guestCart || guestCart.items.length === 0) {
         const merged = await this.getCartWithItems(userCart.id, tx);
-        return this.serializeCart(merged, false);
+        return {
+          cart: await this.serializeCartForClient(merged, false, tx),
+          guestCouponRelease: null as { couponId: string; sessionToken: string } | null
+        };
       }
+
+      const guestCouponRelease =
+        guestCart.coupon && guestCart.sessionToken
+          ? {
+              couponId: guestCart.coupon.id,
+              sessionToken: guestCart.sessionToken
+            }
+          : null;
 
       for (const guestItem of guestCart.items) {
         const reservationDelegate = (tx as unknown as { cartReservation?: Prisma.TransactionClient['cartReservation'] })
@@ -289,7 +399,7 @@ export class CartService {
         }
       }
 
-      if (!userCart.couponId && guestCart.coupon) {
+      if (!userCart.couponId && guestCart.coupon && featureFlags.coupons) {
         const mergedPreview = await this.getCartWithItems(userCart.id, tx);
         const subtotal = mergedPreview.items.reduce((sum, item) => sum + item.priceSnapshot * item.quantity, 0);
         try {
@@ -306,8 +416,20 @@ export class CartService {
       await tx.cart.delete({ where: { id: guestCart.id } });
       await this.extendCartReservationWindow(userCart.id, tx);
       const merged = await this.getCartWithItems(userCart.id, tx);
-      return this.serializeCart(merged, false);
+      return {
+        cart: await this.serializeCartForClient(merged, false, tx),
+        guestCouponRelease
+      };
     });
+
+    if (mergeResult.guestCouponRelease) {
+      await this.decrementGuestCouponUsage(
+        mergeResult.guestCouponRelease.couponId,
+        mergeResult.guestCouponRelease.sessionToken
+      );
+    }
+
+    return mergeResult.cart;
   }
 
   async applyCoupon(userId: string | undefined, sessionToken: string | undefined, input: ApplyCouponInput) {
@@ -335,21 +457,29 @@ export class CartService {
     if (!userId && updated.sessionToken) {
       await this.incrementGuestCouponUsage(coupon.id, updated.sessionToken);
     }
-    return this.serializeCart(updated, !userId);
+    return this.serializeCartForClient(updated, !userId);
   }
 
   async removeCoupon(userId: string | undefined, sessionToken: string | undefined) {
     const cart = await this.resolveOrCreateCart(userId, sessionToken);
+    const fullCart = await this.getCartWithItems(cart.id);
+    if (fullCart.coupon && !userId && fullCart.sessionToken) {
+      await this.decrementGuestCouponUsage(fullCart.coupon.id, fullCart.sessionToken);
+    }
     await this.fastify.prisma.cart.update({
       where: { id: cart.id },
       data: { couponId: null }
     });
     const updated = await this.getCartWithItems(cart.id);
-    return this.serializeCart(updated, !userId);
+    return this.serializeCartForClient(updated, !userId);
   }
 
   private isNoopMode(): boolean {
     return !this.shippingProvider || this.shippingProvider instanceof NoopShippingAdapter;
+  }
+
+  usesNoopShipping(): boolean {
+    return this.isNoopMode();
   }
 
   async checkPincodeServiceability(pincode: string) {
@@ -359,8 +489,12 @@ export class CartService {
     }
     const effectiveProvider: ShippingProviderAdapter =
       usingNoop ? new NoopShippingAdapter() : (this.shippingProvider as ShippingProviderAdapter);
+    const originPincode =
+      (await resolvePickupPincode(this.fastify.prisma, {
+        noopFallback: usingNoop ? '500001' : null
+      })) ?? undefined;
     try {
-      const result = await effectiveProvider.checkServiceability(pincode);
+      const result = await effectiveProvider.checkServiceability(pincode, originPincode);
       return {
         pincode,
         serviceable: result.serviceable
@@ -380,14 +514,21 @@ export class CartService {
     }
   }
 
-  async getDeliveryRates(userId: string | undefined, sessionToken: string | undefined, pincode: string) {
+  async getDeliveryRates(
+    userId: string | undefined,
+    sessionToken: string | undefined,
+    pincode: string,
+    paymentMode: 'COD' | 'PREPAID' = 'PREPAID'
+  ) {
     const cart = await this.getExistingCartWithItems(userId, sessionToken);
     if (!cart || cart.items.length === 0) {
       throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'At least one cart item is required to calculate delivery rates', 400);
     }
 
     const usingNoop = this.isNoopMode();
-    const pickupPincode = (await this.resolvePickupPincode()) ?? (usingNoop ? '500001' : null);
+    const pickupPincode = await resolvePickupPincode(this.fastify.prisma, {
+      noopFallback: usingNoop ? '500001' : null
+    });
     if (!usingNoop && !this.shippingProvider) {
       throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Shipping provider is not configured', 503);
     }
@@ -397,11 +538,54 @@ export class CartService {
       throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Shipping provider is not configured', 503);
     }
 
-    const serviceability = await effectiveProvider.checkServiceability(pincode);
+    const serviceability = await effectiveProvider.checkServiceability(pincode, pickupPincode);
     if (!serviceability.serviceable) {
       throw new AppError(ERROR_CODES.PINCODE_NOT_SERVICEABLE, 'Delivery is unavailable for this pincode', 422);
     }
-    const totalWeightGrams = cart.items.reduce((sum, item) => {
+
+    const shippingQuote = await this.computeShippingChargeForCart({
+      cart,
+      destinationPincode: pincode,
+      originPincode: pickupPincode,
+      provider: effectiveProvider,
+      usingNoop,
+      paymentMode
+    });
+
+    return {
+      pincode,
+      shippingCharge: shippingQuote.shippingChargePaise,
+      estimatedDays: shippingQuote.estimatedDays,
+      ...(shippingQuote.availableCouriers && shippingQuote.availableCouriers.length > 0
+        ? { availableCouriers: shippingQuote.availableCouriers }
+        : {})
+    };
+  }
+
+  async computeShippingChargeForCart(input: {
+    cart: {
+      coupon: Coupon | null;
+      items: Array<{
+        quantity: number;
+        variant: { id: string; weight?: number | null };
+      }>;
+    };
+    destinationPincode: string;
+    originPincode: string;
+    provider?: ShippingProviderAdapter;
+    usingNoop?: boolean;
+    paymentMode?: 'COD' | 'PREPAID';
+  }): Promise<{
+    shippingChargePaise: number;
+    estimatedDays: number;
+    availableCouriers?: DeliveryRateResult['availableCouriers'];
+  }> {
+    const usingNoop = input.usingNoop ?? this.isNoopMode();
+    const effectiveProvider =
+      input.provider ??
+      (usingNoop ? new NoopShippingAdapter() : (this.shippingProvider as ShippingProviderAdapter));
+
+    const totalWeightGrams = input.cart.items.reduce((sum, item) => {
       const unitWeight = item.variant.weight ?? 0;
       if (unitWeight <= 0 && !usingNoop) {
         throw new AppError(
@@ -412,19 +596,22 @@ export class CartService {
       }
       return sum + Math.max(unitWeight, 1) * item.quantity;
     }, 0);
+
     const rate = await effectiveProvider.calculateDeliveryRate({
-      destinationPincode: pincode,
-      originPincode: pickupPincode,
-      totalWeightGrams
+      destinationPincode: input.destinationPincode,
+      originPincode: input.originPincode,
+      totalWeightGrams,
+      paymentMode: input.paymentMode ?? 'PREPAID'
     });
 
+    const effectiveCoupon = featureFlags.coupons ? input.cart.coupon : null;
+    const shippingChargePaise =
+      effectiveCoupon?.type === CouponType.FREE_SHIPPING ? 0 : rate.shippingChargePaise;
+
     return {
-      pincode,
-      shippingCharge: rate.shippingChargePaise,
+      shippingChargePaise,
       estimatedDays: rate.estimatedDays,
-      ...(rate.availableCouriers && rate.availableCouriers.length > 0
-        ? { availableCouriers: rate.availableCouriers }
-        : {})
+      ...(rate.availableCouriers ? { availableCouriers: rate.availableCouriers } : {})
     };
   }
 
@@ -454,48 +641,26 @@ export class CartService {
     if (subtotal < coupon.minOrderPaise) {
       throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Cart total does not meet coupon minimum order value', 400);
     }
-    if (coupon.maxUsesTotal !== null && coupon.usesCount >= coupon.maxUsesTotal) {
-      throw new AppError(ERROR_CODES.COUPON_USAGE_EXCEEDED, 'Coupon usage limit reached', 409);
-    }
 
     const scopedSubtotal = this.resolveCouponEligibleSubtotal(coupon, items);
     if (this.hasCouponScope(coupon) && scopedSubtotal <= 0) {
       throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Coupon is not applicable to cart items', 400);
     }
 
-    if (userId) {
-      const userUsageCount = await this.fastify.prisma.order.count({
-        where: {
-          userId,
-          coupons: { some: { id: coupon.id } },
-          status: {
-            in: [
-              OrderStatus.CONFIRMED,
-              OrderStatus.PROCESSING,
-              OrderStatus.SHIPPED,
-              OrderStatus.OUT_FOR_DELIVERY,
-              OrderStatus.DELIVERED,
-              OrderStatus.REFUNDED
-            ]
-          }
-        }
-      });
-      if (coupon.maxUsesPerUser !== null && userUsageCount >= coupon.maxUsesPerUser) {
-        throw new AppError(ERROR_CODES.COUPON_USAGE_EXCEEDED, 'Coupon usage limit reached for this user', 409);
-      }
-      return;
-    }
-
-    if (!sessionToken) {
+    if (!userId && !sessionToken) {
       throw new AppError(ERROR_CODES.UNAUTHORISED, 'Sign in to apply this coupon', 401);
     }
 
-    await this.migrateGuestCouponUsageKeysIfNeeded(coupon.id, sessionToken);
-    const guestUsage = Number(
-      (await this.fastify.redis.get(this.getGuestCouponUsageKeyV2(coupon.id, sessionToken))) ?? '0'
-    );
-    if (coupon.maxUsesPerUser !== null && guestUsage >= coupon.maxUsesPerUser) {
-      throw new AppError(ERROR_CODES.COUPON_USAGE_EXCEEDED, 'Coupon usage limit reached for this session', 409);
+    await assertCouponWithinUsageLimits(this.fastify.prisma, coupon, userId);
+
+    if (!userId && sessionToken) {
+      await this.migrateGuestCouponUsageKeysIfNeeded(coupon.id, sessionToken);
+      const guestUsage = Number(
+        (await this.fastify.redis.get(this.getGuestCouponUsageKeyV2(coupon.id, sessionToken))) ?? '0'
+      );
+      if (coupon.maxUsesPerUser !== null && guestUsage >= coupon.maxUsesPerUser) {
+        throw new AppError(ERROR_CODES.COUPON_USAGE_EXCEEDED, 'Coupon usage limit reached for this session', 409);
+      }
     }
   }
 
@@ -623,6 +788,7 @@ export class CartService {
       return this.fastify.prisma.cart.findUnique({
         where: { userId },
         include: {
+          coupon: true,
           items: {
             include: {
               variant: {
@@ -645,6 +811,7 @@ export class CartService {
     return this.fastify.prisma.cart.findUnique({
       where: { sessionToken },
       include: {
+        coupon: true,
         items: {
           include: {
             variant: {
@@ -658,22 +825,6 @@ export class CartService {
         }
       }
     });
-  }
-
-  private async resolvePickupPincode(): Promise<string | null> {
-    const settings = await this.fastify.prisma.storeSettings.findUnique({
-      where: { singletonKey: 'default' },
-      select: { pickupPincode: true }
-    });
-    if (settings?.pickupPincode) {
-      return settings.pickupPincode;
-    }
-    const envPincode = process.env.DELHIVERY_PICKUP_PINCODE ?? process.env.SHIPROCKET_PICKUP_PINCODE ?? null;
-    if (envPincode) return envPincode;
-    if (this.isNoopMode()) {
-      return '500001';
-    }
-    return null;
   }
 
   private serializeCart(
@@ -697,7 +848,9 @@ export class CartService {
     isGuest: boolean
   ) {
     const subtotal = cart.items.reduce((sum, item) => sum + item.priceSnapshot * item.quantity, 0);
-    const discountAmount = this.calculateDiscount(subtotal, cart.coupon, cart.items);
+    const discountAmount = featureFlags.coupons
+      ? this.calculateDiscount(subtotal, cart.coupon, cart.items)
+      : 0;
     const total = Math.max(subtotal - discountAmount, 0);
     const reservations = cart.reservations ?? [];
 
@@ -719,7 +872,7 @@ export class CartService {
       subtotal,
       discountAmount,
       total,
-      coupon: cart.coupon
+      coupon: featureFlags.coupons && cart.coupon
         ? {
             id: cart.coupon.id,
             code: cart.coupon.code,
@@ -868,38 +1021,21 @@ export class CartService {
     return this.parseCouponScope(coupon.applicableTo) !== null;
   }
 
-  /**
-   * Legacy key (v1) — included raw session token. Migrated to v2 on read/write.
-   */
-  private getGuestCouponUsageKeyV1(couponId: string, sessionToken: string) {
-    return `coupon:guest-uses:${couponId}:${sessionToken}`;
+  private buildExpiryDate() {
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + GUEST_CART_TTL_DAYS);
+    return expiresAt;
   }
 
-  /**
-   * v2 — no raw session material in Redis key (HMAC digest of session token).
-   */
-  private getGuestCouponUsageKeyV2(couponId: string, sessionToken: string) {
-    const digest = this.guestSessionRedisDigest(sessionToken);
-    return `coupon:guest-uses:v2:${couponId}:${digest}`;
+  private getGuestCouponUsageKeyV2(couponId: string, sessionToken: string): string {
+    return `guest-coupon-usage:v2:${couponId}:${this.fingerprintIdentifier(sessionToken)}`;
   }
 
-  private getRedisKeyPepper(): string {
-    const pepper = (process.env.REDIS_KEY_PEPPER ?? process.env.JWT_SECRET ?? '').trim();
-    if (!pepper) {
-      throw new AppError(
-        ERROR_CODES.INTERNAL_ERROR,
-        'REDIS_KEY_PEPPER or JWT_SECRET must be set for guest coupon Redis keys',
-        500
-      );
-    }
-    return pepper;
+  private getGuestCouponUsageKeyV1(couponId: string, sessionToken: string): string {
+    return `guest-coupon-usage:${couponId}:${sessionToken}`;
   }
 
-  private guestSessionRedisDigest(sessionToken: string): string {
-    return createHmac('sha256', this.getRedisKeyPepper()).update(sessionToken, 'utf8').digest('hex').slice(0, 24);
-  }
-
-  private async migrateGuestCouponUsageKeysIfNeeded(couponId: string, sessionToken: string): Promise<void> {
+  private async migrateGuestCouponUsageKeysIfNeeded(couponId: string, sessionToken: string) {
     const v2Key = this.getGuestCouponUsageKeyV2(couponId, sessionToken);
     const v1Key = this.getGuestCouponUsageKeyV1(couponId, sessionToken);
     const existingV2 = await this.fastify.redis.get(v2Key);
@@ -941,13 +1077,38 @@ export class CartService {
         },
         'Failed to record guest coupon usage'
       );
+      throw new AppError(
+        ERROR_CODES.INTERNAL_ERROR,
+        'Unable to apply coupon right now. Please try again.',
+        503
+      );
     }
   }
 
-  private buildExpiryDate() {
-    const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + GUEST_CART_TTL_DAYS);
-    return expiresAt;
+  private async decrementGuestCouponUsage(couponId: string, sessionToken: string) {
+    try {
+      await this.migrateGuestCouponUsageKeysIfNeeded(couponId, sessionToken);
+      const key = this.getGuestCouponUsageKeyV2(couponId, sessionToken);
+      const current = await this.fastify.redis.get(key);
+      if (current === null) {
+        return;
+      }
+      const next = Number(current) - 1;
+      if (!Number.isFinite(next) || next <= 0) {
+        await this.fastify.redis.del(key);
+        return;
+      }
+      await this.fastify.redis.set(key, String(next), 'EX', GUEST_COUPON_USAGE_TTL_SECONDS);
+    } catch (error) {
+      this.fastify.log.warn(
+        {
+          couponId,
+          sessionFingerprint: this.fingerprintIdentifier(sessionToken),
+          error: error instanceof Error ? error.message : 'Unknown guest coupon usage decrement error'
+        },
+        'Failed to revert guest coupon usage'
+      );
+    }
   }
 
   private buildReservationExpiryDate(): Date {

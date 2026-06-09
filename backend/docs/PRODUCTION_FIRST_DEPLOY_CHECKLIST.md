@@ -34,7 +34,7 @@ Edit `.env` and set **all Phase 1 keys**:
 | `JWT_SECRET` | Generate: `node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"` |
 | `JWT_REFRESH_SECRET` | Same as above — use a **different** value |
 | `CLIENT_ID` | Short identifier for this client, e.g. `myclient` |
-| `STOREFRONT_URL` | e.g. `https://shop.myclient.com` |
+| `STOREFRONT_URL` | e.g. `https://shop.myclient.com` — **required**; API refuses to start in production-like profiles if missing (password-reset email safety) |
 | `ADMIN_URL` | e.g. `https://admin.myclient.com` |
 | `ADMIN_ALERT_EMAIL` | Where system alerts go |
 | `AUDIT_ANCHOR_SECRET` | Generate same as JWT_SECRET |

@@ -6,9 +6,10 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { MapPin } from "lucide-react";
-import { checkPincodeServiceability } from "@/lib/cart-api";
-import { getApiErrorMessage } from "@/lib/error-messages";
+import { MapPin, AlertTriangle } from "lucide-react";
+import { checkPincodeServiceability, getDeliveryRates } from "@/lib/cart-api";
+import { getApiErrorMessage, getApiErrorMessageWithHint } from "@/lib/error-messages";
+import { ApiError } from "@/lib/api";
 import { createIdempotencyKey } from "@/lib/idempotency";
 import { useAuthStore } from "@/stores/auth";
 import { useCartStore } from "@/stores/cart";
@@ -44,8 +45,10 @@ type AddressFieldName = Extract<
 
 interface CheckoutFormProps {
   isCodEnabled: boolean;
-  /** Minimum cart total in paise (from backend DB). 0 = no minimum. */
+  /** Minimum cart subtotal in paise (from backend DB). 0 = no minimum. */
   minOrderValuePaise: number;
+  /** False when store config could not be loaded — checkout must stay blocked. */
+  configAvailable?: boolean;
 }
 
 function addressToFormValues(addr: UserAddress): Partial<CheckoutValues> {
@@ -60,12 +63,19 @@ function addressToFormValues(addr: UserAddress): Partial<CheckoutValues> {
   };
 }
 
-export function CheckoutForm({ isCodEnabled, minOrderValuePaise }: CheckoutFormProps) {
+export function CheckoutForm({
+  isCodEnabled,
+  minOrderValuePaise,
+  configAvailable = true,
+}: CheckoutFormProps) {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [savedAddresses, setSavedAddresses] = useState<UserAddress[]>([]);
   const [selectedAddressId, setSelectedAddressId] = useState<string | null>(null);
+  const [shippingQuote, setShippingQuote] = useState<{ shippingCharge: number; estimatedDays: number } | null>(null);
+  const [shippingQuoteLoading, setShippingQuoteLoading] = useState(false);
+  const [shippingQuoteError, setShippingQuoteError] = useState<string | null>(null);
   const accessToken = useAuthStore((s) => s.accessToken);
   const user = useAuthStore((s) => s.user);
   const cart = useCartStore((s) => s.cart);
@@ -100,6 +110,44 @@ export function CheckoutForm({ isCodEnabled, minOrderValuePaise }: CheckoutFormP
       .catch(() => { /* non-fatal */ });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- load once per token
   }, [accessToken]);
+
+  const pincode = form.watch("pincode");
+  const paymentMode = form.watch("paymentMode");
+
+  useEffect(() => {
+    if (!accessToken || !pincode || pincode.length !== 6) {
+      setShippingQuote(null);
+      setShippingQuoteError(null);
+      return;
+    }
+    let cancelled = false;
+    setShippingQuoteLoading(true);
+    setShippingQuoteError(null);
+    void getDeliveryRates(pincode, accessToken, paymentMode)
+      .then((rates) => {
+        if (!cancelled) {
+          setShippingQuote({
+            shippingCharge: rates.shippingCharge,
+            estimatedDays: rates.estimatedDays,
+          });
+          setShippingQuoteError(null);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setShippingQuote(null);
+          setShippingQuoteError(getApiErrorMessageWithHint(err));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setShippingQuoteLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [accessToken, pincode, paymentMode]);
 
   const clearSavedAddressOnManualEdit = () => {
     if (selectedAddressId) setSelectedAddressId(null);
@@ -137,17 +185,42 @@ export function CheckoutForm({ isCodEnabled, minOrderValuePaise }: CheckoutFormP
     form.reset({ ...form.getValues(), ...addressToFormValues(addr), saveAddress: false });
   };
 
+  const cartItems = cart?.items ?? [];
+  const cartSubtotal = cart?.subtotal ?? cartItems.reduce((s, i) => s + i.priceSnapshot * i.quantity, 0);
+  const cartDiscount = cart?.discountAmount ?? 0;
+  const cartPayableTotal = cart?.total ?? cartSubtotal;
+  const effectiveMinOrderPaise = cart?.minOrderValuePaise ?? minOrderValuePaise;
+  const meetsMinimumOrder =
+    cart?.meetsMinimumOrder ??
+    (effectiveMinOrderPaise === 0 || cartSubtotal >= effectiveMinOrderPaise);
+  const belowMinOrder = configAvailable && !meetsMinimumOrder && effectiveMinOrderPaise > 0;
+  const checkoutBlocked = !configAvailable || belowMinOrder;
+  const shippingCharge = shippingQuote?.shippingCharge ?? 0;
+  const hasShippingQuote = shippingQuote !== null && !shippingQuoteError;
+  const estimatedPayableTotal = hasShippingQuote
+    ? Math.max(cartPayableTotal + shippingCharge, 0)
+    : cartPayableTotal;
+
   const submit = form.handleSubmit(async (values) => {
     setError(null);
     setSubmitting(true);
     try {
       if (!isCodEnabled && values.paymentMode === "COD") {
         setError("COD is currently unavailable. Please choose prepaid.");
+        setSubmitting(false);
+        return;
+      }
+      if (!meetsMinimumOrder && effectiveMinOrderPaise > 0) {
+        setError(
+          `Your cart subtotal doesn't meet the minimum of ${formatPrice(effectiveMinOrderPaise)}. Please add more items to your cart.`,
+        );
+        setSubmitting(false);
         return;
       }
       const pincodeResult = await checkPincodeServiceability(values.pincode);
       if (!pincodeResult.serviceable) {
         setError("Delivery is not available at this pincode.");
+        setSubmitting(false);
         return;
       }
 
@@ -205,10 +278,12 @@ export function CheckoutForm({ isCodEnabled, minOrderValuePaise }: CheckoutFormP
       const razorpayKey = process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID;
       if (!razorpayKey) {
         setError("Payment gateway is not configured. Contact support.");
+        setSubmitting(false);
         return;
       }
       if (!window.Razorpay) {
         setError("Payment SDK unavailable. Refresh and try again.");
+        setSubmitting(false);
         return;
       }
 
@@ -259,27 +334,14 @@ export function CheckoutForm({ isCodEnabled, minOrderValuePaise }: CheckoutFormP
 
       razorpay.open();
     } catch (err) {
-      // If the backend rejects due to minimum order value, show a specific
-      // message pointing the user back to the cart. Branch on error.code only.
-      if (
-        err !== null &&
-        typeof err === "object" &&
-        "code" in err &&
-        (err as { code: string }).code === "VALIDATION_ERROR" &&
-        minOrderValuePaise > 0
-      ) {
-        setError(
-          `Your order total doesn't meet the minimum of ${formatPrice(minOrderValuePaise)}. Please add more items to your cart.`,
-        );
+      if (err instanceof ApiError && err.code === "VALIDATION_ERROR") {
+        setError(getApiErrorMessageWithHint(err));
       } else {
         setError(getApiErrorMessage(err));
       }
       setSubmitting(false);
     }
   });
-
-  const cartItems = cart?.items ?? [];
-  const cartTotal = cartItems.reduce((s, i) => s + i.priceSnapshot * i.quantity, 0);
 
   return (
     <form onSubmit={submit} className="grid gap-5 rounded-[20px] bg-white p-4 shadow-sm sm:gap-6 sm:p-6 lg:p-8">
@@ -326,12 +388,39 @@ export function CheckoutForm({ isCodEnabled, minOrderValuePaise }: CheckoutFormP
               <span>{formatPrice(item.priceSnapshot * item.quantity)}</span>
             </div>
           ))}
-          <div className="mt-2 border-t border-[#efe8e4] pt-2 flex justify-between font-bold text-[#23403d]">
-            <span>Total</span>
-            <span>{formatPrice(cartTotal)}</span>
+          <div className="mt-2 border-t border-[#efe8e4] pt-2 flex flex-col gap-1.5 text-xs">
+            <div className="flex justify-between text-[#767676]">
+              <span>Subtotal</span>
+              <span>{formatPrice(cartSubtotal)}</span>
+            </div>
+            {cartDiscount > 0 ? (
+              <div className="flex justify-between text-[#00aa63]">
+                <span>Discount</span>
+                <span>-{formatPrice(cartDiscount)}</span>
+              </div>
+            ) : null}
+            <div className="flex justify-between font-bold text-[#23403d]">
+              <span>Total</span>
+              <span>{formatPrice(cartPayableTotal)}</span>
+            </div>
           </div>
         </div>
       )}
+
+      {!configAvailable ? (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          Store settings are temporarily unavailable. Please refresh the page before placing an order.
+        </div>
+      ) : null}
+      {belowMinOrder ? (
+        <div className="flex items-start gap-2 rounded-[12px] border border-amber-200 bg-amber-50 px-3 py-2.5">
+          <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-600" aria-hidden />
+          <p className="text-xs font-bold text-amber-800">
+            Add {formatPrice(effectiveMinOrderPaise - cartSubtotal)} more to reach the{" "}
+            {formatPrice(effectiveMinOrderPaise)} minimum order value.
+          </p>
+        </div>
+      ) : null}
 
       <div className="grid gap-4 md:grid-cols-2">
         <div className="grid gap-1.5">
@@ -452,12 +541,66 @@ export function CheckoutForm({ isCodEnabled, minOrderValuePaise }: CheckoutFormP
         />
       </div>
 
+      <div className="grid gap-2 border-t border-[#efe8e4] pt-4">
+        <h3 className="text-lg font-bold text-[#23403d]">Order summary</h3>
+        <div className="flex justify-between text-sm text-[#767676]">
+          <span>Subtotal</span>
+          <span>{formatPrice(cartSubtotal)}</span>
+        </div>
+        {cartDiscount > 0 ? (
+          <div className="flex justify-between text-sm text-[#767676]">
+            <span>Discount</span>
+            <span>-{formatPrice(cartDiscount)}</span>
+          </div>
+        ) : null}
+        <div className="flex justify-between text-sm text-[#767676]">
+          <span>Shipping</span>
+          <span>
+            {shippingQuoteLoading
+              ? "Calculating…"
+              : shippingQuoteError
+                ? "Unavailable"
+                : pincode?.length === 6
+                  ? hasShippingQuote
+                    ? shippingCharge === 0
+                      ? "Free"
+                      : formatPrice(shippingCharge)
+                    : "Enter pincode"
+                  : "Enter pincode"}
+          </span>
+        </div>
+        {shippingQuoteError ? (
+          <p className="text-xs text-red-600">{shippingQuoteError}</p>
+        ) : null}
+        {shippingQuote && shippingQuote.estimatedDays > 0 ? (
+          <p className="text-xs text-[#767676]">
+            Estimated delivery in {shippingQuote.estimatedDays} day
+            {shippingQuote.estimatedDays === 1 ? "" : "s"}
+          </p>
+        ) : null}
+        <div className="flex justify-between border-t border-[#efe8e4] pt-2 text-sm font-bold text-[#23403d]">
+          <span>{hasShippingQuote ? "Estimated total" : "Cart total"}</span>
+          <span>{formatPrice(estimatedPayableTotal)}</span>
+        </div>
+        <p className="text-xs text-[#767676]">
+          {hasShippingQuote
+            ? "Final total is confirmed when your order is placed."
+            : "Enter a valid pincode to preview shipping."}
+        </p>
+      </div>
+
       <button
         type="submit"
         className="mt-2 h-12 w-full rounded-full bg-[#23403d] text-sm font-bold text-white transition-transform hover:-translate-y-1 hover:bg-[#ec6e55] hover:shadow-lg disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0 sm:h-14"
-        disabled={submitting}
+        disabled={submitting || checkoutBlocked}
       >
-        {submitting ? "Processing…" : "Place Order"}
+        {submitting
+          ? "Processing…"
+          : !configAvailable
+            ? "Store settings unavailable"
+            : belowMinOrder
+              ? "Minimum order not met"
+              : "Place Order"}
       </button>
 
       {error ? (

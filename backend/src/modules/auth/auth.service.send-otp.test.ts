@@ -41,7 +41,14 @@ describe('AuthService sendOtp', () => {
           findFirst: vi.fn().mockResolvedValue(null)
         },
         storeSettings: {
-          findUnique: vi.fn().mockResolvedValue({ storeName: 'Test Store' })
+          findUnique: vi.fn().mockResolvedValue({
+            storeName: 'Test Store',
+            mobileOtpSignupEnabled: true,
+            notifyEmailEnabled: true,
+            notifySmsEnabled: true,
+            notifyWhatsappEnabled: false,
+            primaryNotificationChannels: null
+          })
         }
       }
     } as unknown as FastifyInstance;
@@ -74,7 +81,7 @@ describe('AuthService sendOtp', () => {
       prisma: {
         opsConfigSecret: { findMany: vi.fn().mockResolvedValue([]) },
         user: { findFirst: vi.fn().mockResolvedValue(null) },
-        storeSettings: { findUnique: vi.fn().mockResolvedValue({ storeName: 'Test Store' }) }
+        storeSettings: { findUnique: vi.fn().mockResolvedValue({ storeName: 'Test Store', mobileOtpSignupEnabled: true }) }
       }
     } as unknown as FastifyInstance;
     const service = new AuthService(fastify);
@@ -153,7 +160,12 @@ describe('AuthService sendOtp', () => {
       prisma: {
         opsConfigSecret: { findMany: vi.fn().mockResolvedValue([]) },
         user: { findFirst: vi.fn().mockResolvedValue(null) },
-        storeSettings: { findUnique: vi.fn().mockResolvedValue(null) }
+        storeSettings: {
+          findUnique: vi
+            .fn()
+            .mockResolvedValueOnce({ mobileOtpSignupEnabled: true })
+            .mockResolvedValueOnce(null)
+        }
       }
     } as unknown as FastifyInstance;
 
@@ -194,6 +206,7 @@ describe('AuthService sendOtp', () => {
         storeSettings: {
           findUnique: vi.fn().mockResolvedValue({
             storeName: 'Acme Shop',
+            mobileOtpSignupEnabled: true,
             notifyEmailEnabled: false,
             notifySmsEnabled: true,
             notifyWhatsappEnabled: true,
@@ -283,7 +296,14 @@ describe('AuthService sendOtp', () => {
           findFirst: vi.fn().mockResolvedValue(null)
         },
         storeSettings: {
-          findUnique: vi.fn().mockResolvedValue({ storeName: 'Test Store' })
+          findUnique: vi.fn().mockResolvedValue({
+            storeName: 'Test Store',
+            mobileOtpSignupEnabled: true,
+            notifyEmailEnabled: true,
+            notifySmsEnabled: true,
+            notifyWhatsappEnabled: false,
+            primaryNotificationChannels: null
+          })
         }
       }
     } as unknown as FastifyInstance;
@@ -323,7 +343,7 @@ describe('AuthService sendOtp', () => {
       prisma: {
         opsConfigSecret: { findMany: vi.fn().mockResolvedValue([]) },
         user: { findFirst: vi.fn().mockResolvedValue(null) },
-        storeSettings: { findUnique: vi.fn().mockResolvedValue({ storeName: 'Test Store' }) }
+        storeSettings: { findUnique: vi.fn().mockResolvedValue({ storeName: 'Test Store', mobileOtpSignupEnabled: true }) }
       }
     } as unknown as FastifyInstance;
 
@@ -355,7 +375,7 @@ describe('AuthService sendOtp', () => {
       prisma: {
         opsConfigSecret: { findMany: vi.fn().mockResolvedValue([]) },
         user: { findFirst: vi.fn().mockResolvedValue(null) },
-        storeSettings: { findUnique: vi.fn().mockResolvedValue({ storeName: 'Test Store' }) }
+        storeSettings: { findUnique: vi.fn().mockResolvedValue({ storeName: 'Test Store', mobileOtpSignupEnabled: true }) }
       }
     } as unknown as FastifyInstance;
 
@@ -366,5 +386,32 @@ describe('AuthService sendOtp', () => {
     expect('devOtp' in result).toBe(false);
     expect(result.message).toBe('OTP sent successfully');
     expect(notificationsAdd).toHaveBeenCalled();
+  });
+
+  it('rejects OTP for new phone numbers when mobile signup is disabled', async () => {
+    const fastify = {
+      redis: {
+        get: vi.fn().mockResolvedValue(null),
+        set: vi.fn(),
+        del: vi.fn(),
+        ttl: vi.fn(),
+        incr: vi.fn(),
+        expire: vi.fn()
+      },
+      queues: { notifications: { add: vi.fn() } },
+      prisma: {
+        opsConfigSecret: { findMany: vi.fn().mockResolvedValue([]) },
+        user: { findFirst: vi.fn().mockResolvedValue(null) },
+        storeSettings: {
+          findUnique: vi.fn().mockResolvedValue({ mobileOtpSignupEnabled: false })
+        }
+      }
+    } as unknown as FastifyInstance;
+
+    const service = new AuthService(fastify);
+    await expect(service.sendOtp({ phone: '9876543210', channel: 'sms' })).rejects.toMatchObject({
+      statusCode: 400,
+      message: 'Phone signup is not available'
+    });
   });
 });

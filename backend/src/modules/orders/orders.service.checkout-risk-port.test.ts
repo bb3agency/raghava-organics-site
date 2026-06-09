@@ -8,7 +8,9 @@ describe('OrdersService CheckoutRiskAssessmentPort injection', () => {
     const findFirst = vi.fn().mockResolvedValue({
       id: 'order_1',
       total: 5000,
-      orderNumber: 'ORD-1'
+      orderNumber: 'ORD-1',
+      paymentMode: 'PREPAID',
+      status: 'PENDING_PAYMENT'
     });
     const upsert = vi.fn().mockResolvedValue({
       id: 'pay_1',

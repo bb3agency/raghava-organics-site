@@ -24,6 +24,7 @@ import { useAuthenticatedApi } from "@/hooks/use-authenticated-api";
 import { useAdminDataRefreshEffect } from "@/hooks/use-admin-data-refresh-effect";
 import { createIdempotencyKey } from "@/lib/idempotency";
 import { notifyAdminDataChanged } from "@/lib/admin-data-refresh";
+import { resolveProductImageUrl } from "@/lib/media-url";
 import { ADMIN_PERMISSIONS, hasAdminPermission } from "@/lib/permissions";
 import {
   Package,
@@ -470,7 +471,7 @@ export function AdminProductsList() {
                             <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-border/50 bg-muted/30 overflow-hidden relative">
                               {firstImage?.url ? (
                                 <Image
-                                  src={firstImage.url}
+                                  src={resolveProductImageUrl(firstImage.url)}
                                   alt={firstImage.altText || product.name}
                                   fill
                                   className="object-cover"

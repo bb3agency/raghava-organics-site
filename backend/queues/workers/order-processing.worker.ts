@@ -9,6 +9,8 @@ import { type InvoiceStorageAdapter } from '@common/interfaces/invoice-storage.i
 import { createInvoiceStorageProvider } from '@modules/invoices/invoice-storage-provider';
 import { renderCreditNotePdfBuffer, renderInvoicePdfBuffer, type InvoiceLineItem } from '@modules/invoices/invoice-renderer';
 import { featureFlags } from '@config/feature-flags';
+import { finalizeCouponUsageForOrder, releaseCouponUsageForOrder } from '@common/coupons/coupon-usage';
+import { releaseReservationsForOrder } from '@common/orders/release-reservations';
 
 type OrderStatus =
   | 'PENDING_PAYMENT'
@@ -133,50 +135,6 @@ function resolveWebhookPayload(data: CaptureRecoveryData): Prisma.InputJsonValue
     return parseJsonPayload(data.payload);
   }
   return {};
-}
-
-async function releaseReservationsForOrder(tx: Prisma.TransactionClient, orderId: string): Promise<void> {
-  const reservationDelegate = (tx as unknown as { cartReservation?: Prisma.TransactionClient['cartReservation'] }).cartReservation;
-  if (!reservationDelegate) {
-    return;
-  }
-
-  const order = await tx.order.findUnique({
-    where: { id: orderId },
-    select: {
-      userId: true,
-      items: {
-        select: {
-          variantId: true
-        }
-      }
-    }
-  });
-  if (!order || !order.userId) {
-    return;
-  }
-
-  const cart = await tx.cart.findFirst({
-    where: { userId: order.userId },
-    select: { id: true }
-  });
-  if (!cart) {
-    return;
-  }
-
-  const variantIds = order.items.map((item) => item.variantId);
-  if (variantIds.length === 0) {
-    return;
-  }
-
-  await reservationDelegate.deleteMany({
-    where: {
-      cartId: cart.id,
-      variantId: {
-        in: variantIds
-      }
-    }
-  });
 }
 
 async function enqueueOutboxOrQueue(
@@ -426,6 +384,7 @@ export function createOrderProcessingWorker(
                   note: `Refund processed (${processedRefundAmount} paise)`
                 }
               });
+              await releaseCouponUsageForOrder(tx, order.id);
             }
           } else {
             await tx.orderStatusHistory.create({
@@ -496,36 +455,38 @@ export function createOrderProcessingWorker(
           }
         }
 
-        if (nextPaymentStatus === PAYMENT_STATUS.FAILED && order.user.email) {
+        if (nextPaymentStatus === PAYMENT_STATUS.FAILED) {
           await releaseReservationsForOrder(tx, order.id);
-          const outboxDelegate = (tx as unknown as { outboxMessage?: Prisma.TransactionClient['outboxMessage'] }).outboxMessage;
-          if (outboxDelegate) {
-            await outboxDelegate.create({
-              data: {
-                queueName: 'notifications',
-                jobName: 'send-primary',
-                payload: {
-                  email: order.user.email,
-                  phone: order.user.phone,
-                  template: 'PaymentFailed',
-                  data: {
-                    orderId: order.id,
-                    providerOrderId: data.providerOrderId
-                  }
-                } as Prisma.InputJsonValue,
-                jobId: `notifications:primary:${order.id}:PaymentFailed`
-              }
-            });
-          } else {
-            await notificationsQueue.add('send-primary', {
-              email: order.user.email,
-              phone: order.user.phone,
-              template: 'PaymentFailed',
-              data: {
-                orderId: order.id,
-                providerOrderId: data.providerOrderId
-              }
-            });
+          if (order.user.email || order.user.phone) {
+            const outboxDelegate = (tx as unknown as { outboxMessage?: Prisma.TransactionClient['outboxMessage'] }).outboxMessage;
+            if (outboxDelegate) {
+              await outboxDelegate.create({
+                data: {
+                  queueName: 'notifications',
+                  jobName: 'send-primary',
+                  payload: {
+                    email: order.user.email,
+                    phone: order.user.phone,
+                    template: 'PaymentFailed',
+                    data: {
+                      orderId: order.id,
+                      providerOrderId: data.providerOrderId
+                    }
+                  } as Prisma.InputJsonValue,
+                  jobId: `notifications:primary:${order.id}:PaymentFailed`
+                }
+              });
+            } else {
+              await notificationsQueue.add('send-primary', {
+                email: order.user.email,
+                phone: order.user.phone,
+                template: 'PaymentFailed',
+                data: {
+                  orderId: order.id,
+                  providerOrderId: data.providerOrderId
+                }
+              });
+            }
           }
         }
       });
@@ -607,6 +568,7 @@ async function handleProcessOrderUpdate(
           id: true,
           userId: true,
           status: true,
+          discountAmount: true,
           coupons: {
             select: {
               id: true,
@@ -634,23 +596,46 @@ async function handleProcessOrderUpdate(
         return;
       }
 
-      // Idempotency guard: skip if already past PENDING_PAYMENT.
-      if (order.status !== ORDER_STATUS.PENDING_PAYMENT) {
+      const isCodSideEffectsJob =
+        data.triggeredBy === 'COD_ORDER_CREATED' &&
+        order.status === ORDER_STATUS.CONFIRMED;
+
+      // Prepaid path: order must still be awaiting payment or recovering from a failed attempt.
+      const isPrepaidConfirmationTarget =
+        !isCodSideEffectsJob &&
+        (order.status === ORDER_STATUS.PENDING_PAYMENT ||
+          order.status === ORDER_STATUS.PAYMENT_FAILED);
+      if (!isCodSideEffectsJob && !isPrepaidConfirmationTarget) {
         return;
       }
 
-      // CAS gate — only one concurrent job wins.
-      const claimed = await tx.order.updateMany({
-        where: {
-          id: order.id,
-          status: ORDER_STATUS.PENDING_PAYMENT
-        },
-        data: {
-          status: ORDER_STATUS.CONFIRMED
+      if (isCodSideEffectsJob) {
+        const alreadyProcessed = await tx.orderStatusHistory.findFirst({
+          where: {
+            orderId: order.id,
+            triggeredBy: 'COD_ORDER_CREATED'
+          },
+          select: { id: true }
+        });
+        if (alreadyProcessed) {
+          return;
         }
-      });
-      if (claimed.count === 0) {
-        return;
+      } else {
+        // CAS gate — only one concurrent prepaid job wins.
+        const claimed = await tx.order.updateMany({
+          where: {
+            id: order.id,
+            status: {
+              in: [ORDER_STATUS.PENDING_PAYMENT, ORDER_STATUS.PAYMENT_FAILED]
+            }
+          },
+          data: {
+            status: ORDER_STATUS.CONFIRMED
+          }
+        });
+        if (claimed.count === 0) {
+          return;
+        }
       }
 
       // Deduct inventory for each line item.
@@ -680,8 +665,8 @@ async function handleProcessOrderUpdate(
 
       await releaseReservationsForOrder(tx, order.id);
 
-      // Persist payment capture if provider data is present and not yet recorded.
-      if (order.payment && data.providerPaymentId) {
+      // Persist payment capture if provider data is present and not yet recorded (prepaid only).
+      if (!isCodSideEffectsJob && order.payment && data.providerPaymentId) {
         if (order.payment.status !== PAYMENT_STATUS.CAPTURED) {
           await tx.payment.update({
             where: { id: order.payment.id },
@@ -698,60 +683,19 @@ async function handleProcessOrderUpdate(
       await tx.orderStatusHistory.create({
         data: {
           orderId: order.id,
-          fromStatus: order.status,
+          fromStatus: isCodSideEffectsJob ? ORDER_STATUS.CONFIRMED : order.status,
           toStatus: ORDER_STATUS.CONFIRMED,
           triggeredBy: data.triggeredBy,
           note: data.note ?? 'process-order-update'
         }
       });
 
-      for (const coupon of order.coupons) {
-        const couponDelegate = tx.coupon as unknown as {
-          updateMany?: (args: { where: Record<string, unknown>; data: Record<string, unknown> }) => Promise<{ count: number }>;
-          update: (args: { where: { id: string }; data: Record<string, unknown> }) => Promise<unknown>;
-        };
-        const preferUpdateForMock =
-          typeof couponDelegate.update === 'function' &&
-          'mock' in (couponDelegate.update as unknown as Record<string, unknown>);
-
-        if (couponDelegate.updateMany && !preferUpdateForMock) {
-          const incrementResult = await couponDelegate.updateMany({
-            where: {
-              id: coupon.id,
-              OR: [
-                { maxUsesTotal: null },
-                {
-                  maxUsesTotal: {
-                    gt: coupon.usesCount
-                  }
-                }
-              ]
-            },
-            data: {
-              usesCount: {
-                increment: 1
-              }
-            }
-          });
-
-          if (incrementResult.count === 0) {
-            throw new AppError(
-              ERROR_CODES.COUPON_USAGE_EXCEEDED,
-              `Coupon usage limit reached while confirming order for coupon ${coupon.id}`,
-              409
-            );
-          }
-        } else {
-          await couponDelegate.update({
-            where: { id: coupon.id },
-            data: {
-              usesCount: {
-                increment: 1
-              }
-            }
-          });
-        }
-      }
+      await finalizeCouponUsageForOrder(tx, {
+        orderId: order.id,
+        userId: order.userId,
+        discountAmount: order.discountAmount ?? 0,
+        coupons: order.coupons
+      });
 
       orderForSideEffects = {
         id: order.id,
@@ -763,18 +707,30 @@ async function handleProcessOrderUpdate(
       };
     });
   } catch (error) {
-    if (error instanceof AppError && error.code === ERROR_CODES.INSUFFICIENT_STOCK) {
-      await handlePostCaptureRecovery(prisma, data, refundsQueue, {
-        cancelReason: 'Auto-cancelled due to insufficient stock after payment capture',
-        refundReason: 'Auto-refund due to insufficient stock after payment capture'
-      });
+      if (error instanceof AppError && error.code === ERROR_CODES.INSUFFICIENT_STOCK) {
+        if (data.triggeredBy === 'COD_ORDER_CREATED') {
+          await handleCodSideEffectsFailure(prisma, data, notificationsQueue, {
+            cancelReason: 'Auto-cancelled due to insufficient stock while confirming COD order'
+          });
+        } else {
+        await handlePostCaptureRecovery(prisma, data, refundsQueue, {
+          cancelReason: 'Auto-cancelled due to insufficient stock after payment capture',
+          refundReason: 'Auto-refund due to insufficient stock after payment capture'
+        });
+      }
       return;
     }
-    if (error instanceof AppError && error.code === ERROR_CODES.COUPON_USAGE_EXCEEDED) {
-      await handlePostCaptureRecovery(prisma, data, refundsQueue, {
-        cancelReason: 'Auto-cancelled due to coupon usage limit reached after payment capture',
-        refundReason: 'Auto-refund due to coupon usage limit reached after payment capture'
-      });
+      if (error instanceof AppError && error.code === ERROR_CODES.COUPON_USAGE_EXCEEDED) {
+        if (data.triggeredBy === 'COD_ORDER_CREATED') {
+          await handleCodSideEffectsFailure(prisma, data, notificationsQueue, {
+            cancelReason: 'Auto-cancelled due to coupon usage limit while confirming COD order'
+          });
+        } else {
+        await handlePostCaptureRecovery(prisma, data, refundsQueue, {
+          cancelReason: 'Auto-cancelled due to coupon usage limit reached after payment capture',
+          refundReason: 'Auto-refund due to coupon usage limit reached after payment capture'
+        });
+      }
       return;
     }
     throw error;
@@ -797,9 +753,11 @@ async function handleProcessOrderUpdate(
     }, notificationsQueue, `notifications:primary:${sideEffectsTarget.id}:OrderConfirmed`);
   }
 
-  await enqueueOutboxOrQueue(prisma, 'orderProcessing', 'generate-invoice', {
-    orderId: sideEffectsTarget.id
-  }, orderProcessingQueue, `generate-invoice:${sideEffectsTarget.id}`);
+  if (featureFlags.gstInvoicing) {
+    await enqueueOutboxOrQueue(prisma, 'orderProcessing', 'generate-invoice', {
+      orderId: sideEffectsTarget.id
+    }, orderProcessingQueue, `generate-invoice:${sideEffectsTarget.id}`);
+  }
 
   await enqueueOutboxOrQueue(prisma, 'analytics', 'record-event', {
     eventType: ANALYTICS_EVENT_TYPE.PURCHASE,
@@ -811,6 +769,78 @@ async function handleProcessOrderUpdate(
     },
     occurredAt: new Date().toISOString()
   }, analyticsQueue, `analytics:${ANALYTICS_EVENT_TYPE.PURCHASE}:order:${sideEffectsTarget.id}`);
+}
+
+async function handleCodSideEffectsFailure(
+  prisma: RealPrismaClient,
+  data: ProcessOrderUpdateJobData,
+  notificationsQueue: NotificationsQueue,
+  reason: { cancelReason: string }
+): Promise<void> {
+  const notifyTarget = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+    const order = await tx.order.findUnique({
+      where: { id: data.orderId },
+      select: {
+        id: true,
+        status: true,
+        user: {
+          select: {
+            email: true,
+            phone: true
+          }
+        }
+      }
+    });
+    if (!order || order.status !== ORDER_STATUS.CONFIRMED) {
+      return null;
+    }
+
+    const cancelled = await tx.order.updateMany({
+      where: {
+        id: order.id,
+        status: ORDER_STATUS.CONFIRMED
+      },
+      data: {
+        status: ORDER_STATUS.CANCELLED
+      }
+    });
+    if (cancelled.count === 0) {
+      return null;
+    }
+
+    await releaseReservationsForOrder(tx, order.id);
+    await releaseCouponUsageForOrder(tx, order.id);
+    await tx.orderStatusHistory.create({
+      data: {
+        orderId: order.id,
+        fromStatus: ORDER_STATUS.CONFIRMED,
+        toStatus: ORDER_STATUS.CANCELLED,
+        triggeredBy: 'SYSTEM',
+        note: reason.cancelReason
+      }
+    });
+    return {
+      id: order.id,
+      email: order.user.email,
+      phone: order.user.phone
+    };
+  });
+
+  if (notifyTarget && (notifyTarget.email || notifyTarget.phone)) {
+    await enqueueOutboxOrQueue(
+      prisma,
+      'notifications',
+      'send-primary',
+      {
+        email: notifyTarget.email,
+        phone: notifyTarget.phone,
+        template: 'OrderCancelled',
+        data: { orderId: notifyTarget.id }
+      },
+      notificationsQueue,
+      `notifications:primary:${notifyTarget.id}:OrderCancelled:cod-failure`
+    );
+  }
 }
 
 async function handlePostCaptureRecovery(
@@ -1116,6 +1146,7 @@ async function resolveSellerProfileOrThrow(prisma: RealPrismaClient): Promise<Se
         where: { singletonKey: 'default' },
         select: {
           storeName: true,
+          sellerLegalName: true,
           sellerAddress: true,
           sellerState: true,
           gstin: true,
@@ -1124,7 +1155,7 @@ async function resolveSellerProfileOrThrow(prisma: RealPrismaClient): Promise<Se
       })
     : null;
 
-  const legalName = (settings?.storeName ?? '').trim();
+  const legalName = (settings?.sellerLegalName ?? settings?.storeName ?? '').trim();
   const addressLine = (settings?.sellerAddress ?? '').trim();
   const state = (settings?.sellerState ?? '').trim();
   const gstin = (settings?.gstin ?? '').trim();
@@ -1141,7 +1172,7 @@ async function resolveSellerProfileOrThrow(prisma: RealPrismaClient): Promise<Se
 
   if (process.env.NODE_ENV === 'production') {
     const missing = [
-      !legalName ? 'StoreSettings.storeName' : null,
+      !legalName ? 'StoreSettings.sellerLegalName' : null,
       !addressLine ? 'StoreSettings.sellerAddress' : null,
       !state ? 'StoreSettings.sellerState' : null,
       !gstin ? 'StoreSettings.gstin' : null,

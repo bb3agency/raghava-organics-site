@@ -118,7 +118,8 @@ function buildFastifyForCreateOrder(couponType: 'PERCENTAGE_OFF' | 'FREE_SHIPPIN
           },
           shipment: null
         });
-      })
+      }),
+      count: vi.fn().mockResolvedValue(0)
     },
     orderItem: {
       create: vi.fn().mockResolvedValue(undefined)
@@ -131,6 +132,14 @@ function buildFastifyForCreateOrder(couponType: 'PERCENTAGE_OFF' | 'FREE_SHIPPIN
     },
     coupon: {
       update: vi.fn().mockResolvedValue(undefined)
+    },
+    storeSettings: {
+      findUnique: vi.fn().mockResolvedValue({ minOrderValuePaise: 0 })
+    },
+    couponUsage: {
+      count: vi.fn().mockResolvedValue(0),
+      findMany: vi.fn(),
+      delete: vi.fn()
     }
   };
 
@@ -178,9 +187,8 @@ describe('OrdersService createOrder pricing composition', () => {
   });
 
   it('applies Delhivery-derived shipping charge to order total', async () => {
-    vi.spyOn(CartService.prototype, 'getDeliveryRates').mockResolvedValue({
-      pincode: '500001',
-      shippingCharge: 4500,
+    vi.spyOn(CartService.prototype, 'computeShippingChargeForCart').mockResolvedValue({
+      shippingChargePaise: 4500,
       estimatedDays: 3
     });
     const { fastify } = buildFastifyForCreateOrder('PERCENTAGE_OFF');
@@ -192,9 +200,8 @@ describe('OrdersService createOrder pricing composition', () => {
   });
 
   it('forces shipping charge to zero for FREE_SHIPPING coupon', async () => {
-    vi.spyOn(CartService.prototype, 'getDeliveryRates').mockResolvedValue({
-      pincode: '500001',
-      shippingCharge: 4500,
+    vi.spyOn(CartService.prototype, 'computeShippingChargeForCart').mockResolvedValue({
+      shippingChargePaise: 0,
       estimatedDays: 3
     });
     const { fastify } = buildFastifyForCreateOrder('FREE_SHIPPING');

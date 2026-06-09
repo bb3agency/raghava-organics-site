@@ -88,10 +88,32 @@ export async function checkPincodeServiceability(
 export async function getDeliveryRates(
   pincode: string,
   accessToken?: string | null,
+  paymentMode: "COD" | "PREPAID" = "PREPAID",
 ): Promise<DeliveryRates> {
-  const params = new URLSearchParams({ pincode }).toString();
+  const params = new URLSearchParams({ pincode, paymentMode }).toString();
   return apiClient<DeliveryRates>(`/cart/delivery-rates?${params}`, {
     method: "GET",
+    accessToken: accessToken ?? null,
+  });
+}
+
+export async function applyCartCoupon(
+  code: string,
+  accessToken?: string | null,
+): Promise<Cart> {
+  return apiClient<Cart>("/cart/coupon", {
+    method: "POST",
+    accessToken: accessToken ?? null,
+    idempotencyKey: createIdempotencyKey(),
+    body: JSON.stringify({ code: code.trim() }),
+  });
+}
+
+export async function removeCartCoupon(
+  accessToken?: string | null,
+): Promise<Cart> {
+  return apiClient<Cart>("/cart/coupon", {
+    method: "DELETE",
     accessToken: accessToken ?? null,
   });
 }

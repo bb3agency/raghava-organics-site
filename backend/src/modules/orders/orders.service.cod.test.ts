@@ -1,6 +1,7 @@
-import { OrderStatus, PaymentStatus } from '@prisma/client';
+import { OrderStatus, PaymentProvider, PaymentStatus } from '@prisma/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
+import { featureFlags } from '@config/feature-flags';
 import { OrdersService } from './orders.service';
 import { CartService } from '@modules/cart/cart.service';
 
@@ -120,6 +121,95 @@ describe('OrdersService createOrder — COD', () => {
     expect(paymentCallArg?.data['provider']).toBe('COD');
   });
 
+  it('finalizes coupon usage in transaction for COD orders with coupon', async () => {
+    const originalCoupons = featureFlags.coupons;
+    featureFlags.coupons = true;
+    try {
+      const coupon = {
+        id: 'coupon_1',
+        code: 'SAVE10',
+        type: 'PERCENTAGE_OFF',
+        value: 10,
+        minOrderPaise: 0,
+        maxUsesTotal: null,
+        maxUsesPerUser: null,
+        usesCount: 0,
+        isActive: true,
+        validFrom: new Date('2026-01-01T00:00:00.000Z'),
+        validUntil: new Date('2026-12-31T23:59:59.000Z'),
+        applicableTo: null
+      };
+      const tx: ReturnType<typeof buildTx> & Record<string, unknown> = buildTx(true);
+      tx.cart.findFirst.mockResolvedValue({
+        id: 'cart_1',
+        coupon,
+        items: [{
+          variantId: 'v1',
+          quantity: 1,
+          priceSnapshot: 10000,
+          variant: {
+            id: 'v1',
+            name: 'V1',
+            sku: 'SKU-1',
+            productId: 'p1',
+            product: { categoryId: 'c1', name: 'Product' },
+            inventory: { quantity: 5 }
+          }
+        }]
+      });
+      tx.order = {
+        ...tx.order,
+        count: vi.fn().mockResolvedValue(0)
+      } as typeof tx.order;
+      tx.couponUsage = {
+        findUnique: vi.fn().mockResolvedValue(null),
+        create: vi.fn().mockResolvedValue(undefined)
+      };
+      tx.coupon = {
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        update: vi.fn().mockResolvedValue(undefined)
+      };
+      const fastify = {
+        prisma: {
+          order: { count: vi.fn().mockResolvedValue(0) },
+          storeSettings: { findUnique: vi.fn().mockResolvedValue({ minOrderValuePaise: 0 }) },
+          address: {
+            findFirst: vi.fn().mockResolvedValue({
+              id: 'addr_1',
+              userId: 'user_1',
+              pincode: '500001',
+              fullName: 'Test',
+              phone: '9999999999',
+              line1: 'L1',
+              city: 'Hyd',
+              state: 'TG',
+              line2: null
+            })
+          },
+          $transaction: vi.fn().mockImplementation(async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx))
+        },
+        log: baseLog(),
+        queues: baseQueues(),
+        redis: { set: vi.fn() }
+      } as unknown as FastifyInstance;
+
+      const service = new OrdersService(fastify);
+      await service.createOrder('user_1', { addressId: 'addr_1', paymentMode: 'COD' });
+
+      expect((tx.couponUsage as { create: ReturnType<typeof vi.fn> }).create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            couponId: 'coupon_1',
+            orderId: 'order_1',
+            userId: 'user_1'
+          })
+        })
+      );
+    } finally {
+      featureFlags.coupons = originalCoupons;
+    }
+  });
+
   it('creates PREPAID order with PENDING_PAYMENT status and no COD payment record', async () => {
     const tx = buildTx(false);
     // override: storeSettings not needed for prepaid
@@ -202,6 +292,151 @@ describe('OrdersService retryPayment', () => {
       code: 'NOT_FOUND',
       statusCode: 404
     });
+  });
+
+  it('transitions PAYMENT_FAILED to PENDING_PAYMENT before initiating payment', async () => {
+    const orderUpdateMany = vi.fn().mockResolvedValue({ count: 1 });
+    const historyCreate = vi.fn().mockResolvedValue(undefined);
+    const reservationUpsert = vi.fn().mockResolvedValue(undefined);
+    const fastify = {
+      prisma: {
+        order: {
+          findFirst: vi
+            .fn()
+            .mockResolvedValueOnce({
+              id: 'order_1',
+              userId: 'user_1',
+              status: OrderStatus.PAYMENT_FAILED,
+              paymentMode: 'PREPAID',
+              total: 10000,
+              orderNumber: 'ORD-2026-00001',
+              payment: {
+                id: 'pay_1',
+                status: PaymentStatus.FAILED,
+                providerOrderId: 'rpay_1',
+                amount: 10000,
+                currency: 'INR'
+              }
+            })
+            .mockResolvedValueOnce({
+              items: [{ variantId: 'variant_1', quantity: 2 }]
+            })
+        },
+        cart: {
+          findFirst: vi.fn().mockResolvedValue({ id: 'cart_1' })
+        },
+        cartReservation: {
+          upsert: reservationUpsert
+        },
+        $transaction: vi.fn().mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) =>
+          fn({
+            order: { updateMany: orderUpdateMany },
+            orderStatusHistory: { create: historyCreate }
+          })
+        ),
+        storeSettings: { findUnique: vi.fn().mockResolvedValue({ minOrderValuePaise: 0 }) }
+      },
+      log: baseLog(),
+      queues: baseQueues(),
+      redis: { set: vi.fn() }
+    } as unknown as FastifyInstance;
+    const service = new OrdersService(fastify);
+    const initiateSpy = vi
+      .spyOn(OrdersService.prototype, 'initiatePayment')
+      .mockResolvedValue({
+        orderId: 'order_1',
+        provider: PaymentProvider.RAZORPAY,
+        providerOrderId: 'rpay_new',
+        amount: 10000,
+        currency: 'INR'
+      });
+
+    await service.retryPayment('user_1', 'order_1');
+
+    expect(orderUpdateMany).toHaveBeenCalledWith({
+      where: {
+        id: 'order_1',
+        userId: 'user_1',
+        status: OrderStatus.PAYMENT_FAILED
+      },
+      data: { status: OrderStatus.PENDING_PAYMENT }
+    });
+    expect(historyCreate).toHaveBeenCalled();
+    expect(reservationUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          cartId_variantId: {
+            cartId: 'cart_1',
+            variantId: 'variant_1'
+          }
+        },
+        create: expect.objectContaining({
+          cartId: 'cart_1',
+          variantId: 'variant_1',
+          quantity: 2
+        })
+      })
+    );
+    expect(initiateSpy).toHaveBeenCalledWith('user_1', { orderId: 'order_1' }, undefined);
+
+    initiateSpy.mockRestore();
+  });
+
+  it('restores checkout reservations when retrying pending payment', async () => {
+    const reservationUpsert = vi.fn().mockResolvedValue(undefined);
+    const fastify = {
+      prisma: {
+        order: {
+          findFirst: vi
+            .fn()
+            .mockResolvedValueOnce({
+              id: 'order_2',
+              userId: 'user_1',
+              status: OrderStatus.PENDING_PAYMENT,
+              paymentMode: 'PREPAID',
+              total: 10000,
+              orderNumber: 'ORD-2026-00002',
+              payment: {
+                id: 'pay_2',
+                status: PaymentStatus.CREATED,
+                providerOrderId: 'rpay_2',
+                amount: 10000,
+                currency: 'INR'
+              }
+            })
+            .mockResolvedValueOnce({
+              items: [{ variantId: 'variant_2', quantity: 1 }]
+            })
+        },
+        cart: {
+          findFirst: vi.fn().mockResolvedValue({ id: 'cart_1' })
+        },
+        cartReservation: {
+          upsert: reservationUpsert
+        },
+        storeSettings: { findUnique: vi.fn().mockResolvedValue({ minOrderValuePaise: 0 }) }
+      },
+      log: baseLog(),
+      queues: baseQueues(),
+      redis: { set: vi.fn() }
+    } as unknown as FastifyInstance;
+    const service = new OrdersService(fastify);
+    const initiateSpy = vi
+      .spyOn(OrdersService.prototype, 'initiatePayment')
+      .mockResolvedValue({
+        orderId: 'order_2',
+        provider: PaymentProvider.RAZORPAY,
+        providerOrderId: 'rpay_new',
+        amount: 10000,
+        currency: 'INR'
+      });
+
+    await service.retryPayment('user_1', 'order_2');
+
+    expect(reservationUpsert).toHaveBeenCalled();
+    expect(initiateSpy).toHaveBeenCalledWith('user_1', { orderId: 'order_2' }, undefined);
+
+    initiateSpy.mockRestore();
   });
 });
 
@@ -418,7 +653,8 @@ describe('OrdersService cancelMyOrder — cancellation window', () => {
           userId: 'user_1',
           status: OrderStatus.CONFIRMED,
           createdAt,
-          payment: null
+          payment: null,
+          items: [{ variantId: 'variant_1', quantity: 1 }]
         }),
         update: vi.fn().mockResolvedValue({ id: 'order_1', status: OrderStatus.CANCELLED }),
         findUniqueOrThrow: vi.fn().mockResolvedValue({
@@ -432,7 +668,12 @@ describe('OrdersService cancelMyOrder — cancellation window', () => {
       storeSettings: {
         findUnique: vi.fn().mockResolvedValue({ cancellationWindowHours: windowHours })
       },
-      orderStatusHistory: { create: vi.fn().mockResolvedValue(undefined) }
+      orderStatusHistory: { create: vi.fn().mockResolvedValue(undefined) },
+      inventory: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
+      couponUsage: {
+        findMany: vi.fn().mockResolvedValue([]),
+        delete: vi.fn().mockResolvedValue(undefined)
+      }
     };
     return {
       fastify: {

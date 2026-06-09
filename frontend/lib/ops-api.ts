@@ -6,10 +6,16 @@ import { ApiError } from "@/lib/api";
 import { assertOpsUiAccessFromServerAction } from "@/lib/ops-ui-auth";
 import { headers } from "next/headers";
 
-const OPS_BASE_URL =
-  process.env.INTERNAL_API_BASE_URL ??
-  process.env.NEXT_PUBLIC_API_BASE_URL ??
-  "http://localhost:3000/api/v1";
+const OPS_BASE_URL = (() => {
+  const internal = process.env.INTERNAL_API_BASE_URL?.trim();
+  if (internal) return internal.replace(/\/$/, "");
+  const configured = process.env.NEXT_PUBLIC_API_BASE_URL?.trim();
+  if (configured) return configured.replace(/\/$/, "");
+  if (process.env.NODE_ENV === "development") {
+    return "http://localhost:3000/api/v1";
+  }
+  throw new Error("INTERNAL_API_BASE_URL or NEXT_PUBLIC_API_BASE_URL is required for ops metrics.");
+})();
 
 export type {
   OpsSession,

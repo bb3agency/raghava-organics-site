@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import Image from "next/image";
+import { resolveProductImageUrl } from "@/lib/media-url";
 
 interface ProductGalleryProps {
   images: Array<{ url: string; altText: string }>;
@@ -11,13 +12,14 @@ interface ProductGalleryProps {
 export function ProductGallery({ images, productName }: ProductGalleryProps) {
   const [active, setActive] = useState(0);
   const current = images[active] ?? images[0];
+  const currentSrc = resolveProductImageUrl(current?.url);
 
   return (
     <div className="flex flex-col gap-3">
       {/* Main image */}
       <div className="relative aspect-[4/3] overflow-hidden rounded-2xl border border-border bg-secondary">
         <Image
-          src={current?.url ?? "/next.svg"}
+          src={currentSrc}
           alt={current?.altText ?? productName}
           fill
           priority
@@ -42,7 +44,7 @@ export function ProductGallery({ images, productName }: ProductGalleryProps) {
               aria-label={`View image ${idx + 1}`}
             >
               <Image
-                src={img.url}
+                src={resolveProductImageUrl(img.url)}
                 alt={img.altText}
                 fill
                 className="object-cover"

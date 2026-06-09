@@ -388,6 +388,7 @@ export interface AdminProductListItem {
   isFeatured: boolean;
   isActive: boolean;
   metaDescription: string | null;
+  attributes?: { gstRate?: number; hsnCode?: string } | null;
   category: { id: string; name: string; slug: string };
   images: AdminProductImage[];
   variants: AdminProductVariant[];
@@ -404,6 +405,7 @@ export interface AdminCreateProductInput {
   isFeatured?: boolean;
   isActive?: boolean;
   metaDescription?: string;
+  attributes?: { gstRate?: number; hsnCode?: string };
   images?: Array<{ url: string; altText: string; sortOrder: number }>;
   variants?: Array<{
     sku: string;
@@ -425,6 +427,7 @@ export interface AdminUpdateProductInput {
   isFeatured?: boolean;
   isActive?: boolean;
   metaDescription?: string;
+  attributes?: { gstRate?: number; hsnCode?: string } | null;
 }
 
 export interface AdminCreateCategoryInput {
@@ -815,6 +818,9 @@ export interface AdminStoreProfile {
   contactPhone: string | null;
   gstin: string | null;
   fssaiNumber: string | null;
+  sellerLegalName: string | null;
+  sellerAddress: string | null;
+  sellerState: string | null;
 }
 
 export interface AdminInventorySettings {

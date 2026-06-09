@@ -480,7 +480,8 @@ sudo certbot --nginx -d foodstore.com -d www.foodstore.com -d admin.foodstore.co
 cd /var/www/client-foodstore-frontend
 # Ensure .env.production.local exists. Recommended:
 # cp .env.production.example .env.production.local
-# Fill: CLIENT_ID, STOREFRONT_PORT, NEXT_PUBLIC_API_BASE_URL, NEXT_PUBLIC_STOREFRONT_URL, NEXT_PUBLIC_RAZORPAY_KEY_ID
+# Fill: CLIENT_ID, STOREFONT_PORT, NEXT_PUBLIC_API_BASE_URL, NEXT_PUBLIC_STOREFRONT_URL, NEXT_PUBLIC_IMAGE_CDN_URL, NEXT_PUBLIC_RAZORPAY_KEY_ID
+# Storefront COD/module flags: GET /api/v1/store/config (runtime) — not build-time NEXT_PUBLIC_FEATURE_*
 npm ci && npm run build
 pm2 start npm --name "foodstore-frontend" -- start -- -p 3101
 pm2 save && pm2 startup   # persist across VPS reboots
@@ -963,6 +964,7 @@ PCI scope, caller-class JSON minimisation (public vs customer vs admin vs ops), 
 
 | Method | Endpoint | Auth | Description |
 |---|---|---|---|
+| GET | `/api/v1/store/config` | Public | Runtime storefront config: COD, min order, mobile OTP signup, `FEATURE_*` mirrors |
 | GET | `/api/v1/cart` | Public / Customer | Get current cart (session token or JWT) |
 | POST | `/api/v1/cart/items` | Public / Customer | Add item to cart |
 | PATCH | `/api/v1/cart/items/:id` | Public / Customer | Update item quantity |
@@ -972,7 +974,7 @@ PCI scope, caller-class JSON minimisation (public vs customer vs admin vs ops), 
 | POST | `/api/v1/cart/coupon` | Public / Customer | Apply coupon code |
 | DELETE | `/api/v1/cart/coupon` | Public / Customer | Remove coupon |
 | POST | `/api/v1/cart/check-pincode` | Public | Shipping provider serviceability check |
-| GET | `/api/v1/cart/delivery-rates` | Public / Customer | Shipping rate from active provider |
+| GET | `/api/v1/cart/delivery-rates` | Public / Customer | Shipping rate from active provider; query `pincode`, optional `paymentMode=PREPAID\|COD` |
 
 ### 8.5 Wishlist
 

@@ -10,7 +10,7 @@ describe('ProductsService product image contracts', () => {
           findUnique: vi.fn().mockResolvedValue({ id: 'prod_1' })
         },
         productImage: {
-          count: vi.fn().mockResolvedValue(30),
+          count: vi.fn().mockResolvedValue(8),
           create: vi.fn()
         }
       },

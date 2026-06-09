@@ -1,7 +1,8 @@
-import { Worker, type ConnectionOptions } from 'bullmq';
+import { Worker, UnrecoverableError, type ConnectionOptions } from 'bullmq';
 import { NotificationChannel, NotificationStatus, PrismaClient as RealPrismaClient } from '@prisma/client';
 import { type SmsProviderAdapter } from '@common/interfaces/notification-provider.interface';
 import { decryptOpsConfigValue } from '@common/security/ops-config-crypto';
+import { resolveNotifyFlags } from '@config/feature-flags';
 import { Fast2smsAdapter } from '@modules/notifications/adapters/fast2sms.adapter';
 import { MetaWhatsAppAdapter } from '@modules/notifications/adapters/meta-whatsapp.adapter';
 import { Msg91Adapter } from '@modules/notifications/adapters/msg91.adapter';
@@ -54,13 +55,6 @@ function hasSmsProviderCredentials(runtimeConfig: NodeJS.ProcessEnv): boolean {
     return !!runtimeConfig.FAST2SMS_API_KEY?.trim();
   }
   return false;
-}
-
-function parseEnabledFlag(value: string | undefined, defaultValue: boolean): boolean {
-  if (value === undefined) {
-    return defaultValue;
-  }
-  return value.trim().toLowerCase() === 'true';
 }
 
 function normalizePrimaryChannel(value: string | undefined): PrimaryChannel | null {
@@ -221,11 +215,7 @@ export function createNotificationsWorker(
   }
 
   async function resolveEffectiveNotificationFlags(runtimeConfig: NodeJS.ProcessEnv) {
-    const envFlags = {
-      email: parseEnabledFlag(runtimeConfig.NOTIFY_EMAIL_ENABLED, true),
-      sms: parseEnabledFlag(runtimeConfig.NOTIFY_SMS_ENABLED, false),
-      whatsapp: parseEnabledFlag(runtimeConfig.NOTIFY_WHATSAPP_ENABLED, false)
-    };
+    const envFlags = resolveNotifyFlags(runtimeConfig);
     const settings = await prisma.storeSettings.findUnique({
       where: { singletonKey: 'default' },
       select: {
@@ -256,8 +246,8 @@ export function createNotificationsWorker(
         const data = job.data as SendEmailJobData;
         const runtimeConfig = await resolveRuntimeConfig();
         const flags = await resolveEffectiveNotificationFlags(runtimeConfig);
-        if (!flags.emailEnabled || !runtimeConfig.RESEND_API_KEY) {
-          const errorMessage = 'Email notifications disabled or RESEND_API_KEY missing';
+        if (!flags.emailEnabled || !runtimeConfig.RESEND_API_KEY?.trim() || !runtimeConfig.RESEND_FROM?.trim()) {
+          const errorMessage = 'Email notifications disabled or Resend credentials missing';
           await prisma.notificationLog.create({
             data: {
               channel: NotificationChannel.EMAIL,
@@ -279,15 +269,16 @@ export function createNotificationsWorker(
             jobName: job.name,
             jobId: String(job.id ?? 'unknown')
           });
-          throw new Error(errorMessage);
+          throw new UnrecoverableError(errorMessage);
         }
 
         try {
           const emailAdapter = new ResendAdapter({
             apiKey: runtimeConfig.RESEND_API_KEY ?? '',
-            fromEmail: runtimeConfig.RESEND_FROM ?? 'noreply@example.com'
+            fromEmail: runtimeConfig.RESEND_FROM ?? ''
           });
           const sent = await emailAdapter.sendEmail(data);
+          onProviderSuccess('EMAIL', 'resend');
           await prisma.notificationLog.create({
             data: {
               channel: NotificationChannel.EMAIL,
@@ -300,6 +291,7 @@ export function createNotificationsWorker(
           });
         } catch (error) {
           const errorMessage = error instanceof Error ? error.message : 'Unknown email provider error';
+          onProviderFailure('EMAIL', 'resend', prisma, errorMessage, String(job.id ?? 'unknown'));
           await prisma.notificationLog.create({
             data: {
               channel: NotificationChannel.EMAIL,
@@ -354,7 +346,7 @@ export function createNotificationsWorker(
             jobName: job.name,
             jobId: String(job.id ?? 'unknown')
           });
-          return;
+          throw new UnrecoverableError(errorMessage);
         }
 
         try {
@@ -364,6 +356,7 @@ export function createNotificationsWorker(
             data: SmsTemplateRegistry.composeTemplateData(data.data, flags.storeName)
           };
           const sent = await smsAdapter.sendSms(smsData);
+          onProviderSuccess('SMS', smsProvider);
           await prisma.notificationLog.create({
             data: {
               channel: NotificationChannel.SMS,
@@ -376,6 +369,7 @@ export function createNotificationsWorker(
           });
         } catch (error) {
           const errorMessage = error instanceof Error ? error.message : 'Unknown SMS provider error';
+          onProviderFailure('SMS', smsProvider, prisma, errorMessage, String(job.id ?? 'unknown'));
           await prisma.notificationLog.create({
             data: {
               channel: NotificationChannel.SMS,
@@ -429,7 +423,7 @@ export function createNotificationsWorker(
             jobName: job.name,
             jobId: String(job.id ?? 'unknown')
           });
-          return;
+          throw new UnrecoverableError(errorMessage);
         }
 
         try {
@@ -439,6 +433,7 @@ export function createNotificationsWorker(
             apiVersion: runtimeConfig.META_WHATSAPP_API_VERSION ?? 'v21.0'
           });
           const sent = await whatsappAdapter.sendWhatsapp(data);
+          onProviderSuccess('WHATSAPP', 'meta-whatsapp');
           await prisma.notificationLog.create({
             data: {
               channel: NotificationChannel.WHATSAPP,
@@ -451,6 +446,7 @@ export function createNotificationsWorker(
           });
         } catch (error) {
           const errorMessage = error instanceof Error ? error.message : 'Unknown WhatsApp provider error';
+          onProviderFailure('WHATSAPP', 'meta-whatsapp', prisma, errorMessage, String(job.id ?? 'unknown'));
           await prisma.notificationLog.create({
             data: {
               channel: NotificationChannel.WHATSAPP,
@@ -506,7 +502,7 @@ export function createNotificationsWorker(
             jobName: job.name,
             jobId: String(job.id ?? 'unknown')
           });
-          return;
+          throw new UnrecoverableError(errorMessage);
         }
 
         if (primaryChannel === 'EMAIL') {
@@ -514,8 +510,8 @@ export function createNotificationsWorker(
           const errorMessage =
             !recipient
               ? 'Primary EMAIL channel selected but recipient email is missing'
-              : !flags.emailEnabled || !runtimeConfig.RESEND_API_KEY
-                ? 'Email notifications disabled or RESEND_API_KEY missing'
+              : !flags.emailEnabled || !runtimeConfig.RESEND_API_KEY?.trim() || !runtimeConfig.RESEND_FROM?.trim()
+                ? 'Email notifications disabled or Resend credentials missing'
                 : null;
 
           if (errorMessage) {
@@ -540,19 +536,20 @@ export function createNotificationsWorker(
               jobName: job.name,
               jobId: String(job.id ?? 'unknown')
             });
-            return;
+            throw new UnrecoverableError(errorMessage);
           }
 
           try {
             const emailAdapter = new ResendAdapter({
               apiKey: runtimeConfig.RESEND_API_KEY ?? '',
-              fromEmail: runtimeConfig.RESEND_FROM ?? 'noreply@example.com'
+              fromEmail: runtimeConfig.RESEND_FROM ?? ''
             });
             const sent = await emailAdapter.sendEmail({
               to: recipient,
               template: data.template,
               data: data.data
             });
+            onProviderSuccess('EMAIL', 'resend');
             await prisma.notificationLog.create({
               data: {
                 channel: NotificationChannel.EMAIL,
@@ -565,6 +562,7 @@ export function createNotificationsWorker(
             });
           } catch (error) {
             const errorMessage = error instanceof Error ? error.message : 'Unknown email provider error';
+            onProviderFailure('EMAIL', 'resend', prisma, errorMessage, String(job.id ?? 'unknown'));
             await prisma.notificationLog.create({
               data: {
                 channel: NotificationChannel.EMAIL,
@@ -623,7 +621,7 @@ export function createNotificationsWorker(
               jobName: job.name,
               jobId: String(job.id ?? 'unknown')
             });
-            return;
+            throw new UnrecoverableError(errorMessage);
           }
 
           try {
@@ -633,6 +631,7 @@ export function createNotificationsWorker(
               template: data.template,
               data: SmsTemplateRegistry.composeTemplateData(data.data, flags.storeName)
             });
+            onProviderSuccess('SMS', smsProvider);
             await prisma.notificationLog.create({
               data: {
                 channel: NotificationChannel.SMS,
@@ -645,6 +644,7 @@ export function createNotificationsWorker(
             });
           } catch (error) {
             const errorMessage = error instanceof Error ? error.message : 'Unknown SMS provider error';
+            onProviderFailure('SMS', smsProvider, prisma, errorMessage, String(job.id ?? 'unknown'));
             await prisma.notificationLog.create({
               data: {
                 channel: NotificationChannel.SMS,
@@ -701,7 +701,7 @@ export function createNotificationsWorker(
             jobName: job.name,
             jobId: String(job.id ?? 'unknown')
           });
-          return;
+          throw new UnrecoverableError(errorMessage);
         }
 
         try {
@@ -715,6 +715,7 @@ export function createNotificationsWorker(
             template: data.template,
             data: data.data
           });
+          onProviderSuccess('WHATSAPP', 'meta-whatsapp');
           await prisma.notificationLog.create({
             data: {
               channel: NotificationChannel.WHATSAPP,
@@ -727,6 +728,7 @@ export function createNotificationsWorker(
           });
         } catch (error) {
           const errorMessage = error instanceof Error ? error.message : 'Unknown WhatsApp provider error';
+          onProviderFailure('WHATSAPP', 'meta-whatsapp', prisma, errorMessage, String(job.id ?? 'unknown'));
           await prisma.notificationLog.create({
             data: {
               channel: NotificationChannel.WHATSAPP,

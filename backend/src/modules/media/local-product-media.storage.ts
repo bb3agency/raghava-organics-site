@@ -3,6 +3,7 @@ import path from 'path';
 import { AppError } from '@common/errors/app-error';
 import { ERROR_CODES } from '@common/errors/error-codes';
 import {
+  CATEGORY_IMAGE_MEDIA_PATH_PREFIX,
   PRODUCT_IMAGE_MEDIA_PATH_PREFIX,
   PRODUCT_IMAGE_MIME_TO_EXT,
   type ProductImageMimeType
@@ -33,11 +34,16 @@ export function createLocalProductMediaStorage(
     return trimmed;
   }
 
-  function buildRelativePath(productId: string, imageId: string, mime: ProductImageMimeType): string {
-    const safeProductId = sanitizeSegment(productId, 'productId');
+  function buildRelativePath(
+    entity: 'products' | 'categories',
+    entityId: string,
+    imageId: string,
+    mime: ProductImageMimeType
+  ): string {
+    const safeEntityId = sanitizeSegment(entityId, `${entity.slice(0, -1)}Id`);
     const safeImageId = sanitizeSegment(imageId, 'imageId');
     const ext = PRODUCT_IMAGE_MIME_TO_EXT[mime];
-    return `${clientId}/products/${safeProductId}/${safeImageId}.${ext}`;
+    return `${clientId}/${entity}/${safeEntityId}/${safeImageId}.${ext}`;
   }
 
   function resolveAbsolutePath(relativePath: string): string {
@@ -54,12 +60,12 @@ export function createLocalProductMediaStorage(
     return absolutePath;
   }
 
-  function buildMediaPath(productId: string, filename: string): string {
-    sanitizeSegment(productId, 'productId');
+  function buildMediaPath(prefix: string, entityId: string, filename: string, label: string): string {
+    sanitizeSegment(entityId, label);
     if (!SAFE_FILENAME_REGEX.test(filename)) {
       throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Invalid media filename', 400);
     }
-    return `${PRODUCT_IMAGE_MEDIA_PATH_PREFIX}${productId}/${filename}`;
+    return `${prefix}${entityId}/${filename}`;
   }
 
   function parseMediaPath(mediaPath: string): { productId: string; filename: string } | null {
@@ -79,15 +85,31 @@ export function createLocalProductMediaStorage(
     provider: 'local',
 
     async saveProductImage(input): Promise<SaveProductImageResult> {
-      const storageReference = buildRelativePath(input.productId, input.imageId, input.mime);
+      const storageReference = buildRelativePath('products', input.productId, input.imageId, input.mime);
       const absolutePath = resolveAbsolutePath(storageReference);
       await fs.mkdir(path.dirname(absolutePath), { recursive: true });
       await fs.writeFile(absolutePath, input.content);
       const filename = path.basename(absolutePath);
-      const mediaPath = buildMediaPath(input.productId, filename);
+      const mediaPath = buildMediaPath(PRODUCT_IMAGE_MEDIA_PATH_PREFIX, input.productId, filename, 'productId');
       const publicUrl = publicBaseUrl
         ? `${publicBaseUrl}${mediaPath}`
         : mediaPath;
+      return { publicUrl, storageReference, filename, mediaPath };
+    },
+
+    async saveCategoryImage(input): Promise<SaveProductImageResult> {
+      const storageReference = buildRelativePath('categories', input.categoryId, input.imageId, input.mime);
+      const absolutePath = resolveAbsolutePath(storageReference);
+      await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+      await fs.writeFile(absolutePath, input.content);
+      const filename = path.basename(absolutePath);
+      const mediaPath = buildMediaPath(
+        CATEGORY_IMAGE_MEDIA_PATH_PREFIX,
+        input.categoryId,
+        filename,
+        'categoryId'
+      );
+      const publicUrl = publicBaseUrl ? `${publicBaseUrl}${mediaPath}` : mediaPath;
       return { publicUrl, storageReference, filename, mediaPath };
     },
 
@@ -131,14 +153,20 @@ export function createLocalProductMediaStorage(
     storageReferenceFromPublicUrl(url: string): string | null {
       const trimmed = url.trim();
       let mediaPath: string | null = null;
-      if (trimmed.startsWith(PRODUCT_IMAGE_MEDIA_PATH_PREFIX)) {
+      if (
+        trimmed.startsWith(PRODUCT_IMAGE_MEDIA_PATH_PREFIX) ||
+        trimmed.startsWith(CATEGORY_IMAGE_MEDIA_PATH_PREFIX)
+      ) {
         mediaPath = trimmed;
       } else if (publicBaseUrl && trimmed.startsWith(publicBaseUrl)) {
         mediaPath = trimmed.slice(publicBaseUrl.length);
       } else {
         try {
           const parsed = new URL(trimmed);
-          if (parsed.pathname.startsWith(PRODUCT_IMAGE_MEDIA_PATH_PREFIX)) {
+          if (
+            parsed.pathname.startsWith(PRODUCT_IMAGE_MEDIA_PATH_PREFIX) ||
+            parsed.pathname.startsWith(CATEGORY_IMAGE_MEDIA_PATH_PREFIX)
+          ) {
             mediaPath = parsed.pathname;
           }
         } catch {
@@ -146,6 +174,19 @@ export function createLocalProductMediaStorage(
         }
       }
       if (!mediaPath) return null;
+
+      if (mediaPath.startsWith(CATEGORY_IMAGE_MEDIA_PATH_PREFIX)) {
+        const remainder = mediaPath.slice(CATEGORY_IMAGE_MEDIA_PATH_PREFIX.length);
+        const slash = remainder.indexOf('/');
+        if (slash <= 0) return null;
+        const categoryId = remainder.slice(0, slash);
+        const filename = remainder.slice(slash + 1);
+        if (!SAFE_SEGMENT_REGEX.test(categoryId) || !SAFE_FILENAME_REGEX.test(filename)) {
+          return null;
+        }
+        return `${clientId}/categories/${categoryId}/${filename}`;
+      }
+
       const parsed = parseMediaPath(mediaPath);
       if (!parsed) return null;
       return `${clientId}/products/${parsed.productId}/${parsed.filename}`;

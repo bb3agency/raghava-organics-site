@@ -18,6 +18,8 @@ Fill [VPS_INPUTS.md](./VPS_INPUTS.md) first, then run scripts under [scripts/](.
 | Local API (dev) | `http://localhost:3101/api/v1` (Next rewrite → backend `3000`) |
 | Production API | `https://raghavaorganics.com/api/v1` |
 | Production domain | `raghavaorganics.com` |
+| DNS provider | **Cloudflare** (nameservers at Namecheap → Cloudflare) |
+| Image CDN | `https://cdn.raghavaorganics.com` (R2 custom domain) |
 | VPS IP | `178.104.46.202` |
 
 ## Docker Compose on VPS
@@ -100,9 +102,19 @@ Templates: [backend/nginx/](../../../backend/nginx/)
 - `https://<PRODUCTION_DOMAIN>/api/v1/payments/webhook`
 - `https://<PRODUCTION_DOMAIN>/api/v1/shipping/webhook`
 
-## Product image storage (VPS + Cloudflare)
+## Product image storage (Cloudflare R2)
 
-After backend deploy, ensure writable media directory and matching CDN env:
+**Canonical reference:** [CLOUDFLARE_R2_MEDIA.md](./CLOUDFLARE_R2_MEDIA.md)
+
+| R2 field | Value |
+|----------|-------|
+| Bucket | `raghava-organics-product-images` |
+| `R2_PUBLIC_BASE_URL` | `https://cdn.raghavaorganics.com` |
+| `R2_ENDPOINT` | `https://2e87c8fb8842d3a372a5abc98b5cd6cf.r2.cloudflarestorage.com` |
+
+Credentials → Ops UI only (vault: [VPS_INPUTS.md](./VPS_INPUTS.md)). Frontend `NEXT_PUBLIC_IMAGE_CDN_URL=https://cdn.raghavaorganics.com`.
+
+After backend deploy, ensure writable media directory for **local** fallback only:
 
 ```bash
 sudo mkdir -p /var/www/raghava-organics/storage/media
@@ -111,8 +123,10 @@ sudo chown -R deploy:deploy /var/www/raghava-organics/storage
 
 | Variable | Where | Example |
 |----------|-------|---------|
+| `STOREFRONT_URL`, `ADMIN_URL` | `backend/.env` (Phase 1 bootstrap) | `https://<domain>` — **`STOREFRONT_URL` required**; production-like boot fails if missing (password-reset links) |
 | `MEDIA_STORAGE_PROVIDER`, `R2_*` | **Ops UI** → Product Media | Not in `backend/.env`; restart API after save |
 | `NEXT_PUBLIC_IMAGE_CDN_URL` | `frontend/.env.production.local` | Same hostname as Ops `R2_PUBLIC_BASE_URL` |
+| Storefront COD / module flags | **`GET /api/v1/store/config`** (runtime) | No frontend redeploy when admin toggles COD or backend `FEATURE_*` changes |
 
 - Admin uploads: `POST /api/v1/admin/products/:id/images/upload` (multipart batch, max **5 MiB** per file; sort order assigned server-side).
 - Public serve: **`MEDIA_STORAGE_PROVIDER=r2`** → images at `R2_PUBLIC_BASE_URL` (Cloudflare CDN). **`local`** → `GET /api/v1/media/products/:productId/:filename`.
@@ -120,4 +134,4 @@ sudo chown -R deploy:deploy /var/www/raghava-organics/storage
 
 ## Frontend production env
 
-See [frontend/.env.production.example](../../../frontend/.env.production.example) on VPS as `.env.production.local` — includes `NEXT_PUBLIC_IMAGE_CDN_URL`.
+See [frontend/.env.production.example](../../../frontend/.env.production.example) on VPS as `.env.production.local` — includes `NEXT_PUBLIC_IMAGE_CDN_URL`, same-origin `NEXT_PUBLIC_API_BASE_URL`; storefront/COD/module flags from `GET /store/config`. Brand logo: `frontend/public/images/raghava-organics-logo.png` (`BRAND_LOGO_SRC` in `lib/constants.ts`).

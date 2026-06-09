@@ -22,7 +22,6 @@ export function CodSettingsPanel() {
   const [settings, setSettings] = useState<CodSettings | null>(null);
   const [isCodEnabled, setIsCodEnabled] = useState(true);
   const [cancellationWindowHours, setCancellationWindowHours] = useState(24);
-  const [sellerState, setSellerState] = useState("");
   const [mobileOtpSignupEnabled, setMobileOtpSignupEnabled] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -39,7 +38,6 @@ export function CodSettingsPanel() {
         setSettings(result);
         setIsCodEnabled(result.isCodEnabled);
         setCancellationWindowHours(result.cancellationWindowHours);
-        setSellerState(result.sellerState ?? "");
         setMobileOtpSignupEnabled(result.mobileOtpSignupEnabled ?? false);
       } catch (err) {
         if (!cancelled) {
@@ -62,7 +60,6 @@ export function CodSettingsPanel() {
       const payload = {
         isCodEnabled,
         cancellationWindowHours,
-        sellerState: sellerState.trim() ? sellerState.trim() : null,
         mobileOtpSignupEnabled,
       };
       const updated = await api<CodSettings>("/admin/settings/cod", {
@@ -100,13 +97,12 @@ export function CodSettingsPanel() {
         <form onSubmit={(e) => { e.preventDefault(); void onSave(); }} className="space-y-6">
           
           {/* Fail-case warnings */}
-          {isCodEnabled && !sellerState.trim() && (
+          {isCodEnabled && !settings?.sellerState?.trim() && (
             <div className="flex min-w-0 items-start gap-2.5 rounded-lg border border-amber-500/20 bg-amber-500/10 p-3.5 text-xs text-amber-800 overflow-hidden">
               <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" aria-hidden />
               <span>
-                <strong>Seller state is not set.</strong> If GST invoicing is enabled,
-                inter-state vs intra-state IGST/CGST+SGST split cannot be computed.
-                Add your operating state below to ensure correct tax line items on invoices.
+                <strong>Seller operating state is not set.</strong> GST invoice tax splits require
+                the operating state in Admin → Settings → Store Profile.
               </span>
             </div>
           )}
@@ -144,7 +140,7 @@ export function CodSettingsPanel() {
             </h4>
 
             <div className="grid gap-5 sm:gap-6 sm:grid-cols-2">
-              <label className="grid gap-1.5 text-sm font-medium text-foreground">
+              <label className="grid gap-1.5 text-sm font-medium text-foreground sm:col-span-2">
                 Cancellation Window (Hours)
                 <div className="relative">
                   <input
@@ -166,22 +162,18 @@ export function CodSettingsPanel() {
                 </span>
               </label>
 
-              <label className="grid gap-1.5 text-sm font-medium text-foreground">
+              <div className="grid gap-1.5 text-sm font-medium text-foreground sm:col-span-2">
                 <div className="flex items-center gap-1.5">
                   <MapPin className="h-3.5 w-3.5 text-muted-foreground" />
-                  Seller Operating State (Optional)
+                  Seller Operating State
                 </div>
-                <input
-                  type="text"
-                  placeholder="e.g. Karnataka"
-                  className={inputClass}
-                  value={sellerState}
-                  onChange={(event) => setSellerState(event.target.value)}
-                />
+                <div className="rounded-lg border border-border bg-muted/40 px-3.5 py-2 text-sm text-foreground">
+                  {settings?.sellerState?.trim() || "Not set"}
+                </div>
                 <span className="text-xs text-muted-foreground/80">
-                  Specifying your operating state helps calculate regional taxes/rules for self-shipping/COD.
+                  Edit in Admin → Settings → Store Profile (Tax &amp; Compliance section).
                 </span>
-              </label>
+              </div>
             </div>
           </div>
 

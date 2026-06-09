@@ -85,4 +85,8 @@ Templates: [backend/nginx/](../../../backend/nginx/)
 
 ## Frontend production env
 
-See [frontend/.env.production.example](../../../frontend/.env.production.example) on VPS as `.env.production.local`.
+See [frontend/.env.production.example](../../../frontend/.env.production.example) on VPS as `.env.production.local` — includes `NEXT_PUBLIC_IMAGE_CDN_URL`, same-origin API URL; storefront flags from `GET /store/config`. Brand logo: `public/images/raghava-organics-logo.png` (`BRAND_LOGO_SRC`).
+
+**Canonical extended pack:** [docs/clients/raghava-organics/VPS_DEPLOYMENT_PACK.md](../../../../docs/clients/raghava-organics/VPS_DEPLOYMENT_PACK.md) (media/CDN table, bootstrap `STOREFRONT_URL` boot guard, CI references).
+
+**Backend bootstrap:** `STOREFRONT_URL` and `ADMIN_URL` are required in Phase 1 `.env`; production-like boot fails if `STOREFRONT_URL` is missing (password-reset email safety).

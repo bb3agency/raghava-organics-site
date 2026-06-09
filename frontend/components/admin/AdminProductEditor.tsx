@@ -47,9 +47,11 @@ import { ADMIN_PERMISSIONS, hasAdminPermission } from "@/lib/permissions";
 import { uploadAdminProductImages } from "@/lib/admin-product-media";
 import { useAdminFormValidation } from "@/hooks/use-admin-form-validation";
 import { formatAdminValidationSummary } from "@/lib/admin-form-validation";
+import { fetchPublicStoreConfigClient } from "@/lib/storefront-settings";
 import { AdminTableScroll } from "@/components/admin/AdminTableScroll";
 import {
   assertClientProductImageFile,
+  MAX_PRODUCT_IMAGES,
   PRODUCT_IMAGE_ACCEPT,
   resolveProductImageUrl,
 } from "@/lib/media-url";
@@ -131,6 +133,19 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [gstInvoicingEnabled, setGstInvoicingEnabled] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetchPublicStoreConfigClient().then((config) => {
+      if (!cancelled) {
+        setGstInvoicingEnabled(config.gstInvoicingEnabled);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const [categories, setCategories] = useState<AdminCategoryListItem[]>([]);
   const [product, setProduct] = useState<AdminProductDetail | null>(null);
@@ -141,16 +156,22 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
   const [description, setDescription] = useState("");
   const [shortDesc, setShortDesc] = useState("");
   const [lowStockThreshold, setLowStockThreshold] = useState("10");
-  const [trackInventory, setTrackInventory] = useState(true);
   const [status, setStatus] = useState("Draft");
   const [categoryId, setCategoryId] = useState("");
   const [tagsText, setTagsText] = useState("");
   const [isFeatured, setIsFeatured] = useState(false);
+  const [gstRate, setGstRate] = useState("12");
+  const [hsnCode, setHsnCode] = useState("");
 
   const [createVariants, setCreateVariants] = useState<VariantDraft[]>([
     emptyVariant(),
   ]);
-  const [createImages, setCreateImages] = useState<ImageDraft[]>([]);
+  // Pairs of { file, previewUrl } for the create flow.
+  // We upload to the real endpoint AFTER the product is created,
+  // so blob: URLs never reach the database.
+  const [createImageFiles, setCreateImageFiles] = useState<
+    Array<{ file: File; previewUrl: string; altText: string }>
+  >([]);
 
   const [newVariant, setNewVariant] = useState<VariantDraft>(emptyVariant());
   const [newImage, setNewImage] = useState<ImageDraft>({
@@ -201,6 +222,8 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
       setCategoryId(normalized.category.id);
       setTagsText(normalized.tags.join(", "));
       setIsFeatured(normalized.isFeatured);
+      setGstRate(String(normalized.attributes?.gstRate ?? 12));
+      setHsnCode(normalized.attributes?.hsnCode ?? "");
       // Map isActive → Status dropdown: true = "Active", false = "Draft"
       setStatus(normalized.isActive ? "Active" : "Draft");
     } catch (err) {
@@ -333,21 +356,23 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
           return;
         }
 
-        const images = createImages
-          .map((image, index) => {
-            if (!image.url.trim()) return null;
-            const sortOrder = Number(image.sortOrder);
-            return {
-              url: image.url.trim(),
-              altText: image.altText.trim() || name.trim(),
-              sortOrder: Number.isFinite(sortOrder) ? sortOrder : index,
-            };
-          })
-          .filter(
-            (image): image is NonNullable<typeof image> => image !== null,
-          );
-
         const productIsActive = status === "Active";
+        const gstAttributes =
+          gstInvoicingEnabled && (gstRate.trim() || hsnCode.trim())
+            ? {
+                attributes: {
+                  ...(gstRate.trim()
+                    ? {
+                        gstRate: Math.min(
+                          100,
+                          Math.max(0, Math.round(Number(gstRate))),
+                        ),
+                      }
+                    : {}),
+                  ...(hsnCode.trim() ? { hsnCode: hsnCode.trim() } : {}),
+                },
+              }
+            : {};
         const payload: AdminCreateProductInput = {
           name: name.trim(),
           slug: slug.trim(),
@@ -357,8 +382,9 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
           isFeatured,
           isActive: productIsActive,
           ...(shortDesc.trim() ? { metaDescription: shortDesc.trim() } : {}),
+          ...gstAttributes,
           variants,
-          ...(images.length > 0 ? { images } : {}),
+          // Images are uploaded separately after creation — never send blob: URLs here.
         };
 
         const created = await api<AdminProductDetail>("/admin/products", {
@@ -366,6 +392,39 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
           idempotencyKey: createIdempotencyKey(),
           body: JSON.stringify(payload),
         });
+
+        // Upload any pending image files to the newly-created product.
+        if (createImageFiles.length > 0) {
+          if (!accessToken) {
+            setError(
+              "Product created but image upload could not start (missing admin session). Add images from the edit page.",
+            );
+            notifyAdminDataChanged(["products", "inventory", "dashboard"]);
+            router.push(`/admin/products/${created.id}`);
+            return;
+          }
+          try {
+            await uploadAdminProductImages(
+              accessToken,
+              created.id,
+              createImageFiles.map((e) => e.file),
+              { altText: created.name, sortOrder: 0 },
+            );
+          } catch (uploadErr) {
+            // Product was created; images failed. Surface as a warning rather
+            // than hiding the product. Admin can add images from the edit page.
+            setError(
+              `Product created but image upload failed: ${uploadErr instanceof Error ? uploadErr.message : "unknown error"}. You can add images from the edit page.`,
+            );
+            notifyAdminDataChanged(["products", "inventory", "dashboard"]);
+            router.push(`/admin/products/${created.id}`);
+            return;
+          }
+        }
+
+        // Revoke all preview blob URLs to free memory.
+        createImageFiles.forEach((e) => URL.revokeObjectURL(e.previewUrl));
+
         notifyAdminDataChanged(["products", "inventory", "dashboard"]);
         router.push(`/admin/products/${created.id}`);
         return;
@@ -387,6 +446,21 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
             isFeatured,
             isActive: productIsActive,
             metaDescription: shortDesc.trim() || null,
+            ...(gstInvoicingEnabled
+              ? {
+                  attributes: {
+                    ...(gstRate.trim()
+                      ? {
+                          gstRate: Math.min(
+                            100,
+                            Math.max(0, Math.round(Number(gstRate))),
+                          ),
+                        }
+                      : {}),
+                    ...(hsnCode.trim() ? { hsnCode: hsnCode.trim() } : {}),
+                  },
+                }
+              : {}),
           }),
         },
       );
@@ -475,7 +549,7 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
     if (!canWrite || !productId) return;
     const price = parsePaiseInput(draft.pricePaise);
     if (price === undefined) {
-      setError("Variant price must be a non-negative number (paise).");
+      setError("Variant price must be a non-negative number (rupees).");
       return;
     }
     setSaving(true);
@@ -512,7 +586,7 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
       !newVariant.name.trim() ||
       price === undefined
     ) {
-      setError("New variant requires SKU, name, and price (paise).");
+      setError("New variant requires SKU, name, and price (rupees).");
       return;
     }
     setSaving(true);
@@ -568,7 +642,20 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
 
   async function uploadImageFiles(files: File[], sortOrderOverride?: number) {
     if (!canWrite || !productId || !accessToken || files.length === 0) return;
-    for (const file of files) {
+    const existingCount = product?.images?.length ?? 0;
+    if (existingCount >= MAX_PRODUCT_IMAGES) {
+      setError(`A product can have at most ${MAX_PRODUCT_IMAGES} images.`);
+      return;
+    }
+    const allowedCount = MAX_PRODUCT_IMAGES - existingCount;
+    const filesToUpload =
+      files.length > allowedCount ? files.slice(0, allowedCount) : files;
+    if (files.length > allowedCount) {
+      setError(
+        `Only ${allowedCount} more image${allowedCount === 1 ? "" : "s"} can be added (max ${MAX_PRODUCT_IMAGES} per product).`,
+      );
+    }
+    for (const file of filesToUpload) {
       const clientError = assertClientProductImageFile(file);
       if (clientError) {
         setError(clientError);
@@ -584,16 +671,16 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
     setError(null);
     setSuccess(null);
     try {
-      await uploadAdminProductImages(accessToken, productId, files, {
-        altText: newImage.altText.trim() || name.trim() || files[0]!.name,
+      await uploadAdminProductImages(accessToken, productId, filesToUpload, {
+        altText: newImage.altText.trim() || name.trim() || filesToUpload[0]!.name,
         sortOrder,
       });
       setNewImage({ url: "", altText: "", sortOrder: "0" });
       await loadProduct();
       setSuccess(
-        files.length === 1
+        filesToUpload.length === 1
           ? "Image uploaded."
-          : `${files.length} images uploaded.`,
+          : `${filesToUpload.length} images uploaded.`,
       );
       notifyAdminDataChanged(["products", "dashboard"]);
     } catch (err) {
@@ -605,8 +692,15 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
 
   async function addImageByUrl() {
     if (!canWrite || !productId) return;
-    if (!newImage.url.trim().startsWith("https://")) {
-      setError("External image URL must start with https://");
+    if ((product?.images?.length ?? 0) >= MAX_PRODUCT_IMAGES) {
+      setError(`A product can have at most ${MAX_PRODUCT_IMAGES} images.`);
+      return;
+    }
+    if (
+      !newImage.url.trim().startsWith("https://") &&
+      !newImage.url.trim().startsWith("/api/v1/media/")
+    ) {
+      setError("Image URL must be https:// or a hosted /api/v1/media/ path.");
       return;
     }
     const sortOrder = Number(newImage.sortOrder);
@@ -692,12 +786,33 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
   ) => {
     if (!event.target.files) return;
     const selected = Array.from(event.target.files);
-    const newImgDrafts = selected.map((file, idx) => ({
-      url: URL.createObjectURL(file),
-      altText: file.name,
-      sortOrder: String(createImages.length + idx),
-    }));
-    setCreateImages([...createImages, ...newImgDrafts]);
+    const remainingSlots = MAX_PRODUCT_IMAGES - createImageFiles.length;
+    if (remainingSlots <= 0) {
+      setError(`A product can have at most ${MAX_PRODUCT_IMAGES} images.`);
+      event.target.value = "";
+      return;
+    }
+    const capped = selected.slice(0, remainingSlots);
+    if (selected.length > remainingSlots) {
+      setError(
+        `Only ${remainingSlots} more image${remainingSlots === 1 ? "" : "s"} can be added (max ${MAX_PRODUCT_IMAGES} per product).`,
+      );
+    }
+    const newEntries = capped.map((file) => {
+      const clientError = assertClientProductImageFile(file);
+      if (clientError) {
+        setError(clientError);
+        return null;
+      }
+      return {
+        file,
+        previewUrl: URL.createObjectURL(file),
+        altText: file.name.replace(/\.[^.]+$/, ""),
+      };
+    }).filter((e): e is NonNullable<typeof e> => e !== null);
+    setCreateImageFiles((prev) => [...prev, ...newEntries]);
+    // Reset input so the same file can be re-selected if removed
+    event.target.value = "";
   };
 
   const updateFirstVariant = (key: keyof VariantDraft, value: string) => {
@@ -717,6 +832,11 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
   // Find active category name
   const activeCategoryName =
     categories.find((c) => c.id === categoryId)?.name || "Not selected";
+
+  const currentImageCount = isCreate
+    ? createImageFiles.length
+    : (product?.images?.length ?? 0);
+  const atImageLimit = currentImageCount >= MAX_PRODUCT_IMAGES;
 
   return (
     <div className="flex flex-col gap-6">
@@ -959,7 +1079,7 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
                   <textarea
                     className={`${textareaClass} border-border/50 text-foreground resize-none pr-12`}
                     placeholder="A short description about the product..."
-                    maxLength={160}
+                    maxLength={500}
                     value={shortDesc}
                     onChange={(event) => setShortDesc(event.target.value)}
                     disabled={!canWrite}
@@ -969,6 +1089,36 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
                   </span>
                 </div>
               </label>
+
+              {gstInvoicingEnabled ? (
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <label className="grid gap-1.5 text-xs font-bold text-muted-foreground uppercase tracking-wider">
+                    GST Rate (%)
+                    <input
+                      type="number"
+                      min={0}
+                      max={100}
+                      step={1}
+                      className={inputClass}
+                      value={gstRate}
+                      onChange={(event) => setGstRate(event.target.value)}
+                      disabled={!canWrite}
+                    />
+                  </label>
+                  <label className="grid gap-1.5 text-xs font-bold text-muted-foreground uppercase tracking-wider">
+                    HSN Code
+                    <input
+                      type="text"
+                      maxLength={20}
+                      placeholder="e.g. 0801"
+                      className={inputClass}
+                      value={hsnCode}
+                      onChange={(event) => setHsnCode(event.target.value.toUpperCase())}
+                      disabled={!canWrite}
+                    />
+                  </label>
+                </div>
+              ) : null}
 
               <label
                 data-admin-field-label="description"
@@ -1074,7 +1224,7 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
                       aria-invalid={Boolean(getFieldError("description"))}
                       className="min-h-[140px] w-full border-none bg-transparent px-3 py-2.5 text-sm text-foreground focus:ring-0 resize-none pr-12"
                       placeholder="Write a detailed description about the product..."
-                      maxLength={2000}
+                      maxLength={5000}
                       value={description}
                       onChange={(event) => {
                         clearFieldError("description");
@@ -1225,36 +1375,6 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
                     disabled={!canWrite}
                   />
                 </label>
-
-                <div className="flex flex-col gap-1.5">
-                  <span className="text-xs font-bold text-muted-foreground uppercase tracking-wider flex items-center gap-1">
-                    Track Inventory
-                    <span title="Enable to monitor inventory levels automatically.">
-                      <HelpCircle className="h-3.5 w-3.5 text-muted-foreground/60 cursor-help" />
-                    </span>
-                  </span>
-                  <div className="flex h-10 items-center">
-                    <button
-                      type="button"
-                      role="switch"
-                      aria-checked={trackInventory}
-                      onClick={() => setTrackInventory(!trackInventory)}
-                      disabled={!canWrite}
-                      className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                        trackInventory
-                          ? "bg-emerald-600"
-                          : "bg-muted-foreground/30"
-                      }`}
-                    >
-                      <span
-                        aria-hidden="true"
-                        className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
-                          trackInventory ? "translate-x-5" : "translate-x-0"
-                        }`}
-                      />
-                    </button>
-                  </div>
-                </div>
               </div>
             </div>
 
@@ -1276,7 +1396,7 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
                     accept={PRODUCT_IMAGE_ACCEPT}
                     multiple
                     className="absolute inset-0 opacity-0 cursor-pointer"
-                    disabled={saving}
+                    disabled={saving || atImageLimit}
                     onChange={(event) => {
                       if (isCreate) {
                         handleCreateImageUpload(event);
@@ -1303,14 +1423,14 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
 
                 {/* Rendered Uploaded Images */}
                 {isCreate
-                  ? createImages.map((image, index) => (
+                  ? createImageFiles.map((entry, index) => (
                       <div
                         key={index}
                         className="relative aspect-square rounded-xl overflow-hidden border border-border/50 group"
                       >
                         <Image
-                          src={image.url}
-                          alt={image.altText}
+                          src={entry.previewUrl}
+                          alt={entry.altText}
                           fill
                           unoptimized
                           className="object-cover"
@@ -1322,11 +1442,12 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
                         )}
                         <button
                           type="button"
-                          onClick={() =>
-                            setCreateImages(
-                              createImages.filter((_, i) => i !== index),
-                            )
-                          }
+                          onClick={() => {
+                            URL.revokeObjectURL(entry.previewUrl);
+                            setCreateImageFiles((prev) =>
+                              prev.filter((_, i) => i !== index),
+                            );
+                          }}
                           className="absolute top-2 right-2 h-5 w-5 rounded-full bg-black/60 hover:bg-black/80 flex items-center justify-center text-white transition-colors"
                         >
                           <X className="h-3 w-3" />
@@ -1384,7 +1505,7 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
 
                 {/* Add more placeholder dashed box */}
                 {(isCreate
-                  ? createImages.length
+                  ? createImageFiles.length
                   : product?.images?.length || 0) > 0 && (
                   <div className="relative flex flex-col items-center justify-center border border-dashed border-border/60 rounded-xl bg-muted/5 hover:bg-muted/10 transition-colors text-center aspect-square cursor-pointer">
                     <input
@@ -1392,7 +1513,7 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
                       accept={PRODUCT_IMAGE_ACCEPT}
                       multiple
                       className="absolute inset-0 opacity-0 cursor-pointer"
-                      disabled={saving}
+                      disabled={saving || atImageLimit}
                       onChange={(event) => {
                         if (isCreate) {
                           handleCreateImageUpload(event);
@@ -1413,8 +1534,8 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
                 )}
               </div>
               <span className="text-[10px] text-muted-foreground font-semibold mt-1 block">
-                Upload up to 8 images. Recommended size: 1200x1200px. Max file
-                size: 5MB each.
+                Upload up to {MAX_PRODUCT_IMAGES} images. Recommended size:
+                1200x1200px. Max file size: 5MB each.
               </span>
 
               {canWrite && !isCreate && (
@@ -1622,9 +1743,9 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
               <div className="rounded-xl border border-border/40 bg-background overflow-hidden shadow-sm flex items-center p-3 gap-4">
                 <div className="relative h-20 w-20 shrink-0 rounded-lg overflow-hidden border border-border/40 bg-muted/10">
                   {isCreate ? (
-                    createImages[0]?.url ? (
+                    createImageFiles[0]?.previewUrl ? (
                       <Image
-                        src={createImages[0].url}
+                        src={createImageFiles[0].previewUrl}
                         alt={name}
                         fill
                         unoptimized
@@ -1728,7 +1849,7 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
                   <span>Images</span>
                   <span className="text-foreground">
                     {isCreate
-                      ? createImages.length
+                      ? createImageFiles.length
                       : (product?.images.length ?? 0)}
                   </span>
                 </div>

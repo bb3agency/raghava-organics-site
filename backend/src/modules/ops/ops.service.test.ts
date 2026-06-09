@@ -956,6 +956,28 @@ describe('OpsService failcase coverage', () => {
     expect(mocks.opsUserInviteCreate).not.toHaveBeenCalled();
   });
 
+  it('rejects createOpsInvite when setupBaseUrl points to loopback (SSRF guard)', async () => {
+    const { service, mocks } = createOpsServiceHarness();
+
+    await expect(
+      service.createOpsInvite({
+        inviteEmail: 'ops@example.com',
+        inviteName: 'Ops Person',
+        permissions: ['OPS_READ'],
+        ipAllowlist: [],
+        setupBaseUrl: 'https://127.0.0.1',
+        requestIp: '127.0.0.1',
+        requestPath: '/api/v1/ops/invites',
+        method: 'POST'
+      })
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      message: expect.stringContaining('not permitted')
+    });
+
+    expect(mocks.opsUserInviteCreate).not.toHaveBeenCalled();
+  });
+
   it('cleanupExpiredInvites attributes audit log to actorOpsUserId when provided (Gap 2)', async () => {
     const { service, mocks } = createOpsServiceHarness();
 

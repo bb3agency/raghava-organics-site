@@ -48,6 +48,24 @@ export function mapProduct(raw: unknown): Product {
     };
   });
 
+  const reviewsRaw = Array.isArray(item.reviews) ? item.reviews : [];
+  const reviewCount =
+    reviewsRaw.length > 0
+      ? reviewsRaw.length
+      : toNumber(item.reviewCount, 0);
+  const rating =
+    reviewsRaw.length > 0
+      ? reviewsRaw.reduce((sum, review) => {
+          const value =
+            typeof review === "object" &&
+            review !== null &&
+            typeof (review as Record<string, unknown>).rating === "number"
+              ? ((review as Record<string, unknown>).rating as number)
+              : 0;
+          return sum + value;
+        }, 0) / reviewsRaw.length
+      : toNumber(item.rating, 0);
+
   const firstActiveVariant = variants.find((v) => v.isActive) ?? variants[0];
 
   return {
@@ -60,8 +78,8 @@ export function mapProduct(raw: unknown): Product {
       name: toStringValue(categoryRaw?.name, "General"),
       slug: toStringValue(categoryRaw?.slug, ""),
     },
-    rating: toNumber(item.rating, 0),
-    reviewCount: toNumber(item.reviewCount, 0),
+    rating,
+    reviewCount,
     tags: Array.isArray(item.tags)
       ? item.tags.filter((tag): tag is string => typeof tag === "string")
       : [],

@@ -12,6 +12,7 @@ import {
   type PaginatedResponse,
 } from "@/lib/admin-api";
 import { formatAdminDate } from "@/lib/admin-format";
+import { resolveProductImageUrl } from "@/lib/media-url";
 import { getApiErrorMessage } from "@/lib/error-messages";
 import { useAuthenticatedApi } from "@/hooks/use-authenticated-api";
 import { useAdminDataRefreshEffect } from "@/hooks/use-admin-data-refresh-effect";
@@ -246,7 +247,7 @@ export function AdminReviewsList({
                         <div className="h-10 w-10 shrink-0 overflow-hidden rounded-md border border-border/50 bg-muted">
                           {review.images && review.images.length > 0 ? (
                             <Image
-                              src={review.images[0]}
+                              src={resolveProductImageUrl(review.images[0])}
                               alt="Review image"
                               width={40}
                               height={40}

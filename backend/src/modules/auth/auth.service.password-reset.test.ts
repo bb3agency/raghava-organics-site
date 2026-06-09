@@ -1,6 +1,13 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { AuthService } from './auth.service';
+
+vi.mock('@modules/notifications/notification-failure-alert', () => ({
+  sendTechnicalFailureAlert: vi.fn().mockResolvedValue(undefined),
+  sendNotificationFailureAlert: vi.fn().mockResolvedValue(undefined)
+}));
+
+import { sendTechnicalFailureAlert } from '@modules/notifications/notification-failure-alert';
 
 function buildMockPrisma(userEmail: string | null, overrides?: Record<string, unknown>) {
   const tokenRecords: Array<{ id: string; userId: string; tokenHash: string; expiresAt: Date }> = [];
@@ -68,8 +75,20 @@ function buildMockPrisma(userEmail: string | null, overrides?: Record<string, un
 }
 
 describe('AuthService requestPasswordReset', () => {
+  const originalStorefrontUrl = process.env.STOREFRONT_URL;
+
   beforeEach(() => {
     delete process.env.TURNSTILE_SECRET_KEY;
+    process.env.STOREFRONT_URL = 'https://store.example.com';
+    vi.mocked(sendTechnicalFailureAlert).mockClear();
+  });
+
+  afterEach(() => {
+    if (originalStorefrontUrl === undefined) {
+      delete process.env.STOREFRONT_URL;
+    } else {
+      process.env.STOREFRONT_URL = originalStorefrontUrl;
+    }
   });
 
   it('stores token hash in DB and enqueues PasswordReset email when user exists', async () => {
@@ -169,6 +188,39 @@ describe('AuthService requestPasswordReset', () => {
       message: 'If the account exists, a password reset email has been queued.'
     });
     expect(add).not.toHaveBeenCalled();
+  });
+
+  it('returns generic success without enqueue when STOREFRONT_URL is missing', async () => {
+    delete process.env.STOREFRONT_URL;
+    const add = vi.fn().mockResolvedValue(undefined);
+    const prismaMock = buildMockPrisma('user@example.com');
+
+    const fastify = {
+      prisma: prismaMock,
+      queues: {
+        notifications: { add }
+      },
+      redis: {
+        get: vi.fn().mockResolvedValue(null),
+        set: vi.fn().mockResolvedValue('OK'),
+        del: vi.fn().mockResolvedValue(1),
+        incr: vi.fn().mockResolvedValue(1),
+        expire: vi.fn().mockResolvedValue(1),
+        ttl: vi.fn().mockResolvedValue(-1)
+      }
+    } as unknown as FastifyInstance;
+
+    const service = new AuthService(fastify);
+    const result = await service.requestPasswordReset({ email: 'user@example.com' });
+
+    expect(result.message).toContain('If the account exists');
+    expect(add).not.toHaveBeenCalled();
+    expect(sendTechnicalFailureAlert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        template: 'PasswordReset',
+        errorMessage: expect.stringContaining('STOREFRONT_URL')
+      })
+    );
   });
 });
 

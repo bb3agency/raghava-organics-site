@@ -8,6 +8,7 @@ import { BestsellersSection } from "@/components/storefront/home/BestsellersSect
 import { TestimonialsSection } from "@/components/storefront/home/TestimonialsSection";
 import { TestimonialsSectionSkeleton } from "@/components/storefront/home/TestimonialsSectionSkeleton";
 import { FaqSection } from "@/components/storefront/home/FaqSection";
+import { getPublicStoreConfig } from "@/lib/storefront-settings";
 
 export const metadata = {
   title: "Raghava Organics — Chemical-free produce, traceable from farm to door",
@@ -41,7 +42,10 @@ function ProductSectionSkeleton({
 }
 
 export default async function HomePage() {
-  const categories = await getStoreCategories();
+  const [categories, storeConfig] = await Promise.all([
+    getStoreCategories(),
+    getPublicStoreConfig(),
+  ]);
 
   return (
     <div className="flex flex-col bg-white">
@@ -58,9 +62,9 @@ export default async function HomePage() {
       </Suspense>
 
       <Suspense fallback={<TestimonialsSectionSkeleton />}>
-        <TestimonialsSection />
+        {storeConfig.reviewsEnabled ? <TestimonialsSection /> : null}
       </Suspense>
-      <FaqSection />
+      <FaqSection isCodEnabled={storeConfig.isCodEnabled} />
     </div>
   );
 }

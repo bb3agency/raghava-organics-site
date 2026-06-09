@@ -26,7 +26,7 @@ Use this map to keep AI/developer context small while ensuring no detail is lost
 - Error handling canon: `docs/NEXTJS_FRONTEND_INTEGRATION_GUIDE.md` section `2.1` (frontend error-code handling matrix) + section `2.1.1` (admin form validation UX) + `docs/CLIENT_VPS_SETUP_GUIDE.md` section `19.1` (VPS/API error triage matrix).
 - `docs/PHASE7_VPS_DEPLOY_INCIDENT_PLAYBOOK.md` — real incident replay and deterministic remediation for Phase 7 VPS backend deploy.
 - `docs/templates/client-GITHUB_CD_SETUP.template.md` — per-client filled CD checklist (`GITHUB_CD_SETUP.md`).
-- `docs/HARDENING_HISTORY.md` — full engineering hardening narrative (reference-only during active delivery).
+- `docs/HARDENING_HISTORY.md` — full engineering hardening narrative (reference-only during active delivery). **Latest:** June 10, 2026 pass 2 — order/payment/coupon/storefront integration hardening + runtime `GET /store/config` (see also same-day production readiness pass for logo/boot/notification/CI).
 - `docs/DECISIONS.md` — architectural decision ledger.
 
 ## Post-development primary set

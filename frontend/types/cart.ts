@@ -18,6 +18,10 @@ export interface Cart {
   subtotal: number;
   discountAmount: number;
   total: number;
+  /** From GET /cart — authoritative minimum order threshold in paise. */
+  minOrderValuePaise?: number;
+  /** From GET /cart — whether subtotal meets store minimum. */
+  meetsMinimumOrder?: boolean;
   coupon: {
     id: string;
     code: string;

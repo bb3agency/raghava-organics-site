@@ -267,8 +267,8 @@ export async function registerCartRoutes(fastify: FastifyInstance): Promise<void
     async (request) => {
       const userId = await getOptionalUserId(fastify, request);
       const sessionToken = parseSessionToken(request.headers.cookie);
-      const query = request.query as { pincode: string };
-      return cartService.getDeliveryRates(userId, sessionToken, query.pincode);
+      const query = request.query as { pincode: string; paymentMode?: 'COD' | 'PREPAID' };
+      return cartService.getDeliveryRates(userId, sessionToken, query.pincode, query.paymentMode ?? 'PREPAID');
     }
   );
 }

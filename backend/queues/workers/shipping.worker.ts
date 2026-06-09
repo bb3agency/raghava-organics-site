@@ -3,6 +3,8 @@ import { OrderStatus, ShippingProvider, ShipmentStatus, type Prisma, PrismaClien
 import { canTransitionOrder } from '@common/orders/order-state-machine';
 import { mapShipmentStatusToOrderStatus, mapShipmentWebhookStatus } from '@common/orders/webhook-status-mappers';
 import { createShippingProvider } from '@modules/shipping/shipping-provider';
+import { featureFlags } from '@config/feature-flags';
+import { resolvePickupPincode } from '@common/shipping/resolve-pickup-pincode';
 import { sendTechnicalFailureAlert } from '../../src/modules/notifications/notification-failure-alert';
 
 type NotificationsQueue = Pick<Queue, 'add'>;
@@ -26,6 +28,11 @@ type ShippingWebhookJobData = {
 
 type CreateShipmentJobData = {
   orderId: string;
+};
+
+type CancelShipmentJobData = {
+  orderId: string;
+  awbNumber: string;
 };
 
 function parseJsonPayload(payload: string): Prisma.InputJsonValue {
@@ -238,16 +245,15 @@ export function createShippingWorker(
           return;
         }
 
-        const settings = await prisma.storeSettings.findUnique({
-          where: { singletonKey: 'default' },
-          select: { pickupPincode: true, gstin: true }
-        });
-        const pickupPincodeEnvFallback =
-          process.env.SHIPROCKET_PICKUP_PINCODE ?? process.env.DELHIVERY_PICKUP_PINCODE ?? '';
-        const pickupPincode = settings?.pickupPincode ?? pickupPincodeEnvFallback;
+        const pickupPincode = await resolvePickupPincode(prisma);
         if (!pickupPincode) {
           throw new Error('Missing pickup pincode configuration');
         }
+
+        const settings = await prisma.storeSettings.findUnique({
+          where: { singletonKey: 'default' },
+          select: { gstin: true }
+        });
 
         const shippingAddress = (order.shippingAddress ?? {}) as {
           fullName?: string;
@@ -295,11 +301,13 @@ export function createShippingWorker(
           }
         }
         const sellerGstTin = (settings?.gstin ?? '').trim();
-        if (!sellerGstTin) {
-          throw new Error('Missing seller GSTIN for shipment booking');
-        }
-        if (hsnCodes.size === 0) {
-          throw new Error('Missing product HSN code(s) for shipment booking');
+        if (featureFlags.gstInvoicing) {
+          if (!sellerGstTin) {
+            throw new Error('Missing seller GSTIN for shipment booking');
+          }
+          if (hsnCodes.size === 0) {
+            throw new Error('Missing product HSN code(s) for shipment booking');
+          }
         }
         for (const item of order.items) {
           const unitWeight = variantWeights.get(item.variantId) ?? 0;
@@ -330,8 +338,8 @@ export function createShippingWorker(
           originPincode: pickupPincode,
           totalWeightGrams,
           paymentMode,
-          sellerGstTin,
-          hsnCode: [...hsnCodes].join(','),
+          sellerGstTin: sellerGstTin || 'NA',
+          hsnCode: hsnCodes.size > 0 ? [...hsnCodes].join(',') : 'NA',
           customer: {
             fullName: shippingAddress.fullName,
             phone: shippingAddress.phone,
@@ -359,13 +367,36 @@ export function createShippingWorker(
         };
 
         // --- Phase 3: short write-only transaction (result persistence) ---
-        // If the DB write fails here on first attempt and BullMQ retries, Phase 1
-        // will find order.shipment.awbNumber already set and return early, preventing
-        // a second call to the provider (ghost booking prevention).
+        // Re-check order is still shippable before persisting AWB. If the order was
+        // cancelled while the provider call was in flight, compensate by cancelling AWB.
+        let awbToCancel: string | null = null;
         await prisma.$transaction(async (tx) => {
+          const freshOrder = await tx.order.findUnique({
+            where: { id: order.id },
+            select: {
+              id: true,
+              status: true,
+              shipment: {
+                select: {
+                  id: true,
+                  awbNumber: true
+                }
+              }
+            }
+          });
+          if (
+            !freshOrder ||
+            freshOrder.status === OrderStatus.CANCELLED ||
+            (freshOrder.status !== OrderStatus.CONFIRMED && freshOrder.status !== OrderStatus.PROCESSING) ||
+            !canTransitionOrder(freshOrder.status, OrderStatus.SHIPPED)
+          ) {
+            awbToCancel = shipment.awbNumber;
+            return;
+          }
+
           await upsertShipmentCompat(tx, {
             orderId: order.id,
-            existingShipmentId: order.shipment?.id,
+            existingShipmentId: freshOrder.shipment?.id ?? order.shipment?.id,
             data: {
               provider: resolvedProvider,
               status: ShipmentStatus.BOOKED,
@@ -378,7 +409,7 @@ export function createShippingWorker(
 
           const shipped = await updateOrderStatusWithCasCompat(tx, {
             orderId: order.id,
-            fromStatus: order.status,
+            fromStatus: freshOrder.status,
             toStatus: OrderStatus.SHIPPED,
             extraData: {
               ...(shipment.shiprocketOrderId != null ? { shiprocketOrderId: shipment.shiprocketOrderId } : {})
@@ -390,12 +421,52 @@ export function createShippingWorker(
             await tx.orderStatusHistory.create({
               data: {
                 orderId: order.id,
-                fromStatus: order.status,
+                fromStatus: freshOrder.status,
                 toStatus: OrderStatus.SHIPPED,
                 triggeredBy: 'ADMIN',
                 note: `Shipment booked by admin via ${providerLabel}`
               }
             });
+          } else {
+            awbToCancel = shipment.awbNumber;
+          }
+        });
+
+        if (awbToCancel && shippingProvider) {
+          try {
+            await shippingProvider.cancelShipment(awbToCancel);
+          } catch (error) {
+            await alertFn({
+              prisma,
+              template: 'ShipmentCancellation',
+              channel: 'UNKNOWN',
+              recipient: order.id,
+              errorMessage: error instanceof Error ? error.message : 'Unknown shipment cancel error',
+              failureStage: 'CORE_LOGIC',
+              domain: 'shipping',
+              component: 'create-shipment-compensating-cancel',
+              queueName: 'shipping',
+              jobName: 'create-shipment'
+            });
+          }
+        }
+        return;
+      }
+
+      if (job.name === 'cancel-shipment') {
+        const data = job.data as CancelShipmentJobData;
+        if (!shippingProvider) {
+          return;
+        }
+
+        await shippingProvider.cancelShipment(data.awbNumber);
+        await prisma.shipment.updateMany({
+          where: {
+            orderId: data.orderId,
+            awbNumber: data.awbNumber
+          },
+          data: {
+            status: ShipmentStatus.CANCELLED
           }
         });
         return;

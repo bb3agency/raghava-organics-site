@@ -123,10 +123,10 @@ class CircuitBreakerShippingAdapter implements ShippingProviderAdapter {
     }
   }
 
-  async checkServiceability(pincode: string) {
+  async checkServiceability(pincode: string, originPincode?: string) {
     this.assertClosed();
     try {
-      const result = await this.delegate.checkServiceability(pincode);
+      const result = await this.delegate.checkServiceability(pincode, originPincode);
       this.recordSuccess();
       return result;
     } catch (error) {

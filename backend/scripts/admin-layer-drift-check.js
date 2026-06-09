@@ -55,8 +55,8 @@ function parseGuardedAdminOpsRoutesFromSource(source) {
       routePath.startsWith('/api/v1/auth/admin/')
     ) {
       const permissionMatch =
-        configSource.match(/adminPermissionGuard\('([^']+)'\)/) ||
-        configSource.match(/opsPermissionGuard\('([^']+)'\)/);
+        configSource.match(/adminPermissionGuard\s*\(\s*'([^']+)'/) ||
+        configSource.match(/opsPermissionGuard\s*\(\s*'([^']+)'/);
       if (permissionMatch) {
         records.push({ method, path: routePath, permission: permissionMatch[1] });
       }

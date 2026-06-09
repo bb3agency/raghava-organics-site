@@ -16,6 +16,36 @@ describe('reconciliation worker', () => {
   const issueFindFirst = vi.fn();
   const issueUpdateMany = vi.fn(async () => ({ count: 0 }));
   const orderUpdate = vi.fn(async () => undefined);
+  const orderUpdateMany = vi.fn(async () => ({ count: 1 }));
+  const orderStatusHistoryCreate = vi.fn(async () => undefined);
+  const inventoryUpdateMany = vi.fn(async () => ({ count: 1 }));
+  const orderFindUnique = vi.fn(async () => ({
+    id: 'order_refund',
+    status: 'CONFIRMED',
+    paymentMode: 'PREPAID',
+    items: [{ variantId: 'variant_1', quantity: 1 }],
+    statusHistory: [{ triggeredBy: 'PAYMENT_WEBHOOK' }]
+  }));
+  const transactionFn = vi.fn(async (fn: (tx: unknown) => Promise<unknown>) =>
+    fn({
+      order: {
+        updateMany: orderUpdateMany,
+        update: orderUpdate,
+        findUnique: orderFindUnique
+      },
+      inventory: {
+        updateMany: inventoryUpdateMany
+      },
+      orderStatusHistory: { create: orderStatusHistoryCreate },
+      cart: { findFirst: vi.fn(async () => ({ id: 'cart_1' })) },
+      cartReservation: { deleteMany: vi.fn(async () => ({ count: 0 })) },
+      couponUsage: {
+        findMany: vi.fn(async () => []),
+        delete: vi.fn(async () => undefined)
+      },
+      coupon: { update: vi.fn(async () => undefined) }
+    })
+  );
   const queueAdd = vi.fn(async () => undefined);
   const queueClose = vi.fn(async () => undefined);
 
@@ -26,9 +56,11 @@ describe('reconciliation worker', () => {
 
   function MockPrismaClient() {
     return {
+      $transaction: transactionFn,
       order: {
         findMany: vi.fn(async () => orders),
-        update: orderUpdate
+        update: orderUpdate,
+        updateMany: orderUpdateMany
       },
       reconciliationIssue: {
         findFirst: issueFindFirst,
@@ -61,6 +93,11 @@ describe('reconciliation worker', () => {
     issueFindFirst.mockReset();
     issueUpdateMany.mockReset();
     orderUpdate.mockReset();
+    orderUpdateMany.mockReset();
+    orderStatusHistoryCreate.mockReset();
+    inventoryUpdateMany.mockReset();
+    orderFindUnique.mockReset();
+    transactionFn.mockClear();
     queueAdd.mockReset();
     queueClose.mockReset();
     issueFindFirst.mockResolvedValue(null);
@@ -129,6 +166,33 @@ describe('reconciliation worker', () => {
     );
   });
 
+  it('auto-heals captured payment orders stuck in payment failed by enqueuing process-order-update', async () => {
+    createReconciliationWorker({} as never, workerDeps);
+    orders = [
+      {
+        id: 'order_failed_captured',
+        status: 'PAYMENT_FAILED',
+        createdAt: new Date(),
+        payment: { status: 'CAPTURED' },
+        shipment: null
+      }
+    ];
+
+    await processor?.({ name: 'run-order-lifecycle-check' });
+
+    expect(queueAdd).toHaveBeenCalledWith(
+      'process-order-update',
+      expect.objectContaining({
+        orderId: 'order_failed_captured',
+        toStatus: 'CONFIRMED',
+        triggeredBy: 'RECONCILIATION'
+      }),
+      expect.objectContaining({
+        jobId: 'reconcile-process-order-update:order_failed_captured'
+      })
+    );
+  });
+
   it('sends terminal failure alert when reconciliation job exhausts all attempts', () => {
     createReconciliationWorker({} as never, workerDeps);
 
@@ -172,6 +236,80 @@ describe('reconciliation worker', () => {
     expect(orderUpdate).not.toHaveBeenCalledWith(
       expect.objectContaining({
         where: { id: 'order_partial_refund' },
+        data: { status: 'REFUNDED' }
+      })
+    );
+  });
+
+  it('does not cancel stale pending orders when payment is already captured', async () => {
+    createReconciliationWorker({} as never, workerDeps);
+    orders = [
+      {
+        id: 'order_stale_captured',
+        status: 'PENDING_PAYMENT',
+        createdAt: new Date(Date.now() - 45 * 60 * 1000),
+        payment: { status: 'CAPTURED' },
+        shipment: null
+      }
+    ];
+
+    await processor?.({ name: 'run-order-lifecycle-check' });
+
+    expect(queueAdd).toHaveBeenCalledWith(
+      'process-order-update',
+      expect.objectContaining({ orderId: 'order_stale_captured' }),
+      expect.anything()
+    );
+    expect(orderUpdateMany).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ id: 'order_stale_captured', status: 'PENDING_PAYMENT' }),
+        data: { status: 'CANCELLED' }
+      })
+    );
+  });
+
+  it('auto-cancels stale payment failed orders and clears coupon links', async () => {
+    createReconciliationWorker({} as never, workerDeps);
+    orders = [
+      {
+        id: 'order_stale_failed',
+        status: 'PAYMENT_FAILED',
+        createdAt: new Date(Date.now() - 45 * 60 * 1000),
+        payment: { status: 'FAILED' },
+        shipment: null
+      }
+    ];
+
+    await processor?.({ name: 'run-order-lifecycle-check' });
+
+    expect(orderUpdateMany).toHaveBeenCalledWith({
+      where: { id: 'order_stale_failed', status: 'PAYMENT_FAILED' },
+      data: { status: 'CANCELLED' }
+    });
+    expect(orderUpdate).toHaveBeenCalledWith({
+      where: { id: 'order_stale_failed' },
+      data: { coupons: { set: [] } }
+    });
+  });
+
+  it('restores inventory when auto-healing refunded status mismatch on confirmed orders', async () => {
+    createReconciliationWorker({} as never, workerDeps);
+    orders = [
+      {
+        id: 'order_refund',
+        status: 'CONFIRMED',
+        createdAt: new Date(),
+        payment: { status: 'REFUNDED' },
+        shipment: null
+      }
+    ];
+
+    await processor?.({ name: 'run-order-lifecycle-check' });
+
+    expect(inventoryUpdateMany).toHaveBeenCalled();
+    expect(orderUpdateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ id: 'order_refund' }),
         data: { status: 'REFUNDED' }
       })
     );

@@ -160,6 +160,7 @@ These must be set in `.env` (or VPS secrets manager) before the process starts. 
 **`STOREFRONT_URL`**
 - **What:** Public URL of the customer-facing storefront. Used for CORS allowed origins, email link generation (order confirmation links, password reset links), and cookie domain.
 - **Format:** `https://yourdomain.com`
+- **Boot guard (production-like):** `src/config/app.config.ts` throws at startup if this key is missing or still a placeholder — prevents password-reset emails from linking to `localhost` when deploy skips Phase 1 bootstrap.
 - **Rotation:** Update `.env` and restart. Update simultaneously with the actual DNS/CDN change.
 
 **`ADMIN_URL`**
@@ -180,6 +181,23 @@ These are booleans that enable/disable entire product modules. Set once per clie
 | `FEATURE_GST_INVOICING_ENABLED` | PDF GST invoice generation |
 | `FEATURE_RESPONSE_ENVELOPE_ENABLED` | Wrap all API responses in `{ success, data, error }` envelope |
 
+**Frontend mirror (Next.js — prefer runtime `GET /store/config` over build-time flags):**
+
+| Key | Controls |
+|-----|---------|
+| `GET /api/v1/store/config` | **Authoritative** for storefront COD, min order, module flags (`couponsEnabled`, `reviewsEnabled`, `wishlistEnabled`, `gstInvoicingEnabled`), and admin GST field visibility in this repo |
+| `NEXT_PUBLIC_IMAGE_CDN_URL` | Prefix for relative product image paths in SSR; must match Ops `R2_PUBLIC_BASE_URL` in production |
+| `NEXT_PUBLIC_STOREFRONT_URL` | Canonical storefront origin for links; SSR image fallback only when CDN URL unset (never implicit `localhost`) |
+| `NEXT_PUBLIC_FEATURE_*` (legacy) | Deprecated for storefront/admin GST in new work — kept in `.env.example` for backward compatibility only |
+
+### Public store config endpoint
+
+| Endpoint | Auth | Fields returned |
+|----------|------|-----------------|
+| `GET /api/v1/store/config` | None | `isCodEnabled`, `minOrderValuePaise`, `mobileOtpSignupEnabled`, `couponsEnabled`, `reviewsEnabled`, `wishlistEnabled`, `gstInvoicingEnabled` |
+
+DB-backed fields come from `StoreSettings` singleton. Feature flags mirror backend bootstrap `FEATURE_*` env vars. Never exposes GSTIN, notification keys, or ops credentials.
+
 ---
 
 ### Risk and Admission Control
@@ -196,7 +214,7 @@ These are runtime tuning values — safe to adjust without security concern.
 | `HOT_SKU_COOLDOWN_SECONDS` | Cooldown after hot SKU purchase | `30` |
 | `HOT_SKU_SHARD_COUNT` | Redis shard count for hot SKU counters | `8` |
 | `CART_RESERVATION_TTL_MINUTES` | How long a cart reservation holds stock | `15` |
-| `RECONCILIATION_AUTO_HEAL_ISSUES` | Issue types the reconciliation worker auto-resolves | *(empty)* |
+| `RECONCILIATION_AUTO_HEAL_ISSUES` | Issue types the reconciliation worker auto-resolves (comma-separated). Unset = default safe set: `PAYMENT_CAPTURED_ORDER_NOT_CONFIRMED`, `REFUNDED_STATUS_MISMATCH`, `STALE_PENDING_PAYMENT` (also heals stale `PAYMENT_FAILED` abandon). Empty string = disable all auto-heals. `ORDER_SHIPPED_WITHOUT_SHIPMENT` is **not** in the default set (manual review). | *(default safe set when unset)* |
 | `RESTART_PAYMENT_DRAIN_TIMEOUT_MS` | Max time (ms) the `scheduled-process-restart` BullMQ job waits for all `PENDING_PAYMENT` orders to reach a terminal state before proceeding with the restart. If the timeout elapses, a `ProcessRestartPaymentDrainTimeout` alert is sent and the restart proceeds anyway. **Workers process only** — not consumed by the API process. Set lower (e.g. `10000`) in staging/test environments. | `300000` (5 min) |
 | `RESTART_QUEUE_DRAIN_TIMEOUT_MS` | Max time (ms) the `scheduled-process-restart` BullMQ job waits for **all BullMQ queues** to reach `getActiveCount() === 0` after pausing `outboxDispatch` first, then all other producer queues. Timeout → `ProcessRestartQueueDrainTimeout` alert sent (with per-queue active counts); restart proceeds anyway because in-flight jobs that exceed the budget will retry from BullMQ's durable `attempts` state when containers come back. **Workers process only**. Lower this in staging (e.g. `5000`) for fast iteration. | `60000` (60 s) |
 | `RESTART_QUEUE_PAUSE_GRACE_MS` | Settle delay (ms) between pausing `outboxDispatch` and pausing all other producer queues. Gives the in-flight outbox publish loop time to commit rows it has already claimed before downstream queues are frozen. Async `sleep()` — workers stay responsive. **Workers process only**. | `1500` |

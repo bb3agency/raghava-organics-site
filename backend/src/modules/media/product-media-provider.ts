@@ -1,7 +1,7 @@
 import path from 'path';
 import { AppError } from '@common/errors/app-error';
 import { ERROR_CODES } from '@common/errors/error-codes';
-import { PRODUCT_IMAGE_MEDIA_PATH_PREFIX } from './product-media.constants';
+import { CATEGORY_IMAGE_MEDIA_PATH_PREFIX, PRODUCT_IMAGE_MEDIA_PATH_PREFIX } from './product-media.constants';
 import { createLocalProductMediaStorage } from './local-product-media.storage';
 import { createR2ProductMediaStorage } from './r2-product-media.storage';
 import type { ProductMediaStorage } from './product-media-storage.interface';
@@ -95,20 +95,74 @@ function storageReferenceFromLegacyMediaPath(mediaPath: string): string | null {
   return `${clientId}/products/${productId}/${filename}`;
 }
 
+function storageReferenceIndicatesProductPath(storageReference: string): boolean {
+  return storageReference.includes('/products/');
+}
+
+function storageReferenceIndicatesCategoryPath(storageReference: string): boolean {
+  return storageReference.includes('/categories/');
+}
+
+export function hostedCategoryMediaPathFromUrl(url: string): string | null {
+  const trimmed = url.trim();
+  if (trimmed.startsWith(CATEGORY_IMAGE_MEDIA_PATH_PREFIX)) return trimmed;
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.pathname.startsWith(CATEGORY_IMAGE_MEDIA_PATH_PREFIX)) {
+      return parsed.pathname;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
 export function isHostedProductImageUrl(url: string): boolean {
   if (hostedMediaPathFromUrl(url)) return true;
   try {
-    return getProductMediaStorage().isManagedPublicUrl(url);
+    const storage = getProductMediaStorage();
+    if (!storage.isManagedPublicUrl(url)) return false;
+    const storageReference = storage.storageReferenceFromPublicUrl(url);
+    return storageReference !== null && storageReferenceIndicatesProductPath(storageReference);
   } catch {
-    // Storage not yet configured (e.g. R2 keys missing) — treat as not a managed URL.
     return false;
   }
 }
 
+export function isHostedCategoryImageUrl(url: string): boolean {
+  if (hostedCategoryMediaPathFromUrl(url)) return true;
+  try {
+    const storage = getProductMediaStorage();
+    if (!storage.isManagedPublicUrl(url)) return false;
+    const storageReference = storage.storageReferenceFromPublicUrl(url);
+    return storageReference !== null && storageReferenceIndicatesCategoryPath(storageReference);
+  } catch {
+    return false;
+  }
+}
+
+function storageReferenceFromLegacyCategoryPath(mediaPath: string): string | null {
+  if (!mediaPath.startsWith(CATEGORY_IMAGE_MEDIA_PATH_PREFIX)) return null;
+  const remainder = mediaPath.slice(CATEGORY_IMAGE_MEDIA_PATH_PREFIX.length);
+  const slash = remainder.indexOf('/');
+  if (slash <= 0) return null;
+  const categoryId = remainder.slice(0, slash);
+  const filename = remainder.slice(slash + 1);
+  const client = (process.env.CLIENT_ID ?? 'client').trim() || 'client';
+  if (!/^[a-zA-Z0-9_-]+$/.test(categoryId) || !/^[a-zA-Z0-9_-]+\.(jpg|jpeg|png|webp|gif)$/.test(filename)) {
+    return null;
+  }
+  return `${client}/categories/${categoryId}/${filename}`;
+}
+
 export function hostedStorageReferenceFromUrl(url: string): string | null {
-  const mediaPath = hostedMediaPathFromUrl(url);
-  if (mediaPath) {
-    return storageReferenceFromLegacyMediaPath(mediaPath);
+  const productMediaPath = hostedMediaPathFromUrl(url);
+  if (productMediaPath) {
+    return storageReferenceFromLegacyMediaPath(productMediaPath);
+  }
+  const categoryMediaPath = hostedCategoryMediaPathFromUrl(url);
+  if (categoryMediaPath) {
+    return storageReferenceFromLegacyCategoryPath(categoryMediaPath);
   }
   try {
     return getProductMediaStorage().storageReferenceFromPublicUrl(url);
@@ -170,4 +224,8 @@ export function hostedMediaPathFromUrl(url: string): string | null {
 
 export function isLocalMediaProviderActive(): boolean {
   return resolveProvider() === 'local';
+}
+
+export function isR2MediaProviderActive(): boolean {
+  return resolveProvider() === 'r2';
 }

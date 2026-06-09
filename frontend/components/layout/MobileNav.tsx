@@ -24,6 +24,7 @@ import { useSessionBootstrap } from "@/hooks/use-session-bootstrap";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { apiClient } from "@/lib/api";
 import { mapProductListResponse } from "@/lib/product-adapters";
+import { resolveProductImageUrl } from "@/lib/media-url";
 import type { Product } from "@/types/product";
 import { PriceDisplay } from "@/components/shared/PriceDisplay";
 
@@ -259,7 +260,7 @@ export function MobileNav({ minOrderValuePaise = 0 }: MobileNavProps) {
                   <ul>
                     {results.products.map((product) => {
                       const price = getProductPrice(product);
-                      const img = product.images?.[0]?.url;
+                      const img = resolveProductImageUrl(product.images?.[0]?.url);
                       return (
                         <li key={product.id}>
                           <Link
@@ -267,7 +268,7 @@ export function MobileNav({ minOrderValuePaise = 0 }: MobileNavProps) {
                             onClick={close}
                             className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-[#faf3ef]"
                           >
-                            {img ? (
+                            {img && img !== "/next.svg" ? (
                               <Image
                                 src={img}
                                 alt={product.name}

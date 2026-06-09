@@ -43,14 +43,17 @@ function createApp() {
     contactPhone: null,
     gstin: null,
     fssaiNumber: null,
+    sellerLegalName: null,
+    sellerAddress: null,
+    sellerState: null,
     notifyEmailEnabled: true,
     notifySmsEnabled: false,
     notifyWhatsappEnabled: false,
     primaryNotificationChannels: null,
     smsTemplates: null,
     isCodEnabled: false,
-    cancellationWindowHours: 24,
-    sellerState: null
+    mobileOtpSignupEnabled: false,
+    cancellationWindowHours: 24
   };
   const storeSettingsFindUnique = vi.fn(async () => fullSettingsRecord);
   const storeSettingsUpsert = vi.fn(async (args: { create: Record<string, unknown>; update: Record<string, unknown> }) => ({
@@ -123,14 +126,34 @@ describe('settings routes', () => {
       headers: { authorization: 'Bearer token' }
     });
     expect(getRes.statusCode).toBe(200);
+    const getBody = getRes.json() as Record<string, unknown>;
+    expect(getBody).toEqual(
+      expect.objectContaining({
+        sellerLegalName: null,
+        sellerAddress: null,
+        sellerState: null
+      })
+    );
 
     const patchRes = await app.inject({
       method: 'PATCH',
       url: '/api/v1/admin/settings/store',
       headers: { authorization: 'Bearer token' },
-      payload: { storeName: 'My Store' }
+      payload: {
+        sellerLegalName: 'Acme Foods Pvt Ltd',
+        sellerAddress: '123 Market Road',
+        sellerState: 'Telangana'
+      }
     });
     expect(patchRes.statusCode).toBe(200);
+    const patchBody = patchRes.json() as Record<string, unknown>;
+    expect(patchBody).toEqual(
+      expect.objectContaining({
+        sellerLegalName: 'Acme Foods Pvt Ltd',
+        sellerAddress: '123 Market Road',
+        sellerState: 'Telangana'
+      })
+    );
 
     await app.close();
   });

@@ -65,6 +65,7 @@ Identity boundary contract (critical):
 
 | Method | Endpoint | Purpose | Notes |
 |---|---|---|---|
+| GET | `/api/v1/store/config` | Public storefront runtime config | COD, min order, mobile OTP signup, `FEATURE_*` mirrors — no auth; ISR-friendly |
 | GET | `/api/v1/cart` | Get current cart | Guest/customer session aware |
 | POST | `/api/v1/cart/items` | Add cart item | Idempotency guarded |
 | PATCH | `/api/v1/cart/items/:id` | Update cart item quantity | Cart mutation |
@@ -74,7 +75,7 @@ Identity boundary contract (critical):
 | POST | `/api/v1/cart/coupon` | Apply coupon | Idempotency guarded |
 | DELETE | `/api/v1/cart/coupon` | Remove coupon | Cart mutation |
 | POST | `/api/v1/cart/check-pincode` | Check delivery serviceability | Shipping estimate flow |
-| GET | `/api/v1/cart/delivery-rates` | Estimate delivery rates | Shipping estimate flow |
+| GET | `/api/v1/cart/delivery-rates` | Estimate delivery rates | Query: `pincode`, optional `paymentMode=PREPAID\|COD` (default PREPAID) |
 | POST | `/api/v1/orders` | Create order | Customer auth + idempotency |
 | GET | `/api/v1/orders/:id` | Customer order detail | Owner-only |
 | GET | `/api/v1/orders/:id/invoice.pdf` | Customer invoice PDF | Owner-only PDF |

@@ -55,20 +55,54 @@ describe('OrdersService createOrder serviceability enforcement', () => {
     expect(transactionSpy).not.toHaveBeenCalled();
   });
 
-  it('fetches delivery rate before entering order transaction', async () => {
+  it('computes delivery rate inside order transaction', async () => {
     vi.spyOn(CartService.prototype, 'checkPincodeServiceability').mockResolvedValue({
       pincode: '500001',
       serviceable: true
     });
-    const getDeliveryRatesSpy = vi.spyOn(CartService.prototype, 'getDeliveryRates').mockResolvedValue({
-      pincode: '500001',
-      shippingCharge: 4500,
+    const computeShippingSpy = vi.spyOn(CartService.prototype, 'computeShippingChargeForCart').mockResolvedValue({
+      shippingChargePaise: 4500,
       estimatedDays: 3
     });
 
-    const transactionSpy = vi.fn().mockRejectedValue(new Error('stop-after-precheck'));
+    const tx = {
+      $executeRaw: vi.fn().mockResolvedValue(undefined),
+      $queryRaw: vi.fn().mockResolvedValue([{ nextval: 1n }]),
+      storeSettings: {
+        findUnique: vi.fn().mockResolvedValue({
+          minOrderValuePaise: 0,
+          pickupPincode: '500001'
+        })
+      },
+      cart: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'cart_1',
+          coupon: null,
+          reservations: [],
+          items: [
+            {
+              variantId: 'variant_1',
+              quantity: 1,
+              priceSnapshot: 10000,
+              variant: {
+                id: 'variant_1',
+                inventory: { quantity: 10 },
+                product: { categoryId: 'category_1', name: 'Product 1' }
+              }
+            }
+          ]
+        })
+      },
+      order: {
+        create: vi.fn().mockRejectedValue(new Error('stop-after-precheck'))
+      }
+    };
+    const transactionSpy = vi.fn().mockImplementation(async (fn: (arg0: typeof tx) => Promise<unknown>) => fn(tx));
     const fastify = {
       prisma: {
+        order: {
+          count: vi.fn().mockResolvedValue(0)
+        },
         storeSettings: {
           findUnique: vi.fn().mockResolvedValue({
             minOrderValuePaise: 0
@@ -77,6 +111,12 @@ describe('OrdersService createOrder serviceability enforcement', () => {
         address: {
           findFirst: vi.fn().mockResolvedValue({
             id: 'address_1',
+            userId: 'user_1',
+            fullName: 'Test User',
+            phone: '9999999999',
+            line1: 'Street 1',
+            city: 'Hyderabad',
+            state: 'Telangana',
             pincode: '500001'
           })
         },
@@ -101,7 +141,7 @@ describe('OrdersService createOrder serviceability enforcement', () => {
     const service = new OrdersService(fastify);
 
     await expect(service.createOrder('user_1', { addressId: 'address_1' })).rejects.toThrow('stop-after-precheck');
-    expect(getDeliveryRatesSpy).toHaveBeenCalledWith('user_1', undefined, '500001');
+    expect(computeShippingSpy).toHaveBeenCalledTimes(1);
     expect(transactionSpy).toHaveBeenCalledTimes(1);
   });
 });

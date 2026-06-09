@@ -1,4 +1,5 @@
-import { apiClient } from "@/lib/api";
+import { apiClient, ApiError } from "@/lib/api";
+import { getBrowserApiBaseUrl } from "@/lib/api-base";
 import { createIdempotencyKey } from "@/lib/idempotency";
 
 export type CheckoutPaymentMode = "PREPAID" | "COD";
@@ -166,4 +167,42 @@ export async function createReturnRequest(
     idempotencyKey: createIdempotencyKey(),
     body: JSON.stringify(input),
   });
+}
+
+/** Customer invoice PDF — requires Bearer token (customerGuard), not cookie-only. */
+export async function downloadCustomerInvoicePdf(
+  orderId: string,
+  accessToken: string,
+  filename: string,
+): Promise<void> {
+  const url = `${getBrowserApiBaseUrl()}/orders/${orderId}/invoice.pdf`;
+  const response = await fetch(url, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+    credentials: "include",
+  });
+  if (!response.ok) {
+    let body: unknown = null;
+    try {
+      body = await response.json();
+    } catch {
+      body = null;
+    }
+    if (typeof body === "object" && body !== null && "error" in body) {
+      const err = (body as { error?: { code?: string; message?: string; details?: unknown } }).error;
+      throw new ApiError(
+        err?.code ?? "UNKNOWN_ERROR",
+        err?.message ?? "Unable to download invoice.",
+        response.status,
+        err?.details as never,
+      );
+    }
+    throw new ApiError("UNKNOWN_ERROR", "Unable to download invoice.", response.status);
+  }
+  const blob = await response.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = objectUrl;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(objectUrl);
 }

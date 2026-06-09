@@ -68,7 +68,7 @@ describe('notifications worker', () => {
     process.env.MSG91_AUTH_KEY = 'msg91-key';
     process.env.META_WHATSAPP_ACCESS_TOKEN = 'meta-token';
     process.env.META_WHATSAPP_PHONE_NUMBER_ID = '123456789';
-    process.env.NOTIFY_PRIMARY_CHANNEL = 'SMS';
+    process.env.RESEND_FROM = 'noreply@example.com';
     findStoreSettings.mockResolvedValue(null);
     findOpsConfigSecrets.mockResolvedValue([]);
     findOpsUsers.mockResolvedValue([]);
@@ -79,8 +79,15 @@ describe('notifications worker', () => {
     vi.restoreAllMocks();
   });
 
-  it('routes send-primary using configured global channel', async () => {
-    process.env.NOTIFY_PRIMARY_CHANNEL = 'EMAIL';
+  it('routes send-primary using DB primaryNotificationChannels mapping', async () => {
+    findStoreSettings.mockResolvedValue({
+      notifyEmailEnabled: true,
+      notifySmsEnabled: true,
+      notifyWhatsappEnabled: true,
+      primaryNotificationChannels: { OrderConfirmed: 'EMAIL' },
+      storeName: 'Test Store',
+      smsTemplates: null
+    });
     createNotificationsWorker({}, {
       Worker: MockWorker as unknown as NotificationsWorkerType,
       PrismaClient: MockPrismaClient as unknown as NotificationsPrismaType
@@ -110,6 +117,52 @@ describe('notifications worker', () => {
     });
   });
 
+  it('routes send-primary to SMS when store primary channel mapping is SMS', async () => {
+    findStoreSettings.mockResolvedValue({
+      notifyEmailEnabled: true,
+      notifySmsEnabled: true,
+      notifyWhatsappEnabled: true,
+      primaryNotificationChannels: { OrderConfirmed: 'SMS' },
+      storeName: 'Test Store',
+      smsTemplates: null
+    });
+    createNotificationsWorker({}, {
+      Worker: MockWorker as unknown as NotificationsWorkerType,
+      PrismaClient: MockPrismaClient as unknown as NotificationsPrismaType
+    });
+    (sendSmsSpy as import('vitest').Mock).mockResolvedValue({ messageId: 'sms_primary_1', providerPayload: {} });
+
+    await processor?.({
+      name: 'send-primary',
+      data: {
+        email: 'primary@example.com',
+        phone: '9876543210',
+        template: 'OrderConfirmed',
+        data: { orderId: '1' }
+      }
+    });
+
+    expect(sendSmsSpy).toHaveBeenCalledTimes(1);
+    expect(sendEmailSpy).not.toHaveBeenCalled();
+  });
+
+  it('throws on send-email when RESEND_FROM is missing so BullMQ can retry', async () => {
+    delete process.env.RESEND_FROM;
+    createNotificationsWorker({}, {
+      Worker: MockWorker as unknown as NotificationsWorkerType,
+      PrismaClient: MockPrismaClient as unknown as NotificationsPrismaType
+    });
+
+    await expect(
+      processor?.({
+        name: 'send-email',
+        data: { to: 'test@example.com', template: 'OrderConfirmed', data: { orderId: '1' } }
+      })
+    ).rejects.toThrow('Email notifications disabled or Resend credentials missing');
+
+    expect(sendEmailSpy).not.toHaveBeenCalled();
+  });
+
   it('logs sent email notification on provider success', async () => {
     createNotificationsWorker({}, {
       Worker: MockWorker as unknown as NotificationsWorkerType,
@@ -131,6 +184,31 @@ describe('notifications worker', () => {
         status: 'SENT',
         provider: 'resend',
         providerMessageId: 'email_1'
+      })
+    });
+  });
+
+  it('throws on send-email provider failure so BullMQ can retry', async () => {
+    createNotificationsWorker({}, {
+      Worker: MockWorker as unknown as NotificationsWorkerType,
+      PrismaClient: MockPrismaClient as unknown as NotificationsPrismaType
+    });
+    (sendEmailSpy as import('vitest').Mock).mockRejectedValue(new Error('resend timeout'));
+
+    await expect(
+      processor?.({
+        name: 'send-email',
+        data: { to: 'test@example.com', template: 'OrderConfirmed', data: { orderId: '1' } }
+      })
+    ).rejects.toThrow('resend timeout');
+
+    expect(createLog).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        channel: 'EMAIL',
+        recipient: 'test@example.com',
+        template: 'OrderConfirmed',
+        status: 'FAILED',
+        provider: 'resend'
       })
     });
   });
@@ -176,10 +254,12 @@ describe('notifications worker', () => {
       PrismaClient: MockPrismaClient as unknown as NotificationsPrismaType
     });
 
-    await processor?.({
-      name: 'send-sms',
-      data: { phone: '9876543210', template: 'OutForDelivery', data: {} }
-    });
+    await expect(
+      processor?.({
+        name: 'send-sms',
+        data: { phone: '9876543210', template: 'OutForDelivery', data: {} }
+      })
+    ).rejects.toThrow('SMS notifications disabled or provider credentials missing');
 
     expect(sendSmsSpy).not.toHaveBeenCalled();
     expect(createLog).toHaveBeenCalledWith({
@@ -226,10 +306,12 @@ describe('notifications worker', () => {
       PrismaClient: MockPrismaClient as unknown as NotificationsPrismaType
     });
 
-    await processor?.({
-      name: 'send-whatsapp',
-      data: { phone: '9876543210', template: 'OutForDelivery', data: {} }
-    });
+    await expect(
+      processor?.({
+        name: 'send-whatsapp',
+        data: { phone: '9876543210', template: 'OutForDelivery', data: {} }
+      })
+    ).rejects.toThrow('WhatsApp notifications disabled or Meta WhatsApp credentials missing');
 
     expect(sendWhatsappSpy).not.toHaveBeenCalled();
     expect(createLog).toHaveBeenCalledWith({

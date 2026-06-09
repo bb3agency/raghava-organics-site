@@ -10,7 +10,7 @@ import {
   waitForRedisReady
 } from '@common/redis/redis-connection';
 import { validateBootstrapEnv } from '@config/app.config';
-import { refreshFeatureFlags } from '@config/feature-flags';
+import { refreshFeatureFlags, featureFlags } from '@config/feature-flags';
 import prismaClient from '../../src/database/prisma.service';
 import { applyOpsConfigRuntimeOverlay, type OpsConfigRuntimePrismaLike } from '../../src/modules/ops/ops-config-runtime';
 import { dlqJobOptions } from '../queue-registry';
@@ -177,7 +177,7 @@ async function bootstrapWorkers(): Promise<void> {
       missing.push('StoreSettings.websiteUrl');
     }
     // If GST invoicing feature is enabled, ensure seller fields exist in DB.
-    if (isEnabled(process.env.FEATURE_GST_INVOICING_ENABLED)) {
+    if (featureFlags.gstInvoicing) {
       if (!settings?.sellerLegalName || settings.sellerLegalName.trim().length === 0) missing.push('StoreSettings.sellerLegalName');
       if (!settings?.sellerAddress || settings.sellerAddress.trim().length === 0) missing.push('StoreSettings.sellerAddress');
       if (!settings?.sellerState || settings.sellerState.trim().length === 0) missing.push('StoreSettings.sellerState');

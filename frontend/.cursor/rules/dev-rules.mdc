@@ -48,7 +48,7 @@ If `diff` output is non-empty, re-sync and commit the updated `.agents/rules/dev
    - If `db` shows `disconnected` → `DATABASE_URL` wrong or migrations not applied — re-run `npm run dev:e2e`
    - If `redis` shows `disconnected` → `REDIS_URL`/`REDIS_PASSWORD` mismatch — fix `.env` then `docker compose down -v && docker compose up -d postgres redis`
    - **Database is migrated:** `npx prisma migrate status --schema prisma/schema.prisma` shows "Database schema is up to date"
-   - **Feature flags are set** in backend `.env` (ask which are enabled: `FEATURE_COUPONS_ENABLED`, `FEATURE_REVIEWS_ENABLED`, `FEATURE_WISHLIST_ENABLED`, `FEATURE_GST_INVOICING_ENABLED`, `FEATURE_RESPONSE_ENVELOPE_ENABLED`)
+   - **Feature flags are set** in backend `.env` (ask which are enabled: `FEATURE_COUPONS_ENABLED`, `FEATURE_REVIEWS_ENABLED`, `FEATURE_WISHLIST_ENABLED`, `FEATURE_GST_INVOICING_ENABLED`, `FEATURE_RESPONSE_ENVELOPE_ENABLED`). **Storefront reads flags at runtime** via `GET /store/config` (`useStoreConfig()`) — not build-time `NEXT_PUBLIC_FEATURE_*`.
    - If backend is not fully healthy, STOP and guide the user through backend setup first per `README.md` §Local Development Quickstart
    - **Alerting awareness:** The backend emits structured technical failure alerts via email to all active Ops + Admin users on every `catch`/`log.error` path. If the backend is misconfigured (missing Resend keys, no active Ops/Admin users), alert delivery will silently fail. Verify `RESEND_API_KEY` + `RESEND_FROM` are configured and at least one active Ops or Admin user exists in the DB.
 5. **Do not ask questions already answered in the project docs/checklists** (e.g. API URL, feature flags, or agreed delivery sequence).

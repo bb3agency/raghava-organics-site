@@ -27,7 +27,7 @@ export class ReviewsService {
   constructor(private readonly fastify: FastifyInstance) {}
 
   async createReview(userId: string, input: CreateReviewInput) {
-    this.assertReviewsEnabled();
+    this.assertStorefrontReviewsEnabled();
 
     const product = await this.fastify.prisma.product.findFirst({
       where: { id: input.productId, isActive: true },
@@ -97,7 +97,7 @@ export class ReviewsService {
   }
 
   async listMyReviews(userId: string, query: ReviewListQuery) {
-    this.assertReviewsEnabled();
+    this.assertStorefrontReviewsEnabled();
     return this.listReviews({ userId }, query);
   }
 
@@ -219,7 +219,6 @@ export class ReviewsService {
   }
 
   async adminReviewSummary(query: { from?: string; to?: string }) {
-    this.assertReviewsEnabled();
     const where: Prisma.ReviewWhereInput = {
       approved: true,
       ...(query.from || query.to
@@ -267,7 +266,6 @@ export class ReviewsService {
   }
 
   async adminListReviews(query: AdminReviewListQuery) {
-    this.assertReviewsEnabled();
     const searchTerm = query.search?.trim();
     const where: Prisma.ReviewWhereInput = {
       ...(query.approved !== undefined ? { approved: query.approved } : {}),
@@ -302,7 +300,6 @@ export class ReviewsService {
   }
 
   async adminModerateReview(id: string, input: ModerateReviewInput) {
-    this.assertReviewsEnabled();
     const existing = await this.fastify.prisma.review.findUnique({
       where: { id },
       select: { id: true }
@@ -435,7 +432,6 @@ export class ReviewsService {
    * @param id - The review UUID
    */
   async adminDeleteReview(id: string) {
-    this.assertReviewsEnabled();
     const existing = await this.fastify.prisma.review.findUnique({
       where: { id },
       select: { id: true }
@@ -447,7 +443,7 @@ export class ReviewsService {
     return { id, deleted: true };
   }
 
-  private assertReviewsEnabled() {
+  private assertStorefrontReviewsEnabled() {
     if (!featureFlags.reviews) {
       throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Reviews are disabled', 400);
     }

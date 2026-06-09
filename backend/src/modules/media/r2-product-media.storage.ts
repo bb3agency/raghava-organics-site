@@ -40,11 +40,16 @@ export function createR2ProductMediaStorage(options: R2ProductMediaStorageOption
     return trimmed;
   }
 
-  function buildObjectKey(productId: string, imageId: string, mime: ProductImageMimeType): string {
-    const safeProductId = sanitizeSegment(productId, 'productId');
+  function buildObjectKey(
+    entity: 'products' | 'categories',
+    entityId: string,
+    imageId: string,
+    mime: ProductImageMimeType
+  ): string {
+    const safeEntityId = sanitizeSegment(entityId, `${entity.slice(0, -1)}Id`);
     const safeImageId = sanitizeSegment(imageId, 'imageId');
     const ext = PRODUCT_IMAGE_MIME_TO_EXT[mime];
-    return `${clientId}/products/${safeProductId}/${safeImageId}.${ext}`;
+    return `${clientId}/${entity}/${safeEntityId}/${safeImageId}.${ext}`;
   }
 
   function buildPublicUrl(objectKey: string): string {
@@ -75,7 +80,9 @@ export function createR2ProductMediaStorage(options: R2ProductMediaStorageOption
 
     if (!pathname.startsWith('/')) pathname = `/${pathname}`;
     const key = decodeURIComponent(pathname.replace(/^\//, ''));
-    if (!key.startsWith(`${clientId}/products/`)) return null;
+    if (!key.startsWith(`${clientId}/products/`) && !key.startsWith(`${clientId}/categories/`)) {
+      return null;
+    }
     return key;
   }
 
@@ -83,7 +90,29 @@ export function createR2ProductMediaStorage(options: R2ProductMediaStorageOption
     provider: 'r2',
 
     async saveProductImage(input): Promise<SaveProductImageResult> {
-      const storageReference = buildObjectKey(input.productId, input.imageId, input.mime);
+      const storageReference = buildObjectKey('products', input.productId, input.imageId, input.mime);
+      const filename = storageReference.split('/').pop() ?? storageReference;
+
+      await s3.send(
+        new PutObjectCommand({
+          Bucket: options.bucketName,
+          Key: storageReference,
+          Body: input.content,
+          ContentType: input.mime,
+          ContentLength: input.content.length,
+          CacheControl: 'public, max-age=31536000, immutable'
+        })
+      );
+
+      return {
+        publicUrl: buildPublicUrl(storageReference),
+        storageReference,
+        filename
+      };
+    },
+
+    async saveCategoryImage(input): Promise<SaveProductImageResult> {
+      const storageReference = buildObjectKey('categories', input.categoryId, input.imageId, input.mime);
       const filename = storageReference.split('/').pop() ?? storageReference;
 
       await s3.send(

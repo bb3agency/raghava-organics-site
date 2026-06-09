@@ -20,11 +20,15 @@ const ERROR_MESSAGES: Record<string, string> = {
     "Ops audit system is busy. Wait 1–2 seconds and retry this action.",
   INVALID_STATUS_TRANSITION: "This status change is not allowed right now.",
   INSUFFICIENT_STOCK: "Not enough stock is available for this quantity.",
+  COUPON_EXPIRED: "This coupon has expired.",
+  COUPON_USAGE_EXCEEDED: "This coupon has reached its usage limit.",
   PINCODE_NOT_SERVICEABLE: "Delivery is not available for this pincode. Try another address.",
   RATE_LIMIT_EXCEEDED: "Too many attempts. Please wait a moment and try again.",
   ORDER_NOT_FOUND: "Order not found.",
   CONFIG_NOT_READY:
     "Runtime configuration is incomplete. Save the missing keys below, then restart API and workers.",
+  PAYMENT_VERIFICATION_FAILED:
+    "We could not verify your payment. If money was debited, it will be refunded automatically — check your order history or contact support.",
   INTERNAL_ERROR: "Something went wrong. Please try again.",
   UNKNOWN_ERROR: "Something went wrong. Please try again.",
 };

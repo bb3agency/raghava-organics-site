@@ -6,6 +6,68 @@ This document preserves detailed hardening history for engineering traceability.
 
 ---
 
+**Order, payment, coupon, shipping, and storefront integration hardening — June 10, 2026 (pass 2):**
+
+Root cause / gaps addressed: (1) Storefront feature flags and COD/min-order were build-time or admin-only — toggling backend `FEATURE_*` or DB settings did not reach customer UI without redeploy. (2) Coupon usage limits ignored in-flight checkout orders in `PAYMENT_FAILED`, allowing reuse before worker finalization. (3) Guest coupon Redis increment failures were fail-open. (4) Stale invalid coupons remained on cart reads. (5) Checkout showed static/free shipping while COD vs PREPAID rates differ. (6) `createOrder` shipping TOCTOU vs cart preview. (7) Cancel paths did not enqueue provider shipment cancel or guard COD inventory restore before worker deduction. (8) `payment.captured` webhook + `PAYMENT_FAILED` order was rejected by worker CAS. (9) `retryPayment` did not restore cart reservations for `PAYMENT_FAILED` / `PENDING_PAYMENT`. (10) Reconciliation auto-heal for refunds did not restore inventory; stale abandoned checkouts did not release coupon links; `ORDER_SHIPPED_WITHOUT_SHIPMENT` was incorrectly in default auto-heal set. (11) COD worker failure left coupon reservations and sent no cancel notifications. (12) Frontend cancel UI allowed `PENDING_PAYMENT`; retry payment ran twice; invoice UI used build-time GST flag instead of `invoice.hasPdf`.
+
+**Backend — orders, payments, coupons, workers:**
+- **`GET /api/v1/store/config` (public):** Returns `isCodEnabled`, `minOrderValuePaise`, `mobileOtpSignupEnabled`, and runtime mirrors of `FEATURE_COUPONS_ENABLED`, `FEATURE_REVIEWS_ENABLED`, `FEATURE_WISHLIST_ENABLED`, `FEATURE_GST_INVOICING_ENABLED`. No auth; safe for RSC ISR.
+- **Coupon reservation semantics (`coupon-usage.ts`):** `COUPON_RESERVED_ORDER_STATUSES` = `PENDING_PAYMENT` + `PAYMENT_FAILED`. Shared helpers: `assertCouponWithinUsageLimits`, `finalizeCouponUsageForOrder`, `releaseCouponUsageForOrder`, `clearUnfinalizedCouponLinks`.
+- **Guest coupon Redis (`cart.service.ts`):** Increment failure is fail-closed (throws — does not silently allow over-limit apply).
+- **Stale coupon on cart read:** `stripInvalidCouponFromCart` removes expired/over-limit/disabled coupons when cart is loaded.
+- **Shipping:** `GET /cart/delivery-rates?pincode=&paymentMode=PREPAID|COD` returns mode-specific quotes; `createOrder` re-quotes inside the transaction (TOCTOU guard). Cancel paths enqueue **`cancel-shipment`** on `shipping` queue (`jobId: cancel-shipment:<orderId>`). `shipping.worker.ts` handles `cancel-shipment` + phase-3 compensating Delhivery cancel when booking fails after partial provider state.
+- **`payment.captured` + `PAYMENT_FAILED`:** `order-processing.worker.ts` CAS accepts both statuses for prepaid confirmation; reconciliation enqueues `process-order-update` for the same mismatch.
+- **`retryPayment`:** Calls `restoreCheckoutReservationsForOrder` for `PAYMENT_FAILED` and `PENDING_PAYMENT` before re-initiating Razorpay.
+- **COD coupon finalize:** `createOrder` finalizes coupon usage inside the COD DB transaction (same reservation rules as prepaid post-capture).
+- **COD cancel inventory race (`restore-inventory-on-cancel.ts`):** Inventory restored on cancel only after `COD_ORDER_CREATED` appears in order status history (worker has deducted stock).
+- **Payment failed path:** Always `releaseReservationsForOrder`; customer notified on email **or** phone when available.
+- **COD worker failure:** `handleCodSideEffectsFailure` releases coupon usage, restores reservations, cancels order, sends cancel notifications.
+- **Reconciliation defaults (`reconciliation.worker.ts`):** Default auto-heal set (when env unset) = `PAYMENT_CAPTURED_ORDER_NOT_CONFIRMED`, `REFUNDED_STATUS_MISMATCH`, `STALE_PENDING_PAYMENT` — **not** `ORDER_SHIPPED_WITHOUT_SHIPMENT` (manual review; false positives auto-resolved when shipment row exists). Stale `PAYMENT_FAILED` (>30 min, no captured payment) cancels via same handler when `STALE_PENDING_PAYMENT` is enabled; records issue type `STALE_PAYMENT_FAILED`. `REFUNDED_STATUS_MISMATCH` heal restores inventory (when prior status was `CONFIRMED`/`PROCESSING`), releases coupon usage, clears unfinalized coupon links.
+- **Cancel flows:** Inventory restore guard, coupon release, shipment cancel enqueue on customer/admin cancel.
+- **Admin item edits:** `adminUpdateOrderItems` syncs inventory when order is `CONFIRMED`.
+
+**Frontend:**
+- **`StoreConfigProvider` + `lib/storefront-settings.ts`:** Storefront layout fetches `GET /store/config` (ISR 60s server-side; client helper for admin GST panels). Fail-closed when fetch fails (`configAvailable: false` blocks checkout).
+- **Checkout (`CheckoutForm.tsx`):** Live shipping via `getDeliveryRates(pincode, token, paymentMode)`; errors surface as unavailable — no false “Free” fallback.
+- **Cancel UI:** Account order detail — cancel only when status is `CONFIRMED` or `PROCESSING` (not `PENDING_PAYMENT`).
+- **Retry payment:** Order detail navigates to payment page only; `/checkout/payment` calls `retryPayment` once with status guard (`PENDING_PAYMENT` / `PAYMENT_FAILED`, not COD).
+- **Invoice UI:** Download CTA when `order.invoice?.hasPdf === true` only (not build-time GST flag).
+- **Admin GST:** `StoreSettingsPanel` + `AdminProductEditor` use runtime `gstInvoicingEnabled` from `/store/config`.
+- **Admin nav:** Coupons + Reviews always visible (moderation surfaces even when storefront modules are off).
+- **Invoice download errors:** `ApiError` parsing in `orders-api.ts` and `AdminOrderFulfillmentPanel.tsx`.
+
+**Tests added/updated:** `order-processing.worker.test.ts`, `reconciliation.worker.test.ts`, `orders.service.cod.test.ts`, `orders.service.cancel-notifications.test.ts`, `orders.service.admin-update-items.test.ts`, `coupon-usage.test.ts`, `cart.service.apply-coupon.guest-redis.test.ts`, `restore-inventory-on-cancel.test.ts`, `storefront-settings.test.ts`, `admin-nav-config.test.ts`.
+
+**CI reliability (2026-06-10 pass 2):** Backend `npx vitest run` — **1012/1012**; backend e2e **16/16**; `tsc --noEmit` clean; frontend Vitest **114/114**; `npm run build` clean.
+
+**Intentionally deferred (documented, not claimed fixed):**
+- `retryPayment` reservation upsert does not re-validate live stock availability before restore.
+- `adminUpdateOrderItems` does not recalculate coupon/discount totals after line changes.
+- No dedicated unit tests yet for `release-reservations.ts` or full `cancel-shipment` / shipping phase-3 paths.
+
+**Affects:** `orders.service.ts`, `cart.service.ts`, `coupon-usage.ts`, `restore-inventory-on-cancel.ts`, `release-reservations.ts`, `order-processing.worker.ts`, `reconciliation.worker.ts`, `shipping.worker.ts`, `settings.service.ts`, `settings.routes.ts`, `CheckoutForm.tsx`, `cart-api.ts`, `orders-api.ts`, `storefront-settings.ts`, `StoreConfigProvider.tsx`, admin GST panels, account/checkout pages, integration docs listed in this pass.
+
+---
+
+**Production readiness pass — logo assets, boot guards, notification provider tracking, CI gates — June 10, 2026:**
+
+Root cause / gaps addressed: (1) Brand logo lived at repo root and in duplicate `public/logo.png` paths with inconsistent references. (2) Missing `STOREFRONT_URL` in production-like profiles could still boot and send password-reset emails with `localhost` links (`auth.service.ts` fallback). (3) SSR product image resolution could embed `localhost` when `NEXT_PUBLIC_STOREFRONT_URL` was unset. (4) `notifications.worker.ts` declared `onProviderSuccess` / `onProviderFailure` but never called them — systematic provider failure counters and alerts were dead code. (5) Stale `dist/src/modules` caused admin policy registry integrity test to fail for `DELETE /api/v1/admin/categories/:id/permanent`. (6) BullMQ plugin unit test mock lacked `.on()` after `guardRedisDuplicate` wiring. (7) Settings COD route test fixture omitted `mobileOtpSignupEnabled`, failing Fastify response validation.
+
+Changes applied:
+- **Brand logo:** Canonical asset at `frontend/public/images/raghava-organics-logo.png`; constant `BRAND_LOGO_SRC` in `frontend/lib/constants.ts`; all header/admin shell/mobile nav references updated; removed repo-root and `public/logo.png` duplicates.
+- **Backend boot guard:** `app.config.ts` fail-fast when `STOREFRONT_URL` is missing or placeholder in production-like profiles (password-reset email safety).
+- **Frontend SSR images:** `media-url.ts` — SSR builds absolute URLs only when `NEXT_PUBLIC_STOREFRONT_URL` is explicitly set; never falls back to `localhost` in production SSR HTML.
+- **Frontend env docs:** `NEXT_PUBLIC_FEATURE_GST_INVOICING_ENABLED` documented in `frontend/.env.example` and `.env.production.example` (admin `StoreSettingsPanel` GSTIN/FSSAI field visibility).
+- **Notifications worker:** Wired `onProviderSuccess` / `onProviderFailure` into all email, SMS, and WhatsApp send paths (direct + primary-channel dispatch) for provider failure counting and `sendNotificationFailureAlert` on systematic outages.
+- **Redis TypeScript:** `redis-connection.ts` uses `WeakSet` for guarded-client tracking; `guardRedisDuplicate` generic aligned with ioredis duplicate return type; worker boot paths explicitly typed `IORedis`.
+- **Admin policy registry validation:** Static route record for `DELETE /api/v1/admin/categories/:id/permanent` so stale `dist/` scans pass until next production build.
+- **Test / CI fixes:** `bullmq.plugin.test.ts` duplicate mock `.on()`; `settings.routes.test.ts` COD fixture fields; frontend ESLint unused-import cleanup; removed unreferenced `TrustStrip.tsx` stub.
+- **CI reliability (2026-06-10):** Backend `npx vitest run` — **935/935**; `tsc --noEmit` clean; frontend `npm run lint` clean; `npm run build` clean.
+
+**Affects:** `app.config.ts`, `notifications.worker.ts`, `redis-connection.ts`, `queues/workers/index.ts`, `frontend/lib/constants.ts`, `frontend/lib/media-url.ts`, `frontend/.env.example`, `frontend/.env.production.example`, `admin-policy-registry.validation.ts`, test fixtures listed above, `Header.tsx`, `MobileNav.tsx`, `AdminConsoleShell.tsx`.
+
+---
+
 **Redis connection hardening, bodyless DELETE schemas, and admin policy registry — June 9, 2026:**
 
 Root cause: Transient Redis network blips (`ECONNRESET`, `ECONNREFUSED`) on Docker/Windows produced unhandled `[ioredis] error event` spam because BullMQ and pub/sub paths call `duplicate()` without attaching listeners. Separately, several DELETE routes declared an empty JSON `body` schema; Fastify rejected bodyless DELETE requests with `VALIDATION_ERROR` (coupon soft-delete/restore, customer address delete). `dev-up.cmd` also failed boot when `DELETE /api/v1/admin/categories/:id/permanent` was missing from the admin endpoint policy registry.
@@ -890,7 +952,7 @@ Comprehensive audit of concurrency-vulnerable surfaces eliminated all remaining 
 **Final deep audit — six worker-layer bug fixes — May 2026:**
 - **Refund TOCTOU double-spend eliminated:** `refunds.worker.ts` now uses a two-phase CAS pattern. Phase 1 atomically reads payment state, calculates the refundable balance (now correctly subtracting `refundPendingAmountPaise`), and increments `refundPendingAmountPaise` inside a single `$transaction`. Phase 2 calls `initiateRefund()` only after the DB gate commits. A compensating decrement rolls back the reservation if the provider call fails, ensuring BullMQ retries see the correct balance. Concurrent workers cannot both win the gate.
 - **Reconciliation auto-heal routes through `process-order-update` job:** `PAYMENT_CAPTURED_ORDER_NOT_CONFIRMED` auto-heal no longer calls `prisma.order.update({ status: CONFIRMED })` directly (which bypassed inventory deduction, coupon increment, reservation release, notifications, invoice generation, and analytics). It now enqueues a `process-order-update` job to `order-processing` with `jobId: reconcile-process-order-update:<orderId>` for idempotency, delegating to the canonical state-machine path.
-- **Auto-heal set is runtime-configurable:** `RECONCILIATION_AUTO_HEAL_ISSUES` env var (comma-separated) controls which issue types are auto-healed without a code deploy. Empty string disables all auto-heals — useful during fraud investigations or incident triage. Defaults to all four safe types when unset.
+- **Auto-heal set is runtime-configurable:** `RECONCILIATION_AUTO_HEAL_ISSUES` env var (comma-separated) controls which issue types are auto-healed without a code deploy. Empty string disables all auto-heals — useful during fraud investigations or incident triage. Default (unset) enables `PAYMENT_CAPTURED_ORDER_NOT_CONFIRMED`, `REFUNDED_STATUS_MISMATCH`, and `STALE_PENDING_PAYMENT` (also covers stale `PAYMENT_FAILED` abandon cleanup). `ORDER_SHIPPED_WITHOUT_SHIPMENT` is detected but manual-review only — removed from default auto-heal set in pass 2 (June 10, 2026).
 - **`order-processing.worker.ts` module-level `prisma` removed:** `let prisma` at module scope caused the second `createOrderProcessingWorker()` call to overwrite the client used by all helper functions in the first worker. Fixed by scoping `const prisma` inside the factory and passing it explicitly to all five helper functions.
 - **Credit note direct BullMQ path now idempotent:** Missing `jobId` on `orderProcessingQueue.add('generate-credit-note', ...)` fallback path meant BullMQ retries could produce duplicate credit notes. Added `jobId: generate-credit-note:<orderId>:<amount>` matching the outbox path.
 - **`createShipment()` moved outside Prisma transaction:** The provider HTTP call was holding a live DB connection for the full provider round-trip (2–10 s), exhausting the connection pool. Ghost bookings on DB failure post-call were also possible. Now uses three explicit phases: read-only validation → external call (no connection held) → short write-only transaction. An idempotency guard on `order.shipment.awbNumber` prevents a second provider call on retry.

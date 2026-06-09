@@ -17,6 +17,8 @@ describe('validateRuntimeEnv', () => {
     REDIS_URL: 'redis://:password@127.0.0.1:6379',
     AUTH_DEV_BYPASS: 'false',
     TURNSTILE_SECRET_KEY: 'prod-turnstile-secret-key',
+    STOREFRONT_URL: 'https://store.example.com',
+    ADMIN_URL: 'https://admin.example.com',
   };
 
   it('allows boot when provider selectors are set without full dependency keys (incremental Ops save)', async () => {
@@ -80,5 +82,27 @@ describe('validateRuntimeEnv', () => {
 
     const { validateRuntimeEnv } = await import('./app.config');
     expect(() => validateRuntimeEnv()).not.toThrow();
+  });
+
+  it('rejects missing STOREFRONT_URL in production-like profiles', async () => {
+    const env = { ...baseProductionEnv };
+    delete env.STOREFRONT_URL;
+    process.env = { ...originalEnv, ...env };
+    delete process.env.STOREFRONT_URL;
+
+    const { validateRuntimeEnv } = await import('./app.config');
+    delete process.env.STOREFRONT_URL;
+    expect(() => validateRuntimeEnv()).toThrow(/STOREFRONT_URL/);
+  });
+
+  it('rejects missing ADMIN_URL in production-like profiles', async () => {
+    const env = { ...baseProductionEnv };
+    delete env.ADMIN_URL;
+    process.env = { ...originalEnv, ...env };
+    delete process.env.ADMIN_URL;
+
+    const { validateRuntimeEnv } = await import('./app.config');
+    delete process.env.ADMIN_URL;
+    expect(() => validateRuntimeEnv()).toThrow(/ADMIN_URL/);
   });
 });

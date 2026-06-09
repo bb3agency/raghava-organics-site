@@ -45,7 +45,8 @@ describe('OrdersService cancellation notification enqueue', () => {
       order: {
         findFirst: vi.fn().mockResolvedValue(
           buildSerializedOrderSource({
-            status: OrderStatus.CONFIRMED
+            status: OrderStatus.CONFIRMED,
+            items: [{ variantId: 'variant_1', quantity: 1 }]
           })
         ),
         update: vi.fn().mockResolvedValue({ id: 'order_1' }),
@@ -56,6 +57,10 @@ describe('OrdersService cancellation notification enqueue', () => {
       },
       inventory: {
         updateMany: vi.fn().mockResolvedValue({ count: 1 })
+      },
+      couponUsage: {
+        findMany: vi.fn().mockResolvedValue([]),
+        delete: vi.fn().mockResolvedValue(undefined)
       }
     };
 
@@ -94,6 +99,52 @@ describe('OrdersService cancellation notification enqueue', () => {
     expect(orderProcessingAdd).not.toHaveBeenCalled();
   });
 
+  it('does not restore inventory when cancelling COD order before worker side effects complete', async () => {
+    const notificationsAdd = vi.fn().mockResolvedValue(undefined);
+    const tx = {
+      order: {
+        findFirst: vi.fn().mockResolvedValue(
+          buildSerializedOrderSource({
+            status: OrderStatus.CONFIRMED,
+            paymentMode: 'COD',
+            items: [{ variantId: 'variant_1', quantity: 1 }],
+            statusHistory: [{ triggeredBy: 'SYSTEM', createdAt: new Date() }]
+          })
+        ),
+        update: vi.fn().mockResolvedValue({ id: 'order_1' }),
+        findUniqueOrThrow: vi.fn().mockResolvedValue(buildSerializedOrderSource())
+      },
+      orderStatusHistory: {
+        create: vi.fn().mockResolvedValue(undefined),
+        findFirst: vi.fn().mockResolvedValue(null)
+      },
+      inventory: {
+        updateMany: vi.fn().mockResolvedValue({ count: 1 })
+      },
+      couponUsage: {
+        findMany: vi.fn().mockResolvedValue([]),
+        delete: vi.fn().mockResolvedValue(undefined)
+      }
+    };
+
+    const fastify = {
+      prisma: {
+        $transaction: vi.fn(async (fn: (trx: typeof tx) => Promise<unknown>) => fn(tx))
+      },
+      queues: {
+        notifications: { add: notificationsAdd },
+        orderProcessing: { add: vi.fn() },
+        shipping: { add: vi.fn() }
+      },
+      log: { error: vi.fn() }
+    } as unknown as FastifyInstance;
+
+    const service = new OrdersService(fastify);
+    await service.cancelMyOrder('user_1', 'order_1');
+
+    expect(tx.inventory.updateMany).not.toHaveBeenCalled();
+  });
+
   it('enqueues OrderCancelled notifications and refund job for admin refund path', async () => {
     const notificationsAdd = vi.fn().mockResolvedValue(undefined);
     const orderProcessingAdd = vi.fn().mockResolvedValue(undefined);
@@ -103,6 +154,7 @@ describe('OrdersService cancellation notification enqueue', () => {
         findUnique: vi.fn().mockResolvedValue(
           buildSerializedOrderSource({
             status: OrderStatus.PROCESSING,
+            items: [{ variantId: 'variant_1', quantity: 1 }],
             payment: {
               id: 'payment_1',
               status: PaymentStatus.CAPTURED,
@@ -144,6 +196,10 @@ describe('OrdersService cancellation notification enqueue', () => {
       },
       inventory: {
         updateMany: vi.fn().mockResolvedValue({ count: 1 })
+      },
+      couponUsage: {
+        findMany: vi.fn().mockResolvedValue([]),
+        delete: vi.fn().mockResolvedValue(undefined)
       }
     };
 

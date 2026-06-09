@@ -1,15 +1,34 @@
 import type { Metadata } from "next";
 import { interFont } from "@/lib/fonts";
-import { APP_NAME } from "@/lib/constants";
+import { APP_NAME, BRAND_LOGO_SRC } from "@/lib/constants";
+import { getSiteUrl } from "@/lib/seo";
 import { MaintenanceBanner } from "@/components/maintenance/MaintenanceBanner";
 import "./globals.css";
 
 export const metadata: Metadata = {
+  metadataBase: new URL(getSiteUrl()),
   title: {
     default: APP_NAME,
     template: `%s | ${APP_NAME}`,
   },
   description: "Premium chemical free and natural products from Raghava Organics.",
+  icons: {
+    icon: BRAND_LOGO_SRC,
+    shortcut: BRAND_LOGO_SRC,
+    apple: BRAND_LOGO_SRC,
+  },
+  openGraph: {
+    type: "website",
+    locale: "en_IN",
+    siteName: APP_NAME,
+  },
+  twitter: {
+    card: "summary_large_image",
+  },
+  robots: {
+    index: true,
+    follow: true,
+  },
 };
 
 export default function RootLayout({

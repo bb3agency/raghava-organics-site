@@ -10,9 +10,16 @@ import { randomUUID } from 'node:crypto';
 import {
   deleteHostedProductImage,
   getProductMediaStorage,
+  hostedCategoryMediaPathFromUrl,
+  hostedMediaPathFromUrl,
   hostedStorageReferenceFromUrl,
-  isHostedProductImageUrl
+  isHostedCategoryImageUrl,
+  isHostedProductImageUrl,
+  isR2MediaProviderActive
 } from '@modules/media/product-media-provider';
+import { PRODUCT_MAX_IMAGES_PER_PRODUCT } from '@modules/media/product-media.constants';
+import { resolveCategoryImageStorageUrl } from '@modules/media/ingest-external-category-image';
+import { resolveProductImageStorageUrl } from '@modules/media/ingest-external-product-image';
 import { assertProductImageUpload } from '@modules/media/product-media.validation';
 import {
   AdminCategoryListQuery,
@@ -29,7 +36,7 @@ import {
 } from './products.types';
 
 export class ProductsService {
-  private static readonly maxProductImages = 30;
+  private static readonly maxProductImages = PRODUCT_MAX_IMAGES_PER_PRODUCT;
   private readonly settingsService: SettingsService;
 
   constructor(private readonly fastify: FastifyInstance) {
@@ -238,9 +245,22 @@ export class ProductsService {
   async adminCreateProduct(input: CreateProductInput) {
     const defaultLowStockThreshold = await this.settingsService.resolveDefaultLowStockThreshold();
     const variantsInput = input.variants ?? [];
-    const imageSortOrders = (input.images ?? []).map((image) => image.sortOrder);
+    const imagesInput = input.images ?? [];
+    if (imagesInput.length > ProductsService.maxProductImages) {
+      throw new AppError(
+        ERROR_CODES.VALIDATION_ERROR,
+        `A product can have at most ${ProductsService.maxProductImages} images`,
+        400
+      );
+    }
+    const imageSortOrders = imagesInput.map((image) => image.sortOrder);
     if (new Set(imageSortOrders).size !== imageSortOrders.length) {
       throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Duplicate image sort orders are not allowed', 400);
+    }
+    // Validate every image URL — rejects blob:, data:, and other invalid schemes
+    // before they can reach the database.
+    for (const image of imagesInput) {
+      this.assertProductImageUrl(image.url);
     }
     variantsInput.forEach((variant) => this.assertValidCompareAtPrice(variant.price, variant.compareAtPrice));
     await this.assertCategoryExists(input.categoryId);
@@ -305,17 +325,6 @@ export class ProductsService {
         ...(input.metaDescription !== undefined ? { metaDescription: input.metaDescription } : {}),
         isFeatured: input.isFeatured ?? false,
         isActive: input.isActive ?? true,
-        ...(input.images && input.images.length > 0
-          ? {
-              images: {
-                create: input.images.map((image) => ({
-                  url: image.url,
-                  altText: image.altText,
-                  sortOrder: image.sortOrder
-                }))
-              }
-            }
-          : {}),
         ...(variantsInput.length > 0
           ? {
               variants: {
@@ -354,6 +363,29 @@ export class ProductsService {
       }
       throw err;
     }
+
+    if (imagesInput.length > 0) {
+      for (const image of imagesInput) {
+        const storageUrl = await resolveProductImageStorageUrl(product.id, image.url);
+        await this.fastify.prisma.productImage.create({
+          data: {
+            productId: product.id,
+            url: storageUrl,
+            altText: image.altText,
+            sortOrder: image.sortOrder
+          }
+        });
+      }
+      product = await this.fastify.prisma.product.findUniqueOrThrow({
+        where: { id: product.id },
+        include: {
+          category: true,
+          images: { orderBy: { sortOrder: 'asc' } },
+          variants: { where: { isActive: true }, orderBy: { price: 'asc' } }
+        }
+      });
+    }
+
     await this.invalidateProductListCacheSafe();
     return product;
   }
@@ -953,6 +985,13 @@ export class ProductsService {
 
   private assertProductImageUrl(url: string): void {
     const trimmed = url.trim();
+    if (hostedMediaPathFromUrl(trimmed) && isR2MediaProviderActive()) {
+      throw new AppError(
+        ERROR_CODES.VALIDATION_ERROR,
+        'Legacy local media paths are not allowed when MEDIA_STORAGE_PROVIDER=r2. Upload images via multipart upload or use an https:// URL.',
+        400
+      );
+    }
     if (isHostedProductImageUrl(trimmed)) {
       if (!hostedStorageReferenceFromUrl(trimmed)) {
         throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Invalid hosted product image URL', 400);
@@ -974,7 +1013,7 @@ export class ProductsService {
 
   async adminUploadProductImages(
     productId: string,
-    inputs: Array<{ buffer: Buffer; mimeType?: string | null; altText: string }>
+    inputs: Array<{ buffer: Buffer; mimeType?: string | null; altText: string; sortOrderHint?: number }>
   ) {
     if (inputs.length === 0) {
       throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'At least one image file is required', 400);
@@ -1000,7 +1039,13 @@ export class ProductsService {
       where: { productId },
       _max: { sortOrder: true }
     });
-    let nextSortOrder = (maxSortRow._max.sortOrder ?? -1) + 1;
+    // If the caller supplied a sortOrderHint for the first image, use that as
+    // the starting offset; otherwise continue from the current max.
+    const firstHint = inputs[0]?.sortOrderHint;
+    let nextSortOrder =
+      firstHint !== undefined
+        ? Math.max(firstHint, (maxSortRow._max.sortOrder ?? -1) + 1)
+        : (maxSortRow._max.sortOrder ?? -1) + 1;
 
     try {
       for (const input of inputs) {
@@ -1070,10 +1115,11 @@ export class ProductsService {
     if (existingSortOrder) {
       throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Image sort order already exists for this product', 400);
     }
+    const storageUrl = await resolveProductImageStorageUrl(productId, input.url);
     const image = await this.fastify.prisma.productImage.create({
       data: {
         productId,
-        url: input.url,
+        url: storageUrl,
         altText: input.altText,
         sortOrder: input.sortOrder
       }
@@ -1192,9 +1238,43 @@ export class ProductsService {
     };
   }
 
+  private assertCategoryImageUrl(url: string): void {
+    const trimmed = url.trim();
+    if (!trimmed) return;
+    if (hostedCategoryMediaPathFromUrl(trimmed) && isR2MediaProviderActive()) {
+      throw new AppError(
+        ERROR_CODES.VALIDATION_ERROR,
+        'Legacy local category media paths are not allowed when MEDIA_STORAGE_PROVIDER=r2. Use an https:// URL.',
+        400
+      );
+    }
+    if (isHostedCategoryImageUrl(trimmed)) {
+      if (!hostedStorageReferenceFromUrl(trimmed)) {
+        throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Invalid hosted category image URL', 400);
+      }
+      return;
+    }
+    if (!/^https:\/\/.+/i.test(trimmed)) {
+      throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Category image URL must be https:// or a hosted media path', 400);
+    }
+  }
+
+  private async resolveCategoryImageUrlForStorage(
+    categoryId: string,
+    imageUrl: string | null | undefined
+  ): Promise<string | null> {
+    const trimmed = imageUrl?.trim() ?? '';
+    if (!trimmed) return null;
+    this.assertCategoryImageUrl(trimmed);
+    return resolveCategoryImageStorageUrl(categoryId, trimmed);
+  }
+
   async adminCreateCategory(input: CreateCategoryInput) {
     if (input.parentId) {
       await this.assertValidCategoryParent(null, input.parentId);
+    }
+    if (input.imageUrl !== undefined) {
+      this.assertCategoryImageUrl(input.imageUrl);
     }
 
     const data: Prisma.CategoryCreateInput = {
@@ -1204,9 +1284,6 @@ export class ProductsService {
     };
     if (input.parentId !== undefined) {
       data.parent = { connect: { id: input.parentId } };
-    }
-    if (input.imageUrl !== undefined) {
-      data.imageUrl = input.imageUrl;
     }
 
     const existing = await this.fastify.prisma.category.findUnique({ where: { slug: input.slug } });
@@ -1224,6 +1301,16 @@ export class ProductsService {
     }
 
     const createdCategory = await this.fastify.prisma.category.create({ data });
+    if (input.imageUrl !== undefined && input.imageUrl.trim()) {
+      const storedUrl = await this.resolveCategoryImageUrlForStorage(createdCategory.id, input.imageUrl);
+      const updatedCategory = await this.fastify.prisma.category.update({
+        where: { id: createdCategory.id },
+        data: { imageUrl: storedUrl }
+      });
+      await this.invalidateProductListCacheSafe();
+      return updatedCategory;
+    }
+
     await this.invalidateProductListCacheSafe();
     return createdCategory;
   }
@@ -1253,8 +1340,12 @@ export class ProductsService {
       updateManyData.parentId = input.parentId ?? null;
     }
     if (input.imageUrl !== undefined) {
-      updateData.imageUrl = input.imageUrl;
-      updateManyData.imageUrl = input.imageUrl;
+      const nextImageUrl = await this.resolveCategoryImageUrlForStorage(id, input.imageUrl);
+      if (existing.imageUrl && isHostedCategoryImageUrl(existing.imageUrl) && existing.imageUrl !== nextImageUrl) {
+        await deleteHostedProductImage(existing.imageUrl);
+      }
+      updateData.imageUrl = nextImageUrl;
+      updateManyData.imageUrl = nextImageUrl;
     }
     if (input.isActive !== undefined) {
       updateData.isActive = input.isActive;
@@ -1303,6 +1394,9 @@ export class ProductsService {
     const productCount = await this.fastify.prisma.product.count({ where: { categoryId: id } });
     if (productCount > 0) {
       throw new AppError(ERROR_CODES.CONFLICT, `Cannot permanently delete: ${productCount} product(s) use this category. Reassign or delete them first.`, 409);
+    }
+    if (existing.imageUrl && isHostedCategoryImageUrl(existing.imageUrl)) {
+      await deleteHostedProductImage(existing.imageUrl);
     }
     await this.fastify.prisma.category.delete({ where: { id } });
     await this.invalidateProductListCacheSafe();

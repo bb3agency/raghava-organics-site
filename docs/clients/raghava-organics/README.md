@@ -5,10 +5,11 @@ Client-specific deployment and evidence live here (not under `backend/docs/`).
 | Document | Purpose |
 |----------|---------|
 | [VPS_DEPLOYMENT_PACK.md](./VPS_DEPLOYMENT_PACK.md) | Production env template, ports, CD, Nginx |
+| [CLOUDFLARE_R2_MEDIA.md](./CLOUDFLARE_R2_MEDIA.md) | Cloudflare DNS + R2 bucket + `cdn.raghavaorganics.com` |
 | [VPS_INPUTS.md](./VPS_INPUTS.md) | Private inputs + secrets (gitignored); template: [VPS_INPUTS.template.md](./VPS_INPUTS.template.md) |
 | [CLIENT_VPS_DEPLOYMENT_LOG.md](./CLIENT_VPS_DEPLOYMENT_LOG.md) | Phase 6–14 checklist |
 | [LOCAL_SETUP_EVIDENCE.md](./LOCAL_SETUP_EVIDENCE.md) | Local backend bootstrap evidence |
-| [DEPLOYMENT_READY_SIGNOFF.md](./DEPLOYMENT_READY_SIGNOFF.md) | Local vs production readiness |
+| [DEPLOYMENT_READY_SIGNOFF.md](./DEPLOYMENT_READY_SIGNOFF.md) | Local vs production readiness (updated 2026-06-10 pass 2 — CI 1012/1012 + 114/114, runtime store config, boot guards) |
 | [GITHUB_CD_SETUP.md](./GITHUB_CD_SETUP.md) | Raghava CD values (full guide: [GITHUB_CD_SELF_HOSTED_RUNNER_GUIDE.md](../../../backend/docs/GITHUB_CD_SELF_HOSTED_RUNNER_GUIDE.md)) |
 | [PHASE5_EVIDENCE_CHECKLIST.md](./PHASE5_EVIDENCE_CHECKLIST.md) | Postman, dry-runs, go-live sign-off |
 | [scripts/](./scripts/) | Bash scripts to run on the VPS (incl. `phase7.5-nginx-tls-preflight.sh` for multi-client Nginx) |

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
 import { Plus, Minus, MessageCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -10,23 +10,32 @@ interface Faq {
   a: string;
 }
 
-const FAQS: Faq[] = [
-  {
-    q: "What does \"chemical free\" actually mean here?",
-    a: "Our partner farmers don't use synthetic pesticides, herbicides, or fertilizers. Soil is enriched with cow-based manure and crop rotation. Each batch is screened for 300+ pesticide residues by NABL-accredited labs before shipping. We can share the reports on request.",
-  },
-  {
-    q: "Do you offer Cash on Delivery?",
-    a: "Yes — COD is available in supported pincodes. You'll see the option at checkout if your delivery address qualifies. Prepaid orders (UPI, cards, wallets) are accepted everywhere we ship.",
-  },
-  {
-    q: "What if I'm not satisfied with my order?",
-    a: "If something arrives spoiled, damaged, or below the quality you expected, message us with a photo within 24 hours of delivery and we'll refund or replace it — no long forms, no back-and-forth.",
-  },
-];
+interface FaqSectionProps {
+  isCodEnabled?: boolean;
+}
 
-export function FaqSection() {
+function buildFaqs(isCodEnabled: boolean): Faq[] {
+  return [
+    {
+      q: 'What does "chemical free" actually mean here?',
+      a: "Our partner farmers don't use synthetic pesticides, herbicides, or fertilizers. Soil is enriched with cow-based manure and crop rotation. Each batch is screened for 300+ pesticide residues by NABL-accredited labs before shipping. We can share the reports on request.",
+    },
+    {
+      q: "Do you offer Cash on Delivery?",
+      a: isCodEnabled
+        ? "Yes — COD is available when enabled for your delivery pincode. You'll see the option at checkout if your address qualifies. Prepaid orders (UPI, cards, wallets) are accepted everywhere we ship."
+        : "Cash on Delivery is currently unavailable. Prepaid orders (UPI, cards, wallets) are accepted everywhere we ship.",
+    },
+    {
+      q: "What if I'm not satisfied with my order?",
+      a: "If something arrives spoiled, damaged, or below the quality you expected, message us with a photo within 24 hours of delivery and we'll refund or replace it — no long forms, no back-and-forth.",
+    },
+  ];
+}
+
+export function FaqSection({ isCodEnabled = false }: FaqSectionProps) {
   const [openIndex, setOpenIndex] = useState<number | null>(0);
+  const faqs = useMemo(() => buildFaqs(isCodEnabled), [isCodEnabled]);
 
   return (
     <section className="bg-white">
@@ -65,7 +74,7 @@ export function FaqSection() {
           {/* Accordion */}
           <div className="lg:col-span-7">
             <div className="flex flex-col gap-3">
-              {FAQS.map((faq, idx) => {
+              {faqs.map((faq, idx) => {
                 const isOpen = openIndex === idx;
                 return (
                   <div

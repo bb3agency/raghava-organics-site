@@ -15,9 +15,11 @@ describe('AuthService verifyOtpAndSignup', () => {
   const opsUserFindUnique = vi.fn();
   const refreshTokenCreate = vi.fn();
   const jwtSign = vi.fn();
+  const storeSettingsFindUnique = vi.fn();
 
   function buildService(): AuthService {
     process.env.JWT_REFRESH_SECRET = 'refresh-secret-for-tests';
+    storeSettingsFindUnique.mockResolvedValue({ mobileOtpSignupEnabled: true });
     const fastify = {
       redis: {
         get: redisGet,
@@ -36,6 +38,9 @@ describe('AuthService verifyOtpAndSignup', () => {
         },
         refreshToken: {
           create: refreshTokenCreate
+        },
+        storeSettings: {
+          findUnique: storeSettingsFindUnique
         }
       },
       jwt: {
@@ -113,6 +118,22 @@ describe('AuthService verifyOtpAndSignup', () => {
         email: 'ops@example.com'
       })
     ).rejects.toMatchObject({ statusCode: 409, code: 'CONFLICT' });
+    expect(userCreate).not.toHaveBeenCalled();
+  });
+
+  it('rejects phone signup when mobileOtpSignupEnabled is false', async () => {
+    storeSettingsFindUnique.mockResolvedValueOnce({ mobileOtpSignupEnabled: false });
+    const service = buildService();
+
+    await expect(
+      service.verifyOtpAndSignup({
+        phone: '9999999999',
+        otp: '123456'
+      })
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      message: 'Phone signup is not available'
+    });
     expect(userCreate).not.toHaveBeenCalled();
   });
 });

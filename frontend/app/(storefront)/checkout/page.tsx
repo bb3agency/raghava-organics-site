@@ -43,6 +43,7 @@ export default async function CheckoutPage() {
           <CheckoutForm
             isCodEnabled={storeConfig.isCodEnabled}
             minOrderValuePaise={storeConfig.minOrderValuePaise}
+            configAvailable={storeConfig.configAvailable}
           />
 
           <aside className="rounded-[20px] bg-white p-4 shadow-sm sm:p-6 lg:p-8">
@@ -65,7 +66,7 @@ export default async function CheckoutPage() {
               {storeConfig.minOrderValuePaise > 0 && (
                 <li>
                   <strong className="text-[#23403d]">Minimum order:</strong>{" "}
-                  {formatPrice(storeConfig.minOrderValuePaise)} — orders below this amount cannot be placed.
+                  {formatPrice(storeConfig.minOrderValuePaise)} cart subtotal — orders below this cannot be placed.
                 </li>
               )}
               <li>Shipping and total amounts are calculated live from the server based on your pincode.</li>

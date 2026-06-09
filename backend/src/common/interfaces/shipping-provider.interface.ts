@@ -62,6 +62,8 @@ export type DeliveryRateInput = {
   destinationPincode: string;
   originPincode: string;
   totalWeightGrams: number;
+  /** When COD, adapters quote COD freight instead of prepaid. */
+  paymentMode?: 'COD' | 'PREPAID';
 };
 
 export type CourierOption = {
@@ -98,7 +100,7 @@ export interface ShippingProviderAdapter {
   createShipment(input: CreateShipmentInput): Promise<CreateShipmentResult>;
   trackShipment(awbNumber: string): Promise<TrackShipmentResult>;
   cancelShipment(awbNumber: string): Promise<{ cancelled: boolean; providerPayload: Record<string, unknown> }>;
-  checkServiceability(pincode: string): Promise<ServiceabilityResult>;
+  checkServiceability(pincode: string, originPincode?: string): Promise<ServiceabilityResult>;
   calculateDeliveryRate(input: DeliveryRateInput): Promise<DeliveryRateResult>;
   schedulePickup?(shiprocketShipmentId: string): Promise<SchedulePickupResult>;
   generateLabel?(shiprocketShipmentId: string): Promise<GenerateLabelResult>;

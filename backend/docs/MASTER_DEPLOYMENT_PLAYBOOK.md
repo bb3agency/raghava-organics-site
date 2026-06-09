@@ -1397,11 +1397,30 @@ Admin login uses a mandatory 2-step email OTP flow. There is no single-step logi
 // Error code: PINCODE_NOT_SERVICEABLE (when serviceable=false in response)
 ```
 
-#### `GET /api/v1/cart/delivery-rates?pincode=500001`
+#### `GET /api/v1/cart/delivery-rates?pincode=500001&paymentMode=PREPAID`
+
+Query `paymentMode` optional: `PREPAID` (default) or `COD`. Quotes may differ by mode.
 
 ```jsonc
 // Response 200 → data
 { "pincode": "500001", "shippingCharge": 4900, "estimatedDays": 3 }
+```
+
+#### `GET /api/v1/store/config`
+
+Public runtime storefront config (no auth). Used by Next.js ISR and admin GST panels.
+
+```jsonc
+// Response 200 → data
+{
+  "isCodEnabled": true,
+  "minOrderValuePaise": 0,
+  "mobileOtpSignupEnabled": false,
+  "couponsEnabled": true,
+  "reviewsEnabled": true,
+  "wishlistEnabled": false,
+  "gstInvoicingEnabled": true
+}
 ```
 
 ### A.5 Orders — Customer
@@ -1581,7 +1600,7 @@ REFUNDED         → [] (terminal)
 ```
 
 **Frontend rules:**
-- Customer can cancel only from `CONFIRMED` or `PROCESSING`
+- Customer can cancel only from `CONFIRMED` or `PROCESSING` (not `PENDING_PAYMENT` / `PAYMENT_FAILED`)
 - Admin can cancel from `CONFIRMED` or `PROCESSING` (with auto-refund if payment captured)
 - Admin ships only from `CONFIRMED` or `PROCESSING`
 - `SHIPPED` → `OUT_FOR_DELIVERY` → `DELIVERED` are shipping-webhook driven
@@ -2001,7 +2020,7 @@ Token: <SHIPROCKET_WEBHOOK_TOKEN>
 | `REDIS_URL` | Yes | `redis://:password@redis:6379` | Full Redis connection URL. Use `redis` (service name) inside Docker, `localhost` outside. |
 | `REDIS_PASSWORD` | **Recommended** | `strong-random-password` | Must match the password segment of `REDIS_URL`. Used by Redis container `--requirepass`. Technically optional (blank disables auth), but blank causes `ECONNRESET` loops due to Redis `protected-mode` — see Appendix H.3. **Always set in all environments.** |
 | `REDIS_KEY_PEPPER` | No | `hex-string` | Optional HMAC pepper for Redis key derivation (e.g. guest coupon keys). Defaults to `JWT_SECRET`. |
-| `STOREFRONT_URL` | Yes | `https://foodstore.com` | Used for CORS, email links, cookie domain. |
+| `STOREFRONT_URL` | Yes | `https://foodstore.com` | Used for CORS, email links, cookie domain. **Boot fails in production-like profiles if missing** (prevents password-reset emails linking to localhost). |
 | `ADMIN_URL` | Yes | `https://foodstore.com` | Used for CORS. Often same as `STOREFRONT_URL` for same-origin deployments. |
 | `POSTGRES_USER` | No | `postgres` | PostgreSQL user for Docker Compose service. Default: `postgres`. |
 | `POSTGRES_PASSWORD` | No | `postgres` | PostgreSQL password for Docker Compose service. Default: `postgres`. |

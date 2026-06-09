@@ -6,6 +6,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { SignupPhoneForm } from "@/components/auth/SignupPhoneForm";
 import { EmailRegisterForm } from "@/components/auth/EmailRegisterForm";
 import { useAuthStore } from "@/stores/auth";
+import { fetchPublicStoreConfigClient } from "@/lib/storefront-settings";
 import { mergeGuestCartAfterAuth } from "@/lib/post-auth-cart-merge";
 import type { AuthSession } from "@/types/user";
 
@@ -24,25 +25,9 @@ function RegisterPageContent() {
   // Fetch mobileOtpSignupEnabled from the public store config.
   // This is a lightweight ISR-cached endpoint — no auth needed.
   useEffect(() => {
-    const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL;
-    if (!apiBase) {
-      setConfigLoaded(true);
-      return;
-    }
-    fetch(`${apiBase}/store/config`)
-      .then((r) => r.json())
-      .then((body: unknown) => {
-        // Handle both enveloped ({ success, data }) and raw responses.
-        const data =
-          typeof body === "object" && body !== null && "data" in body
-            ? (body as { data: unknown }).data
-            : body;
-        if (
-          typeof data === "object" &&
-          data !== null &&
-          "mobileOtpSignupEnabled" in data &&
-          (data as Record<string, unknown>).mobileOtpSignupEnabled === true
-        ) {
+    fetchPublicStoreConfigClient()
+      .then((config) => {
+        if (config.mobileOtpSignupEnabled) {
           setMobileOtpEnabled(true);
         }
       })

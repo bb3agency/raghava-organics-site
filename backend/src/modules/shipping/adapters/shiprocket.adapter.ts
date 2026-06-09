@@ -186,12 +186,12 @@ export default class ShiprocketAdapter implements ShippingProviderAdapter {
     try {
       return JSON.parse(text) as Record<string, unknown>;
     } catch {
-      return { raw: text };
+      throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Shiprocket returned invalid JSON', 502);
     }
   }
 
-  async checkServiceability(pincode: string): Promise<ServiceabilityResult> {
-    const pickupPincode = process.env.SHIPROCKET_PICKUP_PINCODE ?? '';
+  async checkServiceability(pincode: string, originPincode?: string): Promise<ServiceabilityResult> {
+    const pickupPincode = originPincode ?? process.env.SHIPROCKET_PICKUP_PINCODE ?? '';
     const query = new URLSearchParams({
       pickup_postcode: pickupPincode,
       delivery_postcode: pincode,
@@ -213,11 +213,12 @@ export default class ShiprocketAdapter implements ShippingProviderAdapter {
 
   async calculateDeliveryRate(input: DeliveryRateInput): Promise<DeliveryRateResult> {
     const weightKg = Math.max(0.001, input.totalWeightGrams / 1000);
+    const isCod = input.paymentMode === 'COD';
     const query = new URLSearchParams({
       pickup_postcode: input.originPincode,
       delivery_postcode: input.destinationPincode,
       weight: weightKg.toFixed(3),
-      cod: '0'
+      cod: isCod ? '1' : '0'
     });
 
     const payload = await this.request<ShiprocketServiceabilityResponse>(

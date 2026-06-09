@@ -5,6 +5,7 @@ import { Role } from '@prisma/client';
 import { AppError } from '@common/errors/app-error';
 import { ERROR_CODES } from '@common/errors/error-codes';
 import { AdminPermission, MERCHANT_DEFAULT_PERMISSIONS } from '@common/auth/admin-permissions';
+import { validateSetupBaseUrl } from '@common/security/setup-base-url';
 import { sendNotificationFailureAlert } from '@modules/notifications/notification-failure-alert';
 import { getAvailableOtpChannels, resolveEffectiveOtpChannel, resolvePrimaryOtpChannel } from './otp-channel';
 
@@ -136,6 +137,7 @@ export class AdminInvitesService {
     if (!inviteName) {
       throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Invite name is required', 400);
     }
+    validateSetupBaseUrl(input.setupBaseUrl.trim());
     await this.assertMerchantAdminInviteEmailAllowed(inviteEmail);
     const existingOpsUser = await this.fastify.prisma.opsUser.findUnique({ where: { email: inviteEmail } });
     if (existingOpsUser) {

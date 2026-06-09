@@ -554,6 +554,9 @@ Only one coupon can be applied per order. Stacking coupons is not supported in v
 **BR-CPN-03 — Discount is on subtotal before shipping**
 All discount calculations are applied to the item subtotal. A `FREE_SHIPPING` coupon sets the shipping charge to zero but does not reduce the item subtotal.
 
+**BR-CPN-04 — Checkout reservation until finalize or release**
+Usage limits count in-flight checkout orders in `PENDING_PAYMENT` and `PAYMENT_FAILED` as reserved slots (in addition to finalized `usesCount`). A slot is released on payment failure cleanup, stale checkout cancel (reconciliation), order cancel, or successful finalize (`CouponUsage` row + increment). Guest Redis per-user counters fail closed on increment errors.
+
 ---
 
 ### 7.7 GST & Invoicing Rules

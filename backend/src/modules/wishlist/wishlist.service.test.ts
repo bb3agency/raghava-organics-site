@@ -97,4 +97,19 @@ describe('WishlistService', () => {
     expect(result.items).toHaveLength(1);
     expect(result.meta.total).toBe(1);
   });
+
+  it('rejects addToWishlist when wishlist feature flag is disabled', async () => {
+    featureFlags.wishlist = false;
+    const service = new WishlistService({
+      prisma: {
+        product: { findFirst: vi.fn() },
+        wishlistItem: { findUnique: vi.fn(), create: vi.fn() }
+      }
+    } as unknown as FastifyInstance);
+
+    await expect(service.addWishlistItem('user_1', { productId: 'product_1' })).rejects.toMatchObject({
+      statusCode: 400,
+      message: 'Wishlist is disabled'
+    });
+  });
 });

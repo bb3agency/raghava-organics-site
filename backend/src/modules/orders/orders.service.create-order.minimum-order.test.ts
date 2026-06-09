@@ -74,6 +74,11 @@ describe('OrdersService createOrder minimum order value', () => {
       },
       coupon: {
         update: vi.fn()
+      },
+      storeSettings: {
+        findUnique: vi.fn().mockResolvedValue({
+          minOrderValuePaise: 10000
+        })
       }
     };
 
@@ -112,7 +117,8 @@ describe('OrdersService createOrder minimum order value', () => {
 
     await expect(service.createOrder('user_1', { addressId: 'address_1' })).rejects.toMatchObject({
       code: 'VALIDATION_ERROR',
-      statusCode: 400
+      statusCode: 400,
+      message: 'Cart subtotal is below the minimum order value of 10000 paise'
     });
     expect(tx.order.create).not.toHaveBeenCalled();
   });

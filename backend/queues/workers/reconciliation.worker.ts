@@ -1,5 +1,8 @@
 import { OrderStatus, PaymentStatus, Prisma, PrismaClient as RealPrismaClient } from '@prisma/client';
 import { Queue, Worker, type ConnectionOptions } from 'bullmq';
+import { releaseCouponUsageForOrder, clearUnfinalizedCouponLinks } from '@common/coupons/coupon-usage';
+import { releaseReservationsForOrder } from '@common/orders/release-reservations';
+import { restoreOrderInventoryOnCancel } from '@common/orders/restore-inventory-on-cancel';
 import { sendTechnicalFailureAlert } from '../../src/modules/notifications/notification-failure-alert';
 
 const STALE_PENDING_PAYMENT_MS = 30 * 60 * 1000;
@@ -10,7 +13,6 @@ const STALE_PENDING_PAYMENT_MS = 30 * 60 * 1000;
 // without a code deploy — useful during fraud investigations or incident triage.
 // Default: all four safe types are enabled.
 const DEFAULT_AUTO_HEAL_ISSUES = [
-  'ORDER_SHIPPED_WITHOUT_SHIPMENT',
   'PAYMENT_CAPTURED_ORDER_NOT_CONFIRMED',
   'REFUNDED_STATUS_MISMATCH',
   'STALE_PENDING_PAYMENT'
@@ -116,7 +118,7 @@ export function createReconciliationWorker(
               details: {
                 orderStatus: order.status,
                 severity: 'high',
-                healPolicy: 'auto_heal_safe'
+                healPolicy: 'manual_review'
               }
             });
           }
@@ -138,11 +140,15 @@ export function createReconciliationWorker(
           }
 
           if (
-            order.status === OrderStatus.PENDING_PAYMENT &&
+            (order.status === OrderStatus.PENDING_PAYMENT ||
+              order.status === OrderStatus.PAYMENT_FAILED) &&
             Date.now() - order.createdAt.getTime() > STALE_PENDING_PAYMENT_MS
           ) {
             issues.push({
-              issueType: 'STALE_PENDING_PAYMENT',
+              issueType:
+                order.status === OrderStatus.PAYMENT_FAILED
+                  ? 'STALE_PAYMENT_FAILED'
+                  : 'STALE_PENDING_PAYMENT',
               details: {
                 orderStatus: order.status,
                 ageSeconds: Math.floor((Date.now() - order.createdAt.getTime()) / 1000),
@@ -191,7 +197,8 @@ export function createReconciliationWorker(
           }
 
           if (
-            order.status === OrderStatus.PENDING_PAYMENT &&
+            (order.status === OrderStatus.PENDING_PAYMENT ||
+              order.status === OrderStatus.PAYMENT_FAILED) &&
             order.payment?.status === PaymentStatus.CAPTURED &&
             SAFE_AUTO_HEAL_ISSUES.has('PAYMENT_CAPTURED_ORDER_NOT_CONFIRMED')
           ) {
@@ -233,22 +240,67 @@ export function createReconciliationWorker(
             order.status !== OrderStatus.REFUNDED &&
             SAFE_AUTO_HEAL_ISSUES.has('REFUNDED_STATUS_MISMATCH')
           ) {
-            // Atomic CAS: only transition if status hasn't changed (prevents races)
-            const orderDelegate = prisma.order as unknown as {
-              updateMany?: (args: { where: Record<string, unknown>; data: Record<string, unknown> }) => Promise<unknown>;
-              update: (args: { where: { id: string }; data: Record<string, unknown> }) => Promise<unknown>;
-            };
-            if (typeof orderDelegate.updateMany === 'function') {
-              await orderDelegate.updateMany({
-                where: { id: order.id, status: { not: OrderStatus.REFUNDED } },
-                data: { status: OrderStatus.REFUNDED }
-              });
-            } else {
-              await orderDelegate.update({
-                where: { id: order.id },
-                data: { status: OrderStatus.REFUNDED }
-              });
-            }
+            await prisma.$transaction(async (tx) => {
+              const orderDelegate = tx.order as unknown as {
+                findUnique?: (args: {
+                  where: { id: string };
+                  include: {
+                    items: { select: { variantId: true; quantity: true } };
+                    statusHistory: { select: { triggeredBy: true } };
+                  };
+                }) => Promise<{
+                  id: string;
+                  status: OrderStatus;
+                  paymentMode: string | null;
+                  items: Array<{ variantId: string; quantity: number }>;
+                  statusHistory: Array<{ triggeredBy: string | null }>;
+                } | null>;
+                updateMany?: (args: {
+                  where: Record<string, unknown>;
+                  data: Record<string, unknown>;
+                }) => Promise<{ count: number }>;
+                update: (args: { where: { id: string }; data: Record<string, unknown> }) => Promise<unknown>;
+              };
+              const snapshot = orderDelegate.findUnique
+                ? await orderDelegate.findUnique({
+                    where: { id: order.id },
+                    include: {
+                      items: { select: { variantId: true, quantity: true } },
+                      statusHistory: { select: { triggeredBy: true } }
+                    }
+                  })
+                : null;
+              const priorStatus = snapshot?.status ?? order.status;
+              let healed = false;
+              if (typeof orderDelegate.updateMany === 'function') {
+                const result = await orderDelegate.updateMany({
+                  where: { id: order.id, status: { not: OrderStatus.REFUNDED } },
+                  data: { status: OrderStatus.REFUNDED }
+                });
+                healed = result.count > 0;
+              } else {
+                await orderDelegate.update({
+                  where: { id: order.id },
+                  data: { status: OrderStatus.REFUNDED }
+                });
+                healed = true;
+              }
+              if (healed) {
+                if (
+                  snapshot &&
+                  (priorStatus === OrderStatus.CONFIRMED || priorStatus === OrderStatus.PROCESSING)
+                ) {
+                  await restoreOrderInventoryOnCancel(tx, {
+                    id: order.id,
+                    paymentMode: snapshot.paymentMode,
+                    items: snapshot.items,
+                    statusHistory: snapshot.statusHistory
+                  });
+                }
+                await releaseCouponUsageForOrder(tx, order.id);
+                await clearUnfinalizedCouponLinks(tx, order.id);
+              }
+            });
             await prisma.reconciliationIssue.updateMany({
               where: {
                 aggregateRef: issueKey(order.id, 'REFUNDED_STATUS_MISMATCH'),
@@ -262,31 +314,71 @@ export function createReconciliationWorker(
             });
           }
 
+          const paymentBlocksStaleCancel =
+            paymentStatus === PaymentStatus.CAPTURED ||
+            paymentStatus === PaymentStatus.PARTIALLY_REFUNDED;
+
           if (
-            order.status === OrderStatus.PENDING_PAYMENT &&
+            (order.status === OrderStatus.PENDING_PAYMENT ||
+              order.status === OrderStatus.PAYMENT_FAILED) &&
             Date.now() - order.createdAt.getTime() > STALE_PENDING_PAYMENT_MS &&
+            !paymentBlocksStaleCancel &&
             SAFE_AUTO_HEAL_ISSUES.has('STALE_PENDING_PAYMENT')
           ) {
-            // Atomic CAS: only cancel if still pending (prevents races with concurrent state changes)
-            const orderDelegate = prisma.order as unknown as {
-              updateMany?: (args: { where: Record<string, unknown>; data: Record<string, unknown> }) => Promise<unknown>;
-              update: (args: { where: { id: string }; data: Record<string, unknown> }) => Promise<unknown>;
-            };
-            if (typeof orderDelegate.updateMany === 'function') {
-              await orderDelegate.updateMany({
-                where: { id: order.id, status: OrderStatus.PENDING_PAYMENT },
-                data: { status: OrderStatus.CANCELLED }
-              });
-            } else {
-              await orderDelegate.update({
-                where: { id: order.id },
-                data: { status: OrderStatus.CANCELLED }
-              });
-            }
+            const staleFromStatus = order.status;
+            await prisma.$transaction(async (tx) => {
+              const orderDelegate = tx.order as unknown as {
+                updateMany?: (args: {
+                  where: Record<string, unknown>;
+                  data: Record<string, unknown>;
+                }) => Promise<{ count: number }>;
+                update: (args: { where: { id: string }; data: Record<string, unknown> }) => Promise<unknown>;
+              };
+              let cancelled = false;
+              if (typeof orderDelegate.updateMany === 'function') {
+                const result = await orderDelegate.updateMany({
+                  where: { id: order.id, status: staleFromStatus },
+                  data: { status: OrderStatus.CANCELLED }
+                });
+                cancelled = result.count > 0;
+              } else {
+                await orderDelegate.update({
+                  where: { id: order.id },
+                  data: { status: OrderStatus.CANCELLED }
+                });
+                cancelled = true;
+              }
+              if (cancelled) {
+                if (staleFromStatus === OrderStatus.PENDING_PAYMENT) {
+                  await releaseReservationsForOrder(tx, order.id);
+                }
+                await clearUnfinalizedCouponLinks(tx, order.id);
+                await tx.orderStatusHistory.create({
+                  data: {
+                    orderId: order.id,
+                    fromStatus: staleFromStatus,
+                    toStatus: OrderStatus.CANCELLED,
+                    triggeredBy: 'RECONCILIATION',
+                    note:
+                      staleFromStatus === OrderStatus.PAYMENT_FAILED
+                        ? 'Auto-heal: stale payment failed checkout abandoned'
+                        : 'Auto-heal: stale pending payment checkout abandoned'
+                  }
+                });
+              }
+            });
             await prisma.reconciliationIssue.updateMany({
               where: {
-                aggregateRef: issueKey(order.id, 'STALE_PENDING_PAYMENT'),
-                issueType: 'STALE_PENDING_PAYMENT',
+                aggregateRef: issueKey(
+                  order.id,
+                  staleFromStatus === OrderStatus.PAYMENT_FAILED
+                    ? 'STALE_PAYMENT_FAILED'
+                    : 'STALE_PENDING_PAYMENT'
+                ),
+                issueType:
+                  staleFromStatus === OrderStatus.PAYMENT_FAILED
+                    ? 'STALE_PAYMENT_FAILED'
+                    : 'STALE_PENDING_PAYMENT',
                 isResolved: false
               },
               data: {

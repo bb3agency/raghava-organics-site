@@ -262,7 +262,10 @@ Remove the applied coupon from the cart.
 Check if a pincode is serviceable. Body: `{ pincode }`. Returns `{ serviceable, estimatedDays }`.
 
 ### `GET /api/v1/cart/delivery-rates`
-Get delivery rate estimates for the cart. Query: `pincode`. Returns available courier options and prices.
+Get delivery rate estimates for the cart. Query: `pincode` (required), `paymentMode` (optional, `PREPAID` | `COD`, default `PREPAID`). Returns shipping charge and estimated days for the active provider. COD and prepaid quotes may differ.
+
+### `GET /api/v1/store/config`
+Public runtime storefront configuration. No auth. Returns `isCodEnabled`, `minOrderValuePaise`, `mobileOtpSignupEnabled`, and mirrors of backend `FEATURE_*` flags (`couponsEnabled`, `reviewsEnabled`, `wishlistEnabled`, `gstInvoicingEnabled`). Does not expose GSTIN or secrets.
 
 ---
 
@@ -280,7 +283,7 @@ Customer view of a specific order. Owner-only (cannot view another customer's or
 Download invoice PDF for a specific order. Owner-only. Returns PDF binary with `Content-Type: application/pdf`.
 
 ### `POST /api/v1/orders/:id/cancel`
-Customer self-service cancel. Only allowed within the cancellation window (configurable via `settings/cod`). Body: `{ reason? }`.
+Customer self-service cancel. **Allowed only from `CONFIRMED` or `PROCESSING`** (not `PENDING_PAYMENT` or `PAYMENT_FAILED`). Enforces `cancellationWindowHours` from store settings. Body: `{ reason? }`. Enqueues `cancel-shipment` when a shipment AWB exists. Restores inventory (with COD guard — see `restore-inventory-on-cancel.ts`) and releases coupon reservations.
 
 ### `POST /api/v1/payments/initiate`
 Start prepaid payment for an order. Returns Razorpay order ID, amount, currency for the frontend payment modal.
@@ -289,7 +292,7 @@ Start prepaid payment for an order. Returns Razorpay order ID, amount, currency 
 Called after Razorpay payment modal completes. Body includes Razorpay payment ID, order ID, signature. Verifies HMAC signature and marks order as paid.
 
 ### `POST /api/v1/payments/retry`
-Retry payment for an order stuck in `PENDING_PAYMENT` or `PAYMENT_FAILED` state. Returns fresh Razorpay order params.
+Retry payment for an order stuck in `PENDING_PAYMENT` or `PAYMENT_FAILED` state. Restores checkout cart reservations server-side before returning fresh Razorpay order params. Returns `400`/`409` for COD orders.
 
 ### `GET /api/v1/shipping/track/:awb`
 Track a shipment by AWB number. Returns courier status and timeline events.

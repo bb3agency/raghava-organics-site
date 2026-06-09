@@ -13,6 +13,7 @@ import { FastifyInstance } from 'fastify';
 import { AppError } from '@common/errors/app-error';
 import { ERROR_CODES } from '@common/errors/error-codes';
 import { decryptOpsConfigValue } from '@common/security/ops-config-crypto';
+import { resolvePickupPincode } from '@common/shipping/resolve-pickup-pincode';
 import type { CheckoutRiskAssessmentPort } from '@common/interfaces/checkout-risk.interface';
 import { PaymentProviderAdapter } from '@common/interfaces/payment-provider.interface';
 import { canTransitionOrder } from '@common/orders/order-state-machine';
@@ -27,7 +28,10 @@ import {
 } from '@modules/notifications/notification-failure-alert';
 import { CheckoutRiskService } from './checkout-risk.service';
 import { SettingsService } from '@modules/settings/settings.service';
+import { featureFlags } from '@config/feature-flags';
 import { recordCheckoutPath, recordWebhookEvent } from '@common/observability/metrics';
+import { assertCouponWithinUsageLimits, finalizeCouponUsageForOrder, releaseCouponUsageForOrder, type CouponLimitClient } from '@common/coupons/coupon-usage';
+import { restoreOrderInventoryOnCancel } from '@common/orders/restore-inventory-on-cancel';
 import {
   AdminRetriggerNotificationInput,
   AdminOrderExportQuery,
@@ -379,15 +383,6 @@ export class OrdersService {
         422
       );
     }
-    const deliveryRates = await cartService.getDeliveryRates(
-      userId,
-      undefined,
-      shippingAddress.pincode
-    );
-    const storeSettings = await this.fastify.prisma.storeSettings.findUnique({
-      where: { singletonKey: 'default' },
-      select: { minOrderValuePaise: true }
-    });
 
     const createdOrder = await this.fastify.prisma.$transaction(async (tx) => {
       await tx.$executeRaw`CREATE SEQUENCE IF NOT EXISTS order_number_seq START 1`;
@@ -421,6 +416,11 @@ export class OrdersService {
       if (!cart || cart.items.length === 0) {
         throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Cart is empty', 400);
       }
+
+      const storeSettings = await tx.storeSettings.findUnique({
+        where: { singletonKey: 'default' },
+        select: { minOrderValuePaise: true }
+      });
 
       for (const item of cart.items) {
         const reservationDelegate = (
@@ -457,20 +457,33 @@ export class OrdersService {
       if (subtotal < minimumOrderValue) {
         throw new AppError(
           ERROR_CODES.VALIDATION_ERROR,
-          `Minimum order value is ${minimumOrderValue} paise`,
+          `Cart subtotal is below the minimum order value of ${minimumOrderValue} paise`,
           400
         );
       }
-      const effectiveCoupon = cart.coupon;
+      const effectiveCoupon = featureFlags.coupons ? cart.coupon : null;
       if (effectiveCoupon) {
-        await this.validateOrderCoupon(effectiveCoupon, subtotal, userId, cart.items);
+        await this.validateOrderCoupon(effectiveCoupon, subtotal, userId, cart.items, tx);
       }
       const discountAmount = this.calculateOrderDiscount(subtotal, effectiveCoupon, cart.items);
-      const shippingCharge =
-        effectiveCoupon?.type === 'FREE_SHIPPING' ? 0 : deliveryRates.shippingCharge;
+      const requestedPaymentMode = input.paymentMode ?? 'PREPAID';
+      const usingNoop = cartService.usesNoopShipping();
+      const pickupPincode = await resolvePickupPincode(tx as unknown as PrismaClient, {
+        noopFallback: usingNoop ? '500001' : null
+      });
+      if (!pickupPincode) {
+        throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Shipping provider is not configured', 503);
+      }
+      const shippingQuote = await cartService.computeShippingChargeForCart({
+        cart,
+        destinationPincode: shippingAddress.pincode,
+        originPincode: pickupPincode,
+        usingNoop,
+        paymentMode: requestedPaymentMode === 'COD' ? 'COD' : 'PREPAID'
+      });
+      const shippingCharge = shippingQuote.shippingChargePaise;
       const total = Math.max(subtotal + shippingCharge - discountAmount, 0);
 
-      const requestedPaymentMode = input.paymentMode ?? 'PREPAID';
       if (requestedPaymentMode === 'COD') {
         const codSettings = await tx.storeSettings.findUnique({
           where: { singletonKey: 'default' },
@@ -567,6 +580,15 @@ export class OrdersService {
       }
       await tx.cart.update({ where: { id: cart.id }, data: { couponId: null } });
 
+      if (requestedPaymentMode === 'COD' && effectiveCoupon) {
+        await finalizeCouponUsageForOrder(tx, {
+          orderId: order.id,
+          userId,
+          discountAmount,
+          coupons: [{ id: effectiveCoupon.id, usesCount: effectiveCoupon.usesCount }]
+        });
+      }
+
       const finalized = await tx.order.findUniqueOrThrow({
         where: { id: order.id },
         include: {
@@ -659,6 +681,10 @@ export class OrdersService {
     userId: string,
     orderId: string
   ): Promise<{ invoiceNumber: string; content: Buffer }> {
+    if (!featureFlags.gstInvoicing) {
+      throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'GST invoicing is disabled', 400);
+    }
+
     const order = await this.fastify.prisma.order.findFirst({
       where: { id: orderId, userId },
       select: {
@@ -783,19 +809,18 @@ export class OrdersService {
             400
           );
         }
-        for (const item of existing.items) {
-          await tx.inventory.updateMany({
-            where: { variantId: item.variantId },
-            data: {
-              quantity: {
-                increment: item.quantity
-              }
-            }
-          });
-        }
         queuedRefund = true;
         refundReason = input?.reason?.trim() || 'Order cancelled and refunded by customer';
       }
+
+      await restoreOrderInventoryOnCancel(tx, {
+        id: existing.id,
+        paymentMode: existing.paymentMode,
+        items: existing.items,
+        statusHistory: existing.statusHistory
+      });
+
+      await releaseCouponUsageForOrder(tx, existing.id);
 
       return tx.order.findUniqueOrThrow({
         where: { id: existing.id },
@@ -868,6 +893,7 @@ export class OrdersService {
       updatedOrder.user?.email ?? null,
       updatedOrder.user?.phone ?? null
     );
+    await this.enqueueShipmentCancellation(updatedOrder.id, updatedOrder.shipment);
     recordCheckoutPath('/api/v1/orders/:id/cancel', 'success');
     return this.serializeOrder(updatedOrder, {
       exposeProviderReferences: false,
@@ -881,6 +907,21 @@ export class OrdersService {
     });
     if (!order) {
       throw new AppError(ERROR_CODES.NOT_FOUND, 'Order not found', 404);
+    }
+
+    if (order.paymentMode === 'COD') {
+      throw new AppError(
+        ERROR_CODES.VALIDATION_ERROR,
+        'COD orders do not require online payment',
+        400
+      );
+    }
+    if (order.status !== OrderStatus.PENDING_PAYMENT) {
+      throw new AppError(
+        ERROR_CODES.INVALID_STATUS_TRANSITION,
+        'Payment can only be initiated for pending-payment orders',
+        409
+      );
     }
 
     await this.checkoutRisk.assertInitiatePaymentAllowed({
@@ -898,7 +939,11 @@ export class OrdersService {
         receipt: order.orderNumber,
         notes: { orderId: order.id }
       });
-    } catch {
+    } catch (error) {
+      this.fastify.log?.error(
+        { err: error, orderId: order.id, userId },
+        'Razorpay createOrder failed during payment initiation'
+      );
       throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Unable to initiate payment order', 502);
     }
 
@@ -1918,6 +1963,10 @@ export class OrdersService {
   }
 
   async adminGetInvoicePdf(orderId: string): Promise<{ invoiceNumber: string; content: Buffer }> {
+    if (!featureFlags.gstInvoicing) {
+      throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'GST invoicing is disabled', 400);
+    }
+
     const order = await this.fastify.prisma.order.findUnique({
       where: { id: orderId },
       select: {
@@ -2072,18 +2121,29 @@ export class OrdersService {
 
       if (
         input.status === OrderStatus.CANCELLED &&
-        existing.payment?.status === PaymentStatus.CAPTURED
+        (existing.status === OrderStatus.CONFIRMED || existing.status === OrderStatus.PROCESSING)
       ) {
-        for (const item of existing.items) {
-          await tx.inventory.updateMany({
-            where: { variantId: item.variantId },
-            data: {
-              quantity: {
-                increment: item.quantity
-              }
-            }
-          });
+        const shouldRefund =
+          existing.payment?.status === PaymentStatus.CAPTURED ||
+          existing.payment?.status === PaymentStatus.PARTIALLY_REFUNDED;
+        if (shouldRefund) {
+          if (!existing.payment?.providerPaymentId) {
+            throw new AppError(ERROR_CODES.CONFLICT, 'Missing provider payment id for refund', 409);
+          }
+          queuedRefund = true;
+          refundReason = input.note?.trim() || 'Order cancelled and refunded by admin';
+          refundOrderId = existing.id;
+          refundSourceStatus = existing.status;
         }
+
+        await restoreOrderInventoryOnCancel(tx, {
+          id: existing.id,
+          paymentMode: existing.paymentMode,
+          items: existing.items,
+          statusHistory: existing.statusHistory
+        });
+
+        await releaseCouponUsageForOrder(tx, existing.id);
       }
 
       return tx.order.findUniqueOrThrow({
@@ -2156,6 +2216,10 @@ export class OrdersService {
           'Failed to enqueue refund initiation job'
         );
       }
+    }
+
+    if (updatedOrder.status === OrderStatus.CANCELLED) {
+      await this.enqueueShipmentCancellation(updatedOrder.id, updatedOrder.shipment);
     }
 
     return this.serializeOrder(updatedOrder);
@@ -2313,6 +2377,10 @@ export class OrdersService {
         where: { id: orderId },
         include: {
           payment: true,
+          shipment: true,
+          statusHistory: {
+            orderBy: { createdAt: 'desc' }
+          },
           items: {
             select: {
               variantId: true,
@@ -2356,8 +2424,8 @@ export class OrdersService {
         );
       }
 
-      if (existing.payment && shouldRefund) {
-        if (!existing.payment.providerPaymentId) {
+      if (shouldRefund) {
+        if (!existing.payment?.providerPaymentId) {
           throw new AppError(ERROR_CODES.CONFLICT, 'Missing provider payment id for refund', 409);
         }
         if (
@@ -2391,18 +2459,14 @@ export class OrdersService {
         }
       });
 
-      if (shouldRefund) {
-        for (const item of existing.items) {
-          await tx.inventory.updateMany({
-            where: { variantId: item.variantId },
-            data: {
-              quantity: {
-                increment: item.quantity
-              }
-            }
-          });
-        }
-      }
+      await restoreOrderInventoryOnCancel(tx, {
+        id: existing.id,
+        paymentMode: existing.paymentMode,
+        items: existing.items,
+        statusHistory: existing.statusHistory
+      });
+
+      await releaseCouponUsageForOrder(tx, existing.id);
 
       return tx.order.findUniqueOrThrow({
         where: { id: existing.id },
@@ -2481,6 +2545,7 @@ export class OrdersService {
         updatedOrder.user?.email ?? null,
         updatedOrder.user?.phone ?? null
       );
+      await this.enqueueShipmentCancellation(updatedOrder.id, updatedOrder.shipment);
     }
 
     return this.serializeOrder(updatedOrder);
@@ -2639,7 +2704,8 @@ export class OrdersService {
       priceSnapshot: number;
       quantity: number;
       variant: { productId: string; product: { categoryId: string } };
-    }>
+    }>,
+    client: CouponLimitClient = this.fastify.prisma
   ) {
     if (!coupon.isActive) {
       throw new AppError(ERROR_CODES.NOT_FOUND, 'Coupon not found', 404);
@@ -2664,9 +2730,6 @@ export class OrdersService {
         400
       );
     }
-    if (coupon.maxUsesTotal !== null && coupon.usesCount >= coupon.maxUsesTotal) {
-      throw new AppError(ERROR_CODES.COUPON_USAGE_EXCEEDED, 'Coupon usage limit reached', 409);
-    }
 
     const scopedSubtotal = this.resolveCouponEligibleSubtotal(coupon, items);
     if (this.hasCouponScope(coupon) && scopedSubtotal <= 0) {
@@ -2677,29 +2740,7 @@ export class OrdersService {
       );
     }
 
-    const userUsageCount = await this.fastify.prisma.order.count({
-      where: {
-        userId,
-        coupons: { some: { id: coupon.id } },
-        status: {
-          in: [
-            OrderStatus.CONFIRMED,
-            OrderStatus.PROCESSING,
-            OrderStatus.SHIPPED,
-            OrderStatus.OUT_FOR_DELIVERY,
-            OrderStatus.DELIVERED,
-            OrderStatus.REFUNDED
-          ]
-        }
-      }
-    });
-    if (coupon.maxUsesPerUser !== null && userUsageCount >= coupon.maxUsesPerUser) {
-      throw new AppError(
-        ERROR_CODES.COUPON_USAGE_EXCEEDED,
-        'Coupon usage limit reached for this user',
-        409
-      );
-    }
+    await assertCouponWithinUsageLimits(client, coupon, userId);
   }
 
   private calculateOrderDiscount(
@@ -2828,6 +2869,49 @@ export class OrdersService {
           error: error instanceof Error ? error.message : 'Unknown analytics enqueue error'
         },
         'Failed to enqueue analytics event'
+      );
+    }
+  }
+
+  private async enqueueShipmentCancellation(
+    orderId: string,
+    shipment: { awbNumber: string | null; status: string } | null | undefined
+  ): Promise<void> {
+    const awbNumber = shipment?.awbNumber?.trim();
+    if (!awbNumber) {
+      return;
+    }
+    if (shipment?.status === 'CANCELLED' || shipment?.status === 'DELIVERED') {
+      return;
+    }
+
+    try {
+      await this.enqueueOutboxMessage(
+        'shipping',
+        'cancel-shipment',
+        { orderId, awbNumber },
+        `cancel-shipment:${orderId}`
+      );
+    } catch (error) {
+      await sendTechnicalFailureAlert({
+        prisma: this.fastify.prisma,
+        template: 'ShipmentCancellation',
+        channel: 'UNKNOWN',
+        recipient: orderId,
+        errorMessage: error instanceof Error ? error.message : 'Unknown shipment cancel enqueue error',
+        failureStage: 'QUEUE_ENQUEUE',
+        domain: 'orders',
+        component: 'cancel-order-shipment-enqueue',
+        queueName: 'shipping',
+        jobName: 'cancel-shipment'
+      });
+      this.fastify.log.error(
+        {
+          orderId,
+          awbNumber,
+          error: error instanceof Error ? error.message : 'Unknown shipment cancel enqueue error'
+        },
+        'Failed to enqueue shipment cancellation job'
       );
     }
   }
@@ -3049,7 +3133,99 @@ export class OrdersService {
         400
       );
     }
+
+    if (order.status === OrderStatus.PAYMENT_FAILED) {
+      await this.fastify.prisma.$transaction(async (tx) => {
+        const transitioned = await tx.order.updateMany({
+          where: {
+            id: orderId,
+            userId,
+            status: OrderStatus.PAYMENT_FAILED
+          },
+          data: {
+            status: OrderStatus.PENDING_PAYMENT
+          }
+        });
+        if (transitioned.count === 0) {
+          throw new AppError(
+            ERROR_CODES.INVALID_STATUS_TRANSITION,
+            'Order is no longer eligible for payment retry',
+            409
+          );
+        }
+        await tx.orderStatusHistory.create({
+          data: {
+            orderId,
+            fromStatus: OrderStatus.PAYMENT_FAILED,
+            toStatus: OrderStatus.PENDING_PAYMENT,
+            triggeredBy: 'CUSTOMER',
+            note: 'Payment retry requested'
+          }
+        });
+      });
+    }
+
+    await this.restoreCheckoutReservationsForOrder(userId, orderId);
+
     return this.initiatePayment(userId, { orderId }, opts);
+  }
+
+  private async restoreCheckoutReservationsForOrder(userId: string, orderId: string): Promise<void> {
+    const order = await this.fastify.prisma.order.findFirst({
+      where: { id: orderId, userId },
+      select: {
+        items: {
+          select: {
+            variantId: true,
+            quantity: true
+          }
+        }
+      }
+    });
+    if (!order || order.items.length === 0) {
+      return;
+    }
+
+    const cart = await this.fastify.prisma.cart.findFirst({
+      where: { userId },
+      select: { id: true }
+    });
+    if (!cart) {
+      return;
+    }
+
+    const reservationDelegate = (
+      this.fastify.prisma as unknown as {
+        cartReservation?: {
+          upsert: (args: unknown) => Promise<unknown>;
+        };
+      }
+    ).cartReservation;
+    if (!reservationDelegate?.upsert) {
+      return;
+    }
+
+    const expiresAt = new Date(Date.now() + 30 * 60 * 1000);
+    for (const item of order.items) {
+      await reservationDelegate.upsert({
+        where: {
+          cartId_variantId: {
+            cartId: cart.id,
+            variantId: item.variantId
+          }
+        },
+        create: {
+          cartId: cart.id,
+          variantId: item.variantId,
+          quantity: item.quantity,
+          expiresAt
+        },
+        update: {
+          quantity: item.quantity,
+          expiresAt
+        }
+      });
+    }
   }
 
   async createReturnRequest(
@@ -3338,7 +3514,7 @@ export class OrdersService {
             refundedAmountPaise: order.payment.refundedAmountPaise
           }
         : null,
-      invoice: order.invoice
+      invoice: featureFlags.gstInvoicing && order.invoice
         ? {
             invoiceNumber: order.invoice.invoiceNumber,
             hasPdf: Boolean(order.invoice.pdfUrl),
@@ -3415,20 +3591,7 @@ export class OrdersService {
   }
 
   private async resolvePickupPincode(): Promise<string | null> {
-    const settings = await this.fastify.prisma.storeSettings.findUnique({
-      where: { singletonKey: 'default' },
-      select: { pickupPincode: true }
-    });
-    if (settings?.pickupPincode) {
-      return settings.pickupPincode;
-    }
-    const runtimeConfig = await this.resolveRuntimeConfig([
-      'SHIPROCKET_PICKUP_PINCODE',
-      'DELHIVERY_PICKUP_PINCODE'
-    ]);
-    return (
-      runtimeConfig.SHIPROCKET_PICKUP_PINCODE ?? runtimeConfig.DELHIVERY_PICKUP_PINCODE ?? null
-    );
+    return resolvePickupPincode(this.fastify.prisma);
   }
 
   private fingerprintIdentifier(value: string): string {
@@ -3694,21 +3857,20 @@ export class OrdersService {
     orderId: string,
     updates: Array<{ orderItemId: string; quantity: number }>
   ) {
-    const order = (await this.fastify.prisma.order.findUnique({
+    const order = await this.fastify.prisma.order.findUnique({
       where: { id: orderId },
       include: {
-        items: true
+        items: {
+          select: {
+            id: true,
+            variantId: true,
+            quantity: true,
+            unitPrice: true,
+            totalPrice: true
+          }
+        }
       }
-    })) as
-      | (Record<string, unknown> & {
-          id: string;
-          status: OrderStatus;
-          subtotal: number;
-          shippingCharge: number;
-          discountAmount: number;
-          items: Array<{ id: string; quantity: number; unitPrice: number; totalPrice: number }>;
-        })
-      | null;
+    });
 
     if (!order) {
       throw new AppError(ERROR_CODES.NOT_FOUND, 'Order not found', 404);
@@ -3723,19 +3885,9 @@ export class OrdersService {
     }
 
     const updateMap = new Map(updates.map((u) => [u.orderItemId, u.quantity]));
+    const itemsToUpdate = order.items.filter((item) => updateMap.has(item.id));
 
-    const itemOps = order.items
-      .filter((item) => updateMap.has(item.id))
-      .map((item) => {
-        const newQty = updateMap.get(item.id)!;
-        const newTotal = newQty * item.unitPrice;
-        return this.fastify.prisma.orderItem.update({
-          where: { id: item.id },
-          data: { quantity: newQty, totalPrice: newTotal }
-        });
-      });
-
-    if (itemOps.length === 0) {
+    if (itemsToUpdate.length === 0) {
       throw new AppError(
         ERROR_CODES.VALIDATION_ERROR,
         'No matching order items found for the provided IDs',
@@ -3743,47 +3895,94 @@ export class OrdersService {
       );
     }
 
-    const updatedItems = (await this.fastify.prisma.$transaction(itemOps)) as Array<{
-      id: string;
-      quantity: number;
-      unitPrice: number;
-      totalPrice: number;
-    }>;
-
-    const unchangedSubtotal = order.items
-      .filter((item) => !updateMap.has(item.id))
-      .reduce((sum, item) => sum + item.totalPrice, 0);
-
-    const newSubtotal =
-      unchangedSubtotal + updatedItems.reduce((sum, item) => sum + item.totalPrice, 0);
-    const newTotal = newSubtotal + order.shippingCharge - order.discountAmount;
-
-    await this.fastify.prisma.order.update({
-      where: { id: orderId },
-      data: { subtotal: newSubtotal, total: newTotal }
-    });
-
-    await this.fastify.prisma.orderStatusHistory.create({
-      data: {
-        orderId,
-        fromStatus: order.status as OrderStatus,
-        toStatus: order.status as OrderStatus,
-        triggeredBy: `admin:${adminUserId}`,
-        note: `Items updated by admin`
+    for (const [, quantity] of updateMap) {
+      if (!Number.isInteger(quantity) || quantity <= 0) {
+        throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Quantity must be a positive integer', 400);
       }
-    });
+    }
 
-    return {
-      orderId,
-      subtotal: newSubtotal,
-      total: newTotal,
-      updatedItems: updatedItems.map((i) => ({
-        orderItemId: i.id,
-        quantity: i.quantity,
-        unitPrice: i.unitPrice,
-        totalPrice: i.totalPrice
-      }))
-    };
+    return this.fastify.prisma.$transaction(async (tx) => {
+      const updatedItems: Array<{
+        id: string;
+        quantity: number;
+        unitPrice: number;
+        totalPrice: number;
+      }> = [];
+
+      for (const item of itemsToUpdate) {
+        const newQty = updateMap.get(item.id)!;
+        const delta = newQty - item.quantity;
+
+        if (order.status === OrderStatus.CONFIRMED && delta !== 0) {
+          if (delta > 0) {
+            const decremented = await tx.inventory.updateMany({
+              where: {
+                variantId: item.variantId,
+                quantity: { gte: delta }
+              },
+              data: {
+                quantity: { decrement: delta }
+              }
+            });
+            if (decremented.count === 0) {
+              throw new AppError(
+                ERROR_CODES.INSUFFICIENT_STOCK,
+                `Insufficient stock for variant ${item.variantId}`,
+                422
+              );
+            }
+          } else {
+            await tx.inventory.updateMany({
+              where: { variantId: item.variantId },
+              data: {
+                quantity: { increment: Math.abs(delta) }
+              }
+            });
+          }
+        }
+
+        const newTotal = newQty * item.unitPrice;
+        const updated = await tx.orderItem.update({
+          where: { id: item.id },
+          data: { quantity: newQty, totalPrice: newTotal }
+        });
+        updatedItems.push(updated);
+      }
+
+      const unchangedSubtotal = order.items
+        .filter((item) => !updateMap.has(item.id))
+        .reduce((sum, item) => sum + item.totalPrice, 0);
+      const newSubtotal =
+        unchangedSubtotal + updatedItems.reduce((sum, item) => sum + item.totalPrice, 0);
+      const newTotal = Math.max(newSubtotal + order.shippingCharge - order.discountAmount, 0);
+
+      await tx.order.update({
+        where: { id: orderId },
+        data: { subtotal: newSubtotal, total: newTotal }
+      });
+
+      await tx.orderStatusHistory.create({
+        data: {
+          orderId,
+          fromStatus: order.status,
+          toStatus: order.status,
+          triggeredBy: `admin:${adminUserId}`,
+          note: 'Items updated by admin'
+        }
+      });
+
+      return {
+        orderId,
+        subtotal: newSubtotal,
+        total: newTotal,
+        updatedItems: updatedItems.map((item) => ({
+          orderItemId: item.id,
+          quantity: item.quantity,
+          unitPrice: item.unitPrice,
+          totalPrice: item.totalPrice
+        }))
+      };
+    });
   }
 
   /**

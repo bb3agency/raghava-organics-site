@@ -8,7 +8,8 @@ Checkpoint completed during Phase 4 kickoff (session setup only).
 - Dependencies: Zod, React Hook Form, Zustand, Framer Motion, Lucide
 - Folder structure per `dev-rules`: `app/(storefront)`, `app/(auth)`, `components/`, `lib/`, `stores/`, `types/`, `actions/`
 - `lib/api.ts` + `lib/api-base.ts` — centralized client, same-site cookie auth, Next rewrite to Fastify
-- Environment files: `.env.example`, `.env.local` (gitignored)
+- Environment files: `.env.example`, `.env.production.example`, `.env.local` (gitignored)
+- Production env template documents `NEXT_PUBLIC_IMAGE_CDN_URL`, same-origin API pattern; storefront/COD/module flags via **`GET /store/config`** (`StoreConfigProvider`, `lib/storefront-settings.ts`)
 - AI rules: `.agents/rules/dev-rules.md`, `.cursor/rules/dev-rules.mdc`
 - Dev log: `docs/FRONTEND_DEV_LOG.md`
 - Typography: **Inter** sitewide (`lib/fonts.ts`, `app/globals.css`)
@@ -169,14 +170,24 @@ After admin OTP login, `refresh_token` must appear under **localhost:3101** in D
 # NEXT_PUBLIC_IMAGE_CDN_URL=http://localhost:3101
 ```
 
-Catalog images are resolved in `lib/media-url.ts` (`resolveProductImageUrl`) via `lib/product-adapters.ts`.
+Catalog images are resolved in `lib/media-url.ts` (`resolveProductImageUrl`) via `lib/product-adapters.ts`. In production, set `NEXT_PUBLIC_IMAGE_CDN_URL` to match Ops `R2_PUBLIC_BASE_URL`. SSR does **not** fall back to implicit `localhost` — only uses `NEXT_PUBLIC_STOREFRONT_URL` when CDN is unset.
+
+## Brand logo
+
+| Item | Path / constant |
+|------|-----------------|
+| Asset | `frontend/public/images/raghava-organics-logo.png` |
+| Constant | `BRAND_LOGO_SRC` in `lib/constants.ts` |
+| Used in | `Header.tsx`, `MobileNav.tsx`, `AdminConsoleShell.tsx` |
+
+Do not store logos at repo root or use duplicate `public/logo.png`.
 
 ## Admin console integrity (2026-06-03)
 
 - **Product editor:** `AdminProductEditor` — `isActive`, `metaDescription`, `isFeatured`, variant `lowStockThreshold` on create; see `FRONTEND_DEV_LOG.md` §Admin data integrity.
 - **Date ranges:** `AdminDateRangePicker` on Dashboard, Orders, Payments, Coupons, Reviews (not in shell header).
 - **Live tables:** Payments show customer name/email; reviews show product name; shipments KPIs from API data.
-- **Tests:** Backend 897/897 unit; frontend `npm run build` clean.
+- **Tests:** Backend **1012/1012** unit + **16/16** e2e (2026-06-10 pass 2); frontend Vitest **114/114**, `npm run build` + `npm run lint` clean.
 
 ## Storefront customer journey (2026-06-03)
 

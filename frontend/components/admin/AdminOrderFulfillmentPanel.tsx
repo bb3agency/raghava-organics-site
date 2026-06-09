@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { useAuthenticatedApi } from "@/hooks/use-authenticated-api";
 import { getBrowserApiBaseUrl } from "@/lib/api-base";
+import { ApiError } from "@/lib/api";
 import { createIdempotencyKey } from "@/lib/idempotency";
 import { notifyAdminDataChanged } from "@/lib/admin-data-refresh";
 import { getApiErrorMessageWithHint } from "@/lib/error-messages";
@@ -262,7 +263,22 @@ export function AdminOrderFulfillmentPanel({
         credentials: "include",
       });
       if (!response.ok) {
-        throw new Error("Unable to download invoice.");
+        let body: unknown = null;
+        try {
+          body = await response.json();
+        } catch {
+          body = null;
+        }
+        if (typeof body === "object" && body !== null && "error" in body) {
+          const err = (body as { error?: { code?: string; message?: string; details?: unknown } }).error;
+          throw new ApiError(
+            err?.code ?? "UNKNOWN_ERROR",
+            err?.message ?? "Unable to download invoice.",
+            response.status,
+            err?.details as never,
+          );
+        }
+        throw new ApiError("UNKNOWN_ERROR", "Unable to download invoice.", response.status);
       }
       const blob = await response.blob();
       const objectUrl = URL.createObjectURL(blob);
@@ -272,7 +288,7 @@ export function AdminOrderFulfillmentPanel({
       anchor.click();
       URL.revokeObjectURL(objectUrl);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Invoice download failed.");
+      setError(getApiErrorMessageWithHint(err));
     } finally {
       setBusyAction(null);
     }

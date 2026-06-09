@@ -4,6 +4,7 @@ import ShiprocketAdapter from './shiprocket.adapter';
 describe('ShiprocketAdapter', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
   });
 
   it('authenticates and caches token on first request', async () => {
@@ -198,6 +199,28 @@ describe('ShiprocketAdapter', () => {
     expect(result.pincode).toBe('560001');
   });
 
+  it('uses originPincode override instead of env for serviceability', async () => {
+    vi.stubEnv('SHIPROCKET_PICKUP_PINCODE', '110001');
+    const fetchMock = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ token: 'sr-token-123' })
+    }).mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({
+        data: { available_courier_companies: [{ courier_company_id: 1, courier_name: 'Test', rate: 50 }] }
+      })
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new ShiprocketAdapter({ email: 'test@example.com', password: 'secret' });
+    await adapter.checkServiceability('560001', '500001');
+
+    const [svcUrl] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect(svcUrl).toContain('pickup_postcode=500001');
+  });
+
   it('calculates delivery rate from cheapest courier', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce({
@@ -311,5 +334,24 @@ describe('ShiprocketAdapter', () => {
 
     // First call: auth, second: serviceability (401), third: re-auth, fourth: retry serviceability
     expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+
+  it('throws when Shiprocket returns invalid JSON on success response', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ token: 'sr-token-123' })
+    }).mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: async () => 'not-json'
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new ShiprocketAdapter({ email: 'test@example.com', password: 'secret' });
+    await expect(adapter.checkServiceability('560001')).rejects.toMatchObject({
+      statusCode: 502,
+      message: 'Shiprocket returned invalid JSON'
+    });
   });
 });

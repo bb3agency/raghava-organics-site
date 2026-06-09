@@ -171,6 +171,13 @@ function validateProductionProviderSafetyEnv(): void {
     throw new Error(`Unsupported SHIPPING_PROVIDER in production-like profile: ${shippingProviderRaw}`);
   }
 
+  const mediaProvider = (process.env.MEDIA_STORAGE_PROVIDER ?? '').trim().toLowerCase();
+  if (mediaProvider === 'local') {
+    throw new Error(
+      `MEDIA_STORAGE_PROVIDER=local is not allowed when NODE_ENV=${nodeEnv}. Configure r2 via Ops UI before go-live.`
+    );
+  }
+
   assertEnvNotPlaceholder('JWT_SECRET');
   assertEnvNotPlaceholder('JWT_REFRESH_SECRET');
   assertEnvNotPlaceholder('OPS_DB_ENCRYPTION_KEY');
@@ -190,6 +197,25 @@ function validateProductionProviderSafetyEnv(): void {
     assertEnvNotPlaceholderIfPresent('SHIPROCKET_EMAIL');
     assertEnvNotPlaceholderIfPresent('SHIPROCKET_PASSWORD');
     assertEnvNotPlaceholderIfPresent('SHIPROCKET_WEBHOOK_TOKEN');
+  }
+
+  if (isStrictProfile) {
+    // STOREFRONT_URL is used in password-reset emails — a missing value would send
+    // localhost links to users. Fail fast at boot rather than silently sending bad emails.
+    if (!process.env.STOREFRONT_URL?.trim()) {
+      throw new Error(
+        'STOREFRONT_URL is required in production-like profiles. ' +
+        'It is embedded in password-reset emails — missing value results in localhost links being sent to customers.'
+      );
+    }
+    assertEnvNotPlaceholder('STOREFRONT_URL');
+    if (!process.env.ADMIN_URL?.trim()) {
+      throw new Error(
+        'ADMIN_URL is required in production-like profiles. ' +
+        'It is used for CORS allowed origins alongside STOREFRONT_URL.'
+      );
+    }
+    assertEnvNotPlaceholder('ADMIN_URL');
   }
 
   if (isEnabled(process.env.NOTIFY_EMAIL_ENABLED)) {
