@@ -37,7 +37,7 @@ function el(tag: string, props: Record<string, unknown> | null, ...children: (Re
 function Wrapper(...children: ReactElement[]): ReactElement {
   return el('html', { lang: 'en' },
     el('head', null,
-      el('meta', { charset: 'UTF-8' }),
+      el('meta', { charSet: 'UTF-8' }),
       el('meta', { name: 'viewport', content: 'width=device-width, initial-scale=1.0' })
     ),
     el('body', {
