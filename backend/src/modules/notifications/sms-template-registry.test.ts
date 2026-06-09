@@ -5,19 +5,19 @@ describe('SmsTemplateRegistry', () => {
   it('resolves known template with variable substitution', () => {
     const registry = new SmsTemplateRegistry();
     const result = registry.resolve('OrderConfirmed', { orderId: 'ORD-99', storeName: 'BB3 Foods' });
-    expect(result).toBe('Hi from BB3 Foods! Your order ORD-99 is confirmed. We\'ll notify you on each shipment milestone.');
+    expect(result).toBe('BB3 Foods: Your order ORD-99 is confirmed! We are preparing it for dispatch. You will be notified when it ships.');
   });
 
   it('resolves multiple variables', () => {
     const registry = new SmsTemplateRegistry();
     const result = registry.resolve('OpsInviteSetup', { otp: '777777', storeName: 'BB3 Foods' });
-    expect(result).toBe('BB3 Foods security: Your ops setup OTP is 777777. Valid for 10 minutes. Do not share this code.');
+    expect(result).toBe('BB3 Foods Security: Your ops account setup OTP is 777777. Valid for 10 minutes. Do NOT share this code with anyone.');
   });
 
   it('replaces missing variables with empty string', () => {
     const registry = new SmsTemplateRegistry();
     const result = registry.resolve('OrderConfirmed', {});
-    expect(result).toBe('Hi from ! Your order  is confirmed. We\'ll notify you on each shipment milestone.');
+    expect(result).toBe(': Your order  is confirmed! We are preparing it for dispatch. You will be notified when it ships.');
   });
 
   it('supports custom overrides in constructor', () => {
@@ -45,7 +45,7 @@ describe('SmsTemplateRegistry', () => {
   it('resolves FailedDelivery with awb substitution', () => {
     const registry = new SmsTemplateRegistry();
     const result = registry.resolve('FailedDelivery', { orderId: 'ORD-7', awb: 'AWB123456', storeName: 'BB3 Foods' });
-    expect(result).toBe('BB3 Foods delivery alert: Delivery failed for order ORD-7 (AWB AWB123456). Please contact support to reschedule.');
+    expect(result).toBe('BB3 Foods Delivery Alert: Delivery attempt failed for order ORD-7 (AWB: AWB123456). Please contact support to reschedule delivery.');
   });
 
   it('coerces non-string values to string', () => {

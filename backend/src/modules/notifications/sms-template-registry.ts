@@ -22,23 +22,23 @@ export class SmsTemplateRegistry {
   static defaultTemplates(): Record<string, string> {
     return {
       OrderConfirmed:
-        'Hi from {{storeName}}! Your order {{orderId}} is confirmed. We\'ll notify you on each shipment milestone.',
+        '{{storeName}}: Your order {{orderId}} is confirmed! We are preparing it for dispatch. You will be notified when it ships.',
       OrderShipped:
-        '{{storeName}} update: Order {{orderId}} has been shipped and is in transit. Track via your order details page.',
+        '{{storeName}}: Great news! Order {{orderId}} has been shipped and is in transit. Track your shipment in the app.',
       OutForDelivery:
-        '{{storeName}} update: Order {{orderId}} is out for delivery today. Please keep your phone reachable for delivery assistance.',
+        '{{storeName}}: Your order {{orderId}} is out for delivery today! Please keep your phone reachable. Our courier will attempt delivery at your registered address.',
       OrderDelivered:
-        'Delivered by {{storeName}}: Order {{orderId}} has been marked delivered. If this was not received, contact support immediately.',
+        '{{storeName}}: Order {{orderId}} has been delivered. We hope you love your products! Share your feedback in the app.',
       OrderCancelled:
-        '{{storeName}} notice: Order {{orderId}} has been cancelled as requested or due to processing constraints. Contact support for help.',
+        '{{storeName}}: Your order {{orderId}} has been cancelled. If a payment was made, your refund will be processed within 5-7 business days. Contact support for help.',
       PaymentFailed:
-        '{{storeName}} payment alert: Payment for order {{orderId}} failed. Please retry from your order page to avoid cancellation.',
+        '{{storeName}} Payment Alert: Payment for order {{orderId}} could not be processed. Please retry payment from your order page to avoid cancellation.',
       FailedDelivery:
-        '{{storeName}} delivery alert: Delivery failed for order {{orderId}} (AWB {{awb}}). Please contact support to reschedule.',
+        '{{storeName}} Delivery Alert: Delivery attempt failed for order {{orderId}} (AWB: {{awb}}). Please contact support to reschedule delivery.',
       OpsInviteSetup:
-        '{{storeName}} security: Your ops setup OTP is {{otp}}. Valid for 10 minutes. Do not share this code.',
+        '{{storeName}} Security: Your ops account setup OTP is {{otp}}. Valid for 10 minutes. Do NOT share this code with anyone.',
       OpsActionOtp:
-        '{{storeName}} security: Your ops action OTP is {{otp}}. Valid for 10 minutes. Do not share this code.'
+        '{{storeName}} Security: Your ops action authorization code is {{otp}}. Valid for 10 minutes. Do NOT share this code with anyone.'
     };
   }
 

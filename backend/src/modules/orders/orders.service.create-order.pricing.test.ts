@@ -1,6 +1,7 @@
 import { OrderStatus, PaymentStatus } from '@prisma/client';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
+import { featureFlags } from '@config/feature-flags';
 import { OrdersService } from './orders.service';
 import { CartService } from '@modules/cart/cart.service';
 
@@ -178,12 +179,19 @@ function buildFastifyForCreateOrder(couponType: 'PERCENTAGE_OFF' | 'FREE_SHIPPIN
 }
 
 describe('OrdersService createOrder pricing composition', () => {
+  const originalCouponsFlag = featureFlags.coupons;
+
   beforeEach(() => {
     vi.clearAllMocks();
+    featureFlags.coupons = true;
     vi.spyOn(CartService.prototype, 'checkPincodeServiceability').mockResolvedValue({
       pincode: '500001',
       serviceable: true
     });
+  });
+
+  afterEach(() => {
+    featureFlags.coupons = originalCouponsFlag;
   });
 
   it('applies Delhivery-derived shipping charge to order total', async () => {

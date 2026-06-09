@@ -21,7 +21,7 @@ describe('renderNotificationEmail', () => {
       email: 'user@example.com',
       resetUrl: 'http://localhost:3101/reset-password?token=abc123'
     });
-    expect(rendered.subject).toContain('Password reset request');
+    expect(rendered.subject).toContain('password');
     expect(rendered.html).toContain('user@example.com');
     expect(rendered.html).toContain('http://localhost:3101/reset-password?token=abc123');
   });
@@ -30,7 +30,7 @@ describe('renderNotificationEmail', () => {
     const rendered = await renderNotificationEmail('OtpVerification', {
       otp: '123456'
     });
-    expect(rendered.subject).toContain('OTP verification code');
+    expect(rendered.subject).toContain('login code');
     expect(rendered.html).toContain('123456');
   });
 
@@ -66,7 +66,7 @@ describe('renderNotificationEmail', () => {
       jobId: 'job_123',
       outboxMessageId: 'outbox_123'
     });
-    expect(rendered.subject).toContain('Notification delivery failure - OrderShipped');
+    expect(rendered.subject).toContain('Notification delivery failure');
     expect(rendered.html).toContain('WHATSAPP');
     expect(rendered.html).toContain('9876543210');
     expect(rendered.html).toContain('Meta API timeout');
@@ -81,7 +81,7 @@ describe('renderNotificationEmail', () => {
       setupUrl: 'https://client.example.com/admin/setup?token=abc',
       expiresAt: '2026-05-13T00:00:00.000Z'
     });
-    expect(rendered.subject).toContain('Merchant admin setup invite');
+    expect(rendered.subject).toContain('merchant admin setup invite');
     expect(rendered.html).toContain('merchant@example.com');
     expect(rendered.html).toContain('/admin/setup?token=abc');
     expect(rendered.html).toContain('2026-05-13T00:00:00.000Z');

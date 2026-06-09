@@ -75,20 +75,14 @@ function buildMockPrisma(userEmail: string | null, overrides?: Record<string, un
 }
 
 describe('AuthService requestPasswordReset', () => {
-  const originalStorefrontUrl = process.env.STOREFRONT_URL;
-
   beforeEach(() => {
     delete process.env.TURNSTILE_SECRET_KEY;
-    process.env.STOREFRONT_URL = 'https://store.example.com';
+    vi.stubEnv('STOREFRONT_URL', 'https://store.example.com');
     vi.mocked(sendTechnicalFailureAlert).mockClear();
   });
 
   afterEach(() => {
-    if (originalStorefrontUrl === undefined) {
-      delete process.env.STOREFRONT_URL;
-    } else {
-      process.env.STOREFRONT_URL = originalStorefrontUrl;
-    }
+    vi.unstubAllEnvs();
   });
 
   it('stores token hash in DB and enqueues PasswordReset email when user exists', async () => {
@@ -191,7 +185,7 @@ describe('AuthService requestPasswordReset', () => {
   });
 
   it('returns generic success without enqueue when STOREFRONT_URL is missing', async () => {
-    delete process.env.STOREFRONT_URL;
+    vi.stubEnv('STOREFRONT_URL', '');
     const add = vi.fn().mockResolvedValue(undefined);
     const prismaMock = buildMockPrisma('user@example.com');
 

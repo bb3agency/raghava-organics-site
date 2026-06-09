@@ -602,6 +602,11 @@ describe('auth routes password reset', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     delete process.env.TURNSTILE_SECRET_KEY;
+    vi.stubEnv('STOREFRONT_URL', 'https://store.example.com');
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   function createPasswordResetApp(userExists: boolean) {

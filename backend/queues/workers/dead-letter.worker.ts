@@ -24,13 +24,17 @@ export function createDeadLetterWorker(connection: ConnectionOptions, deps?: Dea
   const alertFn = deps?.sendTechnicalFailureAlert ?? sendTechnicalFailureAlert;
   const prisma = new PrismaClientCtor();
 
+  // Notification delivery jobs that can flood the DLQ when a provider is down.
+  // These get deduped via WORKER_TERMINAL cooldown rather than firing per-job.
+  const NOTIFICATION_DELIVERY_JOBS = new Set(['send-email', 'send-sms', 'send-whatsapp', 'send-primary']);
+
   const worker = new WorkerCtor(
     'dead-letter',
     async (job) => {
       // No-op: DLQ is a holding pen for admin inspection.
       // Jobs are retained indefinitely (removeOnComplete: false, removeOnFail: false).
       // Admins can retry individual jobs via Bull Board UI.
-      // Alert fires via the 'completed' event below (every DLQ arrival = terminal failure).
+      const isNotificationDelivery = NOTIFICATION_DELIVERY_JOBS.has(job.name);
       void alertFn({
         prisma,
         template: 'DeadLetterJobArrival',
@@ -42,8 +46,10 @@ export function createDeadLetterWorker(connection: ConnectionOptions, deps?: Dea
         jobName: job.name,
         jobId: job.id ?? 'unknown',
         domain: 'workers',
-        component: 'dead-letter-worker',
-        terminalFailure: true
+        component: isNotificationDelivery ? `dead-letter-${job.name}` : 'dead-letter-worker',
+        // Notification delivery jobs use cooldown dedup (not per-job) to avoid
+        // flooding admins when a provider like Resend is temporarily down.
+        terminalFailure: !isNotificationDelivery
       });
     },
     {

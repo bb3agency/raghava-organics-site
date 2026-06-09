@@ -36,7 +36,7 @@ describe('Fast2smsAdapter', () => {
 
     expect(body.route).toBe('q');
     expect(body.numbers).toBe('9876543210');
-    expect(body.message).toBe('Hi from ! Your order ORD-42 is confirmed. We\'ll notify you on each shipment milestone.');
+    expect(body.message).toBe(': Your order ORD-42 is confirmed! We are preparing it for dispatch. You will be notified when it ships.');
     expect(body.variables_values).toBeUndefined();
 
     expect(result.messageId).toBe('req-123');

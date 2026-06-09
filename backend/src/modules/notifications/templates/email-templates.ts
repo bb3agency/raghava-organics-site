@@ -63,32 +63,32 @@ export async function renderNotificationEmail(template: string, data: Record<str
   switch (template as EmailTemplateName) {
     case 'OrderConfirmed':
       return {
-        subject: `Order confirmed - ${orderId}`,
+        subject: `Order confirmed — ${orderId}`,
         html: await render(OrderConfirmedEmail(orderId))
       };
     case 'PaymentFailed':
       return {
-        subject: `Payment failed - ${orderId}`,
+        subject: `Payment failed — action required for ${orderId}`,
         html: await render(PaymentFailedEmail(orderId))
       };
     case 'OrderShipped':
       return {
-        subject: `Order shipped - ${orderId}`,
+        subject: `Your order ${orderId} has been shipped`,
         html: await render(OrderShippedEmail(orderId))
       };
     case 'OutForDelivery':
       return {
-        subject: `Out for delivery - ${orderId}`,
+        subject: `Your order ${orderId} is out for delivery today`,
         html: await render(OutForDeliveryEmail(orderId))
       };
     case 'OrderDelivered':
       return {
-        subject: `Order delivered - ${orderId}`,
+        subject: `Your order ${orderId} has been delivered`,
         html: await render(OrderDeliveredEmail(orderId))
       };
     case 'OrderCancelled':
       return {
-        subject: `Order cancelled - ${orderId}`,
+        subject: `Your order ${orderId} has been cancelled`,
         html: await render(OrderCancelledEmail(orderId))
       };
     case 'LowStockAlert':
@@ -110,7 +110,7 @@ export async function renderNotificationEmail(template: string, data: Record<str
           : [];
 
       return {
-        subject: 'Low stock alert',
+        subject: `Low stock alert — ${items.length} variant${items.length === 1 ? '' : 's'} below threshold`,
         html: await render(LowStockAlertEmail(items))
       };
       }
@@ -118,7 +118,7 @@ export async function renderNotificationEmail(template: string, data: Record<str
       {
         const otp = escapeHtml(data.otp ?? 'N/A');
       return {
-        subject: 'OTP verification code',
+        subject: 'Your admin login code — Raghava Organics',
         html: await render(OtpVerificationEmail(otp))
       };
       }
@@ -127,7 +127,7 @@ export async function renderNotificationEmail(template: string, data: Record<str
         const otp = escapeHtml(data.otp ?? 'N/A');
         const storeName = escapeHtml(data.storeName ?? 'Our Store');
         return {
-          subject: `Your sign-in code — ${storeName}`,
+          subject: `Your sign-in code for ${storeName}`,
           html: await render(CustomerOtpVerificationEmail(otp, storeName))
         };
       }
@@ -151,7 +151,7 @@ export async function renderNotificationEmail(template: string, data: Record<str
         const clientName = escapeHtml(data.clientName ?? 'Unknown Client');
         const websiteUrl = escapeHtml(data.websiteUrl ?? 'https://unknown-client.local');
         return {
-          subject: `Notification delivery failure - ${template}`,
+          subject: `[Alert] Notification delivery failure — ${template}`,
           html: await render(
             NotificationDeliveryFailureEmail({
               template,
@@ -180,7 +180,7 @@ export async function renderNotificationEmail(template: string, data: Record<str
         const email = escapeHtml(data.email ?? 'N/A');
         const resetUrl = typeof data.resetUrl === 'string' ? data.resetUrl : 'N/A';
         return {
-          subject: 'Password reset request',
+          subject: 'Reset your Raghava Organics password',
           html: await render(PasswordResetEmail(email, resetUrl))
         };
       }
@@ -190,7 +190,7 @@ export async function renderNotificationEmail(template: string, data: Record<str
         const setupUrl = escapeHtml(data.setupUrl ?? 'N/A');
         const expiresAt = escapeHtml(data.expiresAt ?? 'N/A');
         return {
-          subject: 'Ops setup invite',
+          subject: 'Your Raghava Organics ops account setup invite',
           html: await render(OpsInviteSetupEmail(email, setupUrl, expiresAt))
         };
       }
@@ -200,7 +200,7 @@ export async function renderNotificationEmail(template: string, data: Record<str
         const setupUrl = escapeHtml(data.setupUrl ?? 'N/A');
         const expiresAt = escapeHtml(data.expiresAt ?? 'N/A');
         return {
-          subject: 'Merchant admin setup invite',
+          subject: 'Your Raghava Organics merchant admin setup invite',
           html: await render(AdminInviteSetupEmail(email, setupUrl, expiresAt))
         };
       }
@@ -210,7 +210,7 @@ export async function renderNotificationEmail(template: string, data: Record<str
         const code = escapeHtml(data.code ?? 'N/A');
         const expiresAt = escapeHtml(data.expiresAt ?? 'N/A');
         return {
-          subject: 'Ops verification code',
+          subject: `Ops authorization code — ${action}`,
           html: await render(OpsActionOtpEmail(action, code, expiresAt))
         };
       }
