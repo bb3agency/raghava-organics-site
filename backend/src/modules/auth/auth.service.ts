@@ -869,16 +869,20 @@ export class AuthService {
 
       const storefrontUrl = process.env.STOREFRONT_URL?.trim();
       if (!storefrontUrl) {
-        void sendTechnicalFailureAlert({
-          prisma: this.fastify.prisma,
-          template: 'PasswordReset',
-          channel: 'EMAIL',
-          recipient: user.email ?? input.email,
-          errorMessage: 'STOREFRONT_URL is not configured — password reset email skipped',
-          failureStage: 'CORE_LOGIC',
-          domain: 'auth',
-          component: 'requestPasswordReset'
-        });
+        try {
+          await sendTechnicalFailureAlert({
+            prisma: this.fastify.prisma,
+            template: 'PasswordReset',
+            channel: 'EMAIL',
+            recipient: user.email ?? input.email,
+            errorMessage: 'STOREFRONT_URL is not configured — password reset email skipped',
+            failureStage: 'CORE_LOGIC',
+            domain: 'auth',
+            component: 'requestPasswordReset'
+          });
+        } catch {
+          // Alert failures must never block the password-reset response.
+        }
         return genericResponse;
       }
       const resetUrl = `${storefrontUrl}/reset-password?token=${encodeURIComponent(resetToken)}`;
