@@ -11,7 +11,7 @@ export default defineConfig({
   },
   test: {
     environment: 'node',
-    pool: 'vmForks',
+    pool: 'forks',
     env: { NODE_ENV: 'test' },
     include: ['src/**/*.test.ts', 'queues/**/*.test.ts'],
     exclude: ['src/**/*.integration.test.ts', 'src/**/*.e2e.test.ts'],
