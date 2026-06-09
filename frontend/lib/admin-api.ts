@@ -61,11 +61,20 @@ export function coercePaginatedResponse<T>(
   response: PaginatedResponse<T> | FlatPaginatedResponse<T> | T[] | unknown,
 ): PaginatedResponse<T> {
   const items = getPaginatedItems(
-    response as PaginatedResponse<T> | FlatPaginatedResponse<T> | T[] | null | undefined,
+    response as
+      | PaginatedResponse<T>
+      | FlatPaginatedResponse<T>
+      | T[]
+      | null
+      | undefined,
   );
 
   if (response && typeof response === "object") {
-    if ("meta" in response && response.meta && typeof response.meta === "object") {
+    if (
+      "meta" in response &&
+      response.meta &&
+      typeof response.meta === "object"
+    ) {
       return { items, meta: response.meta as PaginationMeta };
     }
     if ("page" in response && "limit" in response && "total" in response) {
@@ -102,8 +111,7 @@ export function normalizePagination(
     return response.meta;
   }
   const flat = response as FlatPaginatedResponse<unknown>;
-  const totalPages =
-    flat.limit > 0 ? Math.ceil(flat.total / flat.limit) : 0;
+  const totalPages = flat.limit > 0 ? Math.ceil(flat.total / flat.limit) : 0;
   return {
     page: flat.page,
     limit: flat.limit,
@@ -140,6 +148,8 @@ export interface AdminPaymentListItem {
   id: string;
   orderId: string;
   orderNumber: string;
+  customerName: string;
+  customerEmail: string | null;
   provider: string;
   method: string | null;
   status: string;
@@ -227,7 +237,12 @@ export const SHIPMENT_FILTER_STATUSES = [
 
 export type DashboardKpiPeriod = "today" | "7d" | "30d" | "custom";
 
-export const DASHBOARD_KPI_PERIODS: DashboardKpiPeriod[] = ["today", "7d", "30d", "custom"];
+export const DASHBOARD_KPI_PERIODS: DashboardKpiPeriod[] = [
+  "today",
+  "7d",
+  "30d",
+  "custom",
+];
 
 export interface AdminOrderShippingAddress {
   fullName: string;
@@ -334,7 +349,12 @@ export interface AdminReturnRequestListItem {
 export interface AdminReturnRequestItem {
   orderItemId: string;
   quantity: number;
-  reason?: string;
+  reason: string | null;
+  productName: string | null;
+  variantName: string | null;
+  sku: string | null;
+  unitPrice: number | null;
+  orderedQuantity: number | null;
 }
 
 export interface AdminReturnRequestDetail extends AdminReturnRequestListItem {
@@ -366,6 +386,8 @@ export interface AdminProductListItem {
   description: string;
   tags: string[];
   isFeatured: boolean;
+  isActive: boolean;
+  metaDescription: string | null;
   category: { id: string; name: string; slug: string };
   images: AdminProductImage[];
   variants: AdminProductVariant[];
@@ -381,6 +403,7 @@ export interface AdminCreateProductInput {
   tags?: string[];
   isFeatured?: boolean;
   isActive?: boolean;
+  metaDescription?: string;
   images?: Array<{ url: string; altText: string; sortOrder: number }>;
   variants?: Array<{
     sku: string;
@@ -401,6 +424,7 @@ export interface AdminUpdateProductInput {
   tags?: string[];
   isFeatured?: boolean;
   isActive?: boolean;
+  metaDescription?: string;
 }
 
 export interface AdminCreateCategoryInput {
@@ -415,7 +439,7 @@ export interface AdminUpdateCategoryInput {
   name?: string;
   slug?: string;
   parentId?: string | null;
-  imageUrl?: string;
+  imageUrl?: string | null;
   isActive?: boolean;
 }
 
@@ -431,6 +455,10 @@ export interface AdminCategoryListItem {
   name: string;
   slug: string;
   parentId: string | null;
+  imageUrl: string | null;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface AdminUserListItem {
@@ -494,6 +522,8 @@ export interface AdminReviewListItem {
   id: string;
   userId: string;
   productId: string;
+  productName: string | null;
+  productSlug: string | null;
   orderId: string;
   rating: number;
   body: string | null;
@@ -501,7 +531,7 @@ export interface AdminReviewListItem {
   approved: boolean;
   createdAt: string;
   updatedAt: string;
-  author: { firstName: string; lastName: string };
+  author: { id: string; firstName: string; lastName: string };
 }
 
 export interface AdminCouponListItem {
@@ -517,6 +547,11 @@ export interface AdminCouponListItem {
   validFrom: string;
   validUntil: string | null;
   status: "active" | "expired" | "paused" | "deleted";
+  applicableTo?: { productIds?: string[]; categoryIds?: string[] } | null;
+  createdBy?: string | null;
+  updatedBy?: string | null;
+  deletedAt?: string | null;
+  deletedBy?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -621,18 +656,37 @@ export interface AdminNotificationDeliveryStats {
   }>;
 }
 
+/**
+ * Ops-layer provider provisioning status — booleans only, no key values.
+ * Computed server-side from resolveNotificationRuntimeConfig() (env + OpsConfigSecret overlay).
+ * Read-only for admin; can only be changed via /ops/config.
+ */
+export interface NotificationProviderAvailability {
+  /** true = NOTIFY_EMAIL_ENABLED is true AND RESEND_API_KEY is provisioned in ops */
+  emailProvisioned: boolean;
+  /** true = NOTIFY_SMS_ENABLED is true AND the active SMS provider key is provisioned in ops */
+  smsProvisioned: boolean;
+  /** true = NOTIFY_WHATSAPP_ENABLED is true AND META_WHATSAPP_* keys are provisioned in ops */
+  whatsappProvisioned: boolean;
+  /** Active SMS provider name when smsProvisioned=true; null otherwise */
+  smsProvider: "msg91" | "fast2sms" | "noop" | null;
+}
+
 export interface AdminNotificationSettings {
   emailEnabled: boolean;
   smsEnabled: boolean;
   whatsappEnabled: boolean;
   primaryChannels: Record<string, "EMAIL" | "SMS" | "WHATSAPP">;
   smsTemplates: Record<string, string>;
+  /** Ops-layer provider availability. Read-only for admin layer. */
+  providerAvailability: NotificationProviderAvailability;
 }
 
 export interface AdminShipmentListItem {
   id: string;
   orderId: string;
   orderNumber: string;
+  customerName: string;
   provider: string;
   status: string;
   awbNumber: string | null;
@@ -750,7 +804,7 @@ export interface AdminReconciliationIssue {
 export interface AdminShippingSettings {
   pickupPincode: string;
   minOrderValuePaise: number;
-  source: 'database' | 'environment' | 'default';
+  source: "database" | "environment" | "default";
 }
 
 export interface AdminStoreProfile {
@@ -791,11 +845,42 @@ export function buildOrdersExportQuery(params: {
   to: string;
   status?: string;
   search?: string;
+  paymentMode?: string;
 }): string {
   return buildAdminQuery({
     from: toIsoDateRange(params.from, false),
     to: toIsoDateRange(params.to, true),
     status: params.status,
     search: params.search,
+    paymentMode: params.paymentMode,
   });
+}
+
+/** Backend admin list endpoints cap `limit` at 100 — page through for exports/KPI sums. */
+export async function fetchAllPaginatedItems<T>(
+  fetchPage: (page: number, limit: number) => Promise<PaginatedResponse<T>>,
+  options?: { pageSize?: number; maxPages?: number },
+): Promise<T[]> {
+  const pageSize = options?.pageSize ?? 100;
+  const maxPages = options?.maxPages ?? 100;
+  const all: T[] = [];
+  let page = 1;
+  let totalPages = 1;
+
+  while (page <= totalPages && page <= maxPages) {
+    const response = coercePaginatedResponse<T>(
+      await fetchPage(page, pageSize),
+    );
+    all.push(...response.items);
+    totalPages = response.meta.totalPages;
+    page += 1;
+  }
+
+  return all;
+}
+
+export interface AdminReviewSummary {
+  averageRating: number | null;
+  totalApproved: number;
+  distribution: Record<"1" | "2" | "3" | "4" | "5", number>;
 }

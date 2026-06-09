@@ -1,8 +1,9 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { useEffect, useMemo } from "react";
-import { useAdminSessionRestore } from "@/hooks/use-admin-session-restore";
+import { useEffect, useMemo, useRef } from "react";
+import { useRouter } from "next/navigation";
+import { useAdminGuestSessionRestore } from "@/hooks/use-admin-session-restore";
 import { resolveAdminUser } from "@/lib/resolve-admin-user";
 import { useAuthStore } from "@/stores/auth";
 
@@ -13,15 +14,17 @@ interface AdminGuestOnlyProps {
 }
 
 /**
- * Renders sign-in UI only for unauthenticated guests.
- * Redirects away when an admin session exists (memory or refresh cookie).
+ * Renders sign-in UI for guests. Cookie restore runs in the background; the form
+ * is shown immediately (never blocked on "Checking admin session…").
  */
 export function AdminGuestOnly({
   children,
   redirectTo = "/admin",
 }: AdminGuestOnlyProps) {
+  const router = useRouter();
   const accessToken = useAuthStore((s) => s.accessToken);
-  const { status, user } = useAdminSessionRestore();
+  const { status, user } = useAdminGuestSessionRestore();
+  const redirectedRef = useRef(false);
 
   const adminUser = useMemo(
     () => resolveAdminUser(accessToken, user),
@@ -31,23 +34,17 @@ export function AdminGuestOnly({
   const hasAdminSession = status === "ready" && adminUser !== null;
 
   useEffect(() => {
-    if (hasAdminSession) {
-      window.location.assign(redirectTo);
+    if (!hasAdminSession || redirectedRef.current) {
+      return;
     }
-  }, [hasAdminSession, redirectTo]);
+    redirectedRef.current = true;
+    router.replace(redirectTo);
+  }, [hasAdminSession, redirectTo, router]);
 
   if (hasAdminSession) {
     return (
       <p className="text-sm text-muted-foreground" role="status" aria-live="polite">
         Redirecting to admin console…
-      </p>
-    );
-  }
-
-  if (status === "checking" || status === "restoring") {
-    return (
-      <p className="text-sm text-muted-foreground" role="status" aria-live="polite">
-        Checking admin session…
       </p>
     );
   }

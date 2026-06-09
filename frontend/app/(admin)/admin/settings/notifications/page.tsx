@@ -1,9 +1,9 @@
 import { NotificationsChannelPanel } from "@/components/admin/NotificationsChannelPanel";
 
-export default function AdminNotificationsSettingsPage() {
-  return (
-    <div className="grid gap-6">
-      <NotificationsChannelPanel />
-    </div>
-  );
+export const metadata = {
+  title: "Notification Settings — Admin",
+};
+
+export default function NotificationSettingsPage() {
+  return <NotificationsChannelPanel />;
 }

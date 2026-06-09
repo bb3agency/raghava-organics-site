@@ -6,6 +6,7 @@ import { AdminStatusBadge } from "@/components/admin/AdminStatusBadge";
 import { ensureArray, type AdminInventoryListItem } from "@/lib/admin-api";
 import { getApiErrorMessage } from "@/lib/error-messages";
 import { useAuthenticatedApi } from "@/hooks/use-authenticated-api";
+import { useAdminDataRefreshEffect } from "@/hooks/use-admin-data-refresh-effect";
 
 export function AdminLowStockList() {
   const api = useAuthenticatedApi();
@@ -30,6 +31,8 @@ export function AdminLowStockList() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useAdminDataRefreshEffect(load, ["inventory", "products"]);
 
   return (
     <AdminSection

@@ -6,12 +6,13 @@ import { useAdminAuth } from "@/contexts/admin-auth-context";
 import { ADMIN_PERMISSIONS, hasAdminPermission } from "@/lib/permissions";
 import { createIdempotencyKey } from "@/lib/idempotency";
 import { getApiErrorMessage } from "@/lib/error-messages";
-import { Banknote, Clock, MapPin, CheckCircle2, AlertTriangle, Loader2 } from "lucide-react";
+import { Banknote, Clock, MapPin, Smartphone, CheckCircle2, AlertTriangle, Loader2 } from "lucide-react";
 
 interface CodSettings {
   isCodEnabled: boolean;
   cancellationWindowHours: number;
   sellerState: string | null;
+  mobileOtpSignupEnabled?: boolean;
 }
 
 export function CodSettingsPanel() {
@@ -22,6 +23,7 @@ export function CodSettingsPanel() {
   const [isCodEnabled, setIsCodEnabled] = useState(true);
   const [cancellationWindowHours, setCancellationWindowHours] = useState(24);
   const [sellerState, setSellerState] = useState("");
+  const [mobileOtpSignupEnabled, setMobileOtpSignupEnabled] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -38,6 +40,7 @@ export function CodSettingsPanel() {
         setIsCodEnabled(result.isCodEnabled);
         setCancellationWindowHours(result.cancellationWindowHours);
         setSellerState(result.sellerState ?? "");
+        setMobileOtpSignupEnabled(result.mobileOtpSignupEnabled ?? false);
       } catch (err) {
         if (!cancelled) {
           setError(getApiErrorMessage(err));
@@ -60,6 +63,7 @@ export function CodSettingsPanel() {
         isCodEnabled,
         cancellationWindowHours,
         sellerState: sellerState.trim() ? sellerState.trim() : null,
+        mobileOtpSignupEnabled,
       };
       const updated = await api<CodSettings>("/admin/settings/cod", {
         method: "PATCH",
@@ -67,7 +71,8 @@ export function CodSettingsPanel() {
         body: JSON.stringify(payload),
       });
       setSettings(updated);
-      setSuccess("Cash on Delivery settings updated successfully.");
+      setMobileOtpSignupEnabled(updated.mobileOtpSignupEnabled ?? false);
+      setSuccess("Settings updated successfully.");
       setTimeout(() => setSuccess(null), 4000);
     } catch (err) {
       setError(getApiErrorMessage(err));
@@ -76,14 +81,14 @@ export function CodSettingsPanel() {
     }
   };
 
-  const inputClass = "block w-full max-w-md rounded-lg border border-border bg-background/50 px-3.5 py-2 text-sm text-foreground placeholder-muted-foreground/60 transition-all focus:border-primary focus:bg-background focus:ring-2 focus:ring-primary/20 focus:outline-hidden disabled:opacity-50";
+  const inputClass = "block w-full rounded-lg border border-border bg-background/50 px-3.5 py-2 text-sm text-foreground placeholder-muted-foreground/60 transition-all focus:border-primary focus:bg-background focus:ring-2 focus:ring-primary/20 focus:outline-hidden disabled:opacity-50";
 
   return (
     <div className="space-y-6">
       <div>
-        <h3 className="text-lg font-medium text-foreground">Cash on Delivery (COD) Settings</h3>
+        <h3 className="text-lg font-medium text-foreground">Cash on Delivery &amp; Sign-up Settings</h3>
         <p className="text-sm text-muted-foreground">
-          Configure COD availability, customer cancellation policies, and regional rules.
+          Configure COD availability, customer cancellation policies, regional rules, and customer sign-up options.
         </p>
       </div>
 
@@ -94,8 +99,20 @@ export function CodSettingsPanel() {
       ) : (
         <form onSubmit={(e) => { e.preventDefault(); void onSave(); }} className="space-y-6">
           
+          {/* Fail-case warnings */}
+          {isCodEnabled && !sellerState.trim() && (
+            <div className="flex min-w-0 items-start gap-2.5 rounded-lg border border-amber-500/20 bg-amber-500/10 p-3.5 text-xs text-amber-800 overflow-hidden">
+              <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" aria-hidden />
+              <span>
+                <strong>Seller state is not set.</strong> If GST invoicing is enabled,
+                inter-state vs intra-state IGST/CGST+SGST split cannot be computed.
+                Add your operating state below to ensure correct tax line items on invoices.
+              </span>
+            </div>
+          )}
+
           {/* Enable/Disable Card */}
-          <div className="rounded-xl border border-border bg-muted/10 p-5 space-y-4">
+          <div className="rounded-xl border border-border bg-muted/10 p-4 sm:p-5 space-y-4">
             <h4 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               <Banknote className="h-4 w-4 text-primary" />
               Availability Check
@@ -120,16 +137,16 @@ export function CodSettingsPanel() {
           </div>
 
           {/* Configuration Card */}
-          <div className="rounded-xl border border-border bg-muted/10 p-5 space-y-5">
+          <div className="rounded-xl border border-border bg-muted/10 p-4 sm:p-5 space-y-5">
             <h4 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               <Clock className="h-4 w-4 text-primary" />
               Policies & Restrictions
             </h4>
 
-            <div className="grid gap-6 sm:grid-cols-2">
+            <div className="grid gap-5 sm:gap-6 sm:grid-cols-2">
               <label className="grid gap-1.5 text-sm font-medium text-foreground">
                 Cancellation Window (Hours)
-                <div className="relative max-w-md">
+                <div className="relative">
                   <input
                     type="number"
                     min={1}
@@ -168,15 +185,42 @@ export function CodSettingsPanel() {
             </div>
           </div>
 
+          {/* Mobile OTP Signup Toggle */}
+          <div className="rounded-xl border border-border bg-muted/10 p-4 sm:p-5 space-y-4">
+            <h4 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              <Smartphone className="h-4 w-4 text-primary" aria-hidden />
+              Customer Sign-up Options
+            </h4>
+
+            <label className="flex items-start gap-3 rounded-lg border border-border bg-background/60 p-4 transition-all hover:bg-background cursor-pointer">
+              <input
+                type="checkbox"
+                checked={mobileOtpSignupEnabled}
+                onChange={(event) => setMobileOtpSignupEnabled(event.target.checked)}
+                className="mt-1 h-4 w-4 rounded-sm border-border text-primary focus:ring-primary/20"
+              />
+              <div className="space-y-0.5 min-w-0">
+                <span className="text-sm font-medium text-foreground">
+                  Allow Sign-up with Mobile Number (WhatsApp OTP)
+                </span>
+                <p className="text-xs text-muted-foreground">
+                  When enabled, customers see a &quot;Sign up with Mobile&quot; tab on the
+                  registration page. OTP is sent via WhatsApp. Disabled by default — enable
+                  only if WhatsApp messaging is configured.
+                </p>
+              </div>
+            </label>
+          </div>
+
           {error && (
-            <div className="flex items-start gap-2.5 rounded-lg border border-destructive/20 bg-destructive/10 p-3.5 text-xs text-destructive">
+            <div className="flex min-w-0 items-start gap-2.5 rounded-lg border border-destructive/20 bg-destructive/10 p-3.5 text-xs text-destructive overflow-hidden">
               <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
               <span>{error}</span>
             </div>
           )}
 
           {success && (
-            <div className="flex items-start gap-2.5 rounded-lg border border-zinc-900/20 bg-zinc-900/10 p-3.5 text-xs text-zinc-800">
+            <div className="flex min-w-0 items-start gap-2.5 rounded-lg border border-zinc-900/20 bg-zinc-900/10 p-3.5 text-xs text-zinc-800 overflow-hidden">
               <CheckCircle2 className="h-4 w-4 shrink-0 mt-0.5" />
               <span>{success}</span>
             </div>
@@ -188,7 +232,7 @@ export function CodSettingsPanel() {
               type="submit"
               disabled={isSubmitting || !canWrite}
               title={!canWrite ? "Requires settings:write permission" : undefined}
-              className="flex items-center justify-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-medium text-primary-foreground transition-all hover:bg-primary/95 focus:outline-hidden focus:ring-2 focus:ring-primary/20 disabled:opacity-50 cursor-pointer"
+              className="flex w-full sm:w-auto min-h-11 items-center justify-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-medium text-primary-foreground transition-all hover:bg-primary/95 focus:outline-hidden focus:ring-2 focus:ring-primary/20 disabled:opacity-50 cursor-pointer"
             >
               {isSubmitting ? (
                 <>

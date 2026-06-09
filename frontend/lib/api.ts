@@ -50,6 +50,49 @@ function parseApiError(body: unknown, status: number): ApiError {
   return new ApiError("UNKNOWN_ERROR", "Request failed", status);
 }
 
+function requestTimeoutMs(path: string): number {
+  if (path.startsWith("/auth/")) {
+    return 12_000;
+  }
+  return 30_000;
+}
+
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+): Promise<Response> {
+  const controller = new AbortController();
+  const external = init.signal;
+
+  if (external) {
+    if (external.aborted) {
+      controller.abort();
+    } else {
+      external.addEventListener("abort", () => controller.abort(), {
+        once: true,
+      });
+    }
+  }
+
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new ApiError(
+        "REQUEST_TIMEOUT",
+        "Request timed out",
+        408,
+      );
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 export async function apiClient<T>(
   endpoint: string,
   options: ApiClientOptions = {},
@@ -60,16 +103,22 @@ export async function apiClient<T>(
 
   const isFormData = init.body instanceof FormData;
 
-  const response = await fetch(url, {
-    ...init,
-    credentials: "include",
-    headers: {
-      ...(isFormData ? {} : { "Content-Type": "application/json" }),
-      ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
-      ...(idempotencyKey ? { "idempotency-key": idempotencyKey } : {}),
-      ...headers,
+  const hasBody = init.body !== undefined && init.body !== null;
+
+  const response = await fetchWithTimeout(
+    url,
+    {
+      ...init,
+      credentials: "include",
+      headers: {
+        ...(hasBody && !isFormData ? { "Content-Type": "application/json" } : {}),
+        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+        ...(idempotencyKey ? { "idempotency-key": idempotencyKey } : {}),
+        ...headers,
+      },
     },
-  });
+    requestTimeoutMs(path),
+  );
 
   const body: unknown = await response.json().catch(() => ({}));
 
@@ -77,7 +126,28 @@ export async function apiClient<T>(
     if (!body.success) {
       throw parseApiError(body, response.status);
     }
-    return body.data as T;
+    const envelope = body as ApiEnvelope<T>;
+    const meta = envelope.meta;
+    if (
+      Array.isArray(envelope.data) &&
+      meta &&
+      typeof meta === "object" &&
+      typeof meta.page === "number" &&
+      typeof meta.limit === "number" &&
+      typeof meta.total === "number" &&
+      typeof meta.totalPages === "number"
+    ) {
+      return {
+        items: envelope.data,
+        meta: {
+          page: meta.page,
+          limit: meta.limit,
+          total: meta.total,
+          totalPages: meta.totalPages,
+        },
+      } as T;
+    }
+    return envelope.data as T;
   }
 
   if (!response.ok) {

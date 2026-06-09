@@ -6,6 +6,38 @@ This document preserves detailed hardening history for engineering traceability.
 
 ---
 
+**Redis connection hardening, bodyless DELETE schemas, and admin policy registry — June 9, 2026:**
+
+Root cause: Transient Redis network blips (`ECONNRESET`, `ECONNREFUSED`) on Docker/Windows produced unhandled `[ioredis] error event` spam because BullMQ and pub/sub paths call `duplicate()` without attaching listeners. Separately, several DELETE routes declared an empty JSON `body` schema; Fastify rejected bodyless DELETE requests with `VALIDATION_ERROR` (coupon soft-delete/restore, customer address delete). `dev-up.cmd` also failed boot when `DELETE /api/v1/admin/categories/:id/permanent` was missing from the admin endpoint policy registry.
+
+Changes applied:
+- **`src/common/redis/redis-connection.ts` (shared):** `buildStandardRedisOptions()`, `attachRedisErrorListener()` (throttles transient errors), `guardRedisDuplicate()`, `installGuardedIORedisDuplicate()` (patches BullMQ internal duplicates), `waitForRedisReady()`. Wired into API Redis plugin, BullMQ plugin, worker boot, API/worker restart subscribers, cart-cleanup ephemeral clients, and `scripts/resume-paused-queues.js`.
+- **Local dev Docker:** Base `docker-compose.yml` exposes Redis `6379:6379` for host-side API/workers; `docker-compose.prod.yml` uses `redis.ports: !reset []` so Redis stays container-internal on VPS.
+- **Route schemas:** Removed spurious empty `body` from `adminDeleteCouponSchema`, `adminRestoreCouponSchema`, and `deleteAddressSchema` — clients must send bodyless DELETE/POST-without-body as documented.
+- **Admin policy registry:** Added `DELETE /api/v1/admin/categories/:id/permanent` → `categories:write` (Layer A).
+- **Coupon admin:** Usage column uses compact `used / limit` formatting; analytics excludes soft-deleted coupons; `BUY_X_GET_Y` in response enum; `createdBy` nullable.
+- **`AdminRateLimitStore`:** Falls back to in-memory counters when Redis commands fail (multi-instance safety preserved when Redis is healthy).
+
+**Affects:** `redis-connection.ts`, `redis.plugin.ts`, `bullmq.plugin.ts`, `main.ts`, `queues/workers/index.ts`, `cart-cleanup.worker.ts`, `coupons.schemas.ts`, `users.schemas.ts`, `admin-endpoint-policy-registry.ts`, `admin-rate-limit.store.ts`, `frontend/lib/admin-format.ts`, `AdminCouponsList.tsx`.
+
+---
+
+**Admin console data integrity — June 3, 2026:**
+
+Changes: Product editor maps Status → `isActive`, short text → `metaDescription`, Featured → `isFeatured`; removed cosmetic-only fields. `productListItemSchema` exposes `isActive` + `metaDescription`. `GET /admin/payments` returns `customerName`/`customerEmail`; `GET /admin/reviews` returns `productName`/`productSlug`. Per-page `AdminDateRangePicker` with dynamic KPI trend labels (`prevRange`). Frontend tables cleared of mock shipment/payment/review placeholders. Sign-off: 897 unit tests, 59 security invariants, frontend build clean.
+
+**Product image upload — Cloudflare R2 automatic sync — June 3, 2026:**
+
+Changes: `MEDIA_STORAGE_PROVIDER=r2` pushes each admin upload to Cloudflare R2 (S3-compatible) synchronously; `ProductImage.url` stores `R2_PUBLIC_BASE_URL/<clientId>/products/...`. Batch multipart (`file` repeated). Legacy `GET /api/v1/media/*` only when provider is `local`. **Credentials live in Ops UI** (Product Media domain), not bootstrap `.env`. `/health/ready` enforces missing R2 keys. Scripts: `npm run verify:r2-media`. Frontend: multi-file admin picker + Ops config fields.
+
+**Product image upload — VPS filesystem + Cloudflare CDN — June 3, 2026:**
+
+Gap: Admin could only paste external `https://` URLs; no binary upload, no 5 MiB cap, no origin storage.
+
+Changes: `POST /api/v1/admin/products/:id/images/upload` (multipart, magic-byte validation, 5 MiB max); `GET /api/v1/media/products/:productId/:filename` with long-cache headers; `MEDIA_STORAGE_ROOT` / `MEDIA_CDN_BASE_URL` env; delete removes VPS file for hosted URLs; `/api/v1/media` added to `ALWAYS_ALLOWED_PREFIXES`. Frontend: `resolveProductImageUrl`, admin file picker, `NEXT_PUBLIC_IMAGE_CDN_URL`.
+
+---
+
 **VPS automated cleanup script template for multi-client deployments — May 30, 2026:**
 Root cause: Manual disk space cleanup was required periodically on the VPS (83% full). The existing cron job only cleaned Docker buildx cache, missing images, containers, volumes, PM2 logs, and frontend build caches. For multi-client VPS deployments, cleanup needs to be systematic and templated.
 Changes applied: Created `scripts/vps-cleanup-template.sh` — a configurable bash script template that handles:
@@ -27,6 +59,10 @@ Changes applied: Updated `assertInvitePhoneAvailable` to skip the conflict check
 **Admin session persistence, idle timeout, and login/setup UX hardening — May 28, 2026:**
 
 Root cause (2026-05-28 cookie same-site): `NEXT_PUBLIC_API_BASE_URL` pointed at `localhost:3000` while the UI ran on `localhost:3101`, so `refresh_token` was never sent on reload. Fix: Next rewrite `/api/v1/*`, browser base on storefront origin (`lib/api-base.ts`), deduped refresh (`lib/restore-auth-session.ts`), dev refresh cookies without `Secure` (`auth-cookies.ts`).
+
+**2026-06-03 — admin session restore (mobile/LAN dev):** Client showed infinite loading on `/admin` despite RSC `200`; `/admin/login` reload-looped or had a disabled submit button. Causes: `clearSession()` cleared restore `blocked` (infinite restore), failed restore redirected to `/admin/login` while already on login, shared `admin` restore runtime between login and shell, login reset raced in-flight refresh, OTP channel fetch disabled button, LAN HMR blocked without `allowedDevOrigins`. Fix: `admin` vs `admin-guest` audiences, `clearSession` vs `logoutLocalSession`, `redirectToAdminLoginIfNeeded`, `AdminGuestOnly` non-blocking UI, browser API = page origin, restore deadlines + admin skip `GET /users/me`. **Affects:** `frontend/hooks/use-auth-session-restore.ts`, `contexts/admin-auth-context.tsx`, `lib/api-base.ts`, `next.config.ts`.
+
+**2026-06-06 — admin product hard delete + form validation UX:** Merchants need irreversible catalogue cleanup for mistaken drafts, but order/review history must be protected. Added `DELETE /api/v1/admin/products/:id/permanent` with `409` guard; UI renames soft delete to **Deactivate** and isolates permanent delete in `AdminRowActionsMenu`. Separate fix: validation banner did not highlight fields because Tailwind border utilities overrode error classes and product create lacked Category/Slug inputs — shared `admin-form-validation` helpers, `!border-destructive`, and required Category picker. Frontend `predev` probes backend health to avoid proxy `ECONNREFUSED` noise. **Affects:** `products.service.ts`, `AdminProductEditor.tsx`, `AdminProductsList.tsx`, `lib/admin-form-validation.ts`, `ensure-backend-dev.mjs`.
 
 **2026-06-01 — production admin refresh logout:** Admin OTP verify did not pass abuse/risk context into token issuance, so refresh `deviceKeyHash` mismatched and sessions were revoked on reload. Fix: forward risk on `POST /auth/admin/login/verify-otp`; device binding uses UA+IP only; `refresh_token` `Path=/api/v1`; clear cookie on refresh `401`. Re-login once after deploy if sessions were issued before this patch.
 

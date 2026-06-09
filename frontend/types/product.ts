@@ -30,6 +30,7 @@ export interface Product {
   reviewCount: number;
   tags: string[];
   isFeatured: boolean;
+  isActive: boolean;
   images: ProductImage[];
   variants: ProductVariant[];
   inStock: boolean;

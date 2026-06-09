@@ -87,6 +87,8 @@ These are **operational thresholds**, not architecture changes. Canonical stack 
 | --- | --- |
 | `/var/www/<client-id>/backend` | Git clone of **this** template for that client |
 | `/var/www/<client-id>/storefront` | Next.js frontend app (App Router — `TRD.md` §12.1) serving both storefront and admin routes (for example `/admin`) |
+| `/var/www/<client-id>/storage/media` | Product image files (recommended; set `MEDIA_STORAGE_ROOT`) |
+| `/var/www/<client-id>/storage/invoices` | GST invoice PDFs (set `INVOICE_STORAGE_ROOT` via Ops UI) |
 | `/var/log/nginx/` | Per-site `access.log` / `error.log` if you split logs |
 
 ---
@@ -182,7 +184,7 @@ Redis is required for BullMQ workers, idempotency, OTP/rate-limit counters, and 
 
 ### 6.1 Security posture (mandatory)
 
-1. Run Redis **inside client Docker network only**. The default `docker-compose.yml` exposes Redis on the host for local development convenience (`ports: "${REDIS_PORT:-6379}:6379"`). **On production VPS, remove or comment out the `ports:` mapping** from the Redis service to prevent external access.
+1. Run Redis **inside client Docker network only**. Base `docker-compose.yml` exposes Redis on the host for local development (`ports: "${REDIS_PORT:-6379}:6379"`). **On production VPS, use `docker-compose.prod.yml`**, which sets `redis.ports: !reset []` so Redis is not published on host `6379`.
 2. Set a strong `REDIS_PASSWORD` per client stack (minimum 32 random characters).
 3. Use authenticated URL in `.env`:
    - Compose/VPS: `REDIS_URL=redis://:<REDIS_PASSWORD>@redis:6379`
@@ -257,6 +259,7 @@ Expected:
    | **Email bootstrap** | `RESEND_API_KEY`, `RESEND_FROM` | **Phase 1 only** — needed for `ops-newuser.mjs` invite email. After first ops login, manage via Ops UI. |
    | Features | `FEATURE_COUPONS_ENABLED`, `FEATURE_REVIEWS_ENABLED`, `FEATURE_WISHLIST_ENABLED`, `FEATURE_GST_INVOICING_ENABLED`, `FEATURE_RESPONSE_ENVELOPE_ENABLED` | Toggle modules |
    | Runtime tuning | `RISK_*`, `HOT_SKU_*`, `CART_RESERVATION_TTL_MINUTES`, `HEALTH_*`, `LOAD_SHED_MODE` | Ops/risk thresholds |
+   | Product media | `MEDIA_STORAGE_ROOT`, `MEDIA_CDN_BASE_URL`, `PUBLIC_STORE_URL` | VPS image files + public CDN origin for `ProductImage.url` |
    | Validation verbosity | `ENABLE_VERBOSE_VALIDATION_ERRORS` | Keep `false` in production |
    | Observability | `OTEL_TRACING_ENABLED`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_SERVICE_NAME` | Distributed tracing |
 
@@ -279,6 +282,16 @@ Expected:
    | Notifications | `NOTIFY_*`, `RESEND_*`, `MSG91_*`, `FAST2SMS_API_KEY`, `META_WHATSAPP_*`, `SMS_PROVIDER` | Provider credentials; per-template channels configured in `StoreSettings` |
    | Invoice storage | `INVOICE_STORAGE_ROOT` | Local filesystem root for invoice PDFs |
    | Ops security | `OPS_METRICS_TOKEN`, `OPS_METRICS_ALLOWLIST`, `REPLAY_APPROVAL_TOKEN`, `REPLAY_AUDIT_RETENTION_DAYS`, `TRUSTED_PROXY_ALLOWLIST_CIDR` | Managed via Ops UI after first invite |
+
+   **Product images (Ops UI → Product Media / Cloudflare R2 — not bootstrap `.env`):**
+
+   - Cloudflare: create R2 bucket + API token (Object Read & Write); bind custom domain (e.g. `cdn.<storefront-domain>`) to the bucket
+   - After ops login: Ops console → **Product Media (Cloudflare R2)** → set `MEDIA_STORAGE_PROVIDER=r2`, `R2_*`, `R2_PUBLIC_BASE_URL`; save and **restart** API/workers
+   - Confirm `GET /api/v1/health/ready` has no `runtimeConfigMissingKeys` for media
+   - Run `npm run verify:r2-media` on VPS (ensures R2 keys were not left in `backend/.env`)
+   - Storefront `.env`: `NEXT_PUBLIC_IMAGE_CDN_URL` = same hostname as `R2_PUBLIC_BASE_URL`
+   - Admin upload: `POST /api/v1/admin/products/:id/images/upload` — multipart batch, **5 MiB max** each; automatic R2 `PutObject`
+   - Local dev: Ops UI `MEDIA_STORAGE_PROVIDER=local` (optional `MEDIA_STORAGE_ROOT`); origin `GET /api/v1/media/products/*`
 
    **Store/GST seller profile:** `storeName`, `sellerLegalName`, `sellerAddress`, `sellerState`, `gstin`, `fssaiNumber` — set via admin settings API (`PATCH /api/v1/admin/settings`), stored in `StoreSettings` DB row. No env fallback.
 
@@ -490,7 +503,7 @@ Evidence to archive before go-live:
 | **Enable site** | `sudo ln -sf sites-available/<domain.com> sites-enabled/<domain.com>` | `sudo rm sites-enabled/default` unless you confirmed no other site uses it (`ls sites-enabled/`) |
 | **Rate-limit zones** | Install `snippets/rate-zones.conf` **once**; `include` it in `nginx.conf` `http {}` | Duplicate `limit_req_zone` lines in `nginx.conf` and the snippet (nginx reload will fail) |
 | **Ports** | Assign unique `BACKEND_PORT` / storefront port per client (§3); run `ss -tlnp` before deploy | Reuse another client's `3001`/`3101` (or their slot) |
-| **Redis** | Keep Redis on the Docker network only — **comment out** `ports:` on the `redis:` service in each client's `docker-compose.yml` | Publish `6379` on `0.0.0.0` (only one client can bind host `6379`) |
+| **Redis** | Keep Redis on the Docker network only — deploy with `docker-compose.prod.yml` (`redis.ports: !reset []`) | Publish `6379` on `0.0.0.0` (only one client can bind host `6379`; local dev may use base compose port mapping) |
 | **TLS** | `certbot --nginx -d <this-domain> -d www.<this-domain>` per client | Assume one certificate covers all clients |
 | **Routing** | `server_name` matches **this** client's domain; `proxy_pass` to **this** client's loopback ports | Single catch-all `server {}` for all domains on one port |
 

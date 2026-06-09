@@ -97,6 +97,9 @@ Products filtered to a specific category slug. Same pagination/filter params as 
 ### `GET /api/v1/products/:slug`
 Single product detail by slug. Returns full product data including all variants, images, stock status.
 
+### `GET /api/v1/reviews/recent`
+Latest merchant-approved reviews for storefront social proof (homepage testimonials). Query: `limit` (default `3`, max `10`). Returns only reviews with non-empty body text on active products, ordered by approval time (`updatedAt` desc). Items include `productName`, `productSlug`, author, rating, and body.
+
 ### `GET /api/v1/reviews/product/:slug`
 Paginated approved reviews for a product. Public — no auth needed.
 
@@ -346,28 +349,38 @@ Top-selling products by revenue or quantity. Query: `from`, `to`, `limit`.
 
 | Route | What it does |
 |---|---|
-| `GET /api/v1/admin/products` | List/search all products. Supports pagination, search, category filter, status filter. |
-| `GET /api/v1/admin/products/:id` | Full product detail including all variants, images, inventory state. |
-| `POST /api/v1/admin/products` | Create a new product. Body includes name, slug, description, category, base price (paise), all variant definitions. |
-| `PATCH /api/v1/admin/products/:id` | Partial update of product fields (name, description, price, status, etc.). |
-| `DELETE /api/v1/admin/products/:id` | Soft-delete a product. Hides from storefront. Existing orders unaffected. |
+| `GET /api/v1/admin/products` | List/search all products. Each item includes `isActive`, `metaDescription`, category, images, variants. Supports pagination, search, category filter, status filter. |
+| `GET /api/v1/admin/products/:id` | Full product detail including all variants, images, inventory state, `isActive`, `metaDescription`, `isFeatured`. |
+| `POST /api/v1/admin/products` | Create product. Body: `name`, `slug`, `description`, `categoryId`, `tags`, `isFeatured`, `isActive`, optional `metaDescription` (max 500), `variants[]` (incl. optional `lowStockThreshold`), optional `images[]`. |
+| `PATCH /api/v1/admin/products/:id` | Partial update: `name`, `slug`, `description`, `categoryId`, `tags`, `isFeatured`, `isActive`, `metaDescription` (nullable). |
+| `DELETE /api/v1/admin/products/:id` | Deactivate product (soft delete — sets `isActive: false`). Reversible. Admin UI label: **Deactivate**. |
+| `DELETE /api/v1/admin/products/:id/permanent` | Permanently delete product (hard delete). **409** if order history or reviews exist. Clears cart items + hosted media. UI: **Delete Permanently** (`AdminRowActionsMenu`). |
 | `POST /api/v1/admin/products/:id/variants` | Add a new variant to an existing product. Body: size, color, SKU, price, stock. |
 | `PATCH /api/v1/admin/products/:id/variants/:variantId` | Update a variant's fields (price, SKU, attributes). |
-| `POST /api/v1/admin/products/:id/images` | Add a product image. Body: `{ url, altText?, sortOrder? }`. |
-| `PATCH /api/v1/admin/products/:id/images/reorder` | Reorder product images. Body: ordered array of image IDs. |
-| `DELETE /api/v1/admin/products/:id/images/:imageId` | Remove a specific product image. |
+| `POST /api/v1/admin/products/:id/images` | Add image by URL. Body: `{ url, altText, sortOrder }` — `url` is `https://…` or hosted `/api/v1/media/products/…` path. |
+| `POST /api/v1/admin/products/:id/images/upload` | Upload one or more images (multipart `file` repeated, optional `altText`). **Max 5 MiB each.** Sort order auto-assigned per batch. **Automatically** pushes to Cloudflare R2 when `MEDIA_STORAGE_PROVIDER=r2`; local dev writes to `MEDIA_STORAGE_ROOT`. Returns single image or `{ items: [...] }`. |
+| `PATCH /api/v1/admin/products/:id/images/reorder` | Reorder product images. Body: `{ images: [{ id, sortOrder }] }`. |
+| `DELETE /api/v1/admin/products/:id/images/:imageId` | Remove image row and delete R2 object (or legacy VPS file) when URL is hosted media. |
+
+### Public product media
+
+| Route | What it does |
+|---|---|
+| `GET /api/v1/media/products/:productId/:filename` | **Local provider only.** Serves binary from `MEDIA_STORAGE_ROOT`. Skipped when `MEDIA_STORAGE_PROVIDER=r2` (images served directly from R2/CDN). Allowed during maintenance (`ALWAYS_ALLOWED_PREFIXES`). |
 | `POST /api/v1/admin/products/import-csv` | Bulk import products from CSV file. Multipart upload. Returns import report with row-level success/error. |
 
 ### Categories
 
-**`categories:read`** for GET. **`categories:write`** for mutations.
+**`categories:read`** (or **`products:read`** for GET list/detail) for reads. **`categories:write`** for mutations.
 
 | Route | What it does |
 |---|---|
-| `GET /api/v1/admin/categories` | List all categories with product counts. Supports pagination. |
-| `POST /api/v1/admin/categories` | Create category. Body: `{ name, slug, description?, parentId?, imageUrl? }`. |
-| `PATCH /api/v1/admin/categories/:id` | Update category name, slug, description, image, or parent. |
-| `DELETE /api/v1/admin/categories/:id` | Delete a category. Fails if products are assigned to it. |
+| `GET /api/v1/admin/categories` | Paginated category list. Query: `search`, `isActive`, `page`, `limit`. |
+| `GET /api/v1/admin/categories/:id` | Single category for admin editor. |
+| `POST /api/v1/admin/categories` | Create category. Body: `{ name, slug, parentId?, imageUrl?, isActive? }`. Reactivates by slug if inactive match exists. |
+| `PATCH /api/v1/admin/categories/:id` | Update name, slug, parent (`null` clears), image (`null` clears), or `isActive`. |
+| `DELETE /api/v1/admin/categories/:id` | Soft-delete: sets `isActive: false`. Products keep their category assignment. |
+| `DELETE /api/v1/admin/categories/:id/permanent` | Hard-delete: permanently removes category from DB. Returns 409 if any products reference it; 404 if category not found. Requires `categories:write` permission. Idempotency guarded. **Bodyless DELETE** (no JSON body). Registered in admin endpoint policy registry (Layer A). |
 
 ---
 
@@ -435,7 +448,7 @@ Manual stock adjustment for a variant. Body: `{ quantity, note? }`. Creates an a
 
 | Route | What it does |
 |---|---|
-| `GET /api/v1/admin/payments` | Paginated list of all payments across all orders. Query: `status` (PaymentStatus enum filter), `provider` (PaymentProvider filter), `page`, `limit`. Returns `amount` (Int, paise), `provider`, `status`, `providerPaymentId`, and the linked order summary per row. |
+| `GET /api/v1/admin/payments` | Paginated payment list. Query: `status`, `method`, `orderId`, `from`, `to`, `page`, `limit`. Each item includes `customerName`, `customerEmail` (from order user), `orderNumber`, `amount` (paise), `provider`, `status`, provider IDs, refund fields. |
 
 ### Return request routes
 
@@ -458,8 +471,8 @@ All require admin JWT. Additional per-admin Redis rate limiting enforced on writ
 | `POST /api/v1/admin/coupons` | `coupons:write` | Create coupon. Body: code, type (percent/flat), value, minOrderValue, maxUses, perUserLimit, expiry, applicableCategories, etc. Audit-logged. |
 | `PATCH /api/v1/admin/coupons/:id` | `coupons:write` | Update coupon fields. Audit-logged. |
 | `PATCH /api/v1/admin/coupons/:id/status` | `coupons:write` | Toggle coupon active/inactive/paused. Audit-logged. |
-| `DELETE /api/v1/admin/coupons/:id` | `coupons:write` | Soft-delete coupon. Audit-logged. Coupon no longer accepted at checkout. |
-| `POST /api/v1/admin/coupons/:id/restore` | `coupons:write` | Restore a soft-deleted coupon. Audit-logged. |
+| `DELETE /api/v1/admin/coupons/:id` | `coupons:write` | Soft-delete coupon. Audit-logged. Coupon no longer accepted at checkout. **Bodyless DELETE** (no JSON body). |
+| `POST /api/v1/admin/coupons/:id/restore` | `coupons:write` | Restore a soft-deleted coupon. Audit-logged. **No request body.** |
 | `GET /api/v1/admin/coupons/:id/audit` | `coupons:read` | Full audit trail for a specific coupon (who changed what and when). |
 
 ---
@@ -468,7 +481,7 @@ All require admin JWT. Additional per-admin Redis rate limiting enforced on writ
 
 | Route | Permission | What it does |
 |---|---|---|
-| `GET /api/v1/admin/reviews` | `reviews:read` | All reviews across all products. Query: `status` (PENDING/APPROVED/REJECTED), `page`, `limit`. |
+| `GET /api/v1/admin/reviews` | `reviews:read` | All reviews. Query: `status`, `from`, `to`, `page`, `limit`. Items include `productName`, `productSlug` (joined product), author, rating, `approved`, images. |
 | `PATCH /api/v1/admin/reviews/:id/moderate` | `reviews:moderate` | Approve or reject a review. Body: `{ status: 'APPROVED' \| 'REJECTED', reason? }`. |
 | `DELETE /api/v1/admin/reviews/:id` | `reviews:moderate` | Permanently delete a review record. This is a hard delete — the review is removed from the database and can no longer be retrieved. Requires `loadShedGuard` and `idempotencyPreHandler`. Use for abusive/irreversible content removal. |
 
@@ -482,7 +495,7 @@ Customer management includes **read** access to profiles and order history, and 
 
 | Route | What it does |
 |---|---|
-| `GET /api/v1/admin/users` | Paginated customer list. Query: `search`, `page`, `limit`. Phone numbers are masked in the response (last 4 digits visible). Response includes `totalOrders` and `totalSpendPaise` aggregates. |
+| `GET /api/v1/admin/users` | Paginated customer list. Query: `search`, `page`, `limit`. Admin UI may send `banned=true` to filter banned customers (when supported). Phone masked (last 4 digits). Aggregates: `totalOrders`, `totalSpendPaise`. |
 | `GET /api/v1/admin/users/:id` | Customer detail: full profile, addresses, `isBanned`/`bannedAt`/`bannedReason`, recent order history with shipment and payment summary. |
 | `GET /api/v1/admin/users/:id/orders` | Paginated order history for a specific customer. Query: `page`, `limit`. Returns order summaries with status, total, and payment mode. Useful for full CRM view without loading the entire user detail. |
 | `GET /api/v1/admin/users/:id/notes` | List all admin notes attached to a customer account. Returns `UserAdminNote` records ordered by `createdAt` descending. |
@@ -509,9 +522,11 @@ Store profile: store name, contact email, support phone, address, logo URL, time
 Shipping configuration: default courier provider, free shipping threshold (paise), flat rate, COD surcharge.
 
 ### `GET /PATCH /api/v1/admin/settings/notifications`
-**Single-channel selector + per-template routing.** Controls:
-- `emailEnabled` / `smsEnabled` / `whatsappEnabled` — stored in `StoreSettings` (DB-layer, overrides env flags). Only one should be `true` at a time; the admin UI (`/admin/settings/notifications`) enforces single-channel selection via radio buttons.
+**Single-channel selector + per-template routing (ops-only in production).** Controls:
+- `emailEnabled` / `smsEnabled` / `whatsappEnabled` — stored in `StoreSettings` (DB-layer, overrides env flags). Only one should be `true` at a time.
 - `primaryChannels` — per-template primary channel mapping (EMAIL/SMS/WHATSAPP) stored in `StoreSettings.primaryNotificationChannels`.
+
+**Frontend note (2026-06-07):** Admin UI surface removed — merchant admin no longer accesses this endpoint. Notification provider configuration consolidated to `/ops/config` (ops-only) to reduce admin–ops redundancy. Backend endpoint remains for backwards compatibility.
 
 Does **not** control provider credentials — those are ops-only (`POST /ops/config/save` domain `notifications`). Default DB state: `notifyEmailEnabled=true`, `notifySmsEnabled=false`, `notifyWhatsappEnabled=false`.
 
@@ -777,7 +792,7 @@ Used by the storefront banner (`MaintenanceBanner`) and by Nginx as the `auth_re
 **Public** — JSON snapshot for the storefront. Returns `{ mode, phase, pendingUntil, activatedAt, serverTime }`. `serverTime` is included so the client-side countdown stays aligned with the server clock instead of trusting the device clock. Polled every ~30 s in `normal` and every ~5 s during the `pending` window.
 
 #### `GET /api/v1/maintenance/gate`
-**Internal (used by Nginx `auth_request` only)** — Returns `200 OK` with `{ allowed: true }` when the request must pass through (`mode !== 'maintenance'`, or `phase === 'pending'`, or path is in `ALWAYS_ALLOWED_PREFIXES`). Returns `401 Unauthorized` with `{ allowed: false }` when maintenance is `active` and the path should be blocked. The `X-Maintenance-Active: 0|1` response header is still set on both shapes for backward compat with direct API callers, but **Nginx no longer reads the header** — it relies on the status code: `auth_request` natively interprets `401` as "deny", triggering `error_page 401 = @maintenance_block;` on the gated `location`, which `return 503` flows through `error_page 502 503 /maintenance.html`. Routes always allowed even in the `active` phase: `/ops/*`, `/api/v1/health*`, `/api/v1/auth/*`, `/api/v1/maintenance/*`, `/api/v1/payments/webhook`, `/api/v1/shipping/webhook`.
+**Internal (used by Nginx `auth_request` only)** — Returns `200 OK` with `{ allowed: true }` when the request must pass through (`mode !== 'maintenance'`, or `phase === 'pending'`, or path is in `ALWAYS_ALLOWED_PREFIXES`). Returns `401 Unauthorized` with `{ allowed: false }` when maintenance is `active` and the path should be blocked. The `X-Maintenance-Active: 0|1` response header is still set on both shapes for backward compat with direct API callers, but **Nginx no longer reads the header** — it relies on the status code: `auth_request` natively interprets `401` as "deny", triggering `error_page 401 = @maintenance_block;` on the gated `location`, which `return 503` flows through `error_page 502 503 /maintenance.html`. Routes always allowed even in the `active` phase: `/ops/*`, `/api/v1/health*`, `/api/v1/auth/*`, `/api/v1/media*`, `/api/v1/maintenance/*`, `/api/v1/payments/webhook`, `/api/v1/shipping/webhook`.
 
 **Why this shape, not the older 200+header pattern.** The original design (always-200 + `X-Maintenance-Active: 0|1` + `auth_request_set $maintenance_active …` + `if ($maintenance_active = "1") { return 503; }`) was structurally broken because Nginx evaluates `if` inside a `location` in the REWRITE phase, **before** `auth_request` populates `auth_request_set` variables in the ACCESS phase. The `if` always saw an empty variable and never blocked traffic. A debug `add_header X-Debug-Maintenance "value=[$maintenance_active]" always;` showed the captured value (because `add_header` runs in the output phase, last) which masked the bug perfectly. The 401 + `error_page` pattern uses Nginx's documented `auth_request` semantics, which are phase-safe. The `error_page` is scoped to the gated `location` (not server-level) and `proxy_intercept_errors` is OFF, so genuine 401s from the upstream proxy pass through to the client unchanged — there is no collision with real auth UX. See `docs/HARDENING_HISTORY.md` "May 2026 — Maintenance gate bypass (auth_request phase ordering)".
 
@@ -863,7 +878,7 @@ For complete context on how notifications work end-to-end:
 | Provider selection (which SMS provider: msg91/fast2sms/noop) | `POST /ops/config/save` domain `notifications` |
 | Provider API keys | `POST /ops/config/save` domain `notifications` |
 | Enable/disable email, SMS, WhatsApp at provider level | `POST /ops/config/save` domain `notifications` |
-| Which template uses which channel (OTP→SMS, ORDER_CONFIRMED→EMAIL, etc.) | `PATCH /admin/settings/notifications` |
+| Per-template channel routing (OTP→SMS, ORDER_CONFIRMED→EMAIL, etc.) | `PATCH /admin/settings/notifications` (ops-only; frontend removed 2026-06-07) |
 | Retrigger a notification for a specific order | `POST /admin/orders/:id/notifications/retrigger` |
 | View notification delivery analytics | `GET /admin/analytics/notifications` |
 | Replay a failed notification outbox job | `POST /admin/analytics/outbox-dead-letter/:id/replay` |
@@ -876,6 +891,7 @@ Runtime config is overlaid fresh on each worker boot. Per-template channel routi
 
 | Actor | Route | Notes |
 |---|---|---|
+| Storefront | `GET /api/v1/reviews/recent` | Public homepage testimonials — latest approved reviews with written body on active products (`limit` default 3) |
 | Customer | `GET /api/v1/reviews/product/:slug` | Public, no auth |
 | Customer | `GET /api/v1/reviews/me` | Own reviews only |
 | Customer | `POST /api/v1/reviews` | Submit review — starts in `PENDING` state |

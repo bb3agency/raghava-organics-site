@@ -6,9 +6,8 @@ import { useAdminAuth } from "@/contexts/admin-auth-context";
 import { ADMIN_PERMISSIONS, hasAdminPermission } from "@/lib/permissions";
 import { createIdempotencyKey } from "@/lib/idempotency";
 import type { AdminShippingSettings } from "@/lib/admin-api";
-import { formatPaise } from "@/lib/admin-format";
 import { getApiErrorMessage } from "@/lib/error-messages";
-import { Truck, MapPin, BadgePercent, CheckCircle2, AlertTriangle, Loader2 } from "lucide-react";
+import { Truck, MapPin, IndianRupee, CheckCircle2, AlertTriangle, Loader2 } from "lucide-react";
 
 export function ShippingSettingsPanel() {
   const api = useAuthenticatedApi();
@@ -16,7 +15,8 @@ export function ShippingSettingsPanel() {
   const canWrite = hasAdminPermission(adminUser, ADMIN_PERMISSIONS.settingsWrite);
   const [settings, setSettings] = useState<AdminShippingSettings | null>(null);
   const [pickupPincode, setPickupPincode] = useState("");
-  const [minOrderValuePaise, setMinOrderValuePaise] = useState(0);
+  // Displayed and entered in rupees (₹). Multiplied ×100 on save, divided ÷100 on load.
+  const [minOrderValueRupees, setMinOrderValueRupees] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -28,7 +28,9 @@ export function ShippingSettingsPanel() {
         if (!cancelled) {
           setSettings(result);
           setPickupPincode(result.pickupPincode);
-          setMinOrderValuePaise(result.minOrderValuePaise);
+          // Convert paise → rupees for display. Show as integer if divisible by 100.
+          const rupees = result.minOrderValuePaise / 100;
+          setMinOrderValueRupees(rupees === 0 ? "" : String(Number.isInteger(rupees) ? rupees : rupees.toFixed(2)));
         }
       })
       .catch((err) => {
@@ -45,12 +47,18 @@ export function ShippingSettingsPanel() {
     setError(null);
     setSuccess(null);
     try {
+      // Convert rupees → paise. Round to avoid floating-point drift.
+      const rupeesNum = parseFloat(minOrderValueRupees || "0");
+      const minOrderValuePaise = Math.round(rupeesNum * 100);
       const updated = await api<AdminShippingSettings>("/admin/settings/shipping", {
         method: "PATCH",
         idempotencyKey: createIdempotencyKey(),
         body: JSON.stringify({ pickupPincode, minOrderValuePaise }),
       });
       setSettings(updated);
+      // Reflect any server-normalised value back
+      const rupees = updated.minOrderValuePaise / 100;
+      setMinOrderValueRupees(rupees === 0 ? "" : String(Number.isInteger(rupees) ? rupees : rupees.toFixed(2)));
       setSuccess("Shipping settings updated successfully.");
       setTimeout(() => setSuccess(null), 4000);
     } catch (err) {
@@ -79,13 +87,29 @@ export function ShippingSettingsPanel() {
       ) : (
         <form onSubmit={(e) => { e.preventDefault(); void onSave(); }} className="space-y-6">
           {settings?.source === "default" && (
-            <div className="flex items-start gap-2.5 rounded-lg border border-amber-500/20 bg-amber-500/10 p-3.5 text-xs text-amber-800">
-              <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
-              <span>Using default placeholder values. Save custom shipping configuration to persist settings.</span>
+            <div className="flex min-w-0 items-start gap-2.5 rounded-lg border border-amber-500/20 bg-amber-500/10 p-3.5 text-xs text-amber-800 overflow-hidden">
+              <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" aria-hidden />
+              <span className="break-words min-w-0">
+                <strong>Using default placeholder pincode (500001).</strong> This is
+                not your real warehouse/farm origin. Shipping providers (Delhivery,
+                Shiprocket) will compute incorrect serviceability and charges until
+                you save your actual pickup pincode below.
+              </span>
+            </div>
+          )}
+          {settings?.source === "environment" && (
+            <div className="flex min-w-0 items-start gap-2.5 rounded-lg border border-blue-500/20 bg-blue-500/10 p-3.5 text-xs text-blue-800 overflow-hidden">
+              <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" aria-hidden />
+              <span className="break-words min-w-0">
+                Pincode is currently read from the deployment environment variable
+                (SHIPROCKET_PICKUP_PINCODE / DELHIVERY_PICKUP_PINCODE). Save a value
+                here to persist it in the database — environment values may change
+                on deployment without warning.
+              </span>
             </div>
           )}
 
-          <div className="rounded-xl border border-border bg-muted/10 p-5 space-y-4">
+          <div className="rounded-xl border border-border bg-muted/10 p-4 sm:p-5 space-y-4">
             <h4 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               <Truck className="h-4 w-4 text-primary" />
               Fulfillment & Delivery Origin
@@ -114,23 +138,23 @@ export function ShippingSettingsPanel() {
               </label>
 
               <label className="grid gap-1.5 text-sm font-medium text-foreground">
-                Minimum Order Value (in Paise)
+                Minimum Order Value (₹)
                 <div className="relative">
                   <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-muted-foreground/60 select-none">
-                    <BadgePercent className="h-4 w-4" />
+                    <IndianRupee className="h-4 w-4" />
                   </span>
                   <input
                     type="number"
                     min={0}
-                    required
-                    placeholder="50000 (for ₹500.00)"
+                    step="0.01"
+                    placeholder="500"
                     className={`${inputClass} pl-10`}
-                    value={minOrderValuePaise || ""}
-                    onChange={(event) => setMinOrderValuePaise(Number(event.target.value || 0))}
+                    value={minOrderValueRupees}
+                    onChange={(event) => setMinOrderValueRupees(event.target.value)}
                   />
                 </div>
-                <span className="text-xs font-semibold text-zinc-800 mt-0.5">
-                  Equivalent: {formatPaise(minOrderValuePaise)}
+                <span className="text-xs text-muted-foreground/80">
+                  Orders below this amount will be rejected at checkout. Enter in rupees (e.g. 500 for ₹500).
                 </span>
               </label>
             </div>
@@ -143,14 +167,14 @@ export function ShippingSettingsPanel() {
           )}
 
           {error && (
-            <div className="flex items-start gap-2.5 rounded-lg border border-destructive/20 bg-destructive/10 p-3.5 text-xs text-destructive">
+            <div className="flex min-w-0 items-start gap-2.5 rounded-lg border border-destructive/20 bg-destructive/10 p-3.5 text-xs text-destructive overflow-hidden">
               <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
               <span>{error}</span>
             </div>
           )}
 
           {success && (
-            <div className="flex items-start gap-2.5 rounded-lg border border-zinc-900/20 bg-zinc-900/10 p-3.5 text-xs text-zinc-800">
+            <div className="flex min-w-0 items-start gap-2.5 rounded-lg border border-zinc-900/20 bg-zinc-900/10 p-3.5 text-xs text-zinc-800 overflow-hidden">
               <CheckCircle2 className="h-4 w-4 shrink-0 mt-0.5" />
               <span>{success}</span>
             </div>
@@ -162,7 +186,7 @@ export function ShippingSettingsPanel() {
               type="submit"
               disabled={isSubmitting || !canWrite}
               title={!canWrite ? "Requires settings:write permission" : undefined}
-              className="flex items-center justify-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-medium text-primary-foreground transition-all hover:bg-primary/95 focus:outline-hidden focus:ring-2 focus:ring-primary/20 disabled:opacity-50 cursor-pointer"
+              className="flex w-full sm:w-auto min-h-11 items-center justify-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-medium text-primary-foreground transition-all hover:bg-primary/95 focus:outline-hidden focus:ring-2 focus:ring-primary/20 disabled:opacity-50 cursor-pointer"
             >
               {isSubmitting ? (
                 <>

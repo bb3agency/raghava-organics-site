@@ -77,7 +77,6 @@ export function AdminLoginForm({ onSuccess, enrollmentHint }: AdminLoginFormProp
   const [error, setError] = useState<string | null>(null);
   const [expiresAt, setExpiresAt] = useState<string | null>(null);
   const [otpChannel, setOtpChannel] = useState<"sms" | "whatsapp" | "email">("email");
-  const [loadingChannel, setLoadingChannel] = useState(true);
   const [showPassword, setShowPassword] = useState(false);
   const [resendCooldown, setResendCooldown] = useState(0);
   const [otpRemainingSec, setOtpRemainingSec] = useState(0);
@@ -124,11 +123,6 @@ export function AdminLoginForm({ onSuccess, enrollmentHint }: AdminLoginFormProp
           setOtpChannel("email");
         }
       })
-      .finally(() => {
-        if (!cancelled) {
-          setLoadingChannel(false);
-        }
-      });
     return () => {
       cancelled = true;
     };
@@ -344,11 +338,7 @@ export function AdminLoginForm({ onSuccess, enrollmentHint }: AdminLoginFormProp
           <button
             type="submit"
             className="inline-flex h-11 items-center justify-center gap-2 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground disabled:opacity-60"
-            disabled={
-              credentialsForm.formState.isSubmitting ||
-              loadingChannel ||
-              (turnstileRequired && !turnstileReady)
-            }
+            disabled={credentialsForm.formState.isSubmitting}
           >
             {credentialsForm.formState.isSubmitting ? (
               <>

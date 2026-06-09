@@ -52,7 +52,7 @@ Phase 4 frontend build evidence must follow the mandatory sequence: Foundation -
 | **`MSG91_AUTH_KEY`**, **`MSG91_SENDER_ID`**, **`MSG91_ROUTE`** | MSG91 SMS provider credentials (runtime) |
 | **`META_WHATSAPP_ACCESS_TOKEN`**, **`META_WHATSAPP_PHONE_NUMBER_ID`**, **`META_WHATSAPP_WEBHOOK_VERIFY_TOKEN`** | Meta Cloud API WhatsApp credentials (required when `NOTIFY_WHATSAPP_ENABLED=true`) |
 | **`META_WHATSAPP_API_VERSION`** | Meta Graph API version (default: `v21.0`) |
-| **Per-template primary notification channels** | `StoreSettings.primaryNotificationChannels` configured in DB; all 13 templates have primary channel set (`EMAIL` default); merchant admin can override per-template via admin UI. No fallback — if primary channel fails, notification fails and triggers alert. |
+| **Per-template primary notification channels** | `StoreSettings.primaryNotificationChannels` configured in DB; all 13 templates have primary channel set (`EMAIL` default). Configure via direct API: `PATCH /api/v1/admin/settings/notifications` (admin JWT). **Note (2026-06-07):** Merchant admin UI panel removed — use the API or ops console. No fallback — if primary channel fails, notification fails and triggers alert. |
 | **`ENABLE_VERBOSE_VALIDATION_ERRORS`** | Disabled in production (`false`) so validation responses remain minimal/redacted |
 | Feature flags (`FEATURE_*`) | Match commercial agreement (`ECOM_MASTER.md` §12.2) |
 | **`FEATURE_RESPONSE_ENVELOPE_ENABLED`** matches frontend expectation | If `true`, frontend must parse `{ success, data }` wrapper on all 2xx |

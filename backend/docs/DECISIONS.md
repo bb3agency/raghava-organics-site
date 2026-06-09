@@ -4,6 +4,89 @@
 
 ---
 
+## [2026-06-03] Product media on Cloudflare R2 — Ops DB overlay, not bootstrap `.env`
+
+**Context:** Admin product images needed automatic upload to R2 in production, batch multipart, and CDN URLs in `ProductImage.url`, without storing R2 secrets in VPS `backend/.env`.
+
+**Decision:**
+1. New `media` module: `product-media-provider`, `r2-product-media.storage`, `local-product-media.storage`, `media.routes.ts`.
+2. `MEDIA_STORAGE_PROVIDER`, `R2_*`, `R2_PUBLIC_BASE_URL` live in **Ops UI** (Product Media domain) and apply via ops config overlay at boot; `resetProductMediaStorageCache()` after save.
+3. `POST /api/v1/admin/products/:id/images/upload` — batch `file` parts, server-assigned `sortOrder`, compensating R2 delete on partial failure.
+4. `GET /api/v1/media/products/*` only when provider is `local`.
+5. Preflight: `npm run verify:r2-media` fails if R2 keys remain in `.env`.
+
+**Affected files:** `src/modules/media/*`, `src/modules/products/products.service.ts`, `src/modules/ops/ops-config-contract.ts`, `scripts/verify-r2-media-config.mjs`, frontend `lib/media-url.ts`, `lib/admin-product-media.ts`.
+
+---
+
+## [2026-06-03] Backend scripts cleanup — index + remove ad-hoc probes
+
+**Context:** `backend/scripts/` accumulated one-off debug and superseded bootstrap/smoke scripts.
+
+**Decision:** Delete `debug-cwd.js`, `debug-startup.mjs`, `check-email-provider.js`, `check-email-provider2.js`, `check-infra.js`, `admin-live-smoke.mjs`, `ops-bootstrap.mjs`. Add `scripts/README.md` as the canonical index; `ops:newuser` replaces `ops-bootstrap.mjs`.
+
+**Affected files:** `backend/scripts/README.md`, `backend/README.md`, `package.json` (`verify:r2-media`).
+
+---
+
+## [2026-06-03] Admin per-page date ranges & dynamic KPI trends
+
+**Context:** A global date range in `AdminConsoleShell` duplicated state and produced misleading fixed "vs last 7 days" labels when operators changed the window on one page only.
+
+**Decision:**
+1. Remove shell-level date state; keep `admin-shell-context` for **export handler pub/sub** only.
+2. Add `AdminDateRangePicker.tsx` (presets + custom range) with `prevRange`, `rangeToISO`, `trendPeriodLabel`.
+3. Each analytics-heavy page owns local `DateRange`: Dashboard, Orders, Payments, Coupons, Reviews.
+4. KPI footers use `trendPeriodLabel(from, to)`; comparison queries use `prevRange()` for an equal-length prior window.
+
+**Affected files:** `frontend/components/admin/AdminDateRangePicker.tsx`, `frontend/app/(admin)/admin/page.tsx`, `orders/page.tsx`, `payments/page.tsx`, `coupons/page.tsx`, `reviews/page.tsx`, `AdminDashboardPanels.tsx`, `AdminAnalyticsPanels.tsx`.
+
+---
+
+## [2026-06-03] Admin product editor — `isActive`, `metaDescription`, featured; strip cosmetic fields
+
+**Context:** Publish Status, Short Description, and Featured were partially cosmetic; `costPrice`, `visibility`, and `publishDate` had no Prisma fields.
+
+**Decision:**
+1. Map Status → `isActive`; Short Description → `metaDescription` (500 chars); Featured → `isFeatured` on create/PATCH.
+2. Include `lowStockThreshold` on variant create payload; variant table shows compare-at price column.
+3. Remove unsupported UI fields; Summary/Preview use live form-derived values.
+4. Extend `productListItemSchema` + serialization with `isActive` and `metaDescription` for admin list/detail.
+
+**Affected files:** `AdminProductEditor.tsx`, `products.schemas.ts`, `products.service.ts`, `frontend/lib/admin-product-types.ts` (if present).
+
+---
+
+## [2026-06-03] Admin list enrichment — payments customer, reviews product
+
+**Context:** Payments table showed synthetic `User {uuid}` labels; reviews showed `Product {uuid}`; admin OpenAPI schemas omitted joined fields.
+
+**Decision:**
+1. `adminListPayments`: join `order.user`; expose `customerName`, `customerEmail` on list items.
+2. Admin reviews: join `product`; expose `productName`, `productSlug` on `reviewAdminItemSchema`.
+3. `ReviewWithUser`: `product` optional on type for storefront/owner paths without product include.
+
+**Affected files:** `orders.service.ts`, `orders.schemas.ts`, `reviews.service.ts`, `reviews.schemas.ts`, `AdminPaymentsList.tsx`, `AdminReviewsList.tsx`.
+
+---
+
+## [2026-06-03] Admin Console Frontend Integration — live data (completed pass)
+
+**Context:** Admin dashboard and resource tables previously mixed reference-design placeholders with partial API wiring.
+
+**Decision:**
+1. **Dashboard / Orders / Payments / Coupons / Reviews:** FreshMart layout + live `/api/v1/admin/*` data; per-page `AdminDateRangePicker`; no mock customer/product labels on payments/reviews tables.
+2. **Shipments:** KPI and status donut computed from API result set (no hardcoded NYC/mock rows).
+3. **Customers:** Real ban/unban; status filter sends `?banned=true` for banned-only list; removed decorative VIP/Wholesale badges.
+4. **Coupons:** Real usage labels; inline clone code row to avoid clone race.
+5. **API safety:** Envelope coercion + idempotency keys on mutations unchanged.
+
+**Rationale:** Operators need trustworthy admin data matching Postgres; schema extensions prevent frontend guessing from IDs alone.
+
+**Affected files:** `frontend/components/admin/*`, `frontend/app/(admin)/admin/**/page.tsx`, `backend/src/modules/orders/*`, `backend/src/modules/reviews/*`, `backend/src/modules/products/products.schemas.ts`.
+
+---
+
 ## [2026-06-02] Prisma migration strategy — `db push` for development, `migrate deploy` for production
 
 **Context:** The `0_init` migration contained enum values (`PENDING_APPROVAL`, `APPROVED`, `REJECTED`, `OPS_APPROVE`) and a table (`OpsDualApprovalRequest`) that were later removed from `schema.prisma` as part of the dual-approval system cleanup. This caused `prisma migrate deploy` to fail with `P3009` (failed migrations in target database) because subsequent migrations tried to alter enums that had data referencing the old values. `prisma db push` also failed because it could not drop `OpsActionStatus_old` due to the `OpsDualApprovalRequest` column dependency.
@@ -83,6 +166,20 @@
 - *Normalize email only in the frontend.* Rejected — backend must be the source of truth for data integrity; frontend normalization is a convenience layer, not a guarantee.
 
 **Affected files:** `src/modules/auth/auth.service.ts`, `src/modules/auth/auth.routes.ts`, `src/modules/auth/auth.schemas.ts`, `frontend/lib/auth-api.ts`, `frontend/components/auth/EmailRegisterForm.tsx` (implicit, uses `registerWithEmail`).
+
+---
+
+## [2026-06-09] Shared Redis error listeners and bodyless DELETE route schemas
+
+**Context:** BullMQ and ioredis pub/sub duplicate connections emitted unhandled `error` events on transient network blips. Several DELETE routes incorrectly required an empty JSON body, causing `VALIDATION_ERROR` for standard bodyless DELETE clients (admin coupon delete, coupon restore POST, customer address delete).
+
+**Decision:**
+1. Centralize Redis client options and error handling in `src/common/redis/redis-connection.ts` (`attachRedisErrorListener`, `guardRedisDuplicate`, `installGuardedIORedisDuplicate`, `waitForRedisReady`).
+2. Publish Redis port `6379` only in base `docker-compose.yml` for local host dev; strip it in `docker-compose.prod.yml`.
+3. Omit `body` from route schemas when the HTTP method has no payload — never use `emptyBodySchema` on DELETE.
+4. Register `DELETE /api/v1/admin/categories/:id/permanent` in the admin endpoint policy registry.
+
+**Affected files:** `src/common/redis/redis-connection.ts`, `docker-compose.yml`, `docker-compose.prod.yml`, `coupons.schemas.ts`, `users.schemas.ts`, `admin-endpoint-policy-registry.ts`, worker/API Redis boot paths.
 
 ---
 
@@ -175,6 +272,8 @@
 
 **[2026-05-17] Per-template notification channels** — DB-backed `StoreSettings.primaryNotificationChannels` JSON; each of 13 templates configurable `EMAIL|SMSF|WHATSAPP`. No fallback. **Affects:** `prisma/schema.prisma`, `settings.service.ts`, `notifications.worker.ts`.
 
+**[2026-06-07] Admin notifications UI removed** — Merchant admin `/admin/settings/notifications` panel removed to eliminate admin–ops redundancy. Notification provider availability (`NOTIFY_EMAIL_ENABLED`, `SMS_PROVIDER`, etc.) is ops-only via `/ops/config`. Per-template channel routing (`primaryNotificationChannels`) remains DB-backed and configurable via direct `PATCH /api/v1/admin/settings/notifications` API. **Rationale:** Provider infrastructure gates belong in ops; merchants set these once at go-live. Consolidating prevents merchants from accidentally disabling a channel the ops team configured. **Affects:** `frontend/components/admin/NotificationsChannelPanel.tsx` (deleted), `frontend/app/(admin)/admin/settings/notifications/page.tsx` (deleted), settings layout nav (Bell link removed).
+
 **[2026-05-17] System-wide technical failure alerting** — Centralised email pipeline with 10-stage failure taxonomy (`critical`/`high`/`suppressed`), dedup (15-min TTL), cache hygiene, worker `onStall`/`onDlqFailure`, process boundary coverage. **Affects:** `notification-failure-alert.ts`, workers, `main.ts`.
 
 **[2026-05-15] SQL injection prevention** — Eliminated all `$executeRawUnsafe` / `$queryRawUnsafe`; parameterized tagged templates only. Added `scripts/sql-injection-guard.js` CI gate. **Affects:** `scripts/sql-injection-guard.js`, `package.json`.
@@ -207,7 +306,7 @@
 
 **[2026-05-09] Shipment dispatch manual-only** — Removed `AUTO_SHIP_ON_CONFIRM`; explicit `POST /admin/orders/:id/ship` required. **Affects:** `orders.service.ts`, `orders.routes.ts`, `order-processing.worker.ts`.
 
-**[2026-05-07] Ops bootstrap CLI** — `scripts/ops-bootstrap.mjs` (later superseded by `ops-newuser.mjs`). **Affects:** `ops-bootstrap.mjs`, `ops-auth.guard.ts`.
+**[2026-05-07] Ops bootstrap CLI** — `scripts/ops-bootstrap.mjs` (removed 2026-06; use `npm run ops:newuser` / `ops-newuser.mjs`). **Affects:** `ops-auth.guard.ts`.
 
 **[2026-05-07] Webhook raw body as Buffer** — `addContentTypeParser` forwards Buffer to prevent UTF-8 roundtrip breaking Razorpay HMAC. **Affects:** `src/main.ts`.
 
@@ -271,6 +370,16 @@
 
 **[2026-04-27] Inventory restock restriction** — Restock only on `CANCELLED` for captured payments. **Affects:** `orders.service.ts`.
 
+**[2026-06-03] Admin client session restore (mobile/LAN)** — Protected `/admin/*` blocks on `AdminAuthProvider` until deduped cookie refresh completes (RSC may 200 first). Separate restore runtimes: `admin` vs `admin-guest` (`/admin/login`). `clearSession()` does not reset `blocked`; `logoutLocalSession()` does. Browser API base = page origin; `allowedDevOrigins` for LAN `next dev`. **Affects:** `frontend/hooks/use-auth-session-restore.ts`, `contexts/admin-auth-context.tsx`, `components/auth/AdminGuestOnly.tsx`, `lib/api-base.ts`, `next.config.ts`.
+
+**[2026-06-06] Admin product hard delete** — `DELETE /api/v1/admin/products/:id/permanent` (`products:write`) removes product row when no orders/reviews (`409` otherwise). Soft delete remains `DELETE .../:id` (deactivate). Service clears cart line items + hosted media. **Affects:** `products.service.ts`, `products.routes.ts`, `admin-endpoint-policy-registry.ts`.
+
+**[2026-06-06] Admin form validation UX** — Shared client helpers map `VALIDATION_ERROR.details.fields` to `data-admin-field` keys, apply `!border-destructive` rings, scroll/focus first error, and append field summaries to banner copy. Product create UI exposes Category + Slug (required by API). **Affects:** `frontend/lib/admin-form-validation.ts`, `hooks/use-admin-form-validation.ts`, `AdminFormField.tsx`, `AdminProductEditor.tsx`.
+
+**[2026-06-06] Frontend predev backend probe** — `npm run dev` runs `scripts/ensure-backend-dev.mjs` before Next starts; fails fast when Fastify is unreachable. **Affects:** `frontend/package.json`, `frontend/scripts/ensure-backend-dev.mjs`.
+
+**[2026-06-06] MaintenanceBanner admin skip** — Poll `/maintenance/status` only on storefront routes; skip `/admin/*` and `/ops/*`. **Affects:** `frontend/components/maintenance/MaintenanceBanner.tsx`.
+
 **[2026-05-23] Self-hosted GitHub Actions runner** — Per-client runner (`<client-id>-vps`) on VPS; monorepo workflows at repo root. **Affects:** `.github/workflows/`, `scripts/vps-deploy.sh`, `scripts/vps-frontend-deploy.sh`.
 
 **[2026-05-23] Phase 7 fail-fast preflight** — `npm ci` before Prisma; strict env verify; host DB `127.0.0.1`; compose overlay; troubleshooting playbook. **Affects:** `scripts/vps-deploy.sh`, `PHASE7_VPS_DEPLOY_INCIDENT_PLAYBOOK.md`.
@@ -279,5 +388,4 @@
 
 **[2026-04-27] Coupon `maxUsesPerUser` nullable** — `null` = unlimited. Notification toggles from `StoreSettings`. Category route precedence fix. `FEATURE_GUEST_CHECKOUT_ENABLED` removed. Reviews disabled → 200 + empty. Webhook raw payload required. **Affects:** `prisma/schema.prisma`, `coupons/*`, `settings.service.ts`, `products.routes.ts`, `feature-flags.ts`, `reviews.service.ts`, `orders.routes.ts`, workers.
 
- `backend/src/modules/ops/ops.routes.ts` — response schemas updated to expose `mode`, `phase`, `pendingUntil`, `activatedAt`, `reason`.
- 
+**[2026-06-07] Storefront testimonials from approved reviews** — `GET /api/v1/reviews/recent` (public, `limit` default 3) returns latest merchant-approved reviews with non-empty body on active products (`updatedAt` desc). Service scans paginated batches until `limit` displayable rows are found (whitespace-only bodies skipped post-query). Homepage `TestimonialsSection` and PDP `ProductReviewsSection` share `lib/reviews-api.ts` normalization + `lib/review-display.ts`. When `FEATURE_REVIEWS_ENABLED=false`, endpoint returns empty list and homepage section hides. **Affects:** `reviews.service.ts`, `reviews.routes.ts`, `reviews.schemas.ts`, `frontend/lib/storefront-reviews.ts`, `TestimonialsSection.tsx`, `ProductReviewsSection.tsx`.

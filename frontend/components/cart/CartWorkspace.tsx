@@ -1,16 +1,22 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useCartStore } from "@/stores/cart";
 import { useAuthStore } from "@/stores/auth";
 import { useCartSync } from "@/hooks/use-cart-sync";
 import { formatPrice } from "@/lib/format-price";
-import { ShoppingCart, Plus, Minus, X, Trash2, ArrowRight } from "lucide-react";
+import { ShoppingCart, Plus, Minus, X, Trash2, ArrowRight, AlertTriangle } from "lucide-react";
 import { clearCart, removeCartItem, updateCartItem } from "@/lib/cart-api";
 import { getApiErrorMessage } from "@/lib/error-messages";
 
-export function CartWorkspace() {
+interface CartWorkspaceProps {
+  /** Minimum cart total in paise (from backend DB). 0 = no minimum enforced. */
+  minOrderValuePaise?: number;
+}
+
+export function CartWorkspace({ minOrderValuePaise = 0 }: CartWorkspaceProps) {
   useCartSync();
   const cart = useCartStore((s) => s.cart);
   const items = useCartStore((s) => s.items);
@@ -112,20 +118,29 @@ export function CartWorkspace() {
             {items.map((item) => (
               <article
                 key={item.id}
-                className="grid grid-cols-1 gap-4 p-6 md:grid-cols-[3fr_1fr_1.5fr_1fr_auto] md:items-center"
+                className="grid grid-cols-1 gap-3 p-4 sm:gap-4 sm:p-6 md:grid-cols-[3fr_1fr_1.5fr_1fr_auto] md:items-center"
               >
                 {/* Product Info */}
                 <div className="flex items-center gap-4">
-                  {/* Fake Image block for spacing, since backend CartItem doesn't return an image right now, we use a placeholder */}
-                  <div className="flex size-20 shrink-0 items-center justify-center rounded-[10px] bg-[#faf3ef]">
-                    <span className="text-2xl">🛍️</span>
+                  <div className="relative size-16 shrink-0 overflow-hidden rounded-[10px] bg-[#faf3ef] sm:size-20">
+                    <Image
+                      src="/images/product-placeholder.svg"
+                      alt={item.variant.name}
+                      fill
+                      className="object-contain p-2"
+                      sizes="80px"
+                    />
                   </div>
                   <div className="flex flex-col">
-                    <span className="font-bold text-[#23403d]">
-                      {item.variant.name}
+                    {/* Backend CartItem only carries variant.name — show it as-is,
+                        except hide "(Default)" which means single-variant product */}
+                    <span className="text-sm font-bold text-[#23403d] sm:text-base">
+                      {item.variant.name === "Default"
+                        ? item.variant.sku
+                        : item.variant.name}
                     </span>
                     <p className="mt-1 text-xs font-bold text-[#767676]">SKU: {item.variant.sku}</p>
-                    
+
                     {/* Mobile Only Price */}
                     <div className="mt-2 font-bold text-[#ec6e55] md:hidden">
                       {formatPrice(item.variant.price)}
@@ -140,10 +155,10 @@ export function CartWorkspace() {
 
                 {/* Quantity Control */}
                 <div className="flex items-center justify-start md:justify-center">
-                  <div className="flex h-11 items-center rounded-full border border-[#efe8e4] bg-[#faf3ef] px-2">
+                  <div className="flex h-10 items-center rounded-full border border-[#efe8e4] bg-[#faf3ef] px-1.5 sm:h-11 sm:px-2">
                     <button
                       type="button"
-                      className="flex size-8 items-center justify-center rounded-full text-[#767676] hover:bg-white hover:text-[#23403d] hover:shadow-sm transition-all disabled:opacity-50"
+                      className="flex size-7 items-center justify-center rounded-full text-[#767676] hover:bg-white hover:text-[#23403d] hover:shadow-sm transition-all disabled:opacity-50 sm:size-8"
                       onClick={() => handleQuantity(item.id, Math.max(1, item.quantity - 1))}
                       disabled={loadingItemId === item.id}
                       aria-label="Decrease quantity"
@@ -155,7 +170,7 @@ export function CartWorkspace() {
                     </span>
                     <button
                       type="button"
-                      className="flex size-8 items-center justify-center rounded-full text-[#767676] hover:bg-white hover:text-[#23403d] hover:shadow-sm transition-all disabled:opacity-50"
+                      className="flex size-7 items-center justify-center rounded-full text-[#767676] hover:bg-white hover:text-[#23403d] hover:shadow-sm transition-all disabled:opacity-50 sm:size-8"
                       onClick={() => handleQuantity(item.id, item.quantity + 1)}
                       disabled={loadingItemId === item.id}
                       aria-label="Increase quantity"
@@ -198,13 +213,13 @@ export function CartWorkspace() {
         <div className="flex flex-wrap items-center justify-between gap-4">
           <Link
             href="/products"
-            className="inline-flex h-12 items-center justify-center rounded-full border-2 border-[#efe8e4] bg-white px-8 text-sm font-bold text-[#23403d] transition-colors hover:border-[#23403d] hover:bg-[#23403d] hover:text-white"
+            className="inline-flex h-11 items-center justify-center rounded-full border-2 border-[#efe8e4] bg-white px-5 text-xs font-bold text-[#23403d] transition-colors hover:border-[#23403d] hover:bg-[#23403d] hover:text-white sm:h-12 sm:px-8 sm:text-sm"
           >
             Continue Shopping
           </Link>
           <button
             type="button"
-            className="inline-flex h-12 items-center justify-center gap-2 rounded-full bg-[#faf3ef] px-6 text-sm font-bold text-[#ec6e55] transition-colors hover:bg-red-50 hover:text-red-600"
+            className="inline-flex h-11 items-center justify-center gap-2 rounded-full bg-[#faf3ef] px-5 text-xs font-bold text-[#ec6e55] transition-colors hover:bg-red-50 hover:text-red-600 sm:h-12 sm:px-6 sm:text-sm"
             onClick={handleClear}
           >
             <Trash2 className="size-4" /> Clear Cart
@@ -216,33 +231,64 @@ export function CartWorkspace() {
       <aside className="flex flex-col gap-6">
         <div className="rounded-[20px] bg-white p-6 shadow-sm lg:p-8">
           <h2 className="mb-6 font-heading text-2xl font-bold text-[#23403d]">Cart Totals</h2>
-          
+
           <div className="flex flex-col gap-4 text-sm font-bold">
             <div className="flex items-center justify-between border-b border-[#efe8e4] pb-4">
               <span className="text-[#767676]">Subtotal</span>
               <span className="text-[#23403d]">{formatPrice(summary.subtotal)}</span>
             </div>
-            
+
             <div className="flex items-center justify-between border-b border-[#efe8e4] pb-4">
               <span className="text-[#767676]">Discount</span>
               <span className="text-[#00aa63]">-{formatPrice(summary.discountAmount)}</span>
             </div>
-            
+
             <div className="flex items-center justify-between pt-2">
               <span className="text-lg text-[#23403d]">Total</span>
               <span className="text-2xl text-[#ec6e55]">{formatPrice(summary.total)}</span>
             </div>
+
+            {/* Minimum order indicator */}
+            {minOrderValuePaise > 0 && (
+              <div className="flex items-center justify-between border-t border-[#efe8e4] pt-3">
+                <span className="text-xs text-[#767676]">Minimum order</span>
+                <span className="text-xs font-bold text-[#23403d]">
+                  {formatPrice(minOrderValuePaise)}
+                </span>
+              </div>
+            )}
           </div>
 
-          <div className="mt-8">
-            <Link
-              href="/checkout"
-              className="flex h-14 w-full items-center justify-center gap-2 rounded-full bg-[#23403d] text-sm font-bold text-white transition-transform hover:-translate-y-1 hover:bg-[#ec6e55] hover:shadow-lg"
-            >
-              Proceed to checkout <ArrowRight className="size-4" />
-            </Link>
-          </div>
-          
+          {/* Min-order gate: show warning + disable button when cart is below threshold */}
+          {minOrderValuePaise > 0 && summary.total < minOrderValuePaise ? (
+            <div className="mt-6 flex flex-col gap-3">
+              <div className="flex items-start gap-2 rounded-[12px] border border-amber-200 bg-amber-50 px-3 py-2.5">
+                <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-600" aria-hidden />
+                <p className="text-xs font-bold text-amber-800">
+                  Add {formatPrice(minOrderValuePaise - summary.total)} more to reach the{" "}
+                  {formatPrice(minOrderValuePaise)} minimum order value.
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled
+                aria-disabled="true"
+                className="flex h-12 w-full cursor-not-allowed items-center justify-center gap-2 rounded-full bg-[#23403d]/30 text-sm font-bold text-white sm:h-14"
+              >
+                Proceed to checkout <ArrowRight className="size-4" aria-hidden />
+              </button>
+            </div>
+          ) : (
+            <div className="mt-8">
+              <Link
+                href={accessToken ? "/checkout" : "/login?redirect=/checkout"}
+                className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-[#23403d] text-sm font-bold text-white transition-transform hover:-translate-y-1 hover:bg-[#ec6e55] hover:shadow-lg sm:h-14"
+              >
+                Proceed to checkout <ArrowRight className="size-4" />
+              </Link>
+            </div>
+          )}
+
           <p className="mt-4 text-center text-xs font-bold text-[#767676]">
             Shipping & taxes calculated at checkout.
           </p>

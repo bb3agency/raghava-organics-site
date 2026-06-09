@@ -1,4 +1,5 @@
 import type { Product } from "@/types/product";
+import { resolveProductImageUrl } from "@/lib/media-url";
 
 function toNumber(value: unknown, fallback = 0): number {
   if (typeof value === "number" && Number.isFinite(value)) {
@@ -19,7 +20,7 @@ export function mapProduct(raw: unknown): Product {
     const img = image as Record<string, unknown>;
     return {
       id: toStringValue(img.id, ""),
-      url: toStringValue(img.url, "/next.svg"),
+      url: resolveProductImageUrl(toStringValue(img.url, "")),
       altText: toStringValue(
         img.altText,
         toStringValue(item.name, "Product image"),
@@ -65,13 +66,48 @@ export function mapProduct(raw: unknown): Product {
       ? item.tags.filter((tag): tag is string => typeof tag === "string")
       : [],
     isFeatured: Boolean(item.isFeatured ?? false),
+    isActive: Boolean(item.isActive ?? true),
     images,
     variants,
     inStock:
       typeof item.inStock === "boolean"
         ? item.inStock
-        : Boolean(firstActiveVariant && firstActiveVariant.price >= 0),
+        : Boolean(firstActiveVariant),
   };
+}
+
+export interface ProductListMeta {
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+}
+
+export function mapProductListResponseWithMeta(payload: unknown): {
+  products: Product[];
+  meta: ProductListMeta | null;
+} {
+  let meta: ProductListMeta | null = null;
+  if (payload && typeof payload === "object" && !Array.isArray(payload)) {
+    const obj = payload as { meta?: unknown; items?: unknown[] };
+    if (obj.meta && typeof obj.meta === "object") {
+      const m = obj.meta as Record<string, unknown>;
+      if (
+        typeof m.page === "number" &&
+        typeof m.limit === "number" &&
+        typeof m.total === "number" &&
+        typeof m.totalPages === "number"
+      ) {
+        meta = {
+          page: m.page,
+          limit: m.limit,
+          total: m.total,
+          totalPages: m.totalPages,
+        };
+      }
+    }
+  }
+  return { products: mapProductListResponse(payload), meta };
 }
 
 export function mapProductListResponse(payload: unknown): Product[] {

@@ -3,15 +3,33 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import {
+  ChevronDown,
+  Bold,
+  Italic,
+  Underline,
+  Strikethrough,
+  Link2,
+  AlignLeft,
+  List,
+  ListOrdered,
+  Quote,
+  Image as ImageIcon,
+  Maximize2,
+  X,
+  Plus,
+  UploadCloud,
+  Check,
+  HelpCircle,
+} from "lucide-react";
+import { AdminRowActionsMenu } from "@/components/admin/AdminRowActionsMenu";
 import { useCallback, useEffect, useState } from "react";
-import { AdminSection } from "@/components/admin/AdminSection";
-import { AdminStatusBadge } from "@/components/admin/AdminStatusBadge";
 import { useAdminAuth } from "@/contexts/admin-auth-context";
 import { useAuthenticatedApi } from "@/hooks/use-authenticated-api";
 import {
   buildAdminQuery,
   ensureArray,
-  getPaginatedItems,
+  fetchAllPaginatedItems,
   type AdminCategoryListItem,
   type AdminCreateProductInput,
   type AdminProductDetail,
@@ -21,11 +39,23 @@ import {
 } from "@/lib/admin-api";
 import { formatPaise } from "@/lib/admin-format";
 import { getApiErrorMessage } from "@/lib/error-messages";
+import { cn } from "@/lib/utils";
 import { createIdempotencyKey } from "@/lib/idempotency";
+import { notifyAdminDataChanged } from "@/lib/admin-data-refresh";
+import { useAdminDataRefreshEffect } from "@/hooks/use-admin-data-refresh-effect";
 import { ADMIN_PERMISSIONS, hasAdminPermission } from "@/lib/permissions";
+import { uploadAdminProductImages } from "@/lib/admin-product-media";
+import { useAdminFormValidation } from "@/hooks/use-admin-form-validation";
+import { formatAdminValidationSummary } from "@/lib/admin-form-validation";
+import { AdminTableScroll } from "@/components/admin/AdminTableScroll";
+import {
+  assertClientProductImageFile,
+  PRODUCT_IMAGE_ACCEPT,
+  resolveProductImageUrl,
+} from "@/lib/media-url";
 
 const inputClass =
-  "h-10 w-full rounded-md border border-border bg-background px-3 text-sm";
+  "h-10 w-full rounded-md border border-border/50 bg-background px-3 text-sm focus:outline-none focus:ring-1 focus:ring-zinc-900/20";
 const textareaClass =
   "min-h-[96px] w-full rounded-md border border-border bg-background px-3 py-2 text-sm";
 
@@ -53,7 +83,9 @@ interface ImageDraft {
   sortOrder: string;
 }
 
-function normalizeProductDetail(detail: AdminProductDetail): AdminProductDetail {
+function normalizeProductDetail(
+  detail: AdminProductDetail,
+): AdminProductDetail {
   return {
     ...detail,
     tags: ensureArray(detail.tags),
@@ -78,7 +110,7 @@ function parsePaiseInput(value: string): number | undefined {
   if (!trimmed) return undefined;
   const parsed = Number(trimmed);
   if (!Number.isFinite(parsed) || parsed < 0) return undefined;
-  return Math.round(parsed);
+  return Math.round(parsed * 100);
 }
 
 interface AdminProductEditorProps {
@@ -89,8 +121,11 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
   const isCreate = !productId;
   const router = useRouter();
   const api = useAuthenticatedApi();
-  const { adminUser } = useAdminAuth();
-  const canWrite = hasAdminPermission(adminUser, ADMIN_PERMISSIONS.productsWrite);
+  const { adminUser, accessToken } = useAdminAuth();
+  const canWrite = hasAdminPermission(
+    adminUser,
+    ADMIN_PERMISSIONS.productsWrite,
+  );
 
   const [loading, setLoading] = useState(!isCreate);
   const [error, setError] = useState<string | null>(null);
@@ -104,6 +139,10 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
   const [slug, setSlug] = useState("");
   const [slugTouched, setSlugTouched] = useState(false);
   const [description, setDescription] = useState("");
+  const [shortDesc, setShortDesc] = useState("");
+  const [lowStockThreshold, setLowStockThreshold] = useState("10");
+  const [trackInventory, setTrackInventory] = useState(true);
+  const [status, setStatus] = useState("Draft");
   const [categoryId, setCategoryId] = useState("");
   const [tagsText, setTagsText] = useState("");
   const [isFeatured, setIsFeatured] = useState(false);
@@ -120,11 +159,23 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
     sortOrder: "0",
   });
 
+  const {
+    clearFieldErrors,
+    clearFieldError,
+    fieldClassName,
+    getFieldError,
+    validateRequired,
+    handleSubmitError,
+    applyFieldErrors,
+  } = useAdminFormValidation();
+
   const loadCategories = useCallback(async () => {
-    const response = await api<PaginatedResponse<AdminCategoryListItem>>(
-      `/admin/categories${buildAdminQuery({ page: 1, limit: 100 })}`,
+    const items = await fetchAllPaginatedItems<AdminCategoryListItem>(
+      async (page, limit) =>
+        api<PaginatedResponse<AdminCategoryListItem>>(
+          `/admin/categories${buildAdminQuery({ page, limit, isActive: true })}`,
+        ),
     );
-    const items = getPaginatedItems(response);
     setCategories(items);
     if (isCreate && items.length > 0 && !categoryId) {
       setCategoryId(items[0].id);
@@ -136,16 +187,22 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
     setLoading(true);
     setError(null);
     try {
-      const detail = await api<AdminProductDetail>(`/admin/products/${productId}`);
+      const detail = await api<AdminProductDetail>(
+        `/admin/products/${productId}`,
+      );
       const normalized = normalizeProductDetail(detail);
       setProduct(normalized);
       setName(normalized.name);
       setSlug(normalized.slug);
       setSlugTouched(true);
       setDescription(normalized.description);
+      // metaDescription maps to the shortDesc UI field
+      setShortDesc(normalized.metaDescription ?? "");
       setCategoryId(normalized.category.id);
       setTagsText(normalized.tags.join(", "));
       setIsFeatured(normalized.isFeatured);
+      // Map isActive → Status dropdown: true = "Active", false = "Draft"
+      setStatus(normalized.isActive ? "Active" : "Draft");
     } catch (err) {
       setError(getApiErrorMessage(err));
     } finally {
@@ -156,6 +213,10 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
   useEffect(() => {
     void loadCategories().catch((err) => setError(getApiErrorMessage(err)));
   }, [loadCategories]);
+
+  useAdminDataRefreshEffect(() => {
+    void loadCategories().catch((err) => setError(getApiErrorMessage(err)));
+  }, "categories");
 
   useEffect(() => {
     if (!isCreate) {
@@ -174,6 +235,49 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
     setSaving(true);
     setError(null);
     setSuccess(null);
+    clearFieldErrors();
+
+    const requiredChecks = [
+      { field: "name", label: "Product name", isEmpty: () => !name.trim() },
+      {
+        field: "description",
+        label: "Description",
+        isEmpty: () => !description.trim(),
+      },
+    ];
+
+    if (isCreate) {
+      requiredChecks.push(
+        {
+          field: "slug",
+          label: "URL slug",
+          isEmpty: () => !slug.trim(),
+        },
+        {
+          field: "categoryId",
+          label: "Category",
+          isEmpty: () => !categoryId.trim(),
+        },
+        {
+          field: "sku",
+          label: "SKU",
+          isEmpty: () => !createVariants[0]?.sku.trim(),
+        },
+        {
+          field: "price",
+          label: "Price",
+          isEmpty: () => !createVariants[0]?.pricePaise.trim(),
+        },
+      );
+    }
+
+    const requiredResult = validateRequired(requiredChecks);
+    if (!requiredResult.valid) {
+      setError(requiredResult.message);
+      setSaving(false);
+      return;
+    }
+
     const tags = tagsText
       .split(",")
       .map((tag) => tag.trim())
@@ -184,14 +288,22 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
         const variants = createVariants
           .map((variant) => {
             const price = parsePaiseInput(variant.pricePaise);
-            if (!variant.sku.trim() || !variant.name.trim() || price === undefined) {
+            if (
+              !variant.sku.trim() ||
+              !variant.name.trim() ||
+              price === undefined
+            ) {
               return null;
             }
             const compareAtPrice = parsePaiseInput(variant.compareAtPricePaise);
             const qtyStr = variant.initialQuantity.trim();
-            const quantity = qtyStr !== "" && Number.isFinite(Number(qtyStr)) && Number(qtyStr) >= 0
-              ? Math.floor(Number(qtyStr))
-              : 0;
+            const quantity =
+              qtyStr !== "" &&
+              Number.isFinite(Number(qtyStr)) &&
+              Number(qtyStr) >= 0
+                ? Math.floor(Number(qtyStr))
+                : 0;
+            const threshold = Number(lowStockThreshold);
             return {
               sku: variant.sku.trim(),
               name: variant.name.trim(),
@@ -199,12 +311,25 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
               ...(compareAtPrice !== undefined ? { compareAtPrice } : {}),
               quantity,
               isActive: variant.isActive,
+              ...(Number.isFinite(threshold) && threshold >= 0
+                ? { lowStockThreshold: Math.floor(threshold) }
+                : {}),
             };
           })
-          .filter((variant): variant is NonNullable<typeof variant> => variant !== null);
+          .filter(
+            (variant): variant is NonNullable<typeof variant> =>
+              variant !== null,
+          );
 
         if (variants.length === 0) {
-          setError("Add at least one variant with SKU, name, and price (paise).");
+          const variantErrors = {
+            sku: "SKU is required.",
+            price: "Price is required.",
+            variants: "Add at least one variant with SKU, name, and price.",
+          };
+          applyFieldErrors(variantErrors);
+          setError(formatAdminValidationSummary(variantErrors));
+          setSaving(false);
           return;
         }
 
@@ -218,8 +343,11 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
               sortOrder: Number.isFinite(sortOrder) ? sortOrder : index,
             };
           })
-          .filter((image): image is NonNullable<typeof image> => image !== null);
+          .filter(
+            (image): image is NonNullable<typeof image> => image !== null,
+          );
 
+        const productIsActive = status === "Active";
         const payload: AdminCreateProductInput = {
           name: name.trim(),
           slug: slug.trim(),
@@ -227,6 +355,8 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
           categoryId,
           tags,
           isFeatured,
+          isActive: productIsActive,
+          ...(shortDesc.trim() ? { metaDescription: shortDesc.trim() } : {}),
           variants,
           ...(images.length > 0 ? { images } : {}),
         };
@@ -236,27 +366,36 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
           idempotencyKey: createIdempotencyKey(),
           body: JSON.stringify(payload),
         });
+        notifyAdminDataChanged(["products", "inventory", "dashboard"]);
         router.push(`/admin/products/${created.id}`);
         return;
       }
 
       if (!productId) return;
-      const updated = await api<AdminProductDetail>(`/admin/products/${productId}`, {
-        method: "PATCH",
-        idempotencyKey: createIdempotencyKey(),
-        body: JSON.stringify({
-          name: name.trim(),
-          slug: slug.trim(),
-          description: description.trim(),
-          categoryId,
-          tags,
-          isFeatured,
-        }),
-      });
-      setProduct(normalizeProductDetail(updated));
+      const productIsActive = status === "Active";
+      const updated = await api<AdminProductDetail>(
+        `/admin/products/${productId}`,
+        {
+          method: "PATCH",
+          idempotencyKey: createIdempotencyKey(),
+          body: JSON.stringify({
+            name: name.trim(),
+            slug: slug.trim(),
+            description: description.trim(),
+            categoryId,
+            tags,
+            isFeatured,
+            isActive: productIsActive,
+            metaDescription: shortDesc.trim() || null,
+          }),
+        },
+      );
+      const normalizedUpdated = normalizeProductDetail(updated);
+      setProduct(normalizedUpdated);
       setSuccess("Product saved.");
+      notifyAdminDataChanged(["products", "inventory", "dashboard"]);
     } catch (err) {
-      setError(getApiErrorMessage(err));
+      setError(handleSubmitError(err));
     } finally {
       setSaving(false);
     }
@@ -264,7 +403,11 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
 
   async function deleteProduct() {
     if (!canWrite || !productId) return;
-    if (!window.confirm("Delete this product? It will be hidden from the storefront.")) {
+    if (
+      !window.confirm(
+        "Deactivate this product? It will be hidden from the storefront but can be restored later.",
+      )
+    ) {
       return;
     }
     setSaving(true);
@@ -274,6 +417,7 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
         method: "DELETE",
         idempotencyKey: createIdempotencyKey(),
       });
+      notifyAdminDataChanged(["products", "inventory", "dashboard"]);
       router.push("/admin/products");
     } catch (err) {
       setError(getApiErrorMessage(err));
@@ -281,7 +425,53 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
     }
   }
 
-  async function saveVariant(variant: AdminProductVariant, draft: VariantDraft) {
+  async function restoreProduct() {
+    if (!canWrite || !productId) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await api(`/admin/products/${productId}`, {
+        method: "PATCH",
+        idempotencyKey: createIdempotencyKey(),
+        body: JSON.stringify({ isActive: true }),
+      });
+      setStatus("Active");
+      notifyAdminDataChanged(["products", "inventory", "dashboard"]);
+    } catch (err) {
+      setError(getApiErrorMessage(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function hardDeleteProduct() {
+    if (!canWrite || !productId) return;
+    if (
+      !window.confirm(
+        `Permanently delete "${name || "this product"}"? This cannot be undone and will remove all product data, variants, and images forever.`,
+      )
+    ) {
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      await api(`/admin/products/${productId}/permanent`, {
+        method: "DELETE",
+        idempotencyKey: createIdempotencyKey(),
+      });
+      notifyAdminDataChanged(["products", "inventory", "dashboard"]);
+      router.push("/admin/products");
+    } catch (err) {
+      setError(getApiErrorMessage(err));
+      setSaving(false);
+    }
+  }
+
+  async function saveVariant(
+    variant: AdminProductVariant,
+    draft: VariantDraft,
+  ) {
     if (!canWrite || !productId) return;
     const price = parsePaiseInput(draft.pricePaise);
     if (price === undefined) {
@@ -306,6 +496,7 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
       });
       await loadProduct();
       setSuccess("Variant updated.");
+      notifyAdminDataChanged(["products", "inventory", "dashboard"]);
     } catch (err) {
       setError(getApiErrorMessage(err));
     } finally {
@@ -316,7 +507,11 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
   async function addVariant() {
     if (!canWrite || !productId) return;
     const price = parsePaiseInput(newVariant.pricePaise);
-    if (!newVariant.sku.trim() || !newVariant.name.trim() || price === undefined) {
+    if (
+      !newVariant.sku.trim() ||
+      !newVariant.name.trim() ||
+      price === undefined
+    ) {
       setError("New variant requires SKU, name, and price (paise).");
       return;
     }
@@ -339,6 +534,7 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
       setNewVariant(emptyVariant());
       await loadProduct();
       setSuccess("Variant added.");
+      notifyAdminDataChanged(["products", "inventory", "dashboard"]);
     } catch (err) {
       setError(getApiErrorMessage(err));
     } finally {
@@ -362,6 +558,7 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
       });
       await loadProduct();
       setSuccess("Variant deleted.");
+      notifyAdminDataChanged(["products", "inventory", "dashboard"]);
     } catch (err) {
       setError(getApiErrorMessage(err));
     } finally {
@@ -369,10 +566,47 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
     }
   }
 
-  async function addImage() {
+  async function uploadImageFiles(files: File[], sortOrderOverride?: number) {
+    if (!canWrite || !productId || !accessToken || files.length === 0) return;
+    for (const file of files) {
+      const clientError = assertClientProductImageFile(file);
+      if (clientError) {
+        setError(clientError);
+        return;
+      }
+    }
+    const sortOrder =
+      sortOrderOverride ??
+      (Number.isFinite(Number(newImage.sortOrder))
+        ? Number(newImage.sortOrder)
+        : 0);
+    setSaving(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      await uploadAdminProductImages(accessToken, productId, files, {
+        altText: newImage.altText.trim() || name.trim() || files[0]!.name,
+        sortOrder,
+      });
+      setNewImage({ url: "", altText: "", sortOrder: "0" });
+      await loadProduct();
+      setSuccess(
+        files.length === 1
+          ? "Image uploaded."
+          : `${files.length} images uploaded.`,
+      );
+      notifyAdminDataChanged(["products", "dashboard"]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : getApiErrorMessage(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function addImageByUrl() {
     if (!canWrite || !productId) return;
     if (!newImage.url.trim().startsWith("https://")) {
-      setError("Image URL must start with https://");
+      setError("External image URL must start with https://");
       return;
     }
     const sortOrder = Number(newImage.sortOrder);
@@ -392,6 +626,7 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
       setNewImage({ url: "", altText: "", sortOrder: "0" });
       await loadProduct();
       setSuccess("Image added.");
+      notifyAdminDataChanged(["products", "dashboard"]);
     } catch (err) {
       setError(getApiErrorMessage(err));
     } finally {
@@ -411,6 +646,7 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
       });
       await loadProduct();
       setSuccess("Image removed.");
+      notifyAdminDataChanged(["products", "dashboard"]);
     } catch (err) {
       setError(getApiErrorMessage(err));
     } finally {
@@ -420,7 +656,9 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
 
   async function moveImage(image: AdminProductImage, direction: -1 | 1) {
     if (!canWrite || !productId || !product) return;
-    const sorted = [...product.images].sort((a, b) => a.sortOrder - b.sortOrder);
+    const sorted = [...product.images].sort(
+      (a, b) => a.sortOrder - b.sortOrder,
+    );
     const index = sorted.findIndex((item) => item.id === image.id);
     const targetIndex = index + direction;
     if (index < 0 || targetIndex < 0 || targetIndex >= sorted.length) return;
@@ -428,7 +666,10 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
     const reordered = [...sorted];
     const [removed] = reordered.splice(index, 1);
     reordered.splice(targetIndex, 0, removed);
-    const payload = reordered.map((item, order) => ({ id: item.id, sortOrder: order }));
+    const payload = reordered.map((item, order) => ({
+      id: item.id,
+      sortOrder: order,
+    }));
 
     setSaving(true);
     setError(null);
@@ -446,478 +687,1056 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
     }
   }
 
-  return (
-    <div className="grid gap-6">
-      <div className="flex flex-wrap items-center gap-3">
-        <Link
-          href="/admin/products"
-          className="text-sm text-muted-foreground hover:text-foreground"
-        >
-          ← Products
-        </Link>
-        {product ? (
-          <AdminStatusBadge
-            label={product.isFeatured ? "Featured" : "Standard"}
-            tone={product.isFeatured ? "success" : "default"}
-          />
-        ) : null}
-      </div>
+  const handleCreateImageUpload = (
+    event: React.ChangeEvent<HTMLInputElement>,
+  ) => {
+    if (!event.target.files) return;
+    const selected = Array.from(event.target.files);
+    const newImgDrafts = selected.map((file, idx) => ({
+      url: URL.createObjectURL(file),
+      altText: file.name,
+      sortOrder: String(createImages.length + idx),
+    }));
+    setCreateImages([...createImages, ...newImgDrafts]);
+  };
 
-      <AdminSection
-        title={isCreate ? "New product" : "Edit product"}
-        description={
-          isCreate
-            ? "Create a catalog product with variants and optional images."
-            : product
-              ? `${product.slug} · ${product.category.name}`
-              : "Loading product…"
-        }
-        loading={loading}
-        error={error}
-        actions={
-          canWrite ? (
-            <>
-              {!isCreate ? (
+  const updateFirstVariant = (key: keyof VariantDraft, value: string) => {
+    const next = [...createVariants];
+    if (next[0]) {
+      next[0] = { ...next[0], [key]: value };
+      setCreateVariants(next);
+    }
+    if (key === "sku") clearFieldError("sku");
+    if (key === "pricePaise") clearFieldError("price");
+  };
+
+  const pricingSectionHasError = Boolean(
+    getFieldError("price") || getFieldError("sku") || getFieldError("variants"),
+  );
+
+  // Find active category name
+  const activeCategoryName =
+    categories.find((c) => c.id === categoryId)?.name || "Not selected";
+
+  return (
+    <div className="flex flex-col gap-6">
+      {/* Top Breadcrumb & Header */}
+      <header className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Link href="/admin/products" className="hover:text-foreground">
+              Products
+            </Link>
+            <span>&gt;</span>
+            <span className="font-medium text-foreground">
+              {isCreate ? "Add New Product" : "Edit Product"}
+            </span>
+          </div>
+          <h2 className="mt-1 font-heading text-xl font-bold text-foreground sm:text-2xl">
+            {isCreate ? "Add New Product" : "Edit Product"}
+          </h2>
+          <p className="text-sm text-muted-foreground mt-0.5">
+            {isCreate
+              ? "Fill in the details below to add a new product to your store."
+              : `Manage details, pricing, and media for ${name || "this product"}.`}
+          </p>
+        </div>
+        <div className="flex w-full flex-wrap gap-2 lg:w-auto lg:justify-end">
+          {!isCreate && canWrite && (
+            <div className="flex gap-1">
+              {status === "Active" ? (
                 <button
                   type="button"
                   onClick={() => void deleteProduct()}
                   disabled={saving}
-                  className="h-9 rounded-md border border-destructive px-3 text-sm text-destructive disabled:opacity-60"
+                  className="h-9 flex-1 rounded-md bg-zinc-900 px-4 text-sm font-semibold text-white transition-colors hover:bg-zinc-800 disabled:opacity-60 sm:flex-none"
                 >
-                  Delete
+                  Deactivate
                 </button>
-              ) : null}
-              <button
-                type="button"
-                onClick={() => void saveCoreFields()}
-                disabled={saving || loading}
-                className="h-9 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground disabled:opacity-60"
-              >
-                {saving ? "Saving…" : isCreate ? "Create product" : "Save product"}
-              </button>
-            </>
-          ) : (
-            <span className="text-xs text-muted-foreground">Read-only</span>
-          )
-        }
-      >
-        {!loading ? (
-          <div className="grid gap-4 md:grid-cols-2">
-            <label className="grid gap-1 text-sm">
-              Name
-              <input
-                className={inputClass}
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-                disabled={!canWrite}
-              />
-            </label>
-            <label className="grid gap-1 text-sm">
-              Slug
-              <input
-                className={inputClass}
-                value={slug}
-                onChange={(event) => {
-                  setSlugTouched(true);
-                  setSlug(event.target.value);
-                }}
-                disabled={!canWrite}
-              />
-            </label>
-            <label className="grid gap-1 text-sm md:col-span-2">
-              Description
-              <textarea
-                className={textareaClass}
-                value={description}
-                onChange={(event) => setDescription(event.target.value)}
-                disabled={!canWrite}
-              />
-            </label>
-            <label className="grid gap-1 text-sm">
-              Category
-              <select
-                className={inputClass}
-                value={categoryId}
-                onChange={(event) => setCategoryId(event.target.value)}
-                disabled={!canWrite}
-              >
-                {categories.map((category) => (
-                  <option key={category.id} value={category.id}>
-                    {category.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="grid gap-1 text-sm">
-              Tags (comma-separated)
-              <input
-                className={inputClass}
-                value={tagsText}
-                onChange={(event) => setTagsText(event.target.value)}
-                disabled={!canWrite}
-                placeholder="organic, bestseller"
-              />
-            </label>
-            <label className="flex items-center gap-2 text-sm md:col-span-2">
-              <input
-                type="checkbox"
-                checked={isFeatured}
-                onChange={(event) => setIsFeatured(event.target.checked)}
-                disabled={!canWrite}
-              />
-              Featured product
-            </label>
-          </div>
-        ) : null}
-        {success ? (
-          <p className="mt-3 text-sm text-emerald-600">{success}</p>
-        ) : null}
-      </AdminSection>
-
-      {isCreate ? (
-        <>
-          <AdminSection title="Variants" description="At least one variant is required.">
-            <div className="grid gap-3">
-              {createVariants.map((variant, index) => (
-                <div
-                  key={index}
-                  className="grid gap-2 rounded-md border border-border p-3 md:grid-cols-6"
-                >
-                  <input
-                    className={inputClass}
-                    placeholder="SKU"
-                    value={variant.sku}
-                    onChange={(event) => {
-                      const next = [...createVariants];
-                      next[index] = { ...variant, sku: event.target.value };
-                      setCreateVariants(next);
-                    }}
-                    disabled={!canWrite}
-                  />
-                  <input
-                    className={inputClass}
-                    placeholder="Name"
-                    value={variant.name}
-                    onChange={(event) => {
-                      const next = [...createVariants];
-                      next[index] = { ...variant, name: event.target.value };
-                      setCreateVariants(next);
-                    }}
-                    disabled={!canWrite}
-                  />
-                  <input
-                    className={inputClass}
-                    placeholder="Price (paise)"
-                    value={variant.pricePaise}
-                    onChange={(event) => {
-                      const next = [...createVariants];
-                      next[index] = { ...variant, pricePaise: event.target.value };
-                      setCreateVariants(next);
-                    }}
-                    disabled={!canWrite}
-                  />
-                  <input
-                    className={inputClass}
-                    placeholder="Compare-at (paise)"
-                    value={variant.compareAtPricePaise}
-                    onChange={(event) => {
-                      const next = [...createVariants];
-                      next[index] = {
-                        ...variant,
-                        compareAtPricePaise: event.target.value,
-                      };
-                      setCreateVariants(next);
-                    }}
-                    disabled={!canWrite}
-                  />
-                  <input
-                    className={inputClass}
-                    placeholder="Initial stock qty"
-                    type="number"
-                    min="0"
-                    step="1"
-                    value={variant.initialQuantity}
-                    onChange={(event) => {
-                      const next = [...createVariants];
-                      next[index] = { ...variant, initialQuantity: event.target.value };
-                      setCreateVariants(next);
-                    }}
-                    disabled={!canWrite}
-                  />
-                  <div className="flex items-center gap-2">
-                    <label className="flex items-center gap-1 text-xs">
-                      <input
-                        type="checkbox"
-                        checked={variant.isActive}
-                        onChange={(event) => {
-                          const next = [...createVariants];
-                          next[index] = { ...variant, isActive: event.target.checked };
-                          setCreateVariants(next);
-                        }}
-                        disabled={!canWrite}
-                      />
-                      Active
-                    </label>
-                    {createVariants.length > 1 && canWrite ? (
-                      <button
-                        type="button"
-                        className="text-xs text-destructive"
-                        onClick={() =>
-                          setCreateVariants(createVariants.filter((_, i) => i !== index))
-                        }
-                      >
-                        Remove
-                      </button>
-                    ) : null}
-                  </div>
-                </div>
-              ))}
-              {canWrite ? (
+              ) : (
                 <button
                   type="button"
-                  className="justify-self-start text-sm text-primary"
-                  onClick={() => setCreateVariants([...createVariants, emptyVariant()])}
+                  onClick={() => void restoreProduct()}
+                  disabled={saving}
+                  className="h-9 flex-1 rounded-md bg-zinc-900 px-4 text-sm font-semibold text-white transition-colors hover:bg-zinc-800 disabled:opacity-60 sm:flex-none"
                 >
-                  + Add variant
+                  Restore
                 </button>
-              ) : null}
+              )}
+              <AdminRowActionsMenu
+                disabled={saving}
+                triggerClassName="h-9 w-9 border border-border bg-background hover:bg-muted/50"
+                onDeletePermanently={() => void hardDeleteProduct()}
+              />
             </div>
-          </AdminSection>
+          )}
+          <Link href="/admin/products" className="flex-1 sm:flex-none">
+            <button
+              type="button"
+              className="h-9 w-full rounded-md border border-border bg-background px-4 text-sm font-semibold text-foreground transition-colors hover:bg-muted/50"
+            >
+              Cancel
+            </button>
+          </Link>
+          {canWrite ? (
+            <button
+              type="button"
+              onClick={() => void saveCoreFields()}
+              disabled={saving || loading}
+              className="flex h-9 flex-1 items-center justify-center gap-2 rounded-md bg-zinc-900 px-4 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-zinc-800 disabled:opacity-60 sm:flex-none"
+            >
+              {saving ? "Saving…" : isCreate ? "Save Product" : "Save Changes"}
+            </button>
+          ) : (
+            <span className="text-xs text-muted-foreground">Read-only</span>
+          )}
+        </div>
+      </header>
 
-          <AdminSection title="Images (optional)" description="HTTPS URLs only.">
-            <div className="grid gap-3">
-              {createImages.map((image, index) => (
-                <div
-                  key={index}
-                  className="grid gap-2 rounded-md border border-border p-3 md:grid-cols-4"
+      {error ? (
+        <div className="rounded-xl border border-destructive/20 bg-destructive/10 p-4 text-sm text-destructive font-medium">
+          {error}
+        </div>
+      ) : null}
+
+      {success ? (
+        <div className="rounded-xl border border-zinc-300 bg-zinc-100 px-4 py-3 text-sm text-zinc-800 font-semibold flex items-center gap-2">
+          <Check className="h-4 w-4" /> {success}
+        </div>
+      ) : null}
+
+      {loading ? (
+        <div className="flex h-[400px] w-full items-center justify-center">
+          <div className="h-8 w-8 animate-spin rounded-full border-4 border-zinc-900 border-t-transparent"></div>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+          {/* Left Column - 2/3 Width */}
+          <div className="flex flex-col gap-6 lg:col-span-2">
+            {/* Basic Information Section */}
+            <div className="rounded-xl border border-border/40 bg-card p-5 shadow-sm flex flex-col gap-4">
+              <h3 className="font-heading text-base font-bold text-foreground">
+                Basic Information
+              </h3>
+
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <label
+                  data-admin-field-label="name"
+                  className={cn(
+                    "grid gap-1.5 text-xs font-bold text-muted-foreground uppercase tracking-wider",
+                    getFieldError("name") && "rounded-md ring-2 ring-destructive/20",
+                  )}
                 >
+                  Product Name <span className="text-rose-500">*</span>
                   <input
-                    className={`${inputClass} md:col-span-2`}
-                    placeholder="https://…"
-                    value={image.url}
+                    data-admin-field="name"
+                    aria-invalid={Boolean(getFieldError("name"))}
+                    className={fieldClassName("name", inputClass)}
+                    placeholder="e.g. Chemical Free Bananas"
+                    value={name}
                     onChange={(event) => {
-                      const next = [...createImages];
-                      next[index] = { ...image, url: event.target.value };
-                      setCreateImages(next);
+                      clearFieldError("name");
+                      setName(event.target.value);
                     }}
                     disabled={!canWrite}
                   />
+                  {getFieldError("name") ? (
+                    <span className="text-[11px] font-semibold normal-case text-destructive">
+                      {getFieldError("name")}
+                    </span>
+                  ) : null}
+                </label>
+
+                <label
+                  data-admin-field-label="sku"
+                  className={cn(
+                    "grid gap-1.5 text-xs font-bold text-muted-foreground uppercase tracking-wider",
+                    getFieldError("sku") && "rounded-md ring-2 ring-destructive/20",
+                  )}
+                >
+                  SKU <span className="text-rose-500">*</span>
                   <input
-                    className={inputClass}
-                    placeholder="Alt text"
-                    value={image.altText}
+                    data-admin-field="sku"
+                    aria-invalid={Boolean(getFieldError("sku"))}
+                    className={cn(fieldClassName("sku", inputClass), "font-mono")}
+                    placeholder="e.g. BAN-ORG-001"
+                    value={
+                      isCreate
+                        ? createVariants[0]?.sku || ""
+                        : product?.variants[0]?.sku || ""
+                    }
                     onChange={(event) => {
-                      const next = [...createImages];
-                      next[index] = { ...image, altText: event.target.value };
-                      setCreateImages(next);
+                      if (isCreate) {
+                        updateFirstVariant("sku", event.target.value);
+                      }
+                    }}
+                    disabled={!isCreate || !canWrite}
+                  />
+                  {getFieldError("sku") ? (
+                    <span className="text-[11px] font-semibold normal-case text-destructive">
+                      {getFieldError("sku")}
+                    </span>
+                  ) : null}
+                </label>
+              </div>
+
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <label
+                  data-admin-field-label="categoryId"
+                  className={cn(
+                    "grid gap-1.5 text-xs font-bold text-muted-foreground uppercase tracking-wider",
+                    getFieldError("categoryId") && "rounded-md ring-2 ring-destructive/20",
+                  )}
+                >
+                  Category <span className="text-rose-500">*</span>
+                  <select
+                    data-admin-field="categoryId"
+                    aria-invalid={Boolean(getFieldError("categoryId"))}
+                    className={fieldClassName("categoryId", inputClass)}
+                    value={categoryId}
+                    onChange={(event) => {
+                      clearFieldError("categoryId");
+                      setCategoryId(event.target.value);
+                    }}
+                    disabled={!canWrite || categories.length === 0}
+                  >
+                    <option value="">
+                      {categories.length === 0
+                        ? "No categories available"
+                        : "Select a category"}
+                    </option>
+                    {categories.map((category) => (
+                      <option key={category.id} value={category.id}>
+                        {category.name}
+                      </option>
+                    ))}
+                  </select>
+                  {categories.length === 0 ? (
+                    <span className="text-[11px] font-semibold normal-case text-amber-700">
+                      Categories could not be loaded. Ensure the backend is running
+                      and refresh this page.
+                    </span>
+                  ) : null}
+                  {getFieldError("categoryId") ? (
+                    <span className="text-[11px] font-semibold normal-case text-destructive">
+                      {getFieldError("categoryId")}
+                    </span>
+                  ) : null}
+                </label>
+
+                <label
+                  data-admin-field-label="slug"
+                  className={cn(
+                    "grid gap-1.5 text-xs font-bold text-muted-foreground uppercase tracking-wider",
+                    getFieldError("slug") && "rounded-md ring-2 ring-destructive/20",
+                  )}
+                >
+                  URL Slug <span className="text-rose-500">*</span>
+                  <input
+                    data-admin-field="slug"
+                    aria-invalid={Boolean(getFieldError("slug"))}
+                    className={cn(fieldClassName("slug", inputClass), "font-mono")}
+                    placeholder="e.g. chemical-free-bananas"
+                    value={slug}
+                    onChange={(event) => {
+                      clearFieldError("slug");
+                      setSlugTouched(true);
+                      setSlug(event.target.value);
                     }}
                     disabled={!canWrite}
                   />
-                  <div className="flex items-center gap-2">
-                    <input
-                      className={inputClass}
-                      placeholder="Sort"
-                      value={image.sortOrder}
+                  {getFieldError("slug") ? (
+                    <span className="text-[11px] font-semibold normal-case text-destructive">
+                      {getFieldError("slug")}
+                    </span>
+                  ) : null}
+                </label>
+              </div>
+
+              <label className="grid gap-1.5 text-xs font-bold text-muted-foreground uppercase tracking-wider">
+                Short Description
+                <div className="relative">
+                  <textarea
+                    className={`${textareaClass} border-border/50 text-foreground resize-none pr-12`}
+                    placeholder="A short description about the product..."
+                    maxLength={160}
+                    value={shortDesc}
+                    onChange={(event) => setShortDesc(event.target.value)}
+                    disabled={!canWrite}
+                  />
+                  <span className="absolute bottom-2.5 right-3 text-[10px] text-muted-foreground font-semibold">
+                    {shortDesc.length}/160
+                  </span>
+                </div>
+              </label>
+
+              <label
+                data-admin-field-label="description"
+                className={cn(
+                  "grid gap-1.5 text-xs font-bold text-muted-foreground uppercase tracking-wider",
+                  getFieldError("description") && "rounded-md ring-2 ring-destructive/20",
+                )}
+              >
+                Description <span className="text-rose-500">*</span>
+                <div
+                  className={`rounded-lg border bg-background overflow-hidden ${
+                    getFieldError("description")
+                      ? "border-destructive ring-2 ring-destructive/25"
+                      : "border-border/50"
+                  }`}
+                >
+                  {/* Styled Editor Toolbar */}
+                  <div className="flex flex-wrap items-center gap-1.5 border-b border-border/40 bg-muted/20 px-2 py-1.5">
+                    <button
+                      type="button"
+                      className="p-1 rounded hover:bg-muted text-muted-foreground"
+                      title="Bold"
+                    >
+                      <Bold className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      className="p-1 rounded hover:bg-muted text-muted-foreground"
+                      title="Italic"
+                    >
+                      <Italic className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      className="p-1 rounded hover:bg-muted text-muted-foreground"
+                      title="Underline"
+                    >
+                      <Underline className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      className="p-1 rounded hover:bg-muted text-muted-foreground"
+                      title="Strikethrough"
+                    >
+                      <Strikethrough className="h-3.5 w-3.5" />
+                    </button>
+                    <div className="h-4 w-px bg-border/50 mx-1" />
+                    <button
+                      type="button"
+                      className="p-1 rounded hover:bg-muted text-muted-foreground"
+                      title="Align Left"
+                    >
+                      <AlignLeft className="h-3.5 w-3.5" />
+                    </button>
+                    <div className="h-4 w-px bg-border/50 mx-1" />
+                    <button
+                      type="button"
+                      className="p-1 rounded hover:bg-muted text-muted-foreground"
+                      title="Bullet List"
+                    >
+                      <List className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      className="p-1 rounded hover:bg-muted text-muted-foreground"
+                      title="Numbered List"
+                    >
+                      <ListOrdered className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      className="p-1 rounded hover:bg-muted text-muted-foreground"
+                      title="Quote"
+                    >
+                      <Quote className="h-3.5 w-3.5" />
+                    </button>
+                    <div className="h-4 w-px bg-border/50 mx-1" />
+                    <button
+                      type="button"
+                      className="p-1 rounded hover:bg-muted text-muted-foreground"
+                      title="Link"
+                    >
+                      <Link2 className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      className="p-1 rounded hover:bg-muted text-muted-foreground"
+                      title="Image"
+                    >
+                      <ImageIcon className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      className="p-1 rounded hover:bg-muted text-muted-foreground ml-auto"
+                      title="Expand"
+                    >
+                      <Maximize2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                  <div className="relative">
+                    <textarea
+                      data-admin-field="description"
+                      aria-invalid={Boolean(getFieldError("description"))}
+                      className="min-h-[140px] w-full border-none bg-transparent px-3 py-2.5 text-sm text-foreground focus:ring-0 resize-none pr-12"
+                      placeholder="Write a detailed description about the product..."
+                      maxLength={2000}
+                      value={description}
                       onChange={(event) => {
-                        const next = [...createImages];
-                        next[index] = { ...image, sortOrder: event.target.value };
-                        setCreateImages(next);
+                        clearFieldError("description");
+                        setDescription(event.target.value);
                       }}
                       disabled={!canWrite}
                     />
-                    {canWrite ? (
-                      <button
-                        type="button"
-                        className="text-xs text-destructive"
-                        onClick={() =>
-                          setCreateImages(createImages.filter((_, i) => i !== index))
-                        }
-                      >
-                        Remove
-                      </button>
-                    ) : null}
+                    <span className="absolute bottom-2.5 right-3 text-[10px] text-muted-foreground font-semibold">
+                      {description.length}/2000
+                    </span>
                   </div>
                 </div>
-              ))}
-              {canWrite ? (
-                <button
-                  type="button"
-                  className="justify-self-start text-sm text-primary"
-                  onClick={() =>
-                    setCreateImages([
-                      ...createImages,
-                      { url: "", altText: "", sortOrder: String(createImages.length) },
-                    ])
-                  }
-                >
-                  + Add image
-                </button>
-              ) : null}
+                {getFieldError("description") ? (
+                  <span className="text-[11px] font-semibold normal-case text-destructive">
+                    {getFieldError("description")}
+                  </span>
+                ) : null}
+              </label>
             </div>
-          </AdminSection>
-        </>
-      ) : product ? (
-        <>
-          <AdminSection title="Variants" description="Manage SKUs and pricing.">
-            <div className="overflow-x-auto rounded-md border border-border">
-              <table className="w-full min-w-[800px] text-left text-sm">
-                <thead className="border-b border-border bg-muted/50 text-xs uppercase text-muted-foreground">
-                  <tr>
-                    <th className="px-3 py-2 font-medium">SKU</th>
-                    <th className="px-3 py-2 font-medium">Name</th>
-                    <th className="px-3 py-2 font-medium">Price</th>
-                    <th className="px-3 py-2 font-medium">Compare-at</th>
-                    <th className="px-3 py-2 font-medium">Active</th>
-                    <th className="px-3 py-2 font-medium">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {product.variants.map((variant) => (
-                    <VariantEditRow
-                      key={variant.id}
-                      variant={variant}
-                      canWrite={canWrite}
-                      saving={saving}
-                      onSave={(draft) => void saveVariant(variant, draft)}
-                      onDelete={() => void removeVariant(variant.id)}
-                      canDelete={product.variants.length > 1}
-                    />
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            {canWrite ? (
-              <div className="mt-4 grid gap-2 rounded-md border border-dashed border-border p-3 md:grid-cols-5">
-                <input
-                  className={inputClass}
-                  placeholder="New SKU"
-                  value={newVariant.sku}
-                  onChange={(event) =>
-                    setNewVariant({ ...newVariant, sku: event.target.value })
-                  }
-                />
-                <input
-                  className={inputClass}
-                  placeholder="Name"
-                  value={newVariant.name}
-                  onChange={(event) =>
-                    setNewVariant({ ...newVariant, name: event.target.value })
-                  }
-                />
-                <input
-                  className={inputClass}
-                  placeholder="Price (paise)"
-                  value={newVariant.pricePaise}
-                  onChange={(event) =>
-                    setNewVariant({ ...newVariant, pricePaise: event.target.value })
-                  }
-                />
-                <input
-                  className={inputClass}
-                  placeholder="Compare-at"
-                  value={newVariant.compareAtPricePaise}
-                  onChange={(event) =>
-                    setNewVariant({
-                      ...newVariant,
-                      compareAtPricePaise: event.target.value,
-                    })
-                  }
-                />
-                <button
-                  type="button"
-                  className="h-10 rounded-md bg-primary px-3 text-sm text-primary-foreground disabled:opacity-60"
-                  disabled={saving}
-                  onClick={() => void addVariant()}
-                >
-                  Add variant
-                </button>
-              </div>
-            ) : null}
-          </AdminSection>
 
-          <AdminSection title="Images" description="Reorder or remove product images.">
-            <div className="grid gap-2">
-              {[...product.images]
-                .sort((a, b) => a.sortOrder - b.sortOrder)
-                .map((image) => (
-                  <div
-                    key={image.id}
-                    className="flex flex-wrap items-center gap-3 rounded-md border border-border p-3"
-                  >
-                    <Image
-                      src={image.url}
-                      alt={image.altText}
-                      width={48}
-                      height={48}
-                      className="rounded object-cover"
+            {/* Pricing & Inventory Section */}
+            <div
+              data-admin-field-label="variants"
+              className={cn(
+                "rounded-xl border bg-card p-5 shadow-sm flex flex-col gap-4",
+                pricingSectionHasError
+                  ? "border-destructive ring-2 ring-destructive/20"
+                  : "border-border/40",
+              )}
+            >
+              <h3 className="font-heading text-base font-bold text-foreground">
+                Pricing & Inventory
+              </h3>
+              {getFieldError("variants") ? (
+                <p className="text-xs font-medium text-destructive" role="alert">
+                  {getFieldError("variants")}
+                </p>
+              ) : null}
+
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                <label
+                  data-admin-field-label="price"
+                  className={cn(
+                    "grid gap-1.5 text-xs font-bold text-muted-foreground uppercase tracking-wider",
+                    getFieldError("price") && "rounded-md ring-2 ring-destructive/20",
+                  )}
+                >
+                  Price <span className="text-rose-500">*</span>
+                  <div className="relative flex items-center">
+                    <span className="absolute left-3 text-muted-foreground font-medium text-sm">
+                      ₹
+                    </span>
+                    <input
+                      data-admin-field="price"
+                      aria-invalid={Boolean(getFieldError("price"))}
+                      className={cn(fieldClassName("price", inputClass), "pl-7")}
+                      placeholder="0.00"
+                      value={
+                        isCreate
+                          ? createVariants[0]?.pricePaise || ""
+                          : product?.variants[0]?.price
+                            ? String(product.variants[0].price / 100)
+                            : ""
+                      }
+                      onChange={(event) => {
+                        if (isCreate) {
+                          updateFirstVariant("pricePaise", event.target.value);
+                        }
+                      }}
+                      disabled={!isCreate || !canWrite}
                     />
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium">{image.altText}</p>
-                      <p className="truncate text-xs text-muted-foreground">{image.url}</p>
-                    </div>
-                    <span className="text-xs text-muted-foreground">#{image.sortOrder}</span>
-                    {canWrite ? (
-                      <div className="flex gap-1">
+                  </div>
+                  {getFieldError("price") ? (
+                    <span className="text-[11px] font-semibold normal-case text-destructive">
+                      {getFieldError("price")}
+                    </span>
+                  ) : null}
+                </label>
+
+                <label className="grid gap-1.5 text-xs font-bold text-muted-foreground uppercase tracking-wider">
+                  <span className="flex items-center gap-1">
+                    Compare at Price
+                    <span title="Original price before discount.">
+                      <HelpCircle className="h-3.5 w-3.5 text-muted-foreground/60 cursor-help" />
+                    </span>
+                  </span>
+                  <div className="relative flex items-center">
+                    <span className="absolute left-3 text-muted-foreground font-medium text-sm">
+                      ₹
+                    </span>
+                    <input
+                      className={`${inputClass} border-border/50 text-foreground pl-7`}
+                      placeholder="0.00"
+                      value={
+                        isCreate
+                          ? createVariants[0]?.compareAtPricePaise || ""
+                          : product?.variants[0]?.compareAtPrice
+                            ? String(product.variants[0].compareAtPrice / 100)
+                            : ""
+                      }
+                      onChange={(event) => {
+                        if (isCreate) {
+                          updateFirstVariant(
+                            "compareAtPricePaise",
+                            event.target.value,
+                          );
+                        }
+                      }}
+                      disabled={!isCreate || !canWrite}
+                    />
+                  </div>
+                </label>
+              </div>
+
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-3 items-center">
+                <label className="grid gap-1.5 text-xs font-bold text-muted-foreground uppercase tracking-wider">
+                  Stock Quantity <span className="text-rose-500">*</span>
+                  <input
+                    className={`${inputClass} border-border/50 text-foreground`}
+                    type="text"
+                    placeholder={!isCreate ? "Managed in Inventory" : "0"}
+                    value={
+                      isCreate ? createVariants[0]?.initialQuantity || "" : ""
+                    }
+                    onChange={(event) => {
+                      if (isCreate) {
+                        updateFirstVariant(
+                          "initialQuantity",
+                          event.target.value,
+                        );
+                      }
+                    }}
+                    disabled={!isCreate || !canWrite}
+                  />
+                </label>
+
+                <label className="grid gap-1.5 text-xs font-bold text-muted-foreground uppercase tracking-wider">
+                  Low Stock Threshold
+                  <input
+                    className={`${inputClass} border-border/50 text-foreground`}
+                    type="number"
+                    min="0"
+                    placeholder="10"
+                    value={lowStockThreshold}
+                    onChange={(event) =>
+                      setLowStockThreshold(event.target.value)
+                    }
+                    disabled={!canWrite}
+                  />
+                </label>
+
+                <div className="flex flex-col gap-1.5">
+                  <span className="text-xs font-bold text-muted-foreground uppercase tracking-wider flex items-center gap-1">
+                    Track Inventory
+                    <span title="Enable to monitor inventory levels automatically.">
+                      <HelpCircle className="h-3.5 w-3.5 text-muted-foreground/60 cursor-help" />
+                    </span>
+                  </span>
+                  <div className="flex h-10 items-center">
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={trackInventory}
+                      onClick={() => setTrackInventory(!trackInventory)}
+                      disabled={!canWrite}
+                      className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                        trackInventory
+                          ? "bg-emerald-600"
+                          : "bg-muted-foreground/30"
+                      }`}
+                    >
+                      <span
+                        aria-hidden="true"
+                        className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                          trackInventory ? "translate-x-5" : "translate-x-0"
+                        }`}
+                      />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Product Images Section */}
+            <div className="rounded-xl border border-border/40 bg-card p-5 shadow-sm flex flex-col gap-4">
+              <h3 className="font-heading text-base font-bold text-foreground">
+                Product Images
+              </h3>
+              <p className="text-xs text-muted-foreground font-medium -mt-2">
+                Upload high-quality images of your product. You can drag and
+                drop or click to browse.
+              </p>
+
+              <div className="grid grid-cols-2 gap-4 sm:grid-cols-5">
+                {/* Upload Box Component */}
+                <div className="relative flex flex-col items-center justify-center border-2 border-dashed border-border/60 hover:border-zinc-900/50 rounded-xl bg-muted/5 p-4 transition-colors cursor-pointer group text-center min-h-[120px]">
+                  <input
+                    type="file"
+                    accept={PRODUCT_IMAGE_ACCEPT}
+                    multiple
+                    className="absolute inset-0 opacity-0 cursor-pointer"
+                    disabled={saving}
+                    onChange={(event) => {
+                      if (isCreate) {
+                        handleCreateImageUpload(event);
+                      } else {
+                        const selected = event.target.files
+                          ? Array.from(event.target.files)
+                          : [];
+                        if (selected.length > 0)
+                          void uploadImageFiles(selected);
+                      }
+                    }}
+                  />
+                  <UploadCloud className="h-6 w-6 text-muted-foreground group-hover:text-zinc-900 transition-colors mb-1.5" />
+                  <span className="text-[10px] font-bold text-muted-foreground group-hover:text-zinc-800">
+                    Drag & drop here
+                  </span>
+                  <span className="text-[9px] text-muted-foreground mt-0.5 font-medium">
+                    or{" "}
+                    <span className="text-zinc-900 underline font-semibold">
+                      Browse Files
+                    </span>
+                  </span>
+                </div>
+
+                {/* Rendered Uploaded Images */}
+                {isCreate
+                  ? createImages.map((image, index) => (
+                      <div
+                        key={index}
+                        className="relative aspect-square rounded-xl overflow-hidden border border-border/50 group"
+                      >
+                        <Image
+                          src={image.url}
+                          alt={image.altText}
+                          fill
+                          unoptimized
+                          className="object-cover"
+                        />
+                        {index === 0 && (
+                          <span className="absolute top-2 left-2 bg-zinc-900 text-[9px] font-bold text-white px-2 py-0.5 rounded-full shadow-sm">
+                            Primary
+                          </span>
+                        )}
                         <button
                           type="button"
-                          className="rounded border border-border px-2 py-1 text-xs"
-                          onClick={() => void moveImage(image, -1)}
-                          disabled={saving}
+                          onClick={() =>
+                            setCreateImages(
+                              createImages.filter((_, i) => i !== index),
+                            )
+                          }
+                          className="absolute top-2 right-2 h-5 w-5 rounded-full bg-black/60 hover:bg-black/80 flex items-center justify-center text-white transition-colors"
                         >
-                          ↑
-                        </button>
-                        <button
-                          type="button"
-                          className="rounded border border-border px-2 py-1 text-xs"
-                          onClick={() => void moveImage(image, 1)}
-                          disabled={saving}
-                        >
-                          ↓
-                        </button>
-                        <button
-                          type="button"
-                          className="rounded border border-destructive px-2 py-1 text-xs text-destructive"
-                          onClick={() => void removeImage(image.id)}
-                          disabled={saving}
-                        >
-                          Remove
+                          <X className="h-3 w-3" />
                         </button>
                       </div>
-                    ) : null}
+                    ))
+                  : [...(product?.images || [])]
+                      .sort((a, b) => a.sortOrder - b.sortOrder)
+                      .map((image, index) => (
+                        <div
+                          key={image.id}
+                          className="relative aspect-square rounded-xl overflow-hidden border border-border/50 group"
+                        >
+                          <Image
+                            src={resolveProductImageUrl(image.url)}
+                            alt={image.altText}
+                            fill
+                            className="object-cover"
+                          />
+                          {index === 0 && (
+                            <span className="absolute top-2 left-2 bg-zinc-900 text-[9px] font-bold text-white px-2 py-0.5 rounded-full shadow-sm z-10">
+                              Primary
+                            </span>
+                          )}
+                          {canWrite && (
+                            <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1.5 z-10">
+                              <button
+                                type="button"
+                                onClick={() => void moveImage(image, -1)}
+                                className="h-6 w-6 rounded bg-black/70 text-white flex items-center justify-center text-xs hover:bg-black/90 font-bold"
+                                title="Move Left"
+                              >
+                                ←
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => void moveImage(image, 1)}
+                                className="h-6 w-6 rounded bg-black/70 text-white flex items-center justify-center text-xs hover:bg-black/90 font-bold"
+                                title="Move Right"
+                              >
+                                →
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => void removeImage(image.id)}
+                                className="h-6 w-6 rounded bg-red-600 text-white flex items-center justify-center text-xs hover:bg-red-700"
+                                title="Remove"
+                              >
+                                <X className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+
+                {/* Add more placeholder dashed box */}
+                {(isCreate
+                  ? createImages.length
+                  : product?.images?.length || 0) > 0 && (
+                  <div className="relative flex flex-col items-center justify-center border border-dashed border-border/60 rounded-xl bg-muted/5 hover:bg-muted/10 transition-colors text-center aspect-square cursor-pointer">
+                    <input
+                      type="file"
+                      accept={PRODUCT_IMAGE_ACCEPT}
+                      multiple
+                      className="absolute inset-0 opacity-0 cursor-pointer"
+                      disabled={saving}
+                      onChange={(event) => {
+                        if (isCreate) {
+                          handleCreateImageUpload(event);
+                        } else {
+                          const selected = event.target.files
+                            ? Array.from(event.target.files)
+                            : [];
+                          if (selected.length > 0)
+                            void uploadImageFiles(selected);
+                        }
+                      }}
+                    />
+                    <Plus className="h-5 w-5 text-muted-foreground mb-1" />
+                    <span className="text-[10px] font-bold text-muted-foreground">
+                      Add more
+                    </span>
                   </div>
-                ))}
-            </div>
-            {canWrite ? (
-              <div className="mt-4 grid gap-2 md:grid-cols-4">
-                <input
-                  className={`${inputClass} md:col-span-2`}
-                  placeholder="https://…"
-                  value={newImage.url}
-                  onChange={(event) =>
-                    setNewImage({ ...newImage, url: event.target.value })
-                  }
-                />
-                <input
-                  className={inputClass}
-                  placeholder="Alt text"
-                  value={newImage.altText}
-                  onChange={(event) =>
-                    setNewImage({ ...newImage, altText: event.target.value })
-                  }
-                />
-                <button
-                  type="button"
-                  className="h-10 rounded-md bg-primary px-3 text-sm text-primary-foreground disabled:opacity-60"
-                  disabled={saving}
-                  onClick={() => void addImage()}
-                >
-                  Add image
-                </button>
+                )}
               </div>
-            ) : null}
-          </AdminSection>
-        </>
-      ) : null}
+              <span className="text-[10px] text-muted-foreground font-semibold mt-1 block">
+                Upload up to 8 images. Recommended size: 1200x1200px. Max file
+                size: 5MB each.
+              </span>
+
+              {canWrite && !isCreate && (
+                <details className="text-xs font-semibold mt-2 text-muted-foreground cursor-pointer select-none">
+                  <summary className="hover:text-foreground">
+                    Or add external image via HTTPS URL
+                  </summary>
+                  <div className="mt-2.5 flex gap-2">
+                    <input
+                      className={`${inputClass} border-border/50 text-foreground text-xs flex-1`}
+                      placeholder="https://example.com/banana.jpg"
+                      value={newImage.url}
+                      onChange={(e) =>
+                        setNewImage({ ...newImage, url: e.target.value })
+                      }
+                    />
+                    <button
+                      type="button"
+                      disabled={saving}
+                      onClick={() => void addImageByUrl()}
+                      className="h-10 rounded-md border border-border bg-background px-4 text-xs font-bold text-foreground hover:bg-muted/50"
+                    >
+                      Add URL
+                    </button>
+                  </div>
+                </details>
+              )}
+            </div>
+
+            {/* Variants table for edit mode so we don't lose variant editing capability */}
+            {!isCreate && product && (
+              <div className="rounded-xl border border-border/40 bg-card p-5 shadow-sm flex flex-col gap-4">
+                <h3 className="font-heading text-base font-bold text-foreground">
+                  Manage All Product Variants
+                </h3>
+                <AdminTableScroll className="rounded-lg border border-border/50">
+                  <table className="w-full min-w-[600px] text-left text-sm">
+                    <thead className="border-b border-border/40 bg-muted/20 text-xs font-bold text-muted-foreground uppercase tracking-wider">
+                      <tr>
+                        <th className="px-3 py-3">SKU</th>
+                        <th className="px-3 py-3">Name</th>
+                        <th className="px-3 py-3">Price (₹)</th>
+                        <th className="px-3 py-3">Cmp. At (₹)</th>
+                        <th className="px-3 py-3">Active</th>
+                        <th className="px-3 py-3 text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border/20">
+                      {product.variants.map((variant) => (
+                        <VariantEditRow
+                          key={variant.id}
+                          variant={variant}
+                          canWrite={canWrite}
+                          saving={saving}
+                          onSave={(draft) => void saveVariant(variant, draft)}
+                          onDelete={() => void removeVariant(variant.id)}
+                          canDelete={product.variants.length > 1}
+                        />
+                      ))}
+                    </tbody>
+                  </table>
+                </AdminTableScroll>
+                {canWrite ? (
+                  <div className="mt-4 grid grid-cols-1 items-center gap-3 rounded-lg border border-dashed border-border/60 bg-muted/5 p-4 sm:grid-cols-2 md:grid-cols-5">
+                    <input
+                      className={`${inputClass} border-border/50 text-foreground font-mono`}
+                      placeholder="New SKU"
+                      value={newVariant.sku}
+                      onChange={(event) =>
+                        setNewVariant({
+                          ...newVariant,
+                          sku: event.target.value,
+                        })
+                      }
+                    />
+                    <input
+                      className={`${inputClass} border-border/50 text-foreground`}
+                      placeholder="Variant Name"
+                      value={newVariant.name}
+                      onChange={(event) =>
+                        setNewVariant({
+                          ...newVariant,
+                          name: event.target.value,
+                        })
+                      }
+                    />
+                    <div className="relative flex items-center">
+                      <span className="absolute left-3 text-muted-foreground font-medium text-sm">
+                        ₹
+                      </span>
+                      <input
+                        className={`${inputClass} border-border/50 text-foreground pl-7`}
+                        placeholder="Price"
+                        value={newVariant.pricePaise}
+                        onChange={(event) =>
+                          setNewVariant({
+                            ...newVariant,
+                            pricePaise: event.target.value,
+                          })
+                        }
+                      />
+                    </div>
+                    <div className="relative flex items-center">
+                      <span className="absolute left-3 text-muted-foreground font-medium text-sm">
+                        ₹
+                      </span>
+                      <input
+                        className={`${inputClass} border-border/50 text-foreground pl-7`}
+                        placeholder="Compare-at"
+                        value={newVariant.compareAtPricePaise}
+                        onChange={(event) =>
+                          setNewVariant({
+                            ...newVariant,
+                            compareAtPricePaise: event.target.value,
+                          })
+                        }
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      disabled={saving}
+                      onClick={() => void addVariant()}
+                      className="h-10 rounded-md bg-zinc-900 px-4 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-zinc-800 disabled:opacity-60"
+                    >
+                      Add Variant
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+            )}
+          </div>
+
+          {/* Right Column - 1/3 Width */}
+          <div className="flex flex-col gap-6 lg:col-span-1">
+            {/* Publish Control Card */}
+            <div className="rounded-xl border border-border/40 bg-card p-5 shadow-sm flex flex-col gap-4">
+              <div className="flex items-center justify-between border-b border-border/20 pb-2.5">
+                <h3 className="font-heading text-base font-bold text-foreground">
+                  Publish
+                </h3>
+                <ChevronDown className="h-4 w-4 text-muted-foreground" />
+              </div>
+
+              <div className="flex flex-col gap-4 text-sm font-semibold">
+                <label className="grid gap-1 text-muted-foreground">
+                  Status
+                  <select
+                    className={`${inputClass} border-border/50 text-foreground mt-1.5 font-bold`}
+                    value={status}
+                    onChange={(e) => setStatus(e.target.value)}
+                    disabled={!canWrite}
+                  >
+                    <option value="Draft">Draft</option>
+                    <option value="Active">Active</option>
+                  </select>
+                </label>
+
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-muted-foreground uppercase tracking-wider">
+                    Featured
+                  </span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={isFeatured}
+                    onClick={() => setIsFeatured(!isFeatured)}
+                    disabled={!canWrite}
+                    className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                      isFeatured ? "bg-emerald-600" : "bg-muted-foreground/30"
+                    }`}
+                  >
+                    <span
+                      aria-hidden="true"
+                      className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                        isFeatured ? "translate-x-5" : "translate-x-0"
+                      }`}
+                    />
+                  </button>
+                </div>
+
+                {/* Status helper banner */}
+                <div
+                  className={`rounded-xl border p-3 flex items-center gap-2 text-xs font-semibold ${
+                    status === "Active"
+                      ? "bg-emerald-50 border-emerald-200 text-emerald-700"
+                      : "bg-amber-50 border-amber-100 text-amber-700"
+                  }`}
+                >
+                  <Check className="h-4 w-4 shrink-0" />
+                  <span>
+                    {status === "Active"
+                      ? "Product is live and visible on the storefront"
+                      : "Product is a draft and hidden from the storefront"}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Product Live Preview Card */}
+            <div className="rounded-xl border border-border/40 bg-card p-5 shadow-sm flex flex-col gap-4">
+              <h3 className="font-heading text-base font-bold text-foreground">
+                Product Preview
+              </h3>
+
+              <div className="rounded-xl border border-border/40 bg-background overflow-hidden shadow-sm flex items-center p-3 gap-4">
+                <div className="relative h-20 w-20 shrink-0 rounded-lg overflow-hidden border border-border/40 bg-muted/10">
+                  {isCreate ? (
+                    createImages[0]?.url ? (
+                      <Image
+                        src={createImages[0].url}
+                        alt={name}
+                        fill
+                        unoptimized
+                        className="object-cover"
+                      />
+                    ) : (
+                      <div className="h-full w-full flex items-center justify-center text-[10px] text-muted-foreground font-semibold">
+                        No Image
+                      </div>
+                    )
+                  ) : product?.images[0]?.url ? (
+                    <Image
+                      src={resolveProductImageUrl(product.images[0].url)}
+                      alt={name}
+                      fill
+                      className="object-cover"
+                    />
+                  ) : (
+                    <div className="h-full w-full flex items-center justify-center text-[10px] text-muted-foreground font-semibold">
+                      No Image
+                    </div>
+                  )}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <h4 className="font-semibold text-foreground text-sm truncate">
+                    {name || "Banana Bunch"}
+                  </h4>
+                  <p className="font-bold text-zinc-900 text-sm mt-0.5">
+                    ₹
+                    {isCreate
+                      ? createVariants[0]?.pricePaise
+                        ? Number(createVariants[0].pricePaise).toFixed(2)
+                        : "0.00"
+                      : product?.variants[0]?.price
+                        ? (product.variants[0].price / 100).toFixed(2)
+                        : "0.00"}
+                  </p>
+
+                  <p className="text-[11px] text-muted-foreground mt-1 line-clamp-2 leading-tight">
+                    {shortDesc ||
+                      description.slice(0, 100) ||
+                      "No description yet."}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Summary Information Card */}
+            <div className="rounded-xl border border-border/40 bg-card p-5 shadow-sm flex flex-col gap-4">
+              <h3 className="font-heading text-base font-bold text-foreground">
+                Summary
+              </h3>
+
+              <div className="flex flex-col gap-3.5 text-xs font-bold text-muted-foreground">
+                <div className="flex items-center justify-between border-b border-border/10 pb-1.5">
+                  <span>Status</span>
+                  <span
+                    className={`font-semibold ${
+                      status === "Active"
+                        ? "text-emerald-600"
+                        : "text-amber-600"
+                    }`}
+                  >
+                    {status}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between border-b border-border/10 pb-1.5">
+                  <span>Category</span>
+                  <span className="text-foreground">{activeCategoryName}</span>
+                </div>
+
+                <div className="flex items-center justify-between border-b border-border/10 pb-1.5">
+                  <span>Featured</span>
+                  <span
+                    className={
+                      isFeatured ? "text-emerald-600" : "text-foreground"
+                    }
+                  >
+                    {isFeatured ? "Yes" : "No"}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between border-b border-border/10 pb-1.5">
+                  <span>Tags</span>
+                  <span className="text-foreground truncate max-w-[160px]">
+                    {tagsText || "—"}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between border-b border-border/10 pb-1.5">
+                  <span>Variants</span>
+                  <span className="text-foreground">
+                    {isCreate
+                      ? `${createVariants.length} draft`
+                      : `${product?.variants.length ?? 0} variant${(product?.variants.length ?? 0) !== 1 ? "s" : ""}`}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between pb-0">
+                  <span>Images</span>
+                  <span className="text-foreground">
+                    {isCreate
+                      ? createImages.length
+                      : (product?.images.length ?? 0)}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -940,9 +1759,11 @@ function VariantEditRow({
   const [draft, setDraft] = useState<VariantDraft>({
     sku: variant.sku,
     name: variant.name,
-    pricePaise: String(variant.price),
+    pricePaise: String(variant.price / 100),
     compareAtPricePaise:
-      variant.compareAtPrice !== null ? String(variant.compareAtPrice) : "",
+      variant.compareAtPrice !== null
+        ? String(variant.compareAtPrice / 100)
+        : "",
     initialQuantity: "",
     isActive: variant.isActive,
   });
@@ -951,9 +1772,11 @@ function VariantEditRow({
     setDraft({
       sku: variant.sku,
       name: variant.name,
-      pricePaise: String(variant.price),
+      pricePaise: String(variant.price / 100),
       compareAtPricePaise:
-        variant.compareAtPrice !== null ? String(variant.compareAtPrice) : "",
+        variant.compareAtPrice !== null
+          ? String(variant.compareAtPrice / 100)
+          : "",
       initialQuantity: "",
       isActive: variant.isActive,
     });
@@ -1031,7 +1854,9 @@ function VariantEditRow({
                 Delete
               </button>
             ) : (
-              <span className="text-xs text-muted-foreground">Last variant</span>
+              <span className="text-xs text-muted-foreground">
+                Last variant
+              </span>
             )}
           </div>
         ) : null}

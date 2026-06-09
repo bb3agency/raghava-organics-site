@@ -100,7 +100,7 @@ Canonical references:
 - **Client Isolation** — Each client deployment gets its own DB, Redis, Docker stack, and `.env`. Never shared.
 - **Queue-First Side Effects** — All notifications, analytics, and background tasks run through BullMQ. Never synchronous in the request cycle.
 - **System-Wide Failure Alerting** — Every `catch`/`log.error` path across modules, plugins, and workers emits structured email alerts via `sendTechnicalFailureAlert()`, sent to active Ops identities (`opsUser.isActive`) and verified Admin users (`User.role=ADMIN`, `isVerified=true`). Eight failure stages (`QUEUE_ENQUEUE`, `OUTBOX_DISPATCH`, `WORKER_TERMINAL`, `WORKER_DELIVERY`, `CORE_LOGIC`, `ROUTE_HANDLER`, `WEBHOOK_PROCESSING`, `PROVIDER_RUNTIME`) with full contextual metadata.
-- **Per-Template Primary Notification Channel** — Each of the 13 notification templates has a configurable primary channel (`EMAIL`/`SMS`/`WHATSAPP`) stored in `StoreSettings.primaryNotificationChannels`. Merchant admin selects per-template channel via admin UI. `send-primary` job routes to the configured channel with no fallback — if primary channel fails, notification fails and triggers alert.
+- **Per-Template Primary Notification Channel** — Each of the 13 notification templates has a configurable primary channel (`EMAIL`/`SMS`/`WHATSAPP`) stored in `StoreSettings.primaryNotificationChannels`. Configure via `PATCH /api/v1/admin/settings/notifications` (admin JWT — no merchant admin UI as of 2026-06-07; ops console manages provider availability). `send-primary` job routes to the configured channel with no fallback — if primary channel fails, notification fails and triggers alert.
 
 ---
 
@@ -224,7 +224,7 @@ If `db` or `redis` shows `disconnected`:
 | `P1000: Authentication failed` | Update password in container: `docker exec <CLIENT_ID>-postgres psql -U postgres -c "ALTER USER postgres WITH PASSWORD 'YourPassword';"` then update `.env`. |
 | Client repo still points to template DB (`ecom_template`) | Set `DATABASE_URL` to a client-specific DB name (for example `raghava_organics`) before first boot. |
 | `Database "..." does not exist` on `npm run dev:e2e` / workers boot | Re-run `npm run dev:e2e` (or `npm run dev:e2e:workers`) after confirming `.env` `DATABASE_URL`; scripts now auto-create DB + run migrations. |
-| `ECONNRESET` / `ECONNABORTED` Redis loop | `REDIS_PASSWORD` is blank or `REDIS_URL` doesn't embed the password. Set both, then `docker compose down -v && docker compose up -d postgres redis` |
+| `ECONNRESET` / `ECONNABORTED` Redis loop | `REDIS_PASSWORD` is blank or `REDIS_URL` doesn't embed the password. Set both, then `docker compose down -v && docker compose up -d postgres redis`. Transient `[ioredis] Unhandled error event` spam after password is correct usually means host cannot reach Redis — confirm dev compose publishes `6379:6379` (see `docker-compose.yml`; production overlay removes the port). |
 | `POSTGRES_DB` has hyphens (e.g. `raghava-organics`) | PostgreSQL forbids hyphens in DB names. Rename to underscores (`raghava_organics`) in both `POSTGRES_DB` and `DATABASE_URL`, then `docker compose down -v && up -d` |
 | `POSTGRES_DB` and `DATABASE_URL` DB name don't match | Both must be identical. Mismatch means migrations run against a different DB than the one Postgres initialized. Fix both and `docker compose down -v`. |
 | `DATABASE_URL is not set` in scripts | Scripts auto-load from `.env` now; or set explicitly: `set DATABASE_URL=postgresql://...` |
@@ -266,7 +266,7 @@ Minimal map:
 src/             core app + modules
 queues/          worker runtime
 prisma/          schema + migrations
-scripts/         CI/reliability gates
+scripts/         CI/reliability gates — see scripts/README.md
 docs/            runbooks/checklists
 observability/   SLO rules + test rules
 nginx/           reverse-proxy template
@@ -526,6 +526,15 @@ npm run dev:e2e:workers
 ```
 
 > Both scripts (`scripts/dev-up.cmd` and `scripts/dev-up-workers.cmd`) are idempotent and handle: auto-starting `ecom-postgres`/`ecom-redis` containers, waiting for Redis health, ensuring Prisma DB exists, running Prisma generate+migrations, killing stale Node processes on port 3000, and setting all noop/E2E env vars. They are the **permanent fix** for recurring local startup errors (`ECONNREFUSED`, `EADDRINUSE`, missing target DB).
+
+### Terminal 3 — Frontend (monorepo)
+
+```cmd
+cd ..\frontend
+npm run dev
+```
+
+> Frontend `npm run dev` runs `scripts/ensure-backend-dev.mjs` first and exits if the API on `BACKEND_PROXY_URL` (default `127.0.0.1:3000`) is unreachable. See `frontend/README.md` and `docs/NEXTJS_FRONTEND_INTEGRATION_GUIDE.md` §1.0.1.
 
 ### Postman setup
 

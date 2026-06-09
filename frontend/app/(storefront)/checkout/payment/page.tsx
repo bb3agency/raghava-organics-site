@@ -4,6 +4,7 @@ import { useEffect, useState, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import Script from "next/script";
 import { useAuthStore } from "@/stores/auth";
+import { useCartStore } from "@/stores/cart";
 import { getMyOrder, retryPayment, verifyPayment, type OrderSummary } from "@/lib/orders-api";
 import { getApiErrorMessage } from "@/lib/error-messages";
 import { formatPrice } from "@/lib/format-price";
@@ -15,10 +16,22 @@ function PaymentContent() {
   const router = useRouter();
   const orderId = searchParams ? searchParams.get("orderId") : null;
   const accessToken = useAuthStore((s) => s.accessToken);
+  const user = useAuthStore((s) => s.user);
+  const clearCart = useCartStore((s) => s.clearCart);
+  const clearPendingMerge = useCartStore((s) => s.clearPendingMerge);
   const [order, setOrder] = useState<OrderSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!orderId) return;
+    if (!accessToken) {
+      router.replace(
+        `/login?redirect=${encodeURIComponent(`/checkout/payment?orderId=${orderId}`)}`,
+      );
+    }
+  }, [accessToken, orderId, router]);
 
   useEffect(() => {
     let cancelled = false;
@@ -70,11 +83,12 @@ function PaymentContent() {
         amount: payment.amount,
         currency: payment.currency,
         order_id: payment.providerOrderId,
-        name: "Raghava Organics",
+        name: process.env.NEXT_PUBLIC_STORE_NAME ?? "Raghava Organics",
         description: `Order ${order.orderNumber}`,
         prefill: {
-          email: order.shippingAddress?.fullName ? `${order.shippingAddress.fullName.toLowerCase().replace(/\s+/g, "")}@example.com` : "",
-          contact: order.shippingAddress?.phone || "",
+          name: order.shippingAddress?.fullName ?? "",
+          contact: order.shippingAddress?.phone ?? "",
+          ...(user?.email ? { email: user.email } : {}),
         },
         handler: async (response: {
           razorpay_payment_id: string;
@@ -90,8 +104,9 @@ function PaymentContent() {
               accessToken,
               verifyKey,
             );
-            setStatusMessage(`Payment verified for ${order.orderNumber}.`);
-            router.push("/orders");
+            clearPendingMerge();
+            clearCart();
+            router.push(`/checkout/success?orderId=${order.id}`);
           } catch (verifyError) {
             setError(getApiErrorMessage(verifyError));
           } finally {
@@ -120,8 +135,23 @@ function PaymentContent() {
     return <p className="text-sm text-destructive">{error}</p>;
   }
 
+  if (!accessToken) {
+    return <p className="text-sm text-muted-foreground">Redirecting to sign in…</p>;
+  }
+
   if (!order) {
     return <p className="text-sm text-muted-foreground">Loading order details...</p>;
+  }
+
+  if (order.paymentMode === "COD") {
+    return (
+      <p className="text-sm text-muted-foreground">
+        This order uses Cash on Delivery.{" "}
+        <a href={`/orders/${order.id}`} className="underline text-[#23403d]">
+          View order details
+        </a>
+      </p>
+    );
   }
 
   return (

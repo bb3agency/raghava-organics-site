@@ -25,7 +25,7 @@ export function AdminDetailDrawer({
         aria-label="Close drawer"
         onClick={onClose}
       />
-      <aside className="relative flex h-full w-full max-w-md flex-col border-l border-border bg-card shadow-xl">
+      <aside className="relative flex h-full w-full max-w-full flex-col border-l border-border bg-card shadow-xl sm:max-w-md">
         <header className="flex items-center justify-between border-b border-border px-4 py-3">
           <h3 className="font-heading text-lg font-semibold">{title}</h3>
           <button

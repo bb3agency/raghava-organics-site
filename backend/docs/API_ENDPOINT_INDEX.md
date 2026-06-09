@@ -28,6 +28,8 @@ Canonical low-noise index of backend HTTP endpoints. Route files and schemas rem
 | GET | `/api/v1/products/categories` | Public category list | `products.routes.ts` |
 | GET | `/api/v1/products/categories/:slug/products` | Products by category | `products.routes.ts` |
 | GET | `/api/v1/products/:slug` | Product detail by slug | `products.routes.ts` |
+| GET | `/api/v1/media/products/:productId/:filename` | Serve hosted product image when `MEDIA_STORAGE_PROVIDER=local` only; R2 URLs served from CDN | `media.routes.ts` |
+| GET | `/api/v1/reviews/recent` | Latest merchant-approved reviews for storefront testimonials; query `limit` (default 3, max 10) | `reviews.routes.ts` |
 | GET | `/api/v1/reviews/product/:slug` | Public product reviews | `reviews.routes.ts` |
 | GET | `/api/v1/maintenance/status` | Maintenance snapshot for storefront banner — `{ mode, phase, pendingUntil, activatedAt, serverTime }`. Always reachable, even during `maintenance/active`. Polled every ~30 s normally, ~5 s during `pending` | `maintenance.routes.ts` |
 | GET | `/api/v1/maintenance/gate` | Internal Nginx `auth_request` gate. Returns `200 { allowed: true }` when the request must pass through (normal/pending, or path in `ALWAYS_ALLOWED_PREFIXES`) or `401 { allowed: false }` when maintenance is `active` and the path is blocked. Nginx catches the 401 via `error_page 401 = @maintenance_block;` on the gated location → `return 503` → `maintenance.html`. The `X-Maintenance-Active: 0|1` response header is set on both shapes for backward compat but is no longer the deciding signal. Not for direct client use | `maintenance.routes.ts` |
@@ -87,7 +89,7 @@ Identity boundary contract (critical):
 | GET | `/api/v1/users/me/addresses` | List addresses | Customer auth |
 | POST | `/api/v1/users/me/addresses` | Create address | Customer auth |
 | PATCH | `/api/v1/users/me/addresses/:id` | Update address | Customer auth |
-| DELETE | `/api/v1/users/me/addresses/:id` | Delete address | Customer auth |
+| DELETE | `/api/v1/users/me/addresses/:id` | Delete address (bodyless DELETE) | Customer auth |
 | GET | `/api/v1/users/me/orders` | Customer order history | Customer auth |
 | GET | `/api/v1/reviews/me` | Customer review history | Customer auth |
 | POST | `/api/v1/reviews` | Create product review | Customer auth |
@@ -126,30 +128,34 @@ Admin UI should be served under `/admin/*` in the frontend and call `/api/v1/adm
 
 | Method | Endpoint | UI use |
 |---|---|---|
-| GET | `/api/v1/admin/products` | Product table |
-| GET | `/api/v1/admin/products/:id` | Product detail/editor |
+| GET | `/api/v1/admin/products` | Product table; query: `search` (name, description, **variant SKU**), `category`, `tags`, `inStock` (true=in stock, **false=out of stock**), **`isActive`**, `page`, `limit` |
+| GET | `/api/v1/admin/products/:id` | Product detail/editor (`isActive`, `metaDescription`, `isFeatured`) |
 | POST | `/api/v1/admin/products/import-csv` | CSV import |
-| POST | `/api/v1/admin/products` | Create product |
+| POST | `/api/v1/admin/products` | Create product — body requires `name`, `slug`, `description`, `categoryId`, `variants[]` (min 1). Admin UI: `AdminProductEditor` create flow includes **Category** + **URL Slug** fields (2026-06-06). |
 | PATCH | `/api/v1/admin/products/:id` | Update product |
-| DELETE | `/api/v1/admin/products/:id` | Delete product |
+| DELETE | `/api/v1/admin/products/:id` | Deactivate product (soft delete — sets `isActive: false`). UI label: **Deactivate**; reversible via restore/`PATCH isActive`. |
+| DELETE | `/api/v1/admin/products/:id/permanent` | Permanently delete product (hard delete — irreversible). UI: **Delete Permanently** in row actions menu (`AdminRowActionsMenu`). Requires `products:write`. Fails with **409** if order history or reviews exist. Clears hosted media and cart line items first. |
 | POST | `/api/v1/admin/products/:id/variants` | Create variant |
 | PATCH | `/api/v1/admin/products/:id/variants/:variantId` | Update variant |
 | DELETE | `/api/v1/admin/products/:id/variants/:variantId` | Delete variant |
-| POST | `/api/v1/admin/products/:id/images` | Add product image |
+| POST | `/api/v1/admin/products/:id/images` | Add product image by external HTTPS URL |
+| POST | `/api/v1/admin/products/:id/images/upload` | Batch multipart upload (max 5 MiB each; optional `altText`; sort order server-assigned). Returns one image or `{ items: [...] }`. Auto R2 when `MEDIA_STORAGE_PROVIDER=r2`. |
 | PATCH | `/api/v1/admin/products/:id/images/reorder` | Reorder images |
-| DELETE | `/api/v1/admin/products/:id/images/:imageId` | Delete image |
-| GET | `/api/v1/admin/categories` | Category table |
+| DELETE | `/api/v1/admin/products/:id/images/:imageId` | Delete image (removes R2 object or legacy VPS file when hosted) |
+| GET | `/api/v1/admin/categories` | Category table; query: `search`, `isActive`, `page`, `limit` |
+| GET | `/api/v1/admin/categories/:id` | Category detail/editor |
 | POST | `/api/v1/admin/categories` | Create category |
-| PATCH | `/api/v1/admin/categories/:id` | Update category |
-| DELETE | `/api/v1/admin/categories/:id` | Delete category |
+| PATCH | `/api/v1/admin/categories/:id` | Update category (`parentId`/`imageUrl` nullable to clear) |
+| DELETE | `/api/v1/admin/categories/:id` | Soft-delete (deactivate) category |
+| DELETE | `/api/v1/admin/categories/:id/permanent` | Permanent hard-delete category (409 if any products reference it). Policy registry: `categories:write`, Layer A. Bodyless DELETE. |
 
 ### Orders, shipping, returns, invoices
 
 | Method | Endpoint | UI use |
 |---|---|---|
-| GET | `/api/v1/admin/orders` | Orders table |
+| GET | `/api/v1/admin/orders` | Orders table; query: `status`, `search`, `paymentMode` (PREPAID\|COD), `sort` (newest\|oldest), `from`, `to`, `page`, `limit` |
 | GET | `/api/v1/admin/orders/board` | Pipeline/kanban board |
-| GET | `/api/v1/admin/orders/export` | CSV export |
+| GET | `/api/v1/admin/orders/export` | CSV export; query: `from`, `to`, `status`, `search`, **`paymentMode`** |
 | GET | `/api/v1/admin/orders/:id` | Order detail |
 | GET | `/api/v1/admin/orders/:id/invoice.pdf` | Invoice download |
 | PATCH | `/api/v1/admin/orders/:id/status` | Status update — base guard: `orders:write`; setting status to `REFUNDED` additionally requires `orders:refund` (enforced in handler) |
@@ -179,13 +185,13 @@ Admin UI should be served under `/admin/*` in the frontend and call `/api/v1/adm
 | Method | Endpoint | UI use |
 |---|---|---|
 | GET | `/api/v1/admin/coupons/analytics` | Coupon analytics |
-| GET | `/api/v1/admin/coupons` | Coupon table |
+| GET | `/api/v1/admin/coupons` | Coupon table; query: `code`, `status`, `type` (PERCENTAGE_OFF\|FLAT_AMOUNT_OFF\|FREE_SHIPPING\|BUY_X_GET_Y), `from`, `to`, `page`, `limit` |
 | GET | `/api/v1/admin/coupons/:id` | Single coupon detail |
 | POST | `/api/v1/admin/coupons` | Create coupon |
 | PATCH | `/api/v1/admin/coupons/:id` | Update coupon |
 | PATCH | `/api/v1/admin/coupons/:id/status` | Pause/resume/status change |
-| DELETE | `/api/v1/admin/coupons/:id` | Soft-delete coupon |
-| POST | `/api/v1/admin/coupons/:id/restore` | Restore coupon |
+| DELETE | `/api/v1/admin/coupons/:id` | Soft-delete coupon (bodyless DELETE — no JSON body) |
+| POST | `/api/v1/admin/coupons/:id/restore` | Restore coupon (no request body) |
 | POST | `/api/v1/admin/coupons/:id/clone` | Clone coupon |
 | GET | `/api/v1/admin/coupons/:id/audit` | Coupon audit trail |
 
@@ -193,7 +199,8 @@ Admin UI should be served under `/admin/*` in the frontend and call `/api/v1/adm
 
 | Method | Endpoint | UI use |
 |---|---|---|
-| GET | `/api/v1/admin/reviews` | Review moderation queue |
+| GET | `/api/v1/admin/reviews/summary` | Approved-review KPIs: `averageRating`, star `distribution`, `totalApproved`; query `from`/`to` |
+| GET | `/api/v1/admin/reviews` | Review queue; query: `approved`, `ratingGte`, `ratingLte`, **`search`** (body, author name, **product name**), `from`, `to`, `page`, `limit` |
 | PATCH | `/api/v1/admin/reviews/:id/moderate` | Moderate review |
 | DELETE | `/api/v1/admin/reviews/:id` | Hard-delete review (`reviews:moderate`) |
 | GET | `/api/v1/admin/users` | Customer table |
@@ -204,9 +211,9 @@ Admin UI should be served under `/admin/*` in the frontend and call `/api/v1/adm
 | GET | `/api/v1/admin/users/:id/notes` | List admin notes for customer |
 | POST | `/api/v1/admin/users/:id/notes` | Create admin note (`users:write`) |
 | DELETE | `/api/v1/admin/users/:id/notes/:noteId` | Delete admin note (`users:write`) |
-| GET | `/api/v1/admin/shipments` | Shipment list with filters |
+| GET | `/api/v1/admin/shipments` | Shipment list; query: `status`, `search` (AWB or order number), `awbNumber`, `orderId`, `from`, `to`; items include `customerName` |
 | GET | `/api/v1/admin/shipments/:id` | Single shipment detail |
-| GET | `/api/v1/admin/payments` | Payment list with filters |
+| GET | `/api/v1/admin/payments` | Payment list; query: `status`, `method`, `orderId`, **`search`** (order number, provider payment ID, customer name/email), `from`, `to` |
 | GET | `/api/v1/admin/payments/:id` | Single payment detail |
 
 ### Analytics and reliability
@@ -231,16 +238,16 @@ Admin UI should be served under `/admin/*` in the frontend and call `/api/v1/adm
 
 | Method | Endpoint | UI use |
 |---|---|---|
-| GET | `/api/v1/admin/settings/shipping` | Shipping settings |
-| PATCH | `/api/v1/admin/settings/shipping` | Update shipping settings |
-| GET | `/api/v1/admin/settings/store` | Store profile settings |
-| PATCH | `/api/v1/admin/settings/store` | Update store profile |
-| GET | `/api/v1/admin/settings/notifications` | Notification settings |
-| PATCH | `/api/v1/admin/settings/notifications` | Update notification settings |
-| GET | `/api/v1/admin/settings/inventory` | Inventory defaults |
-| PATCH | `/api/v1/admin/settings/inventory` | Update inventory defaults |
-| GET | `/api/v1/admin/settings/cod` | COD settings |
-| PATCH | `/api/v1/admin/settings/cod` | Update COD settings |
+| GET | `/api/v1/admin/settings/shipping` | Shipping settings (merchant admin) |
+| PATCH | `/api/v1/admin/settings/shipping` | Update shipping settings (merchant admin) |
+| GET | `/api/v1/admin/settings/store` | Store profile settings (merchant admin) |
+| PATCH | `/api/v1/admin/settings/store` | Update store profile (merchant admin) |
+| GET | `/api/v1/admin/settings/notifications` | Notification settings (deprecated in frontend; ops config used instead) |
+| PATCH | `/api/v1/admin/settings/notifications` | Update notification settings (deprecated in frontend; ops config used instead) |
+| GET | `/api/v1/admin/settings/inventory` | Inventory defaults (merchant admin) |
+| PATCH | `/api/v1/admin/settings/inventory` | Update inventory defaults (merchant admin) |
+| GET | `/api/v1/admin/settings/cod` | COD settings (merchant admin) |
+| PATCH | `/api/v1/admin/settings/cod` | Update COD settings (merchant admin) |
 
 ### Merchant admin invite (ops-authenticated + public setup)
 

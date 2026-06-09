@@ -6,6 +6,18 @@ export function formatPaise(paise: number): string {
   return formatPrice(paise);
 }
 
+export function formatCouponUsageLabel(
+  usesCount: number | null | undefined,
+  maxUsesTotal: number | null | undefined,
+): string {
+  const used = Number.isFinite(Number(usesCount)) ? Number(usesCount) : 0;
+  const limit =
+    maxUsesTotal != null && Number.isFinite(Number(maxUsesTotal))
+      ? String(maxUsesTotal)
+      : "∞";
+  return `${used} / ${limit}`;
+}
+
 export function formatAdminDate(iso: string): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) {

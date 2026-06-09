@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense } from "react";
 import { AdminGuestOnly } from "@/components/auth/AdminGuestOnly";
 import { AdminLoginForm } from "@/components/auth/AdminLoginForm";
@@ -10,14 +10,17 @@ import { useAuthStore } from "@/stores/auth";
 import { resetAuthSessionRestoreState } from "@/hooks/use-auth-session-restore";
 
 function AdminLoginContent() {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const setSession = useAuthStore((state) => state.setSession);
   const enrollmentHint = searchParams.get("mfaEnrollment") === "1";
 
   const handleSuccess = async (session: AuthSession) => {
-    resetAuthSessionRestoreState("admin");
+    resetAuthSessionRestoreState();
     setSession(session.accessToken, session.user);
-    window.location.assign("/admin");
+    // Keep the in-memory session — a hard reload would wipe Zustand and force
+    // cookie restore, which races with guest restore on this page.
+    router.replace("/admin");
   };
 
   return (

@@ -42,6 +42,8 @@ If `diff` output is non-empty, re-sync and commit the updated `.agents/rules/dev
    - If backend is not fully ready, STOP and guide the user through backend setup first per `README.md` §Local Development Quickstart
 4. **Do not ask questions already answered in the project docs/checklists** (e.g. API URL, feature flags, or agreed delivery sequence).
 
+5. **Admin console patterns (2026-06-03):** Per-page `AdminDateRangePicker`; product editor → `isActive` / `metaDescription` / `isFeatured`; no mock labels in admin tables. See `docs/FRONTEND_DEV_LOG.md`.
+
 > This protocol is non-negotiable.
 
 ---
@@ -61,7 +63,7 @@ This is a **high-conversion e-commerce storefront** built as a headless frontend
 - **Forms:** React Hook Form + Zod resolvers
 - **Validation:** Zod (shared schemas between client and server)
 - **Images:** `next/image` exclusively — never raw `<img>` tags
-- **Fonts:** Google Fonts via `next/font` (self-hosted, no external requests)
+- **Fonts:** **Inter** via `next/font/google` in `lib/fonts.ts` (self-hosted subset; sitewide sans + headings). Do not add a second body/heading webfont without explicit approval.
 
 ---
 
@@ -535,7 +537,7 @@ Required delivery sequence (6 tiers, strict order):
 1. **Foundation** — auth bootstrap, refresh-on-401, shared API client, dual-envelope response parser, `error.code` mapper, permission-aware nav scaffold, Zustand stores (auth + cart).
 2. **Ops control plane surfaces** — session bootstrap (`GET /ops/session`), load-shed two-step (request `POST /ops/load-shed` → separate approve/reject `POST /ops/approvals/:id/confirm|reject`), approvals queue, audit timeline, config overview/stored/save screens with masked values only.
 3. **Admin read surfaces** — dashboard KPIs/charts, orders list/detail, inventory list, product list + categories, customer index + CRM view. Build before mutations so you have real data to validate against.
-4. **Admin mutation surfaces** — ship action (run shipping provider dry-run simultaneously), Razorpay PREPAID checkout (run Razorpay test payment dry-run simultaneously), COD checkout, cancel/refund (async — UI must show pending-refund state until worker finalises), COD collection, return request actions, stock adjustment, settings (shipping/store/notifications/inventory/cod), coupon lifecycle (create → edit → pause/resume → soft-delete → restore; audit log per coupon via `GET .../coupons/:id/audit`; handle `RATE_LIMIT_EXCEEDED` 429 gracefully on write actions; `BUY_X_GET_Y` type hidden in forms until v2.2; deleted coupons remain visible in list with restore action — hard delete does not exist).
+4. **Admin mutation surfaces** — ship action, checkout flows, cancel/refund, COD collection, return requests, stock adjustment, settings, coupon lifecycle, **product deactivate** (`DELETE /admin/products/:id`) + **permanent delete** (`DELETE /admin/products/:id/permanent` via `AdminRowActionsMenu`), product variant delete, review hard-delete, customer ban/unban, admin notes. Admin write forms must use `useAdminFormValidation` + field highlighting for `VALIDATION_ERROR` (see `NEXTJS_FRONTEND_INTEGRATION_GUIDE.md` §2.1.1).
 5. **Reliability surfaces** — reconciliation issues, outbox dead-letter list + replay-preview + replay, inbox failures + replay-preview + replay, analytics (revenue, funnel, category breakdown, inventory alerts, notification delivery), Bull Board queue visibility.
 6. **Storefront customer journey surfaces** — catalogue (product list/detail/categories/search), cart (guest session + merge-on-login + coupon + pincode check), PREPAID checkout (full Razorpay sequence), COD checkout, order history/detail/tracking, customer auth (OTP + email + forgot-password + refresh loop + logout), user profile + addresses. Run Resend email dry-run during checkout slice. Feature-flagged surfaces (wishlist, reviews, coupons) only if `FEATURE_*_ENABLED` is active.
 
@@ -680,7 +682,7 @@ NEXT_PUBLIC_GTM_ID=
 # Payment (if client-side tokenization needed)
 NEXT_PUBLIC_RAZORPAY_KEY_ID=
 
-# Image CDN (if using external provider)
+# Image CDN — must match backend MEDIA_CDN_BASE_URL; proxies /api/v1/media/products/*
 NEXT_PUBLIC_IMAGE_CDN_URL=
 ```
 

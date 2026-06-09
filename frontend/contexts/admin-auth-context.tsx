@@ -8,11 +8,18 @@ import {
   type ReactNode,
 } from "react";
 import { useAdminSessionRestore } from "@/hooks/use-admin-session-restore";
-import { redirectToAdminLogin } from "@/lib/admin-auth-navigation";
+import {
+  redirectToAdminLogin,
+  redirectToAdminLoginIfNeeded,
+} from "@/lib/admin-auth-navigation";
 import { resolveAdminUser } from "@/lib/resolve-admin-user";
+import { AdminSessionRestoreGate } from "@/components/auth/AdminSessionRestoreGate";
 import { AdminLoadingBlock } from "@/components/admin/ui/admin-ui";
 import type { User } from "@/types/user";
 import type { AuthSessionRestoreStatus } from "@/hooks/use-auth-session-restore";
+
+/** Max time to block admin chrome while cookie restore runs (page may already be 200 from RSC). */
+const ADMIN_RESTORE_WATCHDOG_MS = 12_000;
 
 interface AdminAuthContextValue {
   status: AuthSessionRestoreStatus;
@@ -33,7 +40,7 @@ export function AdminAuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (status === "failed") {
-      redirectToAdminLogin();
+      redirectToAdminLoginIfNeeded();
     }
   }, [status]);
 
@@ -44,17 +51,33 @@ export function AdminAuthProvider({ children }: { children: ReactNode }) {
     }
   }, [status, adminUser]);
 
+  useEffect(() => {
+    if (status !== "checking" && status !== "restoring") {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      // Redirect only — avoid logoutLocalSession here, which would bump the restore
+      // nonce and restart cookie refresh while navigation is in flight (mobile loop).
+      redirectToAdminLoginIfNeeded();
+    }, ADMIN_RESTORE_WATCHDOG_MS);
+    return () => window.clearTimeout(timer);
+  }, [status]);
+
   if (status === "checking" || status === "restoring") {
     return (
-      <div className="admin-console flex min-h-screen items-center justify-center bg-background">
-        <AdminLoadingBlock label="Restoring admin session…" />
-      </div>
+      <AdminSessionRestoreGate
+        label={
+          status === "checking"
+            ? "Loading admin console…"
+            : "Restoring admin session…"
+        }
+      />
     );
   }
 
   if (status === "failed") {
     return (
-      <div className="admin-console flex min-h-screen items-center justify-center bg-background">
+      <div className="admin-console flex min-h-[100dvh] items-center justify-center bg-background px-4">
         <AdminLoadingBlock label="Redirecting to sign in…" />
       </div>
     );
@@ -62,9 +85,10 @@ export function AdminAuthProvider({ children }: { children: ReactNode }) {
 
   if (!sessionReady || !adminUser) {
     return (
-      <div className="admin-console flex min-h-screen items-center justify-center bg-background">
-        <AdminLoadingBlock label="Checking admin session…" />
-      </div>
+      <AdminSessionRestoreGate
+        label="Checking admin session…"
+        autoRedirectOnTimeout
+      />
     );
   }
 

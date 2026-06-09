@@ -28,34 +28,20 @@ export function getInternalApiBaseUrl(): string {
 
 /**
  * Base URL for browser `fetch` (client components, credentials: include).
- * Rewrites misconfigured cross-port local URLs to the current page origin.
+ * Always uses the current page origin so refresh cookies and Next `/api/v1` rewrites
+ * work on LAN/mobile hosts (e.g. `http://10.x.x.x:3101`), not `localhost` from env.
  */
 export function getBrowserApiBaseUrl(): string {
-  const configured = getConfiguredPublicApiBaseUrl();
-
-  if (configured.startsWith("/")) {
-    return configured;
-  }
-
   if (typeof window === "undefined") {
     return getInternalApiBaseUrl();
   }
 
-  try {
-    const apiUrl = new URL(configured);
-    const pageUrl = new URL(window.location.href);
-    const apiPath = apiUrl.pathname.replace(/\/$/, "");
-    const usesApiV1 =
-      apiPath === API_V1_PATH || apiPath.endsWith(API_V1_PATH);
-
-    if (usesApiV1 && apiUrl.origin !== pageUrl.origin) {
-      return `${pageUrl.origin}${API_V1_PATH}`;
-    }
-  } catch {
+  const configured = getConfiguredPublicApiBaseUrl();
+  if (configured.startsWith("/")) {
     return configured;
   }
 
-  return configured;
+  return `${new URL(window.location.href).origin}${API_V1_PATH}`;
 }
 
 /**

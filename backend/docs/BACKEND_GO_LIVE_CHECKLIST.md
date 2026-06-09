@@ -100,7 +100,7 @@ This checklist validates both:
 - [ ] `npm run test:slo-rules` passes (requires `promtool` in CI).
 - [ ] System-wide technical failure alerting is verified: at least one active Ops user and one active Admin user exist in DB (`role IN ('OPS', 'ADMIN')`, `isActive: true`). Resend (`RESEND_API_KEY` + `RESEND_FROM`) is configured for alert delivery.
 - [ ] `StoreSettings.storeName` and `StoreSettings.websiteUrl` are populated — alert emails carry client-identifying metadata. No env fallbacks.
-- [ ] Per-template primary notification channels are configured in `StoreSettings.primaryNotificationChannels` (DB JSON field). All 13 templates have primary channel set (`EMAIL` default). Merchant admin can override per-template via `PATCH /api/v1/admin/settings/notifications` with `primaryChannels` payload.
+- [ ] Per-template primary notification channels are configured in `StoreSettings.primaryNotificationChannels` (DB JSON field). All 13 templates have primary channel set (`EMAIL` default). Configure via direct API: `PATCH /api/v1/admin/settings/notifications` with `primaryChannels` payload (admin JWT). **Note:** Merchant admin UI panel for this was removed 2026-06-07 — use the API directly or ops console for channel provider toggles.
 
 ### 2.9 Ops control plane hardening
 - [ ] `/api/v1/ops/*` routes are protected by browser session cookie (`ops_session`) issued via email-OTP login — not by merchant admin JWT flow. Privileged write actions additionally require an email OTP challenge (`challengeId`, `otpCode`) in the request body — verified by `opsAuthGuard` before the action commits.
@@ -114,7 +114,7 @@ This checklist validates both:
 - [ ] Ops write actions persist tamper-evident audit-chain records (`OpsAuditLog` chain hash continuity).
 - [ ] Ops setup, endpoint usage, and frontend integration follow `docs/OPS_CONTROL_PLANE_GUIDE.md`.
 - [ ] Invite lifecycle boundaries are verified and documented: `GET /api/v1/admin/invites` (ops:read), `POST /api/v1/admin/invites` (ops:write), `POST /api/v1/admin/invites/:inviteId/revoke` (ops:write, OTP-gated), and `POST /api/v1/admin/invites/cleanup-expired` (ops:write) are all ops-authenticated Layer C controls; `POST /api/v1/admin/invites/consume` and `POST /api/v1/ops/invites/consume` are public, rate-limited, one-time token bootstrap endpoints only; neither consume endpoint creates an invite or grants permissions without a valid unexpired token.
-- [ ] Coupon soft delete and audit trail (`CouponAuditLog`) are operational: deleted coupons have `deletedAt` and `deletedBy` populated, are excluded from active coupon lists, and can be restored via `POST /api/v1/admin/coupons/:id/restore`. All mutations create corresponding audit log entries.
+- [ ] Coupon soft delete and audit trail (`CouponAuditLog`) are operational: deleted coupons have `deletedAt` and `deletedBy` populated, are excluded from active coupon lists, and can be restored via `POST /api/v1/admin/coupons/:id/restore` (**no request body**). `DELETE /api/v1/admin/coupons/:id` is **bodyless**. All mutations create corresponding audit log entries.
 - [ ] Coupon `CouponAuditLog` tamper-evident hash chain is intact: every row contains a non-null `chainHash` (SHA-256 of `previousChainHash + payload`), and the first row for each coupon has `previousChainHash = 'GENESIS'`. Verify via `GET /api/v1/admin/coupons/:id/audit` that consecutive entries chain correctly.
 - [ ] Per-admin coupon mutation rate limits are enforced by `AdminRateLimitStore` (Redis-backed, local fallback): create 10/min, update 20/min, status 20/min, delete 5/min, restore 5/min. Exceeding limits returns `429` with `RATE_LIMIT_EXCEEDED` code.
 - [ ] `FEATURE_COUPONS_ENABLED=true` is set only when the client actively wants promo codes. Disabled by default to prevent unused endpoint exposure.
@@ -167,7 +167,8 @@ This checklist validates both:
 
 ## 5) Queue, Worker, and Reconciliation Health
 
-- [ ] Worker processes are running and connected to Redis. Workers service uses `command: ["node", "bootstrap-workers.js"]` (not `npm run` — npm is stripped from production image).
+- [ ] Worker processes are running and connected to Redis. Workers service uses `command: ["node", "bootstrap-workers.js"]` (not `npm run` — npm is stripped from production image). Worker/API Redis clients use shared error listeners (`src/common/redis/redis-connection.ts`) — transient `ECONNRESET` should log as throttled warnings, not unhandled ioredis events.
+- [ ] API boot passes admin endpoint policy registry integrity (`assertAdminPolicyRegistryIntegrity`) — includes `DELETE /api/v1/admin/categories/:id/permanent` mapped to `categories:write`.
 - [ ] SQL injection guard passes: `npm run security:sql-injection-guard` must report zero unsafe raw Prisma patterns (`$executeRawUnsafe`, `$queryRawUnsafe`, `Prisma.raw`) in `src/`, `queues/`, `scripts/`.
 - [ ] Outbox/inbox flows process normally (no growing dead-letter backlog).
 - [ ] Reconciliation jobs run and produce expected outputs.

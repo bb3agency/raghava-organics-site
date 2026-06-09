@@ -1,12 +1,17 @@
 import Link from "next/link";
 import { Leaf, MapPin, Phone, Mail } from "lucide-react";
 import { APP_NAME } from "@/lib/constants";
+import type { CategoryWithMeta } from "@/lib/categories";
 
-export function Footer() {
+interface FooterProps {
+  categories: CategoryWithMeta[];
+}
+
+export function Footer({ categories }: FooterProps) {
   return (
     <footer className="border-t border-[#efe8e4] bg-[#faf3ef] text-[#23403d]">
-      <div className="mx-auto w-full max-w-[1440px] px-4 py-16 lg:px-8">
-        <div className="grid gap-12 sm:grid-cols-2 lg:grid-cols-4 lg:gap-8">
+      <div className="mx-auto w-full max-w-[1440px] px-4 py-10 sm:py-16 lg:px-8">
+        <div className="grid gap-8 sm:grid-cols-2 sm:gap-12 lg:grid-cols-4 lg:gap-8">
           {/* Brand column */}
           <div className="flex flex-col gap-6">
             <Link
@@ -18,7 +23,7 @@ export function Footer() {
               {APP_NAME}
             </Link>
             <p className="text-sm font-medium leading-relaxed text-[#767676]">
-              Farm-fresh organic produce delivered to your door. Trusted by
+              Farm-fresh chemical free produce delivered to your door. Trusted by
               families across India for quality and purity.
             </p>
             <div className="flex gap-3">
@@ -36,26 +41,30 @@ export function Footer() {
 
           {/* Quick links */}
           <div>
-            <h3 className="mb-6 font-heading text-lg font-bold text-[#23403d]">
+            <h3 className="mb-4 font-heading text-base font-bold text-[#23403d] sm:mb-6 sm:text-lg">
               Quick Links
             </h3>
-            <ul className="space-y-4 text-sm font-bold text-[#767676]">
-              {[
-                { label: "Shop All", href: "/products" },
-                { label: "Fresh Vegetables", href: "/categories/fresh-vegetables" },
-                { label: "Fresh Fruits", href: "/categories/fruits" },
-                { label: "Special Offers", href: "/products?sort=featured" },
-                { label: "My Account", href: "/dashboard" },
-              ].map((link) => (
-                <li key={link.href}>
+            <ul className="space-y-3 text-sm font-bold text-[#767676] sm:space-y-4">
+              <li>
+                <Link href="/products" className="transition-colors hover:text-[#ec6e55]">
+                  Shop All
+                </Link>
+              </li>
+              {categories.slice(0, 3).map((cat) => (
+                <li key={cat.slug}>
                   <Link
-                    href={link.href}
+                    href={`/categories/${cat.slug}`}
                     className="transition-colors hover:text-[#ec6e55]"
                   >
-                    {link.label}
+                    {cat.name}
                   </Link>
                 </li>
               ))}
+              <li>
+                <Link href="/products?sort=popularity" className="transition-colors hover:text-[#ec6e55]">
+                  Special Offers
+                </Link>
+              </li>
             </ul>
           </div>
 
@@ -96,8 +105,8 @@ export function Footer() {
               </li>
               <li className="flex items-center gap-3">
                 <Phone className="size-5 shrink-0 text-[#ec6e55]" aria-hidden />
-                <a href="tel:+919000000000" className="transition-colors hover:text-[#ec6e55]">
-                  +91 90000 00000
+                <a href="tel:+919440445006" className="transition-colors hover:text-[#ec6e55]">
+                  +91 94404 45006
                 </a>
               </li>
               <li className="flex items-center gap-3">
@@ -111,10 +120,10 @@ export function Footer() {
         </div>
 
         {/* Bottom bar */}
-        <div className="mt-16 flex flex-col items-center justify-between gap-4 border-t border-[#efe8e4] pt-8 text-sm font-medium text-[#767676] sm:flex-row">
+        <div className="mt-10 flex flex-col items-center justify-between gap-3 border-t border-[#efe8e4] pt-6 text-xs font-medium text-[#767676] sm:mt-16 sm:flex-row sm:gap-4 sm:pt-8 sm:text-sm">
           <p>&copy; {new Date().getFullYear()} {APP_NAME}. All rights reserved.</p>
           <div className="flex items-center gap-2">
-            <span className="flex items-center gap-1"><Leaf className="size-3 text-[#ec6e55]" /> Certified Organic</span>
+            <span className="flex items-center gap-1"><Leaf className="size-3 text-[#ec6e55]" /> 100% Chemical Free</span>
             <span className="hidden sm:inline">&bull;</span>
             <span className="hidden sm:flex items-center gap-1">Pesticide Free</span>
             <span className="hidden sm:inline">&bull;</span>

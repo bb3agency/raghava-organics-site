@@ -1,4 +1,5 @@
 import { refreshAccessToken } from "@/lib/auth-api";
+import { getCurrentUser } from "@/lib/users-api";
 import { parseAccessTokenClaims } from "@/lib/jwt-utils";
 import type { User } from "@/types/user";
 
@@ -6,6 +7,11 @@ export type AuthSessionRestoreResult =
   | { ok: true; accessToken: string; user: User }
   | { ok: false; reason: "unauthorised" | "invalid_token" };
 
+/**
+ * Builds a minimal user from the JWT claims when the API is not yet reachable.
+ * Profile fields (name, email, phone) are null — callers should hydrate from
+ * GET /users/me whenever possible.
+ */
 export function buildUserFromAccessToken(accessToken: string): User | null {
   const claims = parseAccessTokenClaims(accessToken);
   if (!claims?.sub) {
@@ -55,16 +61,41 @@ function refreshAccessTokenOnce(): Promise<{ accessToken: string }> {
 }
 
 /**
- * Restores any authenticated session from the httpOnly refresh_token cookie.
- * Single in-flight refresh so React Strict Mode cannot consume the token twice.
+ * Restores an authenticated session from the httpOnly refresh_token cookie.
+ *
+ * After a successful token refresh, this fetches the full user profile from
+ * GET /users/me so the restored User has real name/email/phone (not null stubs).
+ * Single in-flight refresh prevents double-consumption in React Strict Mode.
  */
-export async function restoreAuthSessionFromCookie(): Promise<AuthSessionRestoreResult> {
+export interface RestoreAuthSessionOptions {
+  /**
+   * When false, uses JWT claims only (faster; avoids blocking admin shell on GET /users/me).
+   * Admin console only needs role/permissions from the access token.
+   */
+  hydrateProfile?: boolean;
+}
+
+export async function restoreAuthSessionFromCookie(
+  options: RestoreAuthSessionOptions = {},
+): Promise<AuthSessionRestoreResult> {
+  const hydrateProfile = options.hydrateProfile ?? true;
+
   try {
     const refreshed = await refreshAccessTokenOnce();
-    const user = buildUserFromAccessToken(refreshed.accessToken);
-    if (!user) {
+    const minimal = buildUserFromAccessToken(refreshed.accessToken);
+    if (!minimal) {
       return { ok: false, reason: "invalid_token" };
     }
+
+    let user: User = minimal;
+    if (hydrateProfile) {
+      try {
+        user = await getCurrentUser(refreshed.accessToken);
+      } catch {
+        // Use sparse user — profile will be hydrated on next navigation or component mount.
+      }
+    }
+
     return { ok: true, accessToken: refreshed.accessToken, user };
   } catch {
     return { ok: false, reason: "unauthorised" };

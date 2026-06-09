@@ -19,14 +19,13 @@ export function MainNav() {
   const router = useRouter();
   const user = useAuthStore((s) => s.user);
   const accessToken = useAuthStore((s) => s.accessToken);
-  const clearSession = useAuthStore((s) => s.clearSession);
   const clearCart = useCartStore((s) => s.clearCart);
   
   const cartItems = useCartStore((s) => s.items);
   const cartCount = cartItems.reduce((sum, item) => sum + item.quantity, 0);
   const cartTotal = cartItems.reduce((sum, item) => sum + item.lineTotal, 0);
   
-  const isSignedIn = Boolean(user);
+  const isSignedIn = Boolean(accessToken);
   const showAdmin = canAccessAdmin(user);
 
   const onSignOut = async () => {
@@ -35,18 +34,18 @@ export function MainNav() {
     } catch {
       // Ignore API logout failures and clear client session anyway.
     } finally {
-      clearSession();
+      useAuthStore.getState().logoutLocalSession();
       clearCart();
       router.push("/login");
     }
   };
 
   return (
-    <div className="flex shrink-0 items-center gap-6">
+    <div className="flex shrink-0 items-center gap-3 sm:gap-6">
       {/* Account Menu */}
-      <div className="group relative flex items-center gap-2 cursor-pointer">
-        <div className="flex size-11 items-center justify-center rounded-full bg-[#eff5ee] text-[#23403d] transition-colors group-hover:bg-[#ec6e55] group-hover:text-white">
-          <User className="size-5" />
+      <div className="group relative hidden lg:flex items-center gap-2 cursor-pointer">
+        <div className="flex size-9 items-center justify-center rounded-full bg-[#eff5ee] text-[#23403d] transition-colors group-hover:bg-[#ec6e55] group-hover:text-white sm:size-11">
+          <User className="size-4 sm:size-5" />
         </div>
         
         <div className="hidden flex-col lg:flex">
@@ -96,9 +95,9 @@ export function MainNav() {
 
       {/* Mini Cart Trigger */}
       <Link href="/cart" className="group flex items-center gap-3">
-        <div className="relative flex size-11 items-center justify-center rounded-full bg-[#eff5ee] text-[#23403d] transition-colors group-hover:bg-[#ec6e55] group-hover:text-white">
-          <ShoppingCart className="size-5" />
-          <span className="absolute -right-1 -top-1 flex size-[18px] items-center justify-center rounded-full bg-[#ec6e55] text-[10px] font-bold leading-none text-white shadow-sm ring-2 ring-white transition-colors group-hover:bg-[#23403d]">
+        <div className="relative flex size-9 items-center justify-center rounded-full bg-[#eff5ee] text-[#23403d] transition-colors group-hover:bg-[#ec6e55] group-hover:text-white sm:size-11">
+          <ShoppingCart className="size-4 sm:size-5" />
+          <span className="absolute -right-1 -top-1 flex size-4 items-center justify-center rounded-full bg-[#ec6e55] text-[8px] font-bold leading-none text-white shadow-sm ring-2 ring-white transition-colors group-hover:bg-[#23403d] sm:size-[18px] sm:text-[10px]">
             {cartCount > 99 ? "99+" : cartCount}
           </span>
         </div>

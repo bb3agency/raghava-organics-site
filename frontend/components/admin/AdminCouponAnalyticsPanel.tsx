@@ -4,9 +4,11 @@ import { useCallback, useEffect, useState } from "react";
 import { AdminPagination } from "@/components/admin/AdminPagination";
 import { AdminSection } from "@/components/admin/AdminSection";
 import { useAuthenticatedApi } from "@/hooks/use-authenticated-api";
+import { useAdminDataRefreshEffect } from "@/hooks/use-admin-data-refresh-effect";
 import {
   buildAdminQuery,
   coercePaginatedResponse,
+  toIsoDateRange,
   type AdminCouponAnalyticsItem,
   readPaginatedItems,
   type PaginatedResponse,
@@ -14,7 +16,13 @@ import {
 import { formatPaise } from "@/lib/admin-format";
 import { getApiErrorMessage } from "@/lib/error-messages";
 
-export function AdminCouponAnalyticsPanel() {
+export function AdminCouponAnalyticsPanel({
+  from,
+  to,
+}: {
+  from?: string;
+  to?: string;
+} = {}) {
   const api = useAuthenticatedApi();
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
@@ -26,7 +34,12 @@ export function AdminCouponAnalyticsPanel() {
     setError(null);
     try {
       const response = await api<PaginatedResponse<AdminCouponAnalyticsItem>>(
-        `/admin/coupons/analytics${buildAdminQuery({ page, limit: 20 })}`,
+        `/admin/coupons/analytics${buildAdminQuery({
+          page,
+          limit: 20,
+          from: from ? toIsoDateRange(from) : undefined,
+          to: to ? toIsoDateRange(to, true) : undefined,
+        })}`,
       );
       setData(coercePaginatedResponse(response));
     } catch (err) {
@@ -35,11 +48,17 @@ export function AdminCouponAnalyticsPanel() {
     } finally {
       setLoading(false);
     }
-  }, [api, page]);
+  }, [api, page, from, to]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [from, to]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  useAdminDataRefreshEffect(load, ["coupons", "dashboard"]);
 
   const items = readPaginatedItems(data);
 

@@ -23,7 +23,7 @@ Use this map to keep AI/developer context small while ensuring no detail is lost
 - `docs/FRONTEND_DEV_LOG_TEMPLATE.md` — frontend slice-tracker template.
 - `docs/CLIENT_VPS_DEPLOYMENT_LOG_TEMPLATE.md` — VPS-phase execution log template.
 - `docs/OPS_CONTROL_PLANE_GUIDE.md` — detailed ops control-plane behavior.
-- Error handling canon: `docs/NEXTJS_FRONTEND_INTEGRATION_GUIDE.md` section `2.1` (frontend error-code handling matrix) + `docs/CLIENT_VPS_SETUP_GUIDE.md` section `19.1` (VPS/API error triage matrix).
+- Error handling canon: `docs/NEXTJS_FRONTEND_INTEGRATION_GUIDE.md` section `2.1` (frontend error-code handling matrix) + section `2.1.1` (admin form validation UX) + `docs/CLIENT_VPS_SETUP_GUIDE.md` section `19.1` (VPS/API error triage matrix).
 - `docs/PHASE7_VPS_DEPLOY_INCIDENT_PLAYBOOK.md` — real incident replay and deterministic remediation for Phase 7 VPS backend deploy.
 - `docs/templates/client-GITHUB_CD_SETUP.template.md` — per-client filled CD checklist (`GITHUB_CD_SETUP.md`).
 - `docs/HARDENING_HISTORY.md` — full engineering hardening narrative (reference-only during active delivery).

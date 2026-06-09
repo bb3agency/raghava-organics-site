@@ -41,7 +41,9 @@ Do **not** point `NEXT_PUBLIC_API_BASE_URL` at `http://localhost:3000/api/v1` wh
 | `BACKEND_PROXY_URL` | `http://127.0.0.1:3000` | Next.js rewrite target (`frontend/next.config.ts`) |
 | `INTERNAL_API_BASE_URL` | `http://127.0.0.1:3000/api/v1` | SSR, server actions, Vitest integration tests |
 
-Implementation: `frontend/lib/api-base.ts` (auto-corrects legacy cross-port public URL in the browser) + `frontend/lib/restore-auth-session.ts` (deduped `POST /auth/refresh` on load). Restart `npm run dev` after changing env.
+Implementation: `frontend/lib/api-base.ts` (auto-corrects legacy cross-port public URL in the browser) + `frontend/lib/restore-auth-session.ts` (deduped `POST /auth/refresh` on load). **`npm run dev` runs `scripts/ensure-backend-dev.mjs` first** — it probes `BACKEND_PROXY_URL/api/v1/health/live` and exits with start instructions if the Fastify API is down (prevents `ECONNREFUSED` proxy spam). Start backend via `backend/scripts/dev-up.cmd` or `cd backend && npm run dev` **before** the frontend. Restart `npm run dev` after changing env.
+
+**Mobile/LAN dev:** `next.config.ts` auto-adds non-internal IPv4 addresses to `allowedDevOrigins` (plus optional `ALLOWED_DEV_ORIGINS`). Sign in on the **same network URL** shown by `npm run dev` (e.g. `http://192.168.x.x:3101/admin/login`) — refresh cookies are host-scoped.
 
 Verification:
 
@@ -233,7 +235,7 @@ Use this matrix for both storefront and admin/ops frontend clients:
 
 | HTTP | `error.code` | Frontend handling |
 | --- | --- | --- |
-| 400 | `VALIDATION_ERROR` | Show field-level validation errors; do not retry automatically. |
+| 400 | `VALIDATION_ERROR` | Map `error.details.fields[]` to form inputs (`instancePath` → field key). Highlight fields (`data-admin-field`), scroll to first error, show inline + banner copy. Use shared helpers in `frontend/lib/admin-form-validation.ts` + `useAdminFormValidation()`. Do not retry automatically. |
 | 401 | `TOKEN_EXPIRED` | Run refresh-once flow (`/api/v1/auth/refresh`), retry original request once, then force login if refresh fails. |
 | 401 | `UNAUTHORISED` / `INVALID_CREDENTIALS` | Show auth error; redirect/login prompt for protected pages. |
 | 403 | `FORBIDDEN` | Hide/disable unauthorized actions and show access-denied state. |
@@ -245,6 +247,20 @@ Use this matrix for both storefront and admin/ops frontend clients:
 | 500/502/503 | `INTERNAL_ERROR` and upstream failures | Show generic retry-safe error, record telemetry, and provide support escalation path. |
 
 Operational safety rule: webhook endpoints are not browser calls; frontend should never attempt client-side retries against `/api/v1/payments/webhook`, `/api/v1/shipping/webhook`, or `/api/v1/notifications/webhook/*`.
+
+#### 2.1.1 Admin form validation UX (required)
+
+All merchant admin write forms must surface validation failures visibly — never show only a generic banner.
+
+| Piece | Location | Rule |
+| --- | --- | --- |
+| Field map | `lib/admin-form-validation.ts` | Parse `ApiError` `VALIDATION_ERROR` → `details.fields[]`; normalize JSON Schema paths (`variants/0/sku` → `sku`). |
+| Hook | `hooks/use-admin-form-validation.ts` | `validateRequired`, `handleSubmitError`, `fieldClassName`, `applyFieldErrors`. |
+| Wrapper | `components/admin/AdminFormField.tsx` | Label + inline error; `data-admin-field-label` for scroll target. |
+| Inputs | Each field | `data-admin-field="<key>"`; error ring uses `!border-destructive` so trailing border utilities cannot override. |
+| Banner | Form header | `formatAdminValidationSummary()` appends field names/messages to the generic copy. |
+
+**Wired forms (2026-06-06):** `AdminProductEditor` (includes required **Category** + **URL Slug** on create), `AdminCategoryEditor`, `AdminCouponForm`. Product create requires `categoryId` — if categories fail to load (backend down), show the load warning and block submit with a highlighted Category field.
 
 For provider-facing retry/backoff boundaries (timeouts, retry eligibility, and non-idempotent safeguards), follow `docs/THIRD_PARTY_INTEGRATIONS_SETUP_AND_KEY_MANAGEMENT_GUIDE.md` section `2.1`.
 
@@ -414,24 +430,21 @@ Use the following backend routes when building a dedicated ops frontend (or ops 
 
 For full operational setup and security requirements, follow `docs/OPS_CONTROL_PLANE_GUIDE.md`.
 
-### 4.3 Admin notification settings integration
+### 4.3 Admin notification settings — ops-only (2026-06-07)
 
-Admin UI **must** expose notification settings management via these endpoints:
+> **Changed:** The merchant admin UI panel for notification channel configuration has been removed. Notification provider management is now **ops-only** via the ops console (`/ops/config`). Do **not** rebuild a notification settings panel in the merchant admin.
 
-- `GET /api/v1/admin/settings/notifications` — read current notification configuration including:
-  - Channel enable toggles (`emailEnabled`, `smsEnabled`, `whatsappEnabled`)
-  - Per-template primary channels (`primaryChannels: Record<string, "EMAIL" | "SMS" | "WHATSAPP">`)
-  - SMS provider settings and merchant SMS templates (`smsTemplates`)
-- `PATCH /api/v1/admin/settings/notifications` — update notification settings with `primaryChannels` payload
+**What moved to ops config:**
+- Provider availability toggles (`NOTIFY_EMAIL_ENABLED`, `NOTIFY_SMS_ENABLED`, `NOTIFY_WHATSAPP_ENABLED`)
+- SMS provider selection (`SMS_PROVIDER`: `msg91` / `fast2sms` / `noop`)
+- Provider API keys (stored encrypted in `OpsConfigSecret`)
 
-**Per-template primary channel requirements:**
-- Display 13 templates: `OrderConfirmed`, `PaymentFailed`, `OrderShipped`, `OutForDelivery`, `OrderDelivered`, `OrderCancelled`, `LowStockAlert`, `OtpVerification`, `NotificationDeliveryFailure`, `PasswordReset`, `AdminInviteSetup`, `OpsInviteSetup`, `OpsActionOtp`.
-- Each template has a radio selection for primary channel: `EMAIL`, `SMS`, or `WHATSAPP`.
-- Default for all templates is `EMAIL`.
-- Validation: Only enabled channels (per `emailEnabled`, `smsEnabled`, `whatsappEnabled`) should be selectable.
-- UI should surface that there is **no fallback** — if the selected primary channel fails, the notification fails and triggers an alert.
+**What remains DB-backed (configurable via direct API, no merchant admin UI):**
+- `StoreSettings.primaryNotificationChannels` — per-template channel routing (13 templates, `EMAIL` default)
+- `StoreSettings.notifyEmailEnabled` / `notifySmsEnabled` / `notifyWhatsappEnabled` — DB-layer channel overrides
+- Managed via `PATCH /api/v1/admin/settings/notifications` (admin JWT) — no merchant admin UI surface
 
-**Important UX pattern:** When merchant admin selects `SMS` or `WHATSAPP` as primary for OTP templates (`OtpVerification`, `PasswordReset`), ensure corresponding channel is properly configured with provider credentials before allowing save.
+**Rationale:** Provider infrastructure gates (which channels can work) belong in ops. Merchants set these once at go-live and rarely change them. Consolidating to ops reduces confusion between infrastructure-layer controls and app-layer routing.
 
 ---
 
@@ -462,8 +475,19 @@ Storefront rendering model (`TRD.md` §12.1): use ISR patterns (`generateStaticP
 
 ### 5.4 Reviews (`§7.7`) — if `FEATURE_REVIEWS_ENABLED`
 
+- `GET /reviews/recent` (public, latest merchant-approved reviews for homepage testimonials; query `limit`, default 3, max 10). Returns only reviews with non-empty **trimmed** body on **active** products, ordered by `updatedAt` desc (approval time). Payload omits `userId`, `orderId`, `approved`; includes `productName` / `productSlug`.
 - `GET /reviews/product/:slug` (public, moderated list)
 - `GET /reviews/me`, `POST /reviews` (purchase validation server-side)
+
+**Storefront wiring (this repo):**
+
+| Surface | Component / module | API |
+| --- | --- | --- |
+| Homepage testimonials | `TestimonialsSection` → `lib/storefront-reviews.ts` | `GET /reviews/recent?limit=3` |
+| PDP reviews | `ProductReviewsSection` → `lib/reviews-api.ts` | `GET /reviews/product/:slug` |
+| Shared formatters | `lib/review-display.ts` | Privacy-friendly names, dates, star clamp |
+
+When `FEATURE_REVIEWS_ENABLED=false`, `/reviews/recent` and `/reviews/product/:slug` return empty lists — hide testimonials and PDP review blocks (homepage section returns `null` automatically).
 
 ### 5.5 Orders & payments (`§7.8`)
 
@@ -482,13 +506,25 @@ Invoice response contract notes:
 - Frontend should show download CTA only when `invoice?.hasPdf === true`.
 - Admin invoice download uses `GET /api/v1/admin/orders/:id/invoice.pdf` with standard admin auth/permissions.
 
-**COD flow:** when `paymentMode: 'COD'` is sent, the backend checks `isCodEnabled` in store settings, skips the Razorpay payment step, and returns the order already in `CONFIRMED` status. Do **not** call `/payments/initiate` for COD orders — it will fail with `VALIDATION_ERROR`.
+**COD flow:** when `paymentMode: 'COD'` is sent, the backend checks `isCodEnabled` in store settings, skips the Razorpay payment step, and returns the order already in `CONFIRMED` status. Do **not** call `/payments/initiate` for COD orders — it will fail with `VALIDATION_ERROR`. After COD create, backend enqueues **`process-order-update`** (worker) so **OrderConfirmed** email + invoice generation match the PREPAID path.
 
 ### 5.6 Customer profile and addresses (`§7.3`)
 
-- `GET /users/me`, `PATCH /users/me`
-- `GET /users/me/addresses`, `POST /users/me/addresses`, `PATCH /users/me/addresses/:id`, `DELETE /users/me/addresses/:id`
-- `GET /users/me/orders`
+**Database:** `Address` table (Prisma `model Address`) — `userId`, `fullName`, `phone`, `line1`, `line2?`, `city`, `state`, `pincode`, `isDefault`, timestamps. Created in migration `0_init`.
+
+**API (customer JWT, role `CUSTOMER`):**
+
+- `GET /users/me`, `PATCH /users/me` — banned users receive **401** on `GET /users/me` after login refresh hydrates profile.
+- `GET /users/me/addresses` → `{ items, meta }` (not a bare array)
+- `POST /users/me/addresses` — body: `fullName`, `phone`, `line1`, `city`, `state`, `pincode`; optional `line2`, `isDefault`
+- `PATCH /users/me/addresses/:id`, `DELETE /users/me/addresses/:id` (bodyless DELETE)
+- `GET /users/me/orders` → `{ items, meta }` includes `paymentMode` and `invoice.hasPdf` when present
+
+**Checkout integration:**
+
+- `POST /orders` accepts **`addressId`** (saved address owned by user) **or** inline **`shippingAddress`** snapshot (`anyOf` in schema).
+- Storefront: Settings saves addresses via `POST /users/me/addresses`; checkout selects a saved row → send `addressId`; optional “Save this address” on new entry creates address then orders with `addressId`.
+- Do **not** send `line2: null` in JSON — omit the field when empty (`additionalProperties: false` on body schemas).
 
 UI should treat these as authenticated customer-only resources and apply the same refresh-retry policy as other protected routes.
 
@@ -500,7 +536,7 @@ UI should treat these as authenticated customer-only resources and apply the sam
 
 ### 6.1 Razorpay (PREPAID) sequence
 
-1. **`POST /orders`** with `paymentMode: 'PREPAID'` (or omitted) → order in **`PENDING_PAYMENT`**.
+1. **`POST /orders`** with `paymentMode: 'PREPAID'` (or omitted) and `addressId` or `shippingAddress` → order in **`PENDING_PAYMENT`**.
 2. **`POST /payments/initiate`** → receive Razorpay **`order_id`** (provider id).
 3. Load **`https://checkout.razorpay.com/v1/checkout.js`** from Razorpay CDN (**not** bundled npm — `TRD.md` §12.1 PCI note).
 4. Open Razorpay Checkout with **`key` = `NEXT_PUBLIC_RAZORPAY_KEY_ID`** and **`order_id`** from step 2.
@@ -516,8 +552,8 @@ Optional **`RISK_VELOCITY_ENABLED`** may throttle initiate per user/hour (`TRD.m
 ### 6.2 COD (Cash on Delivery) sequence
 
 1. Check `GET /api/v1/admin/settings/cod` (or rely on feature-flag derived from settings at storefront build) to decide whether to show the COD option at checkout.
-2. **`POST /orders`** with `paymentMode: 'COD'` → order immediately returns in **`CONFIRMED`** status — **no Razorpay steps needed**.
-3. Display order confirmation with payment note "Cash on Delivery".
+2. **`POST /orders`** with `paymentMode: 'COD'` and `addressId` or `shippingAddress` → order immediately returns in **`CONFIRMED`** status — **no Razorpay steps needed**.
+3. Redirect to storefront **`/checkout/success?orderId=`** (confirmation page); worker sends **OrderConfirmed** email asynchronously.
 4. COD payment record semantics: backend creates COD payment as `CREATED`; it transitions to `CAPTURED` when collection is confirmed in backend flows.
 5. Shipment booking remains manual-only for COD and PREPAID: admin must trigger `POST /api/v1/admin/orders/:id/ship`.
 6. On error **`VALIDATION_ERROR`** with message mentioning COD disabled → hide COD option and prompt for prepaid.
@@ -555,6 +591,28 @@ Never call `.map()` / `.filter()` on a raw API response without confirming it is
 
 Public `GET /products` and PDP require **`isActive: true`** and at least one **active variant with `inventory.quantity > 0`** (default `inStock=true`). There is no separate `isPublished` flag. When creating products in admin, set **Initial stock qty** per variant (maps to `variants[].quantity` on `POST /admin/products`) or add stock via inventory admin afterward — otherwise the product will not appear on `/products` or `/products/:slug`.
 
+### 7.2 Product images (Cloudflare R2 + CDN)
+
+**Storage model:** Postgres `ProductImage` stores metadata + **public CDN URL only** (no bytes in DB). Production uploads **automatically** sync to **Cloudflare R2** (`MEDIA_STORAGE_PROVIDER=r2`) via S3-compatible `PutObject` on each admin save. Local dev uses `MEDIA_STORAGE_PROVIDER=local` and optional `GET /api/v1/media/products/*` origin serve.
+
+| Concern | Detail |
+| --- | --- |
+| Admin upload | `POST /api/v1/admin/products/:id/images/upload` — `multipart/form-data`, one or more `file` parts, optional `altText`. **Sort order** is assigned server-side (`max(sortOrder)+1` per file in batch). Response: one image object, or `{ items: [...] }` when multiple files. |
+| Size / type | **5 MiB max** per file; JPEG, PNG, WebP, GIF (magic-byte validated server-side) |
+| External URL | `POST /api/v1/admin/products/:id/images` — JSON `{ url, altText, sortOrder }` for legacy `https://` URLs |
+| Public serve (prod) | R2 bucket + `R2_PUBLIC_BASE_URL` (custom domain on bucket recommended) |
+| Public serve (local) | `GET /api/v1/media/products/:productId/:filename` — no auth; cache headers for Cloudflare |
+| Frontend resolve | `resolveProductImageUrl()` in `frontend/lib/media-url.ts`; catalog via `mapProduct()` |
+| Admin UI | `AdminProductEditor` + `lib/admin-product-media.ts` — multi-select file picker on product edit |
+| Ops config | Ops console → **Product Media** domain (`media`) — `MEDIA_STORAGE_PROVIDER`, `R2_*` (DB overlay, restart required) |
+| Admin shell | `AdminConsoleShell` + `contexts/admin-shell-context.tsx` — layout + export pub/sub only; **no** global date range |
+| Date range | `AdminDateRangePicker.tsx` — presets (Today, 7d, 30d, 90d), custom range, `prevRange` / `trendPeriodLabel` for KPI comparison copy |
+| Env (backend) | **Ops UI** → Product Media (`MEDIA_STORAGE_PROVIDER`, `R2_*`) — not bootstrap `.env` |
+| Env (frontend) | `NEXT_PUBLIC_IMAGE_CDN_URL` — must match `R2_PUBLIC_BASE_URL` |
+| Preflight | `npm run verify:r2-media` + `/health/ready` missing-keys |
+
+**Cloudflare setup:** Create R2 bucket, API token (Object Read & Write), bind custom domain (e.g. `cdn.shop.example.com`) to the bucket. Set `R2_PUBLIC_BASE_URL` to that hostname. Cache aggressively at the edge; do not cache admin upload routes.
+
 ---
 
 ## 8. Feature flags (must align with backend `.env`)
@@ -567,7 +625,7 @@ Mirror backend toggles (`ECOM_MASTER.md` §12.2, `.env.example`):
 - `FEATURE_GST_INVOICING_ENABLED`
 - `FEATURE_RESPONSE_ENVELOPE_ENABLED` — when `true`, all success JSON is wrapped in `{ success, data, meta? }`
 
-Hide UI affordances when disabled; backend still returns safe defaults (e.g. empty review lists).
+Hide UI affordances when disabled; backend still returns safe defaults (e.g. empty review lists). For reviews specifically: homepage `TestimonialsSection` and PDP `ProductReviewsSection` both degrade gracefully to hidden/empty states without client-side flag checks.
 
 ---
 
@@ -602,10 +660,12 @@ Prefix all paths with **`/api/v1/admin`**. All require **ADMIN JWT** + permissio
 | **Sales chart** | `GET .../dashboard/sales-chart` (`granularity`) | Hour / day / week trends |
 | **Top products** | `GET .../dashboard/top-products` (`limit`) | Best sellers slice |
 | **Product list** | `GET .../products` | Paginated catalogue management |
-| **Product create / edit** | `POST .../products`, `GET/PATCH .../products/:id`, `DELETE .../products/:id` | Full lifecycle; **DELETE** is **soft-delete** only (`TRD.md` §5.5) |
+| **Product create / edit** | `POST .../products`, `GET/PATCH .../products/:id`, `DELETE .../products/:id`, `DELETE .../products/:id/permanent` | Full lifecycle; PATCH/POST support `isActive`, `isFeatured`, `metaDescription` (short SEO text, max 500). **`DELETE .../:id`** = **Deactivate** (soft — reversible). **`DELETE .../:id/permanent`** = irreversible hard delete (`409` if orders/reviews). UI: `AdminProductEditor.tsx`, `AdminProductsList.tsx`, row menu `AdminRowActionsMenu.tsx`. Create form requires **Category**, **URL Slug**, variants. |
+| **Admin date filters** | Per-page local state + `AdminDateRangePicker` | Dashboard, Orders, Payments, Coupons, Reviews — not global shell state. KPI trends use `trendPeriodLabel` + `prevRange()` |
 | **Variants** | `POST .../products/:id/variants`, `PATCH .../products/:id/variants/:variantId` | Variant CRUD + inventory fields on variant |
 | **Bulk catalog** | `POST .../products/import-csv` | Multipart CSV — optional variant columns per `TRD.md` §7.9 |
-| **Categories** | `GET/POST .../categories`, `PATCH .../categories/:id`, `DELETE .../categories/:id` | Tree list, create, update, deactivate |
+| **Product images** | `POST .../products/:id/images/upload`, `POST .../products/:id/images`, `PATCH .../images/reorder`, `DELETE .../images/:imageId` | R2 auto-upload (5 MiB, batch) or HTTPS URL; reorder/delete in editor |
+| **Categories** | `GET/POST .../categories`, `GET/PATCH/DELETE .../categories/:id`, `DELETE .../categories/:id/permanent` | Dedicated `/admin/categories` page: KPI cards, search, status filter, paginated table, create/edit, deactivate, restore, permanent delete (`409` if products still reference category). Permanent delete is bodyless DELETE. |
 | **Stock overview** | `GET .../inventory` | All variants + quantities |
 | **Stock adjustment** | `PATCH .../inventory/:variantId` | Quantity + **lowStockThreshold** |
 | **Low-stock lens** | `GET .../inventory/low-stock` | Focus queue for replenishment (`BRD.md` AC‑11) |
@@ -615,6 +675,7 @@ Prefix all paths with **`/api/v1/admin`**. All require **ADMIN JWT** + permissio
 | Admin UI module | API | Operator capability |
 | --- | --- | --- |
 | **Order pipeline** | `GET .../orders` (`status`, `from`, `to`, `search`) | Operational queue with filters |
+| **Payments ledger** | `GET .../payments` (`status`, `from`, `to`, …) | Global payment list with `customerName`, `customerEmail` per row |
 | **Order 360°** | `GET .../orders/:id` | Items, payment, shipment, history, invoice metadata; `paymentMode` field distinguishes COD vs PREPAID |
 | **Manual status** | `PATCH .../orders/:id/status` | Controlled transitions — surface **`INVALID_STATUS_TRANSITION`** clearly |
 | **Create shipment** | `POST .../orders/:id/ship` | Triggers shipment via active provider — **AC‑08** |
@@ -629,9 +690,9 @@ Prefix all paths with **`/api/v1/admin`**. All require **ADMIN JWT** + permissio
 
 | Admin UI module | API | Operator capability |
 | --- | --- | --- |
-| **Coupons** | `GET/POST .../coupons`, `PATCH .../coupons/:id`, `PATCH .../coupons/:id/status`, `DELETE .../coupons/:id`, `POST .../coupons/:id/restore`, `GET .../coupons/:id/audit` | Full promo lifecycle including soft-delete + restore. Hard delete is never allowed. Audit log per coupon with tamper-evident chain. Write mutations enforce per-admin rate limits — surface `RATE_LIMIT_EXCEEDED` (429) to operator. Respect **`BUY_X_GET_Y`** rejection until v2.2. |
+| **Coupons** | `GET/POST .../coupons`, `PATCH .../coupons/:id`, `PATCH .../coupons/:id/status`, `DELETE .../coupons/:id`, `POST .../coupons/:id/restore`, `GET .../coupons/:id/audit` | Full promo lifecycle including soft-delete + restore. **`DELETE` and `restore` must not send a JSON body** — empty-body Fastify schemas previously caused false `VALIDATION_ERROR`. List usage column: compact `used / limit` via `formatCouponUsageLabel()`. Hard delete is never allowed. Audit log per coupon with tamper-evident chain. Write mutations enforce per-admin rate limits — surface `RATE_LIMIT_EXCEEDED` (429) to operator. Respect **`BUY_X_GET_Y`** rejection until v2.2. |
 | **Coupon analytics** | `GET .../coupons/analytics` | Redemption count + total discount totals |
-| **Reviews** | `GET .../reviews`, `PATCH .../reviews/:id/moderate` | Moderation queue when **`FEATURE_REVIEWS_ENABLED`** |
+| **Reviews** | `GET .../reviews`, `PATCH .../reviews/:id/moderate` | Moderation queue (`productName`, `productSlug`) when **`FEATURE_REVIEWS_ENABLED`** |
 | **Shipping settings** | `GET/PATCH .../settings/shipping` | Pickup pincode + MOV |
 | **Store profile** | `GET/PATCH .../settings/store` | Identity, GSTIN, FSSAI, branding inputs supported by API |
 | **Notification toggles** | `GET/PATCH .../settings/notifications` | Channel on/off |
@@ -729,33 +790,52 @@ Analytics/chart implementation should match TRD expectations (Recharts primitive
 **Frontend Requirements:**
 - Never store tokens in `localStorage` or `sessionStorage`
 - Access tokens stay in memory (Zustand/Redux store) — lost on page refresh by design
-- **On page refresh:** `AdminGuard` (via `restoreAuthSessionFromCookie()` / `useAdminSessionRestore`) and `AccountGuard` (via `useAccountSessionRestore`) must each attempt **one** shared deduped `POST /api/v1/auth/refresh` before redirecting to login. The refresh token cookie survives page reload. React Strict Mode double-mounts must not fire two parallel refreshes (backend rotates refresh tokens; the second call would fail with `401`). Implementation: `frontend/lib/restore-auth-session.ts`.
+- **On page refresh:** `AdminAuthProvider` inside `AdminConsoleShell` (via `useAdminSessionRestore` → `restoreAuthSessionFromCookie()`) and `AccountGuard` (via `useAccountSessionRestore`) must each attempt **one** shared deduped `POST /api/v1/auth/refresh` before redirecting to login. The refresh token cookie survives page reload. React Strict Mode double-mounts must not fire two parallel refreshes (backend rotates refresh tokens; the second call would fail with `401`). Implementation: `frontend/lib/restore-auth-session.ts`, `frontend/hooks/use-auth-session-restore.ts`.
+- **Browser API base:** Client `fetch` must target **`window.location.origin + /api/v1`** (implemented in `frontend/lib/api-base.ts`) so refresh cookies work when testing on a LAN IP (e.g. `http://10.39.179.140:3101`), not `localhost` from `NEXT_PUBLIC_API_BASE_URL`.
 - Refresh happens automatically via httpOnly cookie
 - For ops UI: cookie handling is automatic, no manual token management needed
 
-**Admin session lifecycle (required implementation):**
+**Admin session lifecycle (required implementation — `frontend` as of 2026-06-03):**
 
 ```
-1. Page load / refresh:
-   AdminGuard checks accessToken in Zustand store
-   → null? → call POST /api/v1/auth/refresh silently (deduped — one in-flight request)
-     → success: parse JWT claims (sub, role, permissions) → setSession() → render console
-     → failure: clearSession() → router.replace('/admin/login')
-   → present? → validate canAccessAdmin(user) → render console
+1. Protected routes (/admin/* via (admin) layout + AdminConsoleShell):
+   AdminAuthProvider runs useAdminSessionRestore() (audience: admin)
+   → While restoring: full-viewport AdminSessionRestoreGate ("Loading…" / "Restoring…")
+   → Note: Next.js may return RSC 200 before the client gate clears — that is expected.
+   → null accessToken? → POST /api/v1/auth/refresh (deduped, 8s deadline; admin skips GET /users/me)
+     → success: setSession() from JWT claims → render AdminConsoleShell children
+     → failure: runtime.blocked=true, clearSession() (memory only), redirectToAdminLoginIfNeeded()
+   → 8s watchdog on gate → logoutLocalSession() + redirect to /admin/login
+   → present + canAccessAdmin? → render console
 
-2. Session expiry warning (AdminSessionWarning):
+2. Guest routes (/admin/login, /admin/setup — (auth) layout, NOT AdminConsoleShell):
+   AdminGuestOnly uses useAdminGuestSessionRestore() (audience: admin-guest, redirectOnFailure: false)
+   → Sign-in UI renders immediately (never blocked on "Checking admin session…")
+   → Background restore: if valid admin cookie → redirect to /admin
+   → Must NOT call redirectToAdminLogin() on restore failure (avoids reload loop on login page)
+
+3. Logout / sign-in again:
+   → logoutLocalSession() — resets restore guards + clears store
+   → clearSession() — memory only; used after failed restore without unblocking guards
+
+4. Session expiry warning (AdminSessionWarning):
    - Shows when accessToken is within 2 minutes of expiry
    - "Extend session" button: calls refreshAccessToken(), updates store via setAccessToken()
-   - "Sign in again" button: clearSession() + redirect to /admin/login
+   - "Sign in again" button: logoutLocalSession() + redirect to /admin/login
 
-3. Idle timeout (AdminIdleTimeoutModal inside AdminConsoleShell):
+5. Idle timeout (AdminIdleTimeoutModal inside AdminConsoleShell):
    - Warning fires after 25 minutes of no user activity
    - Modal shows 5:00 countdown, decrements every second
    - "Stay signed in": calls refreshAccessToken(), dismisses modal
-   - "Sign out now": clearSession() + redirect
+   - "Sign out now": logoutLocalSession() + redirect
    - Auto-logout when countdown reaches 0
    - Any user activity (mouse/keyboard/touch/scroll) while warning is showing: dismiss modal
    - Hook disabled when accessToken is null (no-op for unauthenticated state)
+
+6. Local dev — mobile / LAN (same Wi‑Fi):
+   - Use Network URL from `npm run dev` for phone + sign-in on that host (cookie host must match)
+   - Set ALLOWED_DEV_ORIGINS in frontend/.env.local (see next.config.ts); default includes 10.39.179.140 if unset
+   - Backend must be reachable via BACKEND_PROXY_URL (default http://127.0.0.1:3000)
 ```
 
 ### 10.3 OTP challenge implementation

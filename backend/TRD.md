@@ -939,7 +939,13 @@ Most admin routes require ADMIN JWT plus the listed merchant permission. The inv
 | POST | `/products/:id/variants` | Create variant for existing product |
 | PATCH | `/products/:id/variants/:variantId` | Update variant + inventory fields |
 | PATCH | `/products/:id` | Update |
-| DELETE | `/products/:id` | Soft-delete |
+| DELETE | `/products/:id` | Soft-delete (deactivate) — sets `isActive: false` |
+| DELETE | `/products/:id/permanent` | Hard-delete product — irreversible; `409` if order history or reviews exist; clears cart items + hosted media first. Requires `products:write`. |
+| POST | `/products/:id/images/upload` | Batch multipart upload (max 5 MiB each; server-assigned sort order). R2 auto-upload when `MEDIA_STORAGE_PROVIDER=r2`; local disk + `GET /media/products/*` when `local` |
+| POST | `/products/:id/images` | Add image by URL |
+| PATCH | `/products/:id/images/reorder` | Reorder images |
+| DELETE | `/products/:id/images/:imageId` | Delete image |
+| GET | `/media/products/:productId/:filename` | Public product image (prefix `/api/v1`) |
 | GET | `/categories` | Category tree list |
 | POST | `/categories` | Create category |
 | PATCH | `/categories/:id` | Update category |
@@ -1305,7 +1311,7 @@ fastify.register(cors, {
 |---|---|
 | Auth sensitive (`/auth/send-otp`, `/auth/verify-otp`, `/auth/forgot-password`, `/auth/register`, `/auth/refresh`) | 6 per minute |
 | Auth login (`/auth/login`, `/auth/admin/login/request-otp`, `/auth/admin/login/verify-otp`) | 12 per minute + progressive lockout on failed credentials |
-| Catalogue reads (`/products*`, `/reviews/product/*`) | 300 per minute (route profile) |
+| Catalogue reads (`/products*`, `/reviews/product/*`, `/reviews/recent`) | 300 per minute (route profile) |
 | Cart/user-session flows (`/cart*`, `/wishlist*`, `/users/me*`) | 90 per minute (route profile) |
 | Checkout/payment mutations (`/orders`, `/orders/:id/cancel`, `/payments/initiate`, `/payments/verify`) | 30 per minute (route profile) |
 | Webhook ingress (`/payments/webhook`, `/shipping/webhook`) | 400 per minute (dedicated profile) |

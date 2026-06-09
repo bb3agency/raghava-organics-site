@@ -64,9 +64,11 @@ export function MaintenanceBanner() {
   const reloadInitiatedRef = useRef(false);
 
   const isOpsRoute = pathname.startsWith("/ops");
+  const isAdminRoute = pathname.startsWith("/admin");
+  const skipMaintenancePoll = isOpsRoute || isAdminRoute;
 
   useEffect(() => {
-    if (isOpsRoute) return;
+    if (skipMaintenancePoll) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
 
@@ -119,7 +121,7 @@ export function MaintenanceBanner() {
       window.removeEventListener("online", triggerImmediatePoll);
       document.removeEventListener("visibilitychange", triggerImmediatePoll);
     };
-  }, [isOpsRoute]);
+  }, [skipMaintenancePoll]);
 
   useEffect(() => {
     if (!status || status.phase !== "pending") return;
@@ -133,14 +135,14 @@ export function MaintenanceBanner() {
   // replacing this stale React tree with the branded downtime UX.
   // Skipped on `/ops/*` so operators retain access to the console.
   useEffect(() => {
-    if (isOpsRoute) return;
+    if (skipMaintenancePoll) return;
     if (typeof window === "undefined") return;
     if (!status) return;
     if (status.mode !== "maintenance" || status.phase !== "active") return;
     if (reloadInitiatedRef.current) return;
     reloadInitiatedRef.current = true;
     window.location.reload();
-  }, [isOpsRoute, status?.mode, status?.phase, status]);
+  }, [skipMaintenancePoll, status?.mode, status?.phase, status]);
 
   const secondsRemaining = useMemo(() => {
     if (!status || status.phase !== "pending") return 0;
@@ -148,7 +150,7 @@ export function MaintenanceBanner() {
     return Math.max(0, base - tick);
   }, [status, tick]);
 
-  if (isOpsRoute) return null;
+  if (skipMaintenancePoll) return null;
   if (!shouldShowMaintenanceBanner(status)) return null;
   if (!status) return null;
 

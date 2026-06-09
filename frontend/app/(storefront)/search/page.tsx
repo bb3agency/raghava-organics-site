@@ -1,10 +1,8 @@
 import Link from "next/link";
 import { Search, Leaf, ChevronRight } from "lucide-react";
-import { apiClient } from "@/lib/api";
-import { mapProductListResponse } from "@/lib/product-adapters";
 import { ProductGrid } from "@/components/product/ProductGrid";
 import { SearchInput } from "@/components/shared/SearchInput";
-import type { Product } from "@/types/product";
+import { fetchStorefrontProducts } from "@/lib/storefront-products";
 
 interface SearchPageProps {
   searchParams: Promise<{ q?: string; page?: string; limit?: string }>;
@@ -17,32 +15,26 @@ export const metadata = {
 export default async function SearchPage({ searchParams }: SearchPageProps) {
   const params = await searchParams;
   const q = params.q ?? "";
-  const page = params.page ?? "1";
-  const limit = params.limit ?? "16"; // 4x4 grid
+  const page = Math.max(1, Number(params.page ?? "1") || 1);
+  const limit = Math.min(48, Math.max(1, Number(params.limit ?? "16") || 16));
 
-  let products: Product[] = [];
-  if (q) {
-    try {
-      const payload = await apiClient<unknown>(
-        `/products?${new URLSearchParams({ search: q, page, limit }).toString()}`,
-      );
-      products = mapProductListResponse(payload);
-    } catch {
-      products = [];
-    }
-  }
+  const { products, meta } = q
+    ? await fetchStorefrontProducts({ search: q, page, limit, sort: "newest" })
+    : { products: [], meta: null };
+
+  const total = meta?.total ?? products.length;
 
   const title = q ? `Results for "${q}"` : "Search Products";
 
   return (
     <div className="flex flex-col bg-[#eff5ee] min-h-screen pb-16">
       {/* ── Page Header Banner ──────────────────────────────────────────── */}
-      <section className="relative overflow-hidden bg-[#dbe8d8] py-12 md:py-20">
+      <section className="relative overflow-hidden bg-[#dbe8d8] py-8 md:py-20">
         <div className="mx-auto flex w-full max-w-[1440px] flex-col items-center justify-center px-4 text-center lg:px-8">
-          <h1 className="mb-4 font-heading text-4xl font-bold capitalize text-[#23403d] md:text-5xl">
+          <h1 className="mb-4 font-heading text-2xl font-bold capitalize text-[#23403d] sm:text-4xl md:text-5xl">
             {title}
           </h1>
-          <nav className="flex items-center gap-2 text-sm font-bold text-[#767676]" aria-label="Breadcrumb">
+          <nav className="flex items-center gap-2 text-xs font-bold text-[#767676] sm:text-sm" aria-label="Breadcrumb">
             <Link href="/" className="hover:text-[#ec6e55] transition-colors">Home</Link>
             <ChevronRight className="size-3" />
             <span className="text-[#ec6e55]">Search</span>
@@ -57,7 +49,7 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
       <section className="mx-auto w-full max-w-[1440px] px-4 pt-12 lg:px-8">
         
         {/* Search input container */}
-        <div className="mb-10 mx-auto max-w-2xl bg-white p-4 rounded-[20px] shadow-sm">
+        <div className="mb-8 sm:mb-10 mx-auto max-w-2xl bg-white p-3 sm:p-4 rounded-[20px] shadow-sm">
           <SearchInput defaultValue={q} />
         </div>
 
@@ -71,7 +63,7 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
               Start Searching
             </h2>
             <p className="mb-8 text-sm font-medium text-[#767676] max-w-md">
-              Type a product name above to find farm-fresh organic products.
+              Type a product name above to find farm-fresh chemical free and natural products.
             </p>
           </div>
         ) : products.length === 0 ? (
@@ -96,7 +88,7 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
           <div className="flex flex-col gap-6">
             <div className="flex justify-between items-center rounded-[20px] bg-white p-4 lg:p-6 shadow-sm">
               <p className="text-sm font-bold text-[#767676]">
-                Found {products.length} product{products.length !== 1 ? "s" : ""}
+                Found {total} product{total !== 1 ? "s" : ""}
               </p>
             </div>
             <ProductGrid products={products} />

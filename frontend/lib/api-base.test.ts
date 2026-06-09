@@ -28,22 +28,22 @@ describe("api-base", () => {
     expect(getConfiguredPublicApiBaseUrl()).toBe("http://localhost:3101/api/v1");
   });
 
-  it("rewrites cross-origin local API URL to page origin for cookies", () => {
+  it("always uses page origin in the browser (LAN/mobile safe)", () => {
     process.env.NEXT_PUBLIC_API_BASE_URL = "http://localhost:3000/api/v1";
     vi.stubGlobal("window", {
-      location: { href: "http://localhost:3101/admin" },
+      location: { href: "http://10.39.179.140:3101/admin" },
     } as Window & typeof globalThis);
 
-    expect(getBrowserApiBaseUrl()).toBe("http://localhost:3101/api/v1");
+    expect(getBrowserApiBaseUrl()).toBe("http://10.39.179.140:3101/api/v1");
   });
 
-  it("keeps same-origin configured URL unchanged", () => {
-    process.env.NEXT_PUBLIC_API_BASE_URL = "http://localhost:3101/api/v1";
+  it("keeps relative configured API path in the browser", () => {
+    process.env.NEXT_PUBLIC_API_BASE_URL = "/api/v1";
     vi.stubGlobal("window", {
       location: { href: "http://localhost:3101/admin" },
     } as Window & typeof globalThis);
 
-    expect(getBrowserApiBaseUrl()).toBe("http://localhost:3101/api/v1");
+    expect(getBrowserApiBaseUrl()).toBe("/api/v1");
   });
 
   it("server resolver prefers INTERNAL_API_BASE_URL over public storefront URL", () => {

@@ -61,10 +61,13 @@ Pair this with `docs/BACKEND_GO_LIVE_CHECKLIST.md` for final go-live sign-off. T
 - [ ] Unknown email may still receive generic `200` without OTP (anti-enumeration) — UI must not treat that as proof an OTP was delivered.
 
 **Session restoration on page refresh:**
-- [ ] `AdminGuard` attempts `POST /api/v1/auth/refresh` silently when `accessToken` is null (page reload).
+- [ ] `AdminAuthProvider` (`AdminConsoleShell`) attempts deduped `POST /api/v1/auth/refresh` when `accessToken` is null (page reload); audience `admin`.
 - [ ] On refresh success: parse JWT claims to reconstruct `User` (`sub`, `role`, `permissions`), call `setSession()`, render admin console.
-- [ ] On refresh failure: call `clearSession()`, redirect to `/admin/login`.
-- [ ] A loading state (`AdminLoadingBlock` labelled "Restoring admin session…") is shown during the refresh attempt.
+- [ ] On refresh failure: `clearSession()` (memory only), `runtime.blocked` set, `redirectToAdminLoginIfNeeded()` (not when already on `/admin/login`).
+- [ ] Loading gate (`AdminSessionRestoreGate` / `AdminLoadingBlock`) during restore; 8s watchdog redirects to sign-in if stuck.
+- [ ] `/admin/login`: `AdminGuestOnly` shows form immediately (`useAdminGuestSessionRestore`, `admin-guest` audience, `redirectOnFailure: false`); no reload loop on failed restore.
+- [ ] Browser API calls use page origin (`lib/api-base.ts` → `/api/v1` on same host as UI); LAN/mobile dev uses `ALLOWED_DEV_ORIGINS`.
+- [ ] Logout uses `logoutLocalSession()`, not `clearSession()` alone.
 - [ ] Non-admin tokens (e.g. CUSTOMER role refresh succeeds but role check fails) redirect to `/dashboard`, not `/admin/login`.
 
 **Session expiry warning (`AdminSessionWarning`):**
@@ -72,13 +75,13 @@ Pair this with `docs/BACKEND_GO_LIVE_CHECKLIST.md` for final go-live sign-off. T
 - [ ] "Extend session" button calls `refreshAccessToken()` and updates store via `setAccessToken()` — no page reload.
 - [ ] Button shows `Loader2` spinner during the network call.
 - [ ] Error state shown if refresh fails ("Session is no longer valid for admin access.").
-- [ ] "Sign in again" button calls `clearSession()` + redirects to `/admin/login`.
+- [ ] "Sign in again" button calls `logoutLocalSession()` + redirects to `/admin/login`.
 
 **Idle timeout (`AdminIdleTimeoutModal` inside `AdminConsoleShell`):**
 - [ ] Warning modal fires after 25 minutes of inactivity (no mouse, keyboard, touch, scroll, or click events).
 - [ ] Modal shows countdown timer from 5:00 to 0:00, decrementing every second.
 - [ ] "Stay signed in" calls `refreshAccessToken()` and dismisses the modal.
-- [ ] "Sign out now" calls `clearSession()` + redirects to `/admin/login`.
+- [ ] "Sign out now" calls `logoutLocalSession()` + redirects to `/admin/login`.
 - [ ] Auto-logout triggers when countdown reaches 0.
 - [ ] User activity while modal is open (any tracked event) dismisses it without logging out.
 - [ ] Idle tracking is disabled when `accessToken` is null (no timers running on the login page).
@@ -196,8 +199,9 @@ Pair this with `docs/BACKEND_GO_LIVE_CHECKLIST.md` for final go-live sign-off. T
   - verify BRD AC mapping coverage,
   - execute one full end-to-end high-risk scenario.
 - [ ] Coupon admin UI covers the full lifecycle: create, edit, pause/resume, soft-delete, and restore. The list view shows deleted coupons in a separate "deleted" state (not permanently hidden) with a restore action.
-- [ ] Deleting a coupon calls `DELETE /api/v1/admin/coupons/:id` (soft-delete). The UI never calls a hard-delete endpoint because none exists.
-- [ ] Restoring a coupon calls `POST /api/v1/admin/coupons/:id/restore` and refreshes the coupon state to active.
+- [ ] Deleting a coupon calls `DELETE /api/v1/admin/coupons/:id` (soft-delete) **without a JSON body**. The UI never calls a hard-delete endpoint because none exists.
+- [ ] Restoring a coupon calls `POST /api/v1/admin/coupons/:id/restore` **without a request body** and refreshes the coupon state to active.
+- [ ] Coupon list **Usage** column shows `used / limit` (e.g. `0 / ∞` when unlimited) — not a bare `/ ∞`.
 - [ ] Audit log view per coupon (`GET /api/v1/admin/coupons/:id/audit`) is accessible from the coupon detail screen, showing actor, timestamp, action, and before/after diff.
 - [ ] UI handles `RATE_LIMIT_EXCEEDED` (429) on coupon write actions with a user-friendly message (e.g. "Too many operations — please wait a moment") rather than a generic error.
 - [ ] `BUY_X_GET_Y` coupon type is disabled/hidden in create/edit forms until v2.2 (backend rejects it with `VALIDATION_ERROR`).
@@ -222,9 +226,12 @@ Pair this with `docs/BACKEND_GO_LIVE_CHECKLIST.md` for final go-live sign-off. T
 - [ ] Inventory bulk-update (`POST /api/v1/admin/inventory/bulk-update`) sends an array of `{ variantId, adjustment, note }` objects (max 100). UI provides clear feedback on the per-variant rollback behaviour when any item fails.
 - [ ] Inventory adjustment history (`GET /api/v1/admin/inventory/history/:variantId`) is accessible from the variant detail/stock view, paginated. Requires `inventory:read`.
 - [ ] Product variant delete (`DELETE /api/v1/admin/products/:id/variants/:variantId`) is guarded in UI — action is disabled if the product has only one variant. Backend returns `400` in this case; frontend surfaces it as "Cannot delete the last variant of a product."
+- [ ] Product **deactivate** (`DELETE /api/v1/admin/products/:id`) is labeled **Deactivate** in UI (soft delete — reversible). Product **permanent delete** (`DELETE /api/v1/admin/products/:id/permanent`) is a separate destructive action in `AdminRowActionsMenu` with confirmation; surfaces backend **409** when order history or reviews block deletion.
+- [ ] Product create/edit form maps `VALIDATION_ERROR.details.fields` to highlighted inputs (`data-admin-field`), inline errors, and scroll-to-first-error. Create flow includes required **Category** and **URL Slug** fields. Generic "check highlighted fields" banner also lists field-specific messages.
 - [ ] Global shipment list (`GET /api/v1/admin/shipments`) and global payment list (`GET /api/v1/admin/payments`) are loaded via their dedicated endpoints, not by aggregating per-order requests. Requires `shipments:read` and `payments:read` respectively.
 - [ ] Return request detail (`GET /api/v1/admin/return-requests/:id`) is accessible from the return request queue. Requires `orders:read`.
 - [ ] Review hard-delete (`DELETE /api/v1/admin/reviews/:id`) requires `reviews:moderate`. UI shows a destructive confirmation modal — this is permanent, not a soft-delete.
+- [ ] Storefront homepage testimonials (`TestimonialsSection`) load from `GET /api/v1/reviews/recent?limit=3` when **`FEATURE_REVIEWS_ENABLED=true`**. Section is hidden when the API returns no approved reviews with written body. PDP reviews use `GET /api/v1/reviews/product/:slug` via `ProductReviewsSection`. Admin moderation (`PATCH /api/v1/admin/reviews/:id/moderate`) is the gate for both surfaces.
 
 ## 9) Release Validation Commands (Backend Cross-Check)
 

@@ -5,28 +5,19 @@ import {
   createOrder,
   initiatePayment,
   retryPayment,
-  type CheckoutPaymentMode,
-  type CheckoutShippingAddressInput,
+  type CreateOrderInput,
 } from "@/lib/orders-api";
 
-interface CreateCheckoutOrderInput {
+export type CreateCheckoutOrderInput = CreateOrderInput & {
   accessToken: string;
-  paymentMode: CheckoutPaymentMode;
-  shippingAddress: CheckoutShippingAddressInput;
-  notes?: string;
-}
+};
 
 export async function createCheckoutOrderAction(input: CreateCheckoutOrderInput) {
-  const order = await createOrder(
-    {
-      paymentMode: input.paymentMode,
-      shippingAddress: input.shippingAddress,
-      notes: input.notes,
-    },
-    input.accessToken,
-  );
+  const { accessToken, ...orderInput } = input;
+  const order = await createOrder(orderInput, accessToken);
   revalidatePath("/cart");
   revalidatePath("/checkout");
+  revalidatePath("/orders");
   return order;
 }
 

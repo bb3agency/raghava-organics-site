@@ -35,7 +35,7 @@ export function EmailRegisterForm({ onSuccess }: EmailRegisterFormProps) {
     defaultValues: {
       firstName: "",
       lastName: "",
-      phone: "",
+      phone: "",   // optional — empty string is treated as absent
       email: "",
       password: "",
     },
@@ -49,7 +49,9 @@ export function EmailRegisterForm({ onSuccess }: EmailRegisterFormProps) {
     try {
       setError(null);
       setInfo("Creating account...");
-      const session = await registerWithEmail({ ...values, ...turnstileField });
+      // Strip empty phone so the backend receives undefined (not an empty string).
+      const phone = values.phone?.trim() || undefined;
+      const session = await registerWithEmail({ ...values, phone, ...turnstileField });
       await onSuccess(session);
     } catch (err) {
       setInfo(null);
@@ -93,12 +95,14 @@ export function EmailRegisterForm({ onSuccess }: EmailRegisterFormProps) {
 
       <div className="grid gap-1.5">
         <label htmlFor="phone-reg" className="text-sm font-bold text-[#23403d]">
-          Phone Number
+          Phone Number{" "}
+          <span className="font-normal text-[#767676]">(optional)</span>
         </label>
         <input
           id="phone-reg"
           type="tel"
           autoComplete="tel"
+          placeholder="9876543210"
           className="h-12 w-full rounded-full border border-[#efe8e4] bg-[#faf3ef] px-4 text-sm font-medium text-[#23403d] placeholder:text-[#767676] focus:border-[#23403d] focus:outline-none focus:ring-1 focus:ring-[#23403d]"
           {...form.register("phone")}
         />

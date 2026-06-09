@@ -38,6 +38,7 @@ export function isAdminUser(user: {
     (p) =>
       p.startsWith("orders:") ||
       p.startsWith("products:") ||
+      p.startsWith("categories:") ||
       p.startsWith("inventory:") ||
       p.startsWith("users:") ||
       p.startsWith("settings:") ||
@@ -80,6 +81,7 @@ export type AdminRouteKey =
   | "dashboard"
   | "orders"
   | "products"
+  | "categories"
   | "inventory"
   | "customers"
   | "returns"
@@ -88,7 +90,6 @@ export type AdminRouteKey =
   | "reviews"
   | "coupons"
   | "mutations"
-  | "reliability"
   | "settings";
 
 export function canViewAdminRoute(
@@ -104,6 +105,7 @@ export function canViewAdminRoute(
       return (
         hasPermissionPrefix(user, "orders:") ||
         hasPermissionPrefix(user, "products:") ||
+        hasPermissionPrefix(user, "categories:") ||
         hasPermissionPrefix(user, "inventory:") ||
         hasPermissionPrefix(user, "users:") ||
         hasPermissionPrefix(user, "settings:") ||
@@ -117,11 +119,8 @@ export function canViewAdminRoute(
       return hasAdminPermission(user, ADMIN_PERMISSIONS.shipmentsRead);
     case "payments":
       return hasAdminPermission(user, ADMIN_PERMISSIONS.paymentsRead);
-    case "reliability":
-      return (
-        hasPermissionPrefix(user, "analytics:") ||
-        hasAdminPermission(user, ADMIN_PERMISSIONS.analyticsReplay)
-      );
+    case "categories":
+      return hasPermissionPrefix(user, "categories:") || hasPermissionPrefix(user, "products:");
     case "products":
     case "coupons":
       return hasPermissionPrefix(user, "products:") || hasPermissionPrefix(user, "coupons:");
@@ -154,6 +153,9 @@ export function resolveAdminRouteFromPathname(pathname: string): AdminRouteKey |
   if (pathname.startsWith("/admin/catalog-write") || pathname.startsWith("/admin/products")) {
     return "products";
   }
+  if (pathname.startsWith("/admin/categories")) {
+    return "categories";
+  }
   if (pathname.startsWith("/admin/inventory")) {
     return "inventory";
   }
@@ -171,9 +173,6 @@ export function resolveAdminRouteFromPathname(pathname: string): AdminRouteKey |
   }
   if (pathname.startsWith("/admin/mutations")) {
     return "mutations";
-  }
-  if (pathname.startsWith("/admin/reliability")) {
-    return "reliability";
   }
   if (pathname.startsWith("/admin/analytics")) {
     return "dashboard";

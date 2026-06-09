@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   couponStatusTone,
+  formatCouponUsageLabel,
   formatPaise,
   orderStatusTone,
   paymentStatusTone,
@@ -11,6 +12,12 @@ import {
 describe("admin-format", () => {
   it("formats paise as INR", () => {
     expect(formatPaise(19900)).toMatch(/199/);
+  });
+
+  it("formats coupon usage labels", () => {
+    expect(formatCouponUsageLabel(0, null)).toBe("0 / ∞");
+    expect(formatCouponUsageLabel(undefined, 100)).toBe("0 / 100");
+    expect(formatCouponUsageLabel(12, 50)).toBe("12 / 50");
   });
 
   it("maps order status tones", () => {

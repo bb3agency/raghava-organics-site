@@ -17,7 +17,7 @@ export function AdminBadge({
   status: "success" | "warning" | "destructive" | "default";
 }) {
   const styles = {
-    success: "bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20",
+    success: "bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/20",
     warning: "bg-amber-500/10 text-amber-500 hover:bg-amber-500/20",
     destructive: "bg-red-500/10 text-red-500 hover:bg-red-500/20",
     default: "bg-slate-500/10 text-slate-500 hover:bg-slate-500/20",

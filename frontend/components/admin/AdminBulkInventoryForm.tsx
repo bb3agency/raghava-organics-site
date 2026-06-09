@@ -7,6 +7,7 @@ import { useAuthenticatedApi } from "@/hooks/use-authenticated-api";
 import type { AdminBulkInventoryResult } from "@/lib/admin-api";
 import { getApiErrorMessage } from "@/lib/error-messages";
 import { createIdempotencyKey } from "@/lib/idempotency";
+import { notifyAdminDataChanged } from "@/lib/admin-data-refresh";
 import { ADMIN_PERMISSIONS, hasAdminPermission } from "@/lib/permissions";
 
 const inputClass =
@@ -68,6 +69,7 @@ export function AdminBulkInventoryForm() {
         body: JSON.stringify({ updates }),
       });
       setResult(response);
+      notifyAdminDataChanged(["inventory", "products", "dashboard"]);
     } catch (err) {
       setError(getApiErrorMessage(err));
     } finally {
@@ -147,7 +149,7 @@ export function AdminBulkInventoryForm() {
         </div>
         {error ? <p className="text-sm text-destructive">{error}</p> : null}
         {result ? (
-          <p className="text-sm text-emerald-600">
+          <p className="text-sm text-zinc-900">
             Updated {result.updated} variant(s).
             {result.failed.length > 0
               ? ` Failed: ${result.failed.join(", ")}`

@@ -47,9 +47,9 @@ export default async function ProductDetailPage({ params }: ProductDetailPagePro
 
   return (
     <div className="bg-[#eff5ee] min-h-screen pb-16">
-      <div className="mx-auto max-w-[1440px] px-4 py-8 lg:px-8">
+      <div className="mx-auto max-w-[1440px] px-4 py-4 sm:py-8 lg:px-8">
         {/* Breadcrumb */}
-        <nav className="mb-8 flex flex-wrap items-center gap-2 text-sm font-bold text-[#767676]" aria-label="Breadcrumb">
+        <nav className="mb-4 flex flex-wrap items-center gap-1.5 text-xs font-bold text-[#767676] sm:mb-8 sm:gap-2 sm:text-sm" aria-label="Breadcrumb">
           <Link href="/" className="hover:text-[#ec6e55] transition-colors">Home</Link>
           <ChevronRight className="size-3" />
           <Link href="/products" className="hover:text-[#ec6e55] transition-colors">Shop</Link>
@@ -62,7 +62,7 @@ export default async function ProductDetailPage({ params }: ProductDetailPagePro
         </nav>
 
         {/* Main grid */}
-        <div className="grid gap-12 rounded-[20px] bg-white p-6 shadow-sm lg:grid-cols-[55%_45%] lg:p-12">
+        <div className="grid gap-6 rounded-[20px] bg-white p-4 shadow-sm sm:gap-12 sm:p-6 lg:grid-cols-[55%_45%] lg:p-12">
           {/* Gallery */}
           <div className="rounded-[20px] bg-[#faf3ef] p-4 lg:p-8">
             <ProductGallery images={product.images} productName={product.name} />
@@ -75,10 +75,10 @@ export default async function ProductDetailPage({ params }: ProductDetailPagePro
               <p className="mb-2 text-xs font-bold uppercase tracking-widest text-[#767676]">
                 {product.category.name}
               </p>
-              <h1 className="mb-4 font-heading text-3xl font-bold leading-tight text-[#23403d] md:text-4xl">
+              <h1 className="mb-3 font-heading text-xl font-bold leading-tight text-[#23403d] sm:mb-4 sm:text-3xl md:text-4xl">
                 {product.name}
               </h1>
-              <div className="flex items-center gap-4">
+              <div className="flex flex-wrap items-center gap-2 sm:gap-4">
                 <Rating rating={product.rating} reviewCount={product.reviewCount} />
                 <span className="text-sm font-bold text-[#767676]">({product.reviewCount} reviews)</span>
               </div>
@@ -114,16 +114,16 @@ export default async function ProductDetailPage({ params }: ProductDetailPagePro
             />
 
             {/* Trust signals */}
-            <div className="mt-4 grid grid-cols-2 gap-4 rounded-[20px] bg-[#faf3ef] p-6">
+            <div className="mt-4 grid grid-cols-2 gap-3 rounded-[20px] bg-[#faf3ef] p-4 sm:gap-4 sm:p-6">
               {[
-                { icon: Leaf, text: "100% Organic" },
+                { icon: Leaf, text: "100% Chemical Free" },
                 { icon: Truck, text: "Free Delivery" },
                 { icon: RotateCcw, text: "Easy Returns" },
                 { icon: ShieldCheck, text: "Secure Pay" },
               ].map(({ icon: Icon, text }) => (
-                <div key={text} className="flex items-center gap-3">
-                  <Icon className="size-5 shrink-0 text-[#ec6e55]" aria-hidden />
-                  <span className="text-sm font-bold text-[#23403d]">{text}</span>
+                <div key={text} className="flex items-center gap-2 sm:gap-3">
+                  <Icon className="size-4 shrink-0 text-[#ec6e55] sm:size-5" aria-hidden />
+                  <span className="text-xs font-bold text-[#23403d] sm:text-sm">{text}</span>
                 </div>
               ))}
             </div>

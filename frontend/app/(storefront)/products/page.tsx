@@ -1,11 +1,13 @@
 import Link from "next/link";
 import { Suspense } from "react";
 import { Leaf, SlidersHorizontal, ChevronRight } from "lucide-react";
-import { apiClient } from "@/lib/api";
 import { ProductGrid } from "@/components/product/ProductGrid";
 import { PlpSortSelect } from "@/components/product/PlpSortSelect";
-import { mapProductListResponse } from "@/lib/product-adapters";
-import type { Product } from "@/types/product";
+import { StorefrontPagination } from "@/components/product/StorefrontPagination";
+import {
+  fetchStorefrontProducts,
+  type StorefrontProductSort,
+} from "@/lib/storefront-products";
 
 interface ProductsPageProps {
   searchParams: Promise<{
@@ -18,55 +20,81 @@ interface ProductsPageProps {
 }
 
 export const metadata = {
-  title: "Shop Organic Products",
-  description: "Browse our full range of certified organic produce, staples, and everyday essentials.",
+  title: "Shop Chemical Free & Natural Products",
+  description:
+    "Browse our full range of chemical free and natural produce, staples, and everyday essentials.",
 };
+
+const VALID_SORTS = new Set<StorefrontProductSort>([
+  "newest",
+  "popularity",
+  "price_asc",
+  "price_desc",
+]);
 
 export default async function ProductsPage({ searchParams }: ProductsPageProps) {
   const params = await searchParams;
-  const VALID_SORTS = new Set(["newest", "popularity", "price_asc", "price_desc"]);
-  const page = params.page ?? "1";
-  const limit = params.limit ?? "16";
-  const sort = VALID_SORTS.has(params.sort ?? "") ? (params.sort as string) : "newest";
+  const page = Math.max(1, Number(params.page ?? "1") || 1);
+  const limit = Math.min(48, Math.max(1, Number(params.limit ?? "16") || 16));
+  const sort = VALID_SORTS.has(params.sort as StorefrontProductSort)
+    ? (params.sort as StorefrontProductSort)
+    : "newest";
   const q = params.q ?? "";
   const category = params.category ?? "";
-  const query = new URLSearchParams({ page, limit, sort, ...(q && { search: q }), ...(category && { category }) }).toString();
 
-  let products: Product[] = [];
-  try {
-    const payload = await apiClient<unknown>(`/products?${query}`);
-    products = mapProductListResponse(payload);
-  } catch {
-    products = [];
-  }
+  const { products, meta } = await fetchStorefrontProducts({
+    page,
+    limit,
+    sort,
+    search: q || undefined,
+    category: category || undefined,
+  });
 
-  const title = q ? `Results for "${q}"` : category ? category.replace('-', ' ') : "Shop All Products";
+  const title = q
+    ? `Results for "${q}"`
+    : category
+      ? category.replace(/-/g, " ")
+      : "Shop All Products";
+
+  const total = meta?.total ?? products.length;
+  const totalPages = meta?.totalPages ?? 1;
 
   return (
-    <div className="flex flex-col bg-[#eff5ee] min-h-screen pb-16">
-      {/* ── Page Header Banner ──────────────────────────────────────────── */}
-      <section className="relative overflow-hidden bg-[#dbe8d8] py-12 md:py-20">
+    <div className="flex min-h-screen flex-col bg-[#eff5ee] pb-16">
+      <section className="relative overflow-hidden bg-[#dbe8d8] py-8 md:py-20">
         <div className="mx-auto flex w-full max-w-[1440px] flex-col items-center justify-center px-4 text-center lg:px-8">
-          <h1 className="mb-4 font-heading text-4xl font-bold capitalize text-[#23403d] md:text-5xl">
+          <h1 className="mb-3 font-heading text-2xl font-bold capitalize text-[#23403d] sm:mb-4 sm:text-4xl md:text-5xl">
             {title}
           </h1>
-          <nav className="flex items-center gap-2 text-sm font-bold text-[#767676]" aria-label="Breadcrumb">
-            <Link href="/" className="hover:text-[#ec6e55] transition-colors">Home</Link>
+          <nav
+            className="flex items-center gap-1.5 text-xs font-bold text-[#767676] sm:gap-2 sm:text-sm"
+            aria-label="Breadcrumb"
+          >
+            <Link href="/" className="transition-colors hover:text-[#ec6e55]">
+              Home
+            </Link>
             <ChevronRight className="size-3" />
-            <span className="text-[#ec6e55] capitalize">{q ? 'Search' : category ? category.replace('-', ' ') : 'Shop'}</span>
+            <span className="capitalize text-[#ec6e55]">
+              {q ? "Search" : category ? category.replace(/-/g, " ") : "Shop"}
+            </span>
           </nav>
+          <p className="mt-3 text-sm font-medium text-[#23403d]/75">
+            {total > 0
+              ? `${total} active product${total !== 1 ? "s" : ""} in catalog`
+              : "Live catalog — products appear here when marked Active in admin"}
+          </p>
         </div>
-        {/* Decorative elements */}
-        <div className="absolute -bottom-16 -right-16 size-64 rounded-full bg-[#c5dac2] opacity-40 blur-3xl" aria-hidden />
-        <div className="absolute -left-16 top-0 size-48 rounded-full bg-white opacity-40 blur-3xl" aria-hidden />
+        <div
+          className="absolute -bottom-16 -right-16 size-64 rounded-full bg-[#c5dac2] opacity-40 blur-3xl"
+          aria-hidden
+        />
       </section>
 
-      {/* ── Main Content ──────────────────────────────────────────────── */}
-      <section className="mx-auto w-full max-w-[1440px] px-4 pt-12 lg:px-8">
-        <div className="mb-8 flex flex-col justify-between gap-4 rounded-[20px] bg-white p-4 shadow-sm sm:flex-row sm:items-center lg:p-6">
+      <section className="mx-auto w-full max-w-[1440px] px-4 pt-6 sm:pt-12 lg:px-8">
+        <div className="mb-6 flex flex-col justify-between gap-3 rounded-2xl border border-[#e3ebe1] bg-white p-3 shadow-sm sm:mb-8 sm:flex-row sm:items-center sm:gap-4 sm:p-4 lg:p-6">
           <p className="text-sm font-bold text-[#767676]">
             {products.length > 0
-              ? `Showing ${products.length} product${products.length !== 1 ? "s" : ""}`
+              ? `Showing ${products.length} on this page`
               : "No products found"}
           </p>
           <div className="flex items-center gap-3">
@@ -74,25 +102,38 @@ export default async function ProductsPage({ searchParams }: ProductsPageProps) 
               <SlidersHorizontal className="size-4 text-[#ec6e55]" aria-hidden />
               Sort by
             </span>
-            <Suspense fallback={<div className="h-10 w-40 animate-pulse rounded-full bg-[#efe8e4]" />}>
+            <Suspense
+              fallback={
+                <div className="h-10 w-40 animate-pulse rounded-full bg-[#efe8e4]" />
+              }
+            >
               <PlpSortSelect current={sort} />
             </Suspense>
           </div>
         </div>
 
-        {/* Product grid or empty state */}
         {products.length > 0 ? (
-          <ProductGrid products={products} />
+          <>
+            <ProductGrid products={products} />
+            <StorefrontPagination
+              page={page}
+              totalPages={totalPages}
+              basePath="/products"
+              searchParams={{ sort, q, category, limit: String(limit) }}
+            />
+          </>
         ) : (
-          <div className="flex flex-col items-center justify-center rounded-[20px] bg-white px-4 py-24 text-center shadow-sm">
+          <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-[#c5dac2] bg-white px-4 py-24 text-center shadow-sm">
             <div className="mb-6 flex size-20 items-center justify-center rounded-full bg-[#eff5ee]">
               <Leaf className="size-10 text-[#ec6e55]" aria-hidden />
             </div>
             <h2 className="mb-2 font-heading text-2xl font-bold text-[#23403d]">
-              {q ? "No products matched your search" : "No products yet"}
+              {q ? "No products matched your search" : "No active products yet"}
             </h2>
-            <p className="mb-8 text-sm font-medium text-[#767676] max-w-md">
-              {q ? "Try checking your spelling or use more general terms." : "We're currently stocking up on fresh items. Please check back soon!"}
+            <p className="mb-8 max-w-md text-sm font-medium text-[#767676]">
+              {q
+                ? "Try checking your spelling or use more general terms."
+                : "Add products in the admin console and set their status to Active — they will show up here automatically."}
             </p>
             <Link
               href="/products"

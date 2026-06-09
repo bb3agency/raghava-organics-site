@@ -24,6 +24,7 @@ export interface UserAddress {
   city: string;
   state: string;
   pincode: string;
+  isDefault?: boolean;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -61,9 +62,20 @@ export async function getMyOrders(accessToken: string): Promise<UserOrder[]> {
   return unwrapItems<UserOrder>(response);
 }
 
+export type CreateUserAddressInput = {
+  fullName: string;
+  phone: string;
+  line1: string;
+  line2?: string | null;
+  city: string;
+  state: string;
+  pincode: string;
+  isDefault?: boolean;
+};
+
 export async function createMyAddress(
   accessToken: string,
-  input: Omit<UserAddress, "id" | "createdAt" | "updatedAt">,
+  input: CreateUserAddressInput,
 ): Promise<UserAddress> {
   return apiClient<UserAddress>("/users/me/addresses", {
     method: "POST",

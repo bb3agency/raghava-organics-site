@@ -5,25 +5,24 @@ import { createAuthenticatedApiClient } from "@/lib/authenticated-api";
 import { redirectToAdminLogin } from "@/lib/admin-auth-navigation";
 import { useAuthStore } from "@/stores/auth";
 
+/** Stable authenticated client — store reads use getState to keep hook count fixed (HMR-safe). */
 export function useAuthenticatedApi() {
-  const setAccessToken = useAuthStore((s) => s.setAccessToken);
-  const clearSession = useAuthStore((s) => s.clearSession);
-
   return useMemo(
     () =>
       createAuthenticatedApiClient({
         getAccessToken: () => useAuthStore.getState().accessToken,
-        setAccessToken,
+        setAccessToken: (token) => useAuthStore.getState().setAccessToken(token),
         onAuthFailure: () => {
-          clearSession();
           const path = window.location.pathname;
           if (path.startsWith("/admin")) {
+            useAuthStore.getState().logoutLocalSession();
             redirectToAdminLogin();
           } else {
+            useAuthStore.getState().clearSession();
             window.location.assign("/login");
           }
         },
       }),
-    [setAccessToken, clearSession],
+    [],
   );
 }

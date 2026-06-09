@@ -6,6 +6,7 @@ import { useAdminSessionRestore } from "@/hooks/use-admin-session-restore";
 import { redirectToAdminLogin } from "@/lib/admin-auth-navigation";
 import { canAccessAdmin } from "@/lib/permissions";
 import { resolveAdminUser } from "@/lib/resolve-admin-user";
+import { AdminSessionRestoreGate } from "@/components/auth/AdminSessionRestoreGate";
 import { AdminLoadingBlock } from "@/components/admin/ui/admin-ui";
 import { useAuthStore } from "@/stores/auth";
 
@@ -38,15 +39,16 @@ export function AdminGuard({ children }: AdminGuardProps) {
 
   if (status === "checking" || status === "restoring") {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-[#faf3ef]">
-        <AdminLoadingBlock label="Restoring admin session…" />
-      </div>
+      <AdminSessionRestoreGate
+        label="Restoring admin session…"
+        className="flex min-h-[100dvh] flex-col items-center justify-center gap-4 bg-[#faf3ef] px-4 pb-[max(1rem,env(safe-area-inset-bottom))]"
+      />
     );
   }
 
   if (status === "failed") {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-[#faf3ef]">
+      <div className="flex min-h-[100dvh] items-center justify-center bg-[#faf3ef] px-4">
         <AdminLoadingBlock label="Redirecting to sign in…" />
       </div>
     );
@@ -54,9 +56,10 @@ export function AdminGuard({ children }: AdminGuardProps) {
 
   if (!sessionReady || !adminUser) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-[#faf3ef]">
-        <AdminLoadingBlock label="Checking permissions…" />
-      </div>
+      <AdminSessionRestoreGate
+        label="Checking permissions…"
+        className="flex min-h-[100dvh] flex-col items-center justify-center gap-4 bg-[#faf3ef] px-4 pb-[max(1rem,env(safe-area-inset-bottom))]"
+      />
     );
   }
 

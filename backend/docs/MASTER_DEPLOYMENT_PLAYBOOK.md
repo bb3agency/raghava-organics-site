@@ -569,7 +569,7 @@ Response includes `meta: { page, limit, total, totalPages }`.
 
 Mirror backend toggles in frontend — hide UI when feature is off:
 - `FEATURE_COUPONS_ENABLED` → hide coupon input in cart
-- `FEATURE_REVIEWS_ENABLED` → hide review section on product page
+- `FEATURE_REVIEWS_ENABLED` → hide review section on product page and homepage testimonials (`TestimonialsSection` renders nothing when API returns empty)
 - `FEATURE_WISHLIST_ENABLED` → hide wishlist icon/page
 - `FEATURE_GST_INVOICING_ENABLED` → hide/show invoice download
 - `FEATURE_RESPONSE_ENVELOPE_ENABLED` → when `true`, frontend receives `{ success, data, meta? }` wrapper on all 2xx JSON
@@ -931,7 +931,9 @@ sudo certbot --nginx -d foodstore.com -d www.foodstore.com
 
 > **Mandatory runtime gate before go-live sign-off:** `/api/v1/health/ready` must return `status: "ready"` with `runtimeConfigMissingKeys: []` (after Phase 8 Ops config save + restart). Also execute the runtime stability validation in `docs/CLIENT_VPS_SETUP_GUIDE.md` section **10.1** (separate API/workers supervision, RSS/heap trend capture, sustained OTP/login soak, and notification worker liveness verification).
 
-### 5.5a Runtime validation — Per-template primary notification channels (DB-backed)
+### 5.5a Runtime validation — Per-template primary notification channels (DB-backed, API-only)
+
+> **Note (2026-06-07):** Merchant admin UI panel for notification settings was removed. The API endpoints below remain valid for deployment validation and direct configuration — they are admin-JWT authenticated, no UI required.
 
 Perform these steps on staging before switching traffic:
 
@@ -986,6 +988,7 @@ All provider credentials, webhook tokens, and ops-security parameters are stored
 | Webhook security | `RAZORPAY_WEBHOOK_ALLOWLIST_CIDR`, `DELHIVERY_WEBHOOK_TOKEN`, `SHIPROCKET_WEBHOOK_TOKEN`, skew windows | Strict-profile requires non-empty |
 | Notifications | `RESEND_API_KEY`, `RESEND_FROM`, `MSG91_AUTH_KEY`, `FAST2SMS_API_KEY`, `META_WHATSAPP_*`, `SMS_PROVIDER` | `RESEND_FROM` must use verified domain |
 | Invoice | `INVOICE_STORAGE_ROOT` | PDF storage path — must be writable |
+| Product media | `MEDIA_STORAGE_PROVIDER`, `R2_*`, `R2_PUBLIC_BASE_URL` | **Ops UI** (Product Media domain) — automatic R2 upload; pair with `NEXT_PUBLIC_IMAGE_CDN_URL` |
 | Ops security | `OPS_METRICS_TOKEN`, `REPLAY_APPROVAL_TOKEN`, `TRUSTED_PROXY_ALLOWLIST_CIDR` | DB-overlay runtime keys; enforce before go-live via `/health/ready` |
 
 **After editing `.env`:**
@@ -1518,7 +1521,7 @@ Admin login uses a mandatory 2-step email OTP flow. There is no single-step logi
 { "firstName": "John", "lastName": "Doe", "phone": "+919876543210" }
 ```
 
-#### `GET /api/v1/users/me/addresses` — Response: array of address objects
+#### `GET /api/v1/users/me/addresses` — Response: `{ "items": [ ...address objects ], "meta": { "total": number } }`
 
 #### `POST /api/v1/users/me/addresses`
 
@@ -1547,6 +1550,7 @@ Admin login uses a mandatory 2-step email OTP flow. There is no single-step logi
 ### A.10 Reviews (if `FEATURE_REVIEWS_ENABLED`)
 
 ```jsonc
+// GET /api/v1/reviews/recent?limit=3 → latest approved reviews with body (homepage testimonials)
 // GET /api/v1/reviews/product/:slug → paginated reviews
 // GET /api/v1/reviews/me → my reviews
 // POST /api/v1/reviews → { "productId": "uuid", "rating": 5, "body": "Great!", "images": ["url"] }
@@ -1643,7 +1647,7 @@ if (!response.success) {
 #### `POST /api/v1/admin/products` `[products:write]`
 
 ```jsonc
-// Request body — multipart/form-data supported for image upload
+// Request body — JSON (not multipart). Images added after create via upload or URL endpoints below.
 {
   "name": "Running Shoe Pro",           // required (max 500)
   "description": "Premium running...",   // required (max 10000)
@@ -1673,6 +1677,19 @@ if (!response.success) {
 ```
 
 #### `GET /api/v1/admin/products` `[products:read]` — paginated, with `?isActive=false` filter
+
+#### Product images `[products:write]`
+
+| Method | Path | Notes |
+|--------|------|-------|
+| `POST` | `/api/v1/admin/products/:id/images/upload` | **Preferred.** `multipart/form-data`: one or more `file` parts (max **5 MiB** each, JPEG/PNG/WebP/GIF), optional `altText`. Sort order assigned server-side. **Automatically** uploads to Cloudflare R2 when `MEDIA_STORAGE_PROVIDER=r2`. |
+| `POST` | `/api/v1/admin/products/:id/images` | JSON `{ url, altText, sortOrder }` — external `https://…` or existing hosted URL. |
+| `PATCH` | `/api/v1/admin/products/:id/images/reorder` | `{ images: [{ id, sortOrder }] }` |
+| `DELETE` | `/api/v1/admin/products/:id/images/:imageId` | Deletes DB row; removes R2 object (or legacy VPS file) when URL is hosted media. |
+
+**Public serve (prod):** R2 bucket + `R2_PUBLIC_BASE_URL` (custom domain on bucket). **Local dev:** `GET /api/v1/media/products/:productId/:filename`.
+
+**Env:** Ops UI → Product Media (`MEDIA_STORAGE_PROVIDER=r2`, `R2_*`). Preflight: `npm run verify:r2-media` (no R2 in `.env`). Storefront: `NEXT_PUBLIC_IMAGE_CDN_URL` must match `R2_PUBLIC_BASE_URL`.
 
 ### C.2 Categories — Admin
 
@@ -2061,6 +2078,23 @@ Token: <SHIPROCKET_WEBHOOK_TOKEN>
 | Variable | Required | Example | Notes |
 |----------|----------|---------|-------|
 | `INVOICE_STORAGE_ROOT` | Yes | `/var/www/client/storage/invoices` | Absolute directory path writable by backend/workers. |
+
+### F.7.1 Product image storage (Cloudflare R2 + CDN)
+
+| Variable | Required | Example | Notes |
+|----------|----------|---------|-------|
+| `MEDIA_STORAGE_PROVIDER` | Yes (prod) | `r2` | `local` for dev; `r2` triggers automatic `PutObject` on each admin upload. |
+| `R2_ACCOUNT_ID` | Yes (r2) | Cloudflare account id | From R2 dashboard. |
+| `R2_ACCESS_KEY_ID` | Yes (r2) | API token access key | Object Read & Write on bucket. |
+| `R2_SECRET_ACCESS_KEY` | Yes (r2) | API token secret | Store in vault only. |
+| `R2_BUCKET_NAME` | Yes (r2) | `client-product-images` | Bucket for product media. |
+| `R2_PUBLIC_BASE_URL` | Yes (r2) | `https://cdn.shop.example.com` | Custom domain on bucket (recommended). |
+| `MEDIA_STORAGE_ROOT` | Local only | `/var/www/client/storage/media` | Used when `MEDIA_STORAGE_PROVIDER=local`. |
+| `PUBLIC_STORE_URL` | No | `https://shop.example.com` | Fallback URL builder for local provider. |
+
+**Limits:** 5 MiB per file; MIME validated by magic bytes (JPEG, PNG, WebP, GIF). Max 30 images per product.
+
+**Cloudflare:** Create R2 bucket, bind public hostname, set cache rules on `R2_PUBLIC_BASE_URL`. Objects uploaded with `Cache-Control: public, max-age=31536000, immutable`.
 
 ### F.8 GST / Seller identity
 

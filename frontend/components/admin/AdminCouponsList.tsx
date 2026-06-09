@@ -29,7 +29,7 @@ import {
   type PaginatedResponse,
 } from "@/lib/admin-api";
 
-import { formatAdminDate, formatPaise } from "@/lib/admin-format";
+import { formatAdminDate, formatCouponUsageLabel, formatPaise } from "@/lib/admin-format";
 
 import { getApiErrorMessage } from "@/lib/error-messages";
 
@@ -259,32 +259,27 @@ export function AdminCouponsList({
   const rawItems = readPaginatedItems(data);
   const items = rawItems;
 
+  // Modal form: open for create OR edit
+  const formOpen = showCreate || Boolean(editingCoupon);
+  const formCoupon = editingCoupon ?? null;
+
   return (
     <>
-      {showCreate ? (
-        <AdminCouponForm
-          onSaved={() => {
-            setShowCreate(false);
-
-            void load();
-            notifyAdminDataChanged(["coupons", "dashboard"]);
-          }}
-          onCancel={() => setShowCreate(false)}
-        />
-      ) : null}
-
-      {editingCoupon ? (
-        <AdminCouponForm
-          coupon={editingCoupon}
-          onSaved={() => {
-            setEditingCoupon(null);
-
-            void load();
-            notifyAdminDataChanged(["coupons", "dashboard"]);
-          }}
-          onCancel={() => setEditingCoupon(null)}
-        />
-      ) : null}
+      {/* Create / Edit modal */}
+      <AdminCouponForm
+        open={formOpen}
+        coupon={formCoupon}
+        onSaved={() => {
+          setShowCreate(false);
+          setEditingCoupon(null);
+          void load();
+          notifyAdminDataChanged(["coupons", "dashboard"]);
+        }}
+        onClose={() => {
+          setShowCreate(false);
+          setEditingCoupon(null);
+        }}
+      />
 
       {error ? (
         <p className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
@@ -470,25 +465,34 @@ export function AdminCouponsList({
                       </td>
                       <td className="px-3 py-4">
                         <div className="flex flex-col gap-1.5 w-32">
-                          <div className="flex justify-between text-xs font-medium">
-                            <span>{coupon.usesCount}</span>
-                            <span className="text-muted-foreground">
-                              / {coupon.maxUsesTotal || "∞"}
-                            </span>
-                          </div>
+                          <span className="text-xs font-medium tabular-nums">
+                            {formatCouponUsageLabel(
+                              coupon.usesCount,
+                              coupon.maxUsesTotal,
+                            )}
+                          </span>
                           {coupon.maxUsesTotal ? (
                             <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
                               <div
                                 className={`h-full rounded-full ${
-                                  coupon.usesCount / coupon.maxUsesTotal > 0.9
+                                  (coupon.usesCount ?? 0) / coupon.maxUsesTotal >
+                                  0.9
                                     ? "bg-rose-500"
-                                    : coupon.usesCount / coupon.maxUsesTotal >
+                                    : (coupon.usesCount ?? 0) /
+                                          coupon.maxUsesTotal >
                                         0.7
                                       ? "bg-amber-500"
                                       : "bg-zinc-900"
                                 }`}
                                 style={{
-                                  width: `${Math.min(100, Math.round((coupon.usesCount / coupon.maxUsesTotal) * 100))}%`,
+                                  width: `${Math.min(
+                                    100,
+                                    Math.round(
+                                      ((coupon.usesCount ?? 0) /
+                                        coupon.maxUsesTotal) *
+                                        100,
+                                    ),
+                                  )}%`,
                                 }}
                               />
                             </div>

@@ -19,3 +19,6 @@ services:
   postgres:
     profiles:
       - compose-local-postgres-only
+
+  redis:
+    ports: !reset []

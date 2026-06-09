@@ -12,6 +12,7 @@ import {
 import { formatPaise } from "@/lib/admin-format";
 import { getApiErrorMessage } from "@/lib/error-messages";
 import { createIdempotencyKey } from "@/lib/idempotency";
+import { notifyAdminDataChanged } from "@/lib/admin-data-refresh";
 import { ADMIN_PERMISSIONS, hasAdminPermission } from "@/lib/permissions";
 
 const EDITABLE_STATUSES = new Set(["PENDING_PAYMENT", "CONFIRMED"]);
@@ -89,6 +90,7 @@ export function AdminOrderItemsPanel({ orderId, onUpdated }: AdminOrderItemsPane
       setSuccess("Line items updated.");
       await load();
       onUpdated?.();
+      notifyAdminDataChanged(["orders", "dashboard", "payments", "inventory"]);
     } catch (err) {
       setError(getApiErrorMessage(err));
     } finally {

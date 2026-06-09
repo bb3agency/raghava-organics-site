@@ -140,7 +140,7 @@ Dispatch policy (applies regardless of provider):
   - 13 supported templates: `OrderConfirmed`, `PaymentFailed`, `OrderShipped`, `OutForDelivery`, `OrderDelivered`, `OrderCancelled`, `LowStockAlert`, `OtpVerification`, `NotificationDeliveryFailure`, `PasswordReset`, `AdminInviteSetup`, `OpsInviteSetup`, `OpsActionOtp`.
   - Default for all templates is `EMAIL`.
   - No fallback: if the configured primary channel fails (disabled, missing credentials, provider error), the notification fails immediately and triggers a technical failure alert.
-  - Merchant admin configures per-template channels via `PATCH /api/v1/admin/settings/notifications` with `primaryChannels` payload.
+  - Per-template channels are configured via direct API: `PATCH /api/v1/admin/settings/notifications` with `primaryChannels` payload (admin JWT). **Note (2026-06-07):** Merchant admin UI for this was removed; use the API directly or set defaults at go-live. Provider availability toggles are in ops config (`/ops/config`).
   - Worker reads primary channel from DB at job processing time, not from environment variables.
 
 ### 2.5 Fast2SMS (SMS/OTP — no DLT required)

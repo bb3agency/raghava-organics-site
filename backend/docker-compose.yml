@@ -83,9 +83,10 @@ services:
       timeout: 3s
       retries: 10
       start_period: 10s
-    # ports disabled for multi-client VPS security (Redis accessible only via Docker network)
-    # ports:
-    #   - "${REDIS_PORT:-6379}:6379"
+    # Exposed for host-side dev (dev-up.cmd / npm run dev). docker-compose.prod.yml
+    # removes this mapping on VPS so Redis stays on the Docker network only.
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
     environment:
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
     volumes:

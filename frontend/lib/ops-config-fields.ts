@@ -52,6 +52,10 @@ const SELECT_OPTIONS: Record<string, Array<{ value: string; label: string }>> = 
     { value: "noop", label: "Noop (dev only)" },
   ],
   EMAIL_PROVIDER: [{ value: "resend", label: "Resend" }],
+  MEDIA_STORAGE_PROVIDER: [
+    { value: "r2", label: "Cloudflare R2 (production)" },
+    { value: "local", label: "Local VPS disk (development)" },
+  ],
 };
 
 const BOOLEAN_KEYS = new Set([
@@ -63,7 +67,12 @@ const BOOLEAN_KEYS = new Set([
 ]);
 
 function isSecretKey(key: string): boolean {
-  if (key.endsWith("_KEY_ID") || key.endsWith("_FROM") || key.endsWith("_EMAIL")) {
+  if (
+    key.endsWith("_KEY_ID") ||
+    key.endsWith("_FROM") ||
+    key.endsWith("_EMAIL") ||
+    key === "R2_ACCESS_KEY_ID"
+  ) {
     return false;
   }
   return /(_SECRET|_TOKEN|_PASSWORD|_AUTH_KEY|_API_KEY|_APP_SECRET|OPS_METRICS_TOKEN|REPLAY_APPROVAL_TOKEN|OPS_COOKIE_SECRET)/.test(
@@ -129,6 +138,7 @@ export function groupOpsConfigFieldsByDomain(
 ): Array<{ domain: OpsConfigDomain; label: string; fields: OpsConfigFieldDefinition[] }> {
   const domainLabels: Record<OpsConfigDomain, string> = {
     core: "Core Runtime",
+    media: "Product Media (Cloudflare R2)",
     payments: "Payments",
     shipping: "Shipping",
     notifications: "Notifications",
@@ -137,6 +147,7 @@ export function groupOpsConfigFieldsByDomain(
 
   const order: OpsConfigDomain[] = [
     "core",
+    "media",
     "payments",
     "shipping",
     "notifications",

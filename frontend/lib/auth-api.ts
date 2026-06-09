@@ -2,6 +2,7 @@ import { apiClient } from "@/lib/api";
 import { createIdempotencyKey } from "@/lib/idempotency";
 import type { User } from "@/types/user";
 import {
+  checkIdentifierInputSchema,
   emailLoginInputSchema,
   emailRegisterInputSchema,
   forgotPasswordInputSchema,
@@ -43,14 +44,26 @@ export interface SignupPhoneInput {
 export interface EmailRegisterInput {
   firstName: string;
   lastName: string;
-  phone: string;
+  /** Optional for email registration — not required. Empty string is treated as absent. */
+  phone?: string;
   email: string;
   password: string;
   turnstileToken?: string;
 }
 
+export interface CheckIdentifierInput {
+  identifier: string;
+}
+
+export interface CheckIdentifierResponse {
+  exists: boolean;
+  identifierType: "phone" | "email";
+  hasPhone: boolean;
+}
+
 export interface EmailLoginInput {
-  email: string;
+  /** Phone number or email address. Backend detects the type. */
+  identifier: string;
   password: string;
   turnstileToken?: string;
 }
@@ -118,6 +131,21 @@ export async function registerWithEmail(
     method: "POST",
     body: JSON.stringify(body),
     credentials: "include",
+  });
+}
+
+/**
+ * Check whether a phone number or email address belongs to a registered user.
+ * Used by login forms to give "not registered" feedback before the OTP or
+ * password step.  Does NOT reveal any account details beyond existence.
+ */
+export async function checkIdentifier(
+  input: CheckIdentifierInput,
+): Promise<CheckIdentifierResponse> {
+  const body = checkIdentifierInputSchema.parse(input);
+  return apiClient<CheckIdentifierResponse>("/auth/check-identifier", {
+    method: "POST",
+    body: JSON.stringify(body),
   });
 }
 

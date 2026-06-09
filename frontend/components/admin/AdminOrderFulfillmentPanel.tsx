@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useAuthenticatedApi } from "@/hooks/use-authenticated-api";
 import { getBrowserApiBaseUrl } from "@/lib/api-base";
 import { createIdempotencyKey } from "@/lib/idempotency";
+import { notifyAdminDataChanged } from "@/lib/admin-data-refresh";
 import { getApiErrorMessageWithHint } from "@/lib/error-messages";
 import { ADMIN_PERMISSIONS, hasAdminPermission } from "@/lib/permissions";
 import { useAuthStore } from "@/stores/auth";
@@ -181,6 +182,7 @@ export function AdminOrderFulfillmentPanel({
       setSuccess("Action completed. Refreshing order state…");
       await loadDetail(selectedOrderId);
       await loadOrders();
+      notifyAdminDataChanged(["orders", "shipments", "dashboard", "payments"]);
     } catch (err) {
       setError(getApiErrorMessageWithHint(err));
     } finally {
@@ -209,6 +211,7 @@ export function AdminOrderFulfillmentPanel({
       }
       setSuccess("Label ready.");
       await loadDetail(selectedOrderId);
+      notifyAdminDataChanged(["orders", "shipments", "dashboard"]);
     } catch (err) {
       setError(getApiErrorMessageWithHint(err));
     } finally {
@@ -238,6 +241,7 @@ export function AdminOrderFulfillmentPanel({
           : "Pickup scheduled with Shiprocket.",
       );
       await loadDetail(selectedOrderId);
+      notifyAdminDataChanged(["orders", "shipments", "dashboard"]);
     } catch (err) {
       setError(getApiErrorMessageWithHint(err));
     } finally {

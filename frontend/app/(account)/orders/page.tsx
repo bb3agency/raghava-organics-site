@@ -7,19 +7,23 @@ import { getMyOrders, type UserOrder } from "@/lib/users-api";
 import { getBrowserApiBaseUrl } from "@/lib/api-base";
 import { getApiErrorMessage } from "@/lib/error-messages";
 import { formatPrice } from "@/lib/format-price";
+import { formatPaymentModeLabel } from "@/lib/format-payment-mode";
 import { EmptyState } from "@/components/shared/EmptyState";
 
 export default function AccountOrdersPage() {
   const accessToken = useAuthStore((s) => s.accessToken);
   const [orders, setOrders] = useState<UserOrder[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
     async function load() {
       if (!accessToken) {
+        setLoading(false);
         return;
       }
+      setLoading(true);
       try {
         const data = await getMyOrders(accessToken);
         if (!cancelled) {
@@ -29,6 +33,8 @@ export default function AccountOrdersPage() {
         if (!cancelled) {
           setError(getApiErrorMessage(err));
         }
+      } finally {
+        if (!cancelled) setLoading(false);
       }
     }
     void load();
@@ -36,6 +42,19 @@ export default function AccountOrdersPage() {
       cancelled = true;
     };
   }, [accessToken]);
+
+  if (loading) {
+    return (
+      <div className="grid gap-3 rounded-lg border border-border p-4">
+        <h1 className="font-heading text-xl font-semibold sm:text-2xl">Order history</h1>
+        <div className="grid gap-2">
+          {[1, 2, 3].map((i) => (
+            <div key={i} className="h-16 animate-pulse rounded-md bg-muted" />
+          ))}
+        </div>
+      </div>
+    );
+  }
 
   if (!orders.length && !error) {
     return (
@@ -48,7 +67,7 @@ export default function AccountOrdersPage() {
 
   return (
     <section className="grid gap-3 rounded-lg border border-border p-4">
-      <h1 className="font-heading text-2xl font-semibold">Order history</h1>
+      <h1 className="font-heading text-xl font-semibold sm:text-2xl">Order history</h1>
       {error ? (
         <p className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
           {error}
@@ -62,7 +81,8 @@ export default function AccountOrdersPage() {
           <div>
             <p className="font-medium">{order.orderNumber}</p>
             <p className="text-sm text-muted-foreground">
-              {order.status} · {order.paymentMode}
+              {order.status}
+              {order.paymentMode ? ` · ${formatPaymentModeLabel(order.paymentMode)}` : ""}
             </p>
             <p className="text-sm">{formatPrice(order.total)}</p>
           </div>

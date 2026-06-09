@@ -42,7 +42,11 @@ export function AddToCartButton({
         markPendingMerge();
       }
       if (redirectTo) {
-        router.push(redirectTo);
+        if (redirectTo === "/checkout" && !accessToken) {
+          router.push("/login?redirect=/checkout");
+        } else {
+          router.push(redirectTo);
+        }
       }
     } catch (err) {
       setError(getApiErrorMessage(err));

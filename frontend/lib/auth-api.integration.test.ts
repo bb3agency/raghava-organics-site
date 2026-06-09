@@ -39,7 +39,7 @@ describe("auth api integration", () => {
   it("auth endpoints return API errors for invalid credentials", async () => {
     await expect(
       loginWithEmail({
-        email: "nobody@example.com",
+        identifier: "nobody@example.com",
         password: "invalid-password",
       }),
     ).rejects.toSatisfy(

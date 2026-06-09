@@ -1,9 +1,11 @@
 import Link from "next/link";
-import { Leaf } from "lucide-react";
-import { apiClient } from "@/lib/api";
-import { mapProductListResponse } from "@/lib/product-adapters";
+import { ChevronRight, Leaf } from "lucide-react";
 import { ProductGrid } from "@/components/product/ProductGrid";
-import type { Product } from "@/types/product";
+import { StorefrontPagination } from "@/components/product/StorefrontPagination";
+import {
+  fetchStorefrontCategoryProducts,
+  type StorefrontProductSort,
+} from "@/lib/storefront-products";
 
 interface CategoryProductsPageProps {
   params: Promise<{ slug: string }>;
@@ -11,6 +13,9 @@ interface CategoryProductsPageProps {
 }
 
 function formatCategoryName(slug: string): string {
+  if (slug === "spices-condiments") {
+    return "Spices & Condiments";
+  }
   return slug
     .split("-")
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
@@ -20,7 +25,7 @@ function formatCategoryName(slug: string): string {
 export async function generateMetadata({ params }: CategoryProductsPageProps) {
   const { slug } = await params;
   const name = formatCategoryName(slug);
-  return { title: `${name} — Organic Products` };
+  return { title: `${name} — Chemical Free Products` };
 }
 
 export default async function CategoryProductsPage({
@@ -29,71 +34,81 @@ export default async function CategoryProductsPage({
 }: CategoryProductsPageProps) {
   const { slug } = await params;
   const query = await searchParams;
-  const page = query.page ?? "1";
-  const limit = query.limit ?? "12";
-  const sort = query.sort ?? "newest";
+  const page = Math.max(1, Number(query.page ?? "1") || 1);
+  const limit = Math.min(48, Math.max(1, Number(query.limit ?? "12") || 12));
+  const sort = (query.sort ?? "newest") as StorefrontProductSort;
   const categoryName = formatCategoryName(slug);
 
-  let products: Product[] = [];
-  try {
-    const payload = await apiClient<unknown>(
-      `/products/categories/${slug}/products?${new URLSearchParams({ page, limit, sort }).toString()}`,
-    );
-    products = mapProductListResponse(payload);
-  } catch {
-    products = [];
-  }
+  const { products, meta } = await fetchStorefrontCategoryProducts(slug, {
+    page,
+    limit,
+    sort,
+  });
+
+  const total = meta?.total ?? products.length;
+  const totalPages = meta?.totalPages ?? 1;
 
   return (
-    <div className="mx-auto max-w-7xl px-4 py-10 lg:px-6">
-      {/* Breadcrumb */}
-      <nav className="mb-6 flex items-center gap-1.5 text-xs text-muted-foreground" aria-label="Breadcrumb">
-        <Link href="/" className="hover:text-primary">Home</Link>
-        <span>/</span>
-        <Link href="/products" className="hover:text-primary">Shop</Link>
-        <span>/</span>
-        <span className="font-medium text-foreground">{categoryName}</span>
-      </nav>
-
-      {/* Header */}
-      <div className="mb-8 flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-widest text-accent">
-            Organic Category
+    <div className="flex min-h-screen flex-col bg-[#eff5ee] pb-16">
+      <section className="relative overflow-hidden bg-[#dbe8d8] py-10 md:py-16">
+        <div className="mx-auto w-full max-w-[1440px] px-4 lg:px-8">
+          <nav
+            className="mb-4 flex items-center gap-1.5 text-xs font-bold text-[#767676] sm:text-sm"
+            aria-label="Breadcrumb"
+          >
+            <Link href="/" className="hover:text-[#ec6e55]">
+              Home
+            </Link>
+            <ChevronRight className="size-3" />
+            <Link href="/products" className="hover:text-[#ec6e55]">
+              Shop
+            </Link>
+            <ChevronRight className="size-3" />
+            <span className="text-[#ec6e55]">{categoryName}</span>
+          </nav>
+          <p className="text-xs font-bold uppercase tracking-widest text-[#ec6e55]">
+            Chemical Free Category
           </p>
-          <h1 className="mt-1 font-heading text-3xl font-bold text-foreground">
+          <h1 className="mt-1 font-heading text-3xl font-bold text-[#23403d] sm:text-4xl">
             {categoryName}
           </h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {products.length > 0
-              ? `${products.length} product${products.length !== 1 ? "s" : ""} available`
-              : "No products yet"}
+          <p className="mt-2 text-sm font-medium text-[#23403d]/75">
+            {total > 0
+              ? `${total} active product${total !== 1 ? "s" : ""}`
+              : "Products in this category will appear when marked Active in admin"}
           </p>
         </div>
-        <Link
-          href="/products"
-          className="text-sm font-semibold text-primary underline-offset-2 hover:underline"
-        >
-          ← All products
-        </Link>
-      </div>
+      </section>
 
-      {/* Grid */}
-      {products.length > 0 ? (
-        <ProductGrid products={products} />
-      ) : (
-        <div className="flex flex-col items-center gap-4 py-24 text-center text-muted-foreground">
-          <Leaf className="size-14 opacity-20" aria-hidden />
-          <p className="font-heading text-xl font-semibold text-foreground">Coming soon</p>
-          <p className="text-sm">We&apos;re adding products to this category. Check back shortly!</p>
-          <Link
-            href="/products"
-            className="mt-2 inline-flex h-10 items-center justify-center rounded-full bg-primary px-6 text-sm font-semibold text-primary-foreground transition-colors hover:bg-accent"
-          >
-            Browse all products
-          </Link>
-        </div>
-      )}
+      <section className="mx-auto w-full max-w-[1440px] px-4 pt-8 lg:px-8">
+        {products.length > 0 ? (
+          <>
+            <ProductGrid products={products} />
+            <StorefrontPagination
+              page={page}
+              totalPages={totalPages}
+              basePath={`/categories/${slug}`}
+              searchParams={{ sort, limit: String(limit) }}
+            />
+          </>
+        ) : (
+          <div className="flex flex-col items-center gap-4 rounded-2xl border border-dashed border-[#c5dac2] bg-white py-24 text-center">
+            <Leaf className="size-14 text-[#23403d]/25" aria-hidden />
+            <p className="font-heading text-xl font-semibold text-[#23403d]">
+              No products in this category yet
+            </p>
+            <p className="max-w-md text-sm text-[#767676]">
+              Active products assigned to this category in admin will show up here.
+            </p>
+            <Link
+              href="/products"
+              className="mt-2 inline-flex h-10 items-center justify-center rounded-full bg-[#23403d] px-6 text-sm font-bold text-white transition-colors hover:bg-[#ec6e55]"
+            >
+              Browse all products
+            </Link>
+          </div>
+        )}
+      </section>
     </div>
   );
 }

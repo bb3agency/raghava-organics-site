@@ -7,7 +7,6 @@ import {
   Percent,
   RefreshCcw,
   Settings,
-  ShieldAlert,
   ShoppingCart,
   Star,
   Truck,
@@ -69,6 +68,13 @@ export const ADMIN_NAV_ITEMS: AdminNavItem[] = [
     routeKey: "products",
   },
   {
+    href: "/admin/categories",
+    label: "Categories",
+    description: "Product taxonomy",
+    icon: Layers,
+    routeKey: "categories",
+  },
+  {
     href: "/admin/inventory",
     label: "Inventory",
     description: "Stock levels and alerts",
@@ -102,13 +108,6 @@ export const ADMIN_NAV_ITEMS: AdminNavItem[] = [
     description: "Deep dive reporting",
     icon: BarChart3,
     routeKey: "dashboard", // Tied to dashboard for now
-  },
-  {
-    href: "/admin/reliability",
-    label: "Reliability",
-    description: "System health tools",
-    icon: ShieldAlert,
-    routeKey: "reliability",
   },
   {
     href: "/admin/settings",

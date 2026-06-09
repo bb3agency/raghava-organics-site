@@ -37,8 +37,20 @@ export const signupPhoneInputSchema = z.object({
   email: emailSchema.optional(),
 });
 
+/** Used by login forms to check if a phone/email is registered before proceeding. */
+export const checkIdentifierInputSchema = z.object({
+  identifier: z.string().min(1, "Enter your mobile number or email").max(255),
+});
+
+/**
+ * Password login: `identifier` accepts a mobile number OR email address.
+ * The backend detects the type and looks up the user accordingly.
+ */
 export const emailLoginInputSchema = z.object({
-  email: emailSchema,
+  identifier: z
+    .string()
+    .min(1, "Enter your mobile number or email")
+    .max(255, "Too long"),
   password: passwordSchema,
   turnstileToken: z.string().max(4096).optional(),
 });
@@ -85,10 +97,23 @@ export const addCartItemInputSchema = z.object({
 export const updateCartItemInputSchema = z.object({
   quantity: z.number().int().min(1).max(1000),
 });
+// emailRegisterInputSchema keeps phone as optional string.
+// Empty string ("") passes validation and is stripped to undefined before the API call
+// (see EmailRegisterForm handleSubmit). Non-empty values must be a valid phone number.
 export const emailRegisterInputSchema = z.object({
   firstName: z.string().min(1, "First name is required").max(100),
   lastName: z.string().min(1, "Last name is required").max(100),
-  phone: phoneSchema,
+  phone: z
+    .string()
+    .optional()
+    .refine(
+      (val) => !val || val.trim() === "" || val.trim().length >= 10,
+      "Enter a valid phone number (at least 10 digits)"
+    )
+    .refine(
+      (val) => !val || val.trim().length <= 15,
+      "Enter a valid phone number"
+    ),
   email: emailSchema,
   password: passwordSchema,
   turnstileToken: z.string().max(4096).optional(),

@@ -56,7 +56,7 @@ export function InventorySettingsPanel() {
     }
   }
 
-  const inputClass = "block w-full max-w-xs rounded-lg border border-border bg-background/50 px-3.5 py-2 text-sm text-foreground placeholder-muted-foreground/60 transition-all focus:border-primary focus:bg-background focus:ring-2 focus:ring-primary/20 focus:outline-hidden disabled:opacity-50";
+  const inputClass = "block w-full rounded-lg border border-border bg-background/50 px-3.5 py-2 text-sm text-foreground placeholder-muted-foreground/60 transition-all focus:border-primary focus:bg-background focus:ring-2 focus:ring-primary/20 focus:outline-hidden disabled:opacity-50";
 
   return (
     <div className="space-y-6">
@@ -73,7 +73,7 @@ export function InventorySettingsPanel() {
         </div>
       ) : (
         <form onSubmit={(e) => { e.preventDefault(); void onSave(); }} className="space-y-6">
-          <div className="rounded-xl border border-border bg-muted/10 p-5 space-y-4">
+          <div className="rounded-xl border border-border bg-muted/10 p-4 sm:p-5 space-y-4">
             <h4 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               <Package className="h-4 w-4 text-primary" />
               Stock Alerts & Thresholds
@@ -99,26 +99,26 @@ export function InventorySettingsPanel() {
           </div>
 
           {error && (
-            <div className="flex items-start gap-2.5 rounded-lg border border-destructive/20 bg-destructive/10 p-3.5 text-xs text-destructive">
+            <div className="flex min-w-0 items-start gap-2.5 rounded-lg border border-destructive/20 bg-destructive/10 p-3.5 text-xs text-destructive overflow-hidden">
               <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
               <span>{error}</span>
             </div>
           )}
 
           {success && (
-            <div className="flex items-start gap-2.5 rounded-lg border border-zinc-900/20 bg-zinc-900/10 p-3.5 text-xs text-zinc-800">
+            <div className="flex min-w-0 items-start gap-2.5 rounded-lg border border-zinc-900/20 bg-zinc-900/10 p-3.5 text-xs text-zinc-800 overflow-hidden">
               <CheckCircle2 className="h-4 w-4 shrink-0 mt-0.5" />
               <span>{success}</span>
             </div>
           )}
 
           {/* Submit Action */}
-          <div className="flex justify-start pt-2 border-t border-border">
+          <div className="flex justify-end pt-2 border-t border-border">
             <button
               type="submit"
               disabled={isSubmitting || !canWrite}
               title={!canWrite ? "Requires settings:write permission" : undefined}
-              className="flex items-center justify-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-medium text-primary-foreground transition-all hover:bg-primary/95 focus:outline-hidden focus:ring-2 focus:ring-primary/20 disabled:opacity-50 cursor-pointer"
+              className="flex w-full sm:w-auto min-h-11 items-center justify-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-medium text-primary-foreground transition-all hover:bg-primary/95 focus:outline-hidden focus:ring-2 focus:ring-primary/20 disabled:opacity-50 cursor-pointer"
             >
               {isSubmitting ? (
                 <>

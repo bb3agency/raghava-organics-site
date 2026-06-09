@@ -6,7 +6,7 @@ import { Fast2smsAdapter } from '@modules/notifications/adapters/fast2sms.adapte
 import { MetaWhatsAppAdapter } from '@modules/notifications/adapters/meta-whatsapp.adapter';
 import { Msg91Adapter } from '@modules/notifications/adapters/msg91.adapter';
 import { ResendAdapter } from '@modules/notifications/adapters/resend.adapter';
-import { sendNotificationFailureAlert, sendTechnicalFailureAlert } from '@modules/notifications/notification-failure-alert';
+import { sendNotificationFailureAlert, sendTechnicalFailureAlert, type TechnicalFailureChannel } from '@modules/notifications/notification-failure-alert';
 import type { createNotificationProviders } from '@modules/notifications/notification-provider';
 import { SmsTemplateRegistry } from '@modules/notifications/sms-template-registry';
 import { supportedEmailTemplates } from '@modules/notifications/templates/email-templates';
@@ -96,6 +96,50 @@ function normalizePrimaryChannels(value: unknown): Record<string, PrimaryChannel
 
 function resolvePrimaryChannel(template: string, primaryChannels: Record<string, PrimaryChannel>): PrimaryChannel | null {
   return primaryChannels[template] ?? null;
+}
+
+/**
+ * Tracks consecutive delivery failures per channel:provider.
+ * When the same provider fails PROVIDER_FAILURE_THRESHOLD times in a row,
+ * a PROVIDER_RUNTIME alert fires (subject to the existing 15-min cooldown dedup
+ * in notification-failure-alert.ts). Counter resets on any successful delivery,
+ * meaning a single success after a run of failures clears the slate.
+ *
+ * Keeps admins informed about systematic provider outages (e.g. Resend down,
+ * SMS credentials expired) without sending one email per failed delivery job.
+ */
+const PROVIDER_FAILURE_THRESHOLD = 3;
+const providerFailureCounters = new Map<string, number>();
+
+function onProviderSuccess(channel: TechnicalFailureChannel, provider: string): void {
+  providerFailureCounters.delete(`${channel}:${provider}`);
+}
+
+function onProviderFailure(
+  channel: TechnicalFailureChannel,
+  provider: string,
+  prisma: InstanceType<typeof RealPrismaClient>,
+  errorMessage: string,
+  jobId: string
+): void {
+  const key = `${channel}:${provider}`;
+  const count = (providerFailureCounters.get(key) ?? 0) + 1;
+  providerFailureCounters.set(key, count);
+
+  if (count >= PROVIDER_FAILURE_THRESHOLD) {
+    void sendTechnicalFailureAlert({
+      prisma,
+      template: 'ProviderSystematicFailure',
+      channel,
+      recipient: `${provider}-provider`,
+      errorMessage: `${provider} ${channel.toLowerCase()} provider has failed ${count} consecutive time${count === 1 ? '' : 's'}. Last error: ${errorMessage}`,
+      failureStage: 'PROVIDER_RUNTIME',
+      domain: 'notifications',
+      component: `${provider}-provider`,
+      queueName: 'notifications',
+      jobId,
+    });
+  }
 }
 
 type NotificationsWorkerDeps = {

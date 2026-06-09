@@ -231,7 +231,7 @@ A high-priority SMS (and optional WhatsApp message if enabled) is sent the momen
 Customer can cancel an order while it is in `CONFIRMED` or `PROCESSING` status — before it has been shipped. If payment was already captured, a refund is initiated automatically. The customer receives a cancellation SMS and email.
 
 #### BR-POST-06 — Product Reviews
-After an order is marked `DELIVERED`, the customer can leave a star rating (1–5) and text review for each product they ordered. Reviews are only visible on the product page after admin approval. Only verified purchasers can review.
+After an order is marked `DELIVERED`, the customer can leave a star rating (1–5) and text review for each product they ordered. Reviews are only visible on the storefront after admin approval — on the product detail page and, when written body text is present, in the homepage testimonials carousel (`GET /api/v1/reviews/recent`). Only verified purchasers can review.
 
 #### BR-POST-07 — Return Request
 After an order is `DELIVERED`, the customer can submit a return request specifying which items to return, the quantity, and the reason. The system validates quantities against the original order. The admin then approves or rejects the request. Actual reverse pickup coordination and refund processing are handled in v2.1.
@@ -266,7 +266,7 @@ A live feed of the 10 most recent orders showing order number, customer name, to
 ### 6.2 Product & Catalogue Management
 
 #### BR-PROD-01 — Create Product
-Admin enters product name (slug is auto-generated but editable), selects category, writes description, adds tags, uploads images, and sets the product as active or draft. Products are not visible on the storefront until set to active.
+Admin enters product name (slug is auto-generated but editable), selects category, writes description, optional **short description** (`metaDescription`, max 500 chars for SEO/listings), adds tags, uploads images, toggles **featured**, and sets **active or draft** (`isActive`). Products are not visible on the storefront until `isActive` is true (and in-stock per catalogue rules).
 
 #### BR-PROD-02 — Product Variants
 Admin defines one or more variants per product. Each variant has: SKU, variant name (e.g., `500g`, `Large / Red`), price in rupees, optional compare-at price for strike-through display, weight in grams (used by the active shipping provider for rate calculation), and initial stock quantity.
@@ -278,10 +278,10 @@ Admin can fill flexible attributes relevant to the product type:
 - **Apparel:** handled via variant attributes (size, colour) — no separate attribute needed
 
 #### BR-PROD-04 — Product Images
-Admin can upload multiple images per product via drag-and-drop. Images are stored and served through HTTPS CDN-compatible URLs. Admin can set the display order. Images are delivered with automatic quality and format optimisation when supported by the CDN.
+Admin can upload multiple raw images per product (JPEG/PNG/WebP/GIF, **max 5 MB each**) via the product editor multi-file picker, or attach external HTTPS URLs. Production uploads **automatically** sync to **Cloudflare R2** (`MEDIA_STORAGE_PROVIDER=r2`); Postgres stores the public CDN URL (`R2_PUBLIC_BASE_URL/<clientId>/products/...`). Local dev uses VPS disk (`local`) and optional `GET /api/v1/media/products/:productId/:filename`. Admin can reorder and delete images (delete removes the R2 object or legacy VPS file). Optional CDN image optimisation (resize/WebP) is an operator configuration on the Cloudflare side, not in-app transformation.
 
-#### BR-PROD-05 — Edit & Deactivate
-Admin can edit any product field at any time. Deactivating a product hides it from the storefront immediately. Hard deletion is not available — all order history referencing the product is preserved.
+#### BR-PROD-05 — Edit, Deactivate & Permanent Delete
+Admin can edit any product field at any time. **Deactivate** (soft delete) hides the product from the storefront immediately while preserving order history — reversible via restore or setting `isActive: true`. **Permanent delete** (`DELETE /api/v1/admin/products/:id/permanent`, `products:write`) removes the product row irreversibly when it has **no** order history and **no** customer reviews; hosted media and cart line items are cleared first. The admin UI labels soft delete **Deactivate** and exposes permanent delete only via a separate destructive action with confirmation.
 
 #### BR-PROD-06 — Category Management
 Admin can create and organise categories and subcategories in a tree structure. Each category has a name, a URL slug, an optional image, and an optional parent category. Nesting depth is unlimited.

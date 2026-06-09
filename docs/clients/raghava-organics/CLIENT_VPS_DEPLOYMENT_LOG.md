@@ -40,7 +40,7 @@
 - [x] `production.backend.env` on VPS at `backend/.env`
 - [x] Run `phase7-backend-deploy.sh`
 - [x] `curl http://127.0.0.1:3001/api/v1/health` OK
-- [ ] Redis `ports:` commented out (multi-client — no host `6379` publish)
+- [ ] Redis not published on host `6379` in production (`docker-compose.prod.yml` `redis.ports: !reset []`; multi-client VPS)
 - [ ] `phase7.5-nginx-tls-preflight.sh` then Nginx + Certbot per [VPS_DEPLOYMENT_PACK.md](./VPS_DEPLOYMENT_PACK.md) § multi-client
 
 ---

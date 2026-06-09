@@ -7,6 +7,7 @@ import { useAuthenticatedApi } from "@/hooks/use-authenticated-api";
 import { ORDER_FILTER_STATUSES, type AdminOrderDetailFull } from "@/lib/admin-api";
 import { getApiErrorMessage } from "@/lib/error-messages";
 import { createIdempotencyKey } from "@/lib/idempotency";
+import { notifyAdminDataChanged } from "@/lib/admin-data-refresh";
 import { ADMIN_PERMISSIONS, hasAdminPermission } from "@/lib/permissions";
 
 const inputClass =
@@ -21,6 +22,7 @@ export function AdminOrderStatusPanel({ orderId, onUpdated }: AdminOrderStatusPa
   const api = useAuthenticatedApi();
   const { adminUser } = useAdminAuth();
   const canWrite = hasAdminPermission(adminUser, ADMIN_PERMISSIONS.ordersWrite);
+  const canRefund = hasAdminPermission(adminUser, ADMIN_PERMISSIONS.ordersRefund);
 
   const [order, setOrder] = useState<AdminOrderDetailFull | null>(null);
   const [loading, setLoading] = useState(true);
@@ -66,6 +68,7 @@ export function AdminOrderStatusPanel({ orderId, onUpdated }: AdminOrderStatusPa
       setNote("");
       await load();
       onUpdated?.();
+      notifyAdminDataChanged(["orders", "dashboard", "payments", "shipments"]);
     } catch (err) {
       setError(getApiErrorMessage(err));
     } finally {
@@ -87,7 +90,9 @@ export function AdminOrderStatusPanel({ orderId, onUpdated }: AdminOrderStatusPa
           <label className="grid gap-1 text-sm">
             Status
             <select className={inputClass} value={status} onChange={(e) => setStatus(e.target.value)}>
-              {ORDER_FILTER_STATUSES.map((value) => (
+              {ORDER_FILTER_STATUSES.filter(
+                (value) => value !== "REFUNDED" || canRefund,
+              ).map((value) => (
                 <option key={value} value={value}>
                   {value}
                 </option>

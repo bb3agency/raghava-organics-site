@@ -7,6 +7,7 @@ import { useAuthenticatedApi } from "@/hooks/use-authenticated-api";
 import { ensureArray, type AdminProductImportResult } from "@/lib/admin-api";
 import { getApiErrorMessage } from "@/lib/error-messages";
 import { createIdempotencyKey } from "@/lib/idempotency";
+import { notifyAdminDataChanged } from "@/lib/admin-data-refresh";
 import { ADMIN_PERMISSIONS, hasAdminPermission } from "@/lib/permissions";
 
 export function AdminProductImportPanel() {
@@ -37,6 +38,7 @@ export function AdminProductImportPanel() {
       );
       setResult(response);
       setFile(null);
+      notifyAdminDataChanged(["products", "inventory", "dashboard"]);
     } catch (err) {
       setError(getApiErrorMessage(err));
     } finally {

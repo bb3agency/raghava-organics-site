@@ -7,7 +7,11 @@ import { AdminStatusBadge } from "@/components/admin/AdminStatusBadge";
 import { useAuthenticatedApi } from "@/hooks/use-authenticated-api";
 import type { AdminOrderDetailFull } from "@/lib/admin-api";
 import { getBrowserApiBaseUrl } from "@/lib/api-base";
-import { formatAdminDate, formatPaise, orderStatusTone } from "@/lib/admin-format";
+import {
+  formatAdminDate,
+  formatPaise,
+  orderStatusTone,
+} from "@/lib/admin-format";
 import { getApiErrorMessage } from "@/lib/error-messages";
 import { useAuthStore } from "@/stores/auth";
 
@@ -27,7 +31,9 @@ export function AdminOrderDetailPanel({ orderId }: AdminOrderDetailPanelProps) {
     setLoading(true);
     setError(null);
     try {
-      const detail = await api<AdminOrderDetailFull>(`/admin/orders/${orderId}`);
+      const detail = await api<AdminOrderDetailFull>(
+        `/admin/orders/${orderId}`,
+      );
       setOrder(detail);
     } catch (err) {
       setError(getApiErrorMessage(err));
@@ -80,7 +86,10 @@ export function AdminOrderDetailPanel({ orderId }: AdminOrderDetailPanelProps) {
       actions={
         order ? (
           <div className="flex flex-wrap items-center gap-2">
-            <AdminStatusBadge label={order.status} tone={orderStatusTone(order.status)} />
+            <AdminStatusBadge
+              label={order.status}
+              tone={orderStatusTone(order.status)}
+            />
             {order.invoice?.hasPdf ? (
               <button
                 type="button"
@@ -100,8 +109,12 @@ export function AdminOrderDetailPanel({ orderId }: AdminOrderDetailPanelProps) {
           <div className="grid gap-4 md:grid-cols-3">
             <SummaryBlock title="Customer">
               <p className="font-medium">{order.customer.name}</p>
-              <p className="text-xs text-muted-foreground">{order.customer.email ?? "—"}</p>
-              <p className="text-xs text-muted-foreground">{order.customer.phone ?? "—"}</p>
+              <p className="text-xs text-muted-foreground">
+                {order.customer.email ?? "—"}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                {order.customer.phone ?? "—"}
+              </p>
               <Link
                 href={`/admin/customers/${order.userId}`}
                 className="mt-2 inline-block text-xs text-primary hover:underline"
@@ -113,9 +126,13 @@ export function AdminOrderDetailPanel({ orderId }: AdminOrderDetailPanelProps) {
               {address ? (
                 <>
                   <p>{address.fullName}</p>
-                  <p className="text-xs text-muted-foreground">{address.line1}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {address.line1}
+                  </p>
                   {address.line2 ? (
-                    <p className="text-xs text-muted-foreground">{address.line2}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {address.line2}
+                    </p>
                   ) : null}
                   <p className="text-xs text-muted-foreground">
                     {address.city}, {address.state} {address.pincode}
@@ -128,8 +145,14 @@ export function AdminOrderDetailPanel({ orderId }: AdminOrderDetailPanelProps) {
             <SummaryBlock title="Totals">
               <dl className="grid gap-1 text-sm">
                 <Row label="Subtotal" value={formatPaise(order.subtotal)} />
-                <Row label="Shipping" value={formatPaise(order.shippingCharge)} />
-                <Row label="Discount" value={formatPaise(order.discountAmount)} />
+                <Row
+                  label="Shipping"
+                  value={formatPaise(order.shippingCharge)}
+                />
+                <Row
+                  label="Discount"
+                  value={formatPaise(order.discountAmount)}
+                />
                 <Row label="Total" value={formatPaise(order.total)} bold />
               </dl>
             </SummaryBlock>
@@ -142,7 +165,10 @@ export function AdminOrderDetailPanel({ orderId }: AdminOrderDetailPanelProps) {
                   <Row label="Provider" value={order.payment.provider} />
                   <Row label="Status" value={order.payment.status} />
                   <Row label="Method" value={order.payment.method ?? "—"} />
-                  <Row label="Amount" value={formatPaise(order.payment.amount)} />
+                  <Row
+                    label="Amount"
+                    value={formatPaise(order.payment.amount)}
+                  />
                   <Row
                     label="Captured"
                     value={
@@ -153,7 +179,9 @@ export function AdminOrderDetailPanel({ orderId }: AdminOrderDetailPanelProps) {
                   />
                 </dl>
               ) : (
-                <p className="text-sm text-muted-foreground">No payment record</p>
+                <p className="text-sm text-muted-foreground">
+                  No payment record
+                </p>
               )}
             </SummaryBlock>
             <SummaryBlock title="Shipment">
@@ -164,7 +192,9 @@ export function AdminOrderDetailPanel({ orderId }: AdminOrderDetailPanelProps) {
                   <Row label="AWB" value={order.shipment.awb ?? "—"} />
                   {order.shipment.trackingUrl ? (
                     <div>
-                      <dt className="text-xs text-muted-foreground">Tracking</dt>
+                      <dt className="text-xs text-muted-foreground">
+                        Tracking
+                      </dt>
                       <dd>
                         <a
                           href={order.shipment.trackingUrl}

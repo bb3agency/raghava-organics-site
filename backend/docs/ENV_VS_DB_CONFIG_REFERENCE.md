@@ -39,6 +39,11 @@ These must be set in `.env` (or VPS secrets manager) before the process starts. 
 - **Generation:** `node -e "console.log(require('crypto').randomBytes(24).toString('hex'))"`
 - **Rotation:** Update both `REDIS_PASSWORD` and the password segment of `REDIS_URL` simultaneously, then restart.
 
+**Local Docker dev vs production (June 2026):**
+- **Dev (`docker-compose.yml`):** Redis port `6379` is published to the host so API/worker processes on Windows/macOS/Linux can connect via `redis://:password@localhost:6379`.
+- **Production (`docker-compose.prod.yml`):** `redis.ports: !reset []` removes the host mapping — Redis stays reachable only on the Docker network (VPS internal).
+- **Connection hardening:** All ioredis clients created via `src/common/redis/redis-connection.ts` attach throttled `error` listeners and use shared reconnect options. BullMQ worker boot patches `IORedis.prototype.duplicate` so blocking connections inherit the same guard.
+
 **`NODE_ENV`**
 - **What:** Runtime profile switch. `production` enables strict placeholder rejection and disallows `noop` providers; disables verbose error output; enables secure cookie flags. `development` and `test` relax some checks for local use.
 - **Values:** `production` | `development` | `test`
@@ -312,7 +317,7 @@ These are stored AES-256-GCM encrypted in the `OpsConfigSecret` table and applie
 **`NOTIFY_EMAIL_ENABLED`** / **`NOTIFY_SMS_ENABLED`** / **`NOTIFY_WHATSAPP_ENABLED`**
 - **What:** Master channel on/off toggles. If `NOTIFY_EMAIL_ENABLED=false`, no email is ever sent regardless of per-template configuration. Useful for disabling a broken provider without redeploying.
 - **Defaults (env layer):** `NOTIFY_EMAIL_ENABLED` → `true`; `NOTIFY_SMS_ENABLED` → `false` (opt-in); `NOTIFY_WHATSAPP_ENABLED` → `false`.
-- **DB-layer override:** `StoreSettings.notifyEmailEnabled` / `notifySmsEnabled` / `notifyWhatsappEnabled` take precedence over the env flag when the `storeSettings` row exists. Manage via admin `PATCH /api/v1/admin/settings/notifications` or the **Admin → Settings → Notifications** UI. Only one channel should be active at a time — the admin UI enforces single-channel selection.
+- **DB-layer override:** `StoreSettings.notifyEmailEnabled` / `notifySmsEnabled` / `notifyWhatsappEnabled` take precedence over the env flag when the `storeSettings` row exists. Manage via direct `PATCH /api/v1/admin/settings/notifications` API call (admin JWT). **Note (2026-06-07):** The merchant admin UI panel for this was removed — notification provider configuration is now consolidated to `/ops/config` (ops console). Only one channel should be active at a time.
 
 **`EMAIL_PROVIDER`**
 - **What:** Email provider selection. Currently only `resend` is implemented.
@@ -394,6 +399,25 @@ These are stored AES-256-GCM encrypted in the `OpsConfigSecret` table and applie
 
 **`INVOICE_STORAGE_ROOT`**
 - **What:** Filesystem path where PDF GST invoices are stored. Must be writable by the process user. Only relevant when `FEATURE_GST_INVOICING_ENABLED=true`.
+
+**Product media (Ops UI → Product Media / Cloudflare R2)** — all keys are **DB-overlay** (encrypted in `ops_config_secret`), applied to `process.env` at API boot. **Do not** put R2 credentials in bootstrap `.env`.
+
+| Key | Purpose |
+|-----|---------|
+| `MEDIA_STORAGE_PROVIDER` | `local` (dev) or `r2` (production). When `r2`, each admin upload **automatically** `PutObject`s to Cloudflare R2. |
+| `R2_ACCOUNT_ID` | Cloudflare account id |
+| `R2_ACCESS_KEY_ID` | R2 API token access key (non-secret in Ops UI — public id) |
+| `R2_SECRET_ACCESS_KEY` | R2 API token secret |
+| `R2_BUCKET_NAME` | Target bucket |
+| `R2_PUBLIC_BASE_URL` | Public CDN hostname on bucket — pair with storefront `NEXT_PUBLIC_IMAGE_CDN_URL` |
+| `R2_ENDPOINT` | Optional S3 API endpoint override |
+| `MEDIA_STORAGE_ROOT` | Local provider disk root (dev / legacy delete fallback) |
+| `MEDIA_CDN_BASE_URL` | Fallback origin for local provider URLs |
+
+**Go-live:** `GET /api/v1/health/ready` lists missing keys until `MEDIA_STORAGE_PROVIDER=r2` and R2 chain are saved in Ops UI. Restart API/workers after save. Preflight: `npm run verify:r2-media` (fails if legacy keys remain in `.env`).
+
+**`PUBLIC_STORE_URL`**
+- **What:** Fallback storefront origin when `MEDIA_CDN_BASE_URL` is unset. Usually same as `STOREFRONT_URL`.
 
 ---
 
@@ -515,7 +539,7 @@ Guardrail scripts (both wired into `npm run ci:reliability-gates`):
 3. **Apply DB-overlay keys via Ops UI** (`POST /api/v1/ops/config/save` with OTP): payment credentials, shipping credentials, notification credentials, ops security params (`OPS_METRICS_TOKEN`, `REPLAY_APPROVAL_TOKEN`, `TRUSTED_PROXY_ALLOWLIST_CIDR`, etc.).
 4. **Restart API + workers** to apply overlay.
 5. **Verify:** `GET /api/v1/ops/config/overview` — all required keys present, no placeholders.
-6. **Set StoreSettings** via admin UI: store name, contact details, notification channel config, invoice seller fields.
+6. **Set StoreSettings** via admin UI: store name, contact details, invoice seller fields. **Notification provider config is ops-only** (step 3 above); per-template channel routing via direct `PATCH /api/v1/admin/settings/notifications` API if non-default routing needed.
 7. **Observe startup alerts** — any missing config emits `sendTechnicalFailureAlert`. Resolve all before go-live.
 
 ---

@@ -7,6 +7,7 @@ import { AdminStatusBadge } from "@/components/admin/AdminStatusBadge";
 import { Button } from "@/components/ui/button";
 import { useAuthenticatedApi } from "@/hooks/use-authenticated-api";
 import { createIdempotencyKey } from "@/lib/idempotency";
+import { notifyAdminDataChanged } from "@/lib/admin-data-refresh";
 import {
   ensureArray,
   getPaginatedItems,
@@ -198,6 +199,7 @@ export function AdminCustomerDetailPanel({ customerId }: AdminCustomerDetailPane
                     })
                       .then(() => {
                         setMessage("Note deleted.");
+                        notifyAdminDataChanged(["customers", "dashboard"]);
                         return load();
                       })
                       .catch((err) => setError(getApiErrorMessageWithHint(err)));
@@ -222,6 +224,7 @@ export function AdminCustomerDetailPanel({ customerId }: AdminCustomerDetailPane
                 .then(() => {
                   setMessage("Note added.");
                   setNoteText("");
+                  notifyAdminDataChanged(["customers", "dashboard"]);
                   return load();
                 })
                 .catch((err) => setError(getApiErrorMessageWithHint(err)));
@@ -259,7 +262,10 @@ export function AdminCustomerDetailPanel({ customerId }: AdminCustomerDetailPane
                   idempotencyKey: createIdempotencyKey(),
                   body: JSON.stringify({ reason: banReason }),
                 })
-                  .then(() => setMessage("Customer banned."))
+                  .then(() => {
+                    setMessage("Customer banned.");
+                    notifyAdminDataChanged(["customers", "dashboard"]);
+                  })
                   .catch((err) => setError(getApiErrorMessageWithHint(err)));
               }}
             >
@@ -274,7 +280,10 @@ export function AdminCustomerDetailPanel({ customerId }: AdminCustomerDetailPane
                   method: "DELETE",
                   idempotencyKey: createIdempotencyKey(),
                 })
-                  .then(() => setMessage("Customer unbanned."))
+                  .then(() => {
+                    setMessage("Customer unbanned.");
+                    notifyAdminDataChanged(["customers", "dashboard"]);
+                  })
                   .catch((err) => setError(getApiErrorMessageWithHint(err)));
               }}
             >

@@ -70,7 +70,7 @@ export interface OpsConfigOverview {
   generatedAt: string;
   runtimeProfile: "development-like" | "production-like";
   domains: Array<{
-    domain: "core" | "payments" | "shipping" | "notifications" | "opsSecurity";
+    domain: "core" | "media" | "payments" | "shipping" | "notifications" | "opsSecurity";
     label: string;
     items: Array<{
       key: string;
@@ -90,7 +90,7 @@ export interface OpsConfigOverview {
 
 export interface OpsStoredConfig {
   items: Array<{
-    domain: "core" | "payments" | "shipping" | "notifications" | "opsSecurity";
+    domain: "core" | "media" | "payments" | "shipping" | "notifications" | "opsSecurity";
     key: string;
     maskedValue: string;
     /**

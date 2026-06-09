@@ -38,6 +38,7 @@ export default function AccountSettingsPage() {
   const [error, setError] = useState<string | null>(null);
   const [showAddForm, setShowAddForm] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   const form = useForm<AddressFormData>({
     resolver: zodResolver(addressSchema),
@@ -47,8 +48,10 @@ export default function AccountSettingsPage() {
     let cancelled = false;
     async function load() {
       if (!accessToken) {
+        setLoading(false);
         return;
       }
+      setLoading(true);
       try {
         const data = await getMyAddresses(accessToken);
         if (!cancelled) {
@@ -57,6 +60,10 @@ export default function AccountSettingsPage() {
       } catch (err) {
         if (!cancelled) {
           setError(getApiErrorMessage(err));
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
         }
       }
     }
@@ -75,10 +82,11 @@ export default function AccountSettingsPage() {
         fullName: values.fullName,
         phone: values.phone,
         line1: values.line1,
-        line2: values.line2 || null,
+        ...(values.line2?.trim() ? { line2: values.line2.trim() } : {}),
         city: values.city,
         state: values.state,
         pincode: values.pincode,
+        isDefault: addresses.length === 0,
       });
       setAddresses([...addresses, newAddress]);
       setShowAddForm(false);
@@ -108,8 +116,8 @@ export default function AccountSettingsPage() {
   return (
     <section className="grid gap-6">
        <div className="rounded-lg border border-border p-4">
-          <div className="flex items-center justify-between mb-4">
-             <h1 className="font-heading text-2xl font-semibold">Saved addresses</h1>
+          <div className="flex flex-col gap-3 mb-4 sm:flex-row sm:items-center sm:justify-between">
+             <h1 className="font-heading text-xl font-semibold sm:text-2xl">Saved addresses</h1>
              {!showAddForm && (
                <Button onClick={() => setShowAddForm(true)} disabled={busy} size="sm">
                  Add New Address
@@ -152,7 +160,7 @@ export default function AccountSettingsPage() {
                     <input {...form.register("pincode")} className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring" />
                  </div>
               </div>
-              <div className="flex justify-end gap-2 mt-2">
+              <div className="flex flex-col-reverse gap-2 mt-2 sm:flex-row sm:justify-end">
                 <Button type="button" variant="outline" size="sm" onClick={() => setShowAddForm(false)} disabled={busy}>Cancel</Button>
                 <Button type="submit" size="sm" disabled={busy}>Save Address</Button>
               </div>
@@ -160,11 +168,17 @@ export default function AccountSettingsPage() {
           )}
 
           <div className="grid gap-3">
-            {!showAddForm && addresses.length === 0 ? (
+            {loading ? (
+              <div className="grid gap-2">
+                {[1, 2].map((i) => (
+                  <div key={i} className="h-20 animate-pulse rounded border border-border bg-muted" />
+                ))}
+              </div>
+            ) : !showAddForm && addresses.length === 0 ? (
               <p className="text-sm text-muted-foreground">No saved addresses.</p>
             ) : (
               addresses.map((address) => (
-                <article key={address.id} className="flex justify-between items-start rounded border border-border p-3 text-sm">
+                <article key={address.id} className="flex flex-col gap-2 rounded border border-border p-3 text-sm sm:flex-row sm:justify-between sm:items-start">
                   <div>
                     <p className="font-medium">{address.fullName}</p>
                     <p className="text-muted-foreground">{address.phone}</p>

@@ -986,6 +986,7 @@ PCI scope, caller-class JSON minimisation (public vs customer vs admin vs ops), 
 
 | Method | Endpoint | Auth | Description |
 |---|---|---|---|
+| GET | `/api/v1/reviews/recent` | Public | Latest merchant-approved reviews with written body (homepage testimonials; query `limit`, default 3, max 10) |
 | GET | `/api/v1/reviews/product/:slug` | Public | Approved reviews for a product |
 | GET | `/api/v1/reviews/me` | Customer | Customer's own reviews |
 | POST | `/api/v1/reviews` | Customer | Create review for delivered purchased item |
@@ -1018,10 +1019,13 @@ PCI scope, caller-class JSON minimisation (public vs customer vs admin vs ops), 
 | PATCH | `/api/v1/admin/products/:id/variants/:variantId` | Update variant + inventory fields |
 | DELETE | `/api/v1/admin/products/:id/variants/:variantId` | Delete a product variant (`products:write`). Returns 400 if last variant. |
 | PATCH | `/api/v1/admin/products/:id` | Update product |
-| DELETE | `/api/v1/admin/products/:id` | Soft-delete product |
-| POST | `/api/v1/admin/products/:id/images` | Add product image. Body: `{ url, altText?, sortOrder? }` (`products:write`) |
-| PATCH | `/api/v1/admin/products/:id/images/reorder` | Reorder product images — body: ordered array of image IDs (`products:write`) |
-| DELETE | `/api/v1/admin/products/:id/images/:imageId` | Remove a specific product image (`products:write`) |
+| DELETE | `/api/v1/admin/products/:id` | Soft-delete (deactivate) product |
+| DELETE | `/api/v1/admin/products/:id/permanent` | Hard-delete product — blocked when orders/reviews reference it (`409`) |
+| POST | `/api/v1/admin/products/:id/images/upload` | Batch multipart upload (max 5 MiB each; optional `altText`; sort order server-assigned). Auto **Cloudflare R2** when `MEDIA_STORAGE_PROVIDER=r2` (`products:write`) |
+| POST | `/api/v1/admin/products/:id/images` | Add image by URL. Body: `{ url, altText, sortOrder }` — `https://` or hosted media path (`products:write`) |
+| PATCH | `/api/v1/admin/products/:id/images/reorder` | Reorder — body: `{ images: [{ id, sortOrder }] }` (`products:write`) |
+| DELETE | `/api/v1/admin/products/:id/images/:imageId` | Remove image + R2 object or legacy VPS file when hosted (`products:write`) |
+| GET | `/api/v1/media/products/:productId/:filename` | Public image serve when provider is `local` only; R2 uses `R2_PUBLIC_BASE_URL` (allowed during maintenance) |
 | GET | `/api/v1/admin/categories` | Category tree list |
 | POST | `/api/v1/admin/categories` | Create category |
 | PATCH | `/api/v1/admin/categories/:id` | Update category |
@@ -1041,7 +1045,7 @@ PCI scope, caller-class JSON minimisation (public vs customer vs admin vs ops), 
 | POST | `/api/v1/admin/orders/:id/print-label` | Generate and return shipping label URL (Shiprocket) |
 | POST | `/api/v1/admin/orders/:id/cancel` | Cancel + refund if paid |
 | POST | `/api/v1/admin/orders/:id/notifications/retrigger` | Re-trigger selected order notification template via selected channels (`EMAIL`/`SMS`/`WHATSAPP`) |
-| GET | `/api/v1/admin/reviews` | List reviews for moderation |
+| GET | `/api/v1/admin/reviews` | List reviews for moderation (`productName`, `productSlug`, date filters) |
 | PATCH | `/api/v1/admin/reviews/:id/moderate` | Approve or reject a review |
 | DELETE | `/api/v1/admin/reviews/:id` | Hard-delete a review (`reviews:moderate`) |
 | GET | `/api/v1/admin/settings/shipping` | Read effective pickup pincode + minimum order value (DB/env source) |
@@ -1089,7 +1093,7 @@ PCI scope, caller-class JSON minimisation (public vs customer vs admin vs ops), 
 | PATCH | `/api/v1/admin/orders/:id/items` | Update order line-item quantities (`orders:write`) |
 | GET | `/api/v1/admin/shipments` | Paginated shipment list across all orders. Query: `status`, `provider`, `page`, `limit`. (`shipments:read`) |
 | GET | `/api/v1/admin/shipments/:id` | Single shipment detail — `awbNumber`, `provider`, `status`, `pickupScheduledDate` (`shipments:read`) |
-| GET | `/api/v1/admin/payments` | Paginated payment list across all orders. Query: `status`, `provider`, `page`, `limit`. (`payments:read`) |
+| GET | `/api/v1/admin/payments` | Paginated payment list. Query: `status`, `method`, `orderId`, `from`, `to`, `page`, `limit`. Items include `customerName`, `customerEmail` from order user. (`payments:read`) |
 | GET | `/api/v1/admin/payments/:id` | Single payment detail — `amount` (Int paise), `provider`, `status` (`payments:read`) |
 | POST | `/api/v1/admin/inventory/bulk-update` | Bulk stock adjustment — max 100 variants per `$transaction` (`inventory:write`) |
 | GET | `/api/v1/admin/inventory/history/:variantId` | Paginated `InventoryAdjustment` history for a variant (`inventory:read`) |
@@ -1345,6 +1349,7 @@ Mode is **cached for 5 seconds** per request to avoid Redis hammering.
 ALWAYS_ALLOWED_PREFIXES = [
   '/api/v1/health',
   '/api/v1/auth',
+  '/api/v1/media',
   '/api/v1/payments/webhook',
   '/api/v1/shipping/webhook',
   '/api/v1/notifications/webhook',
@@ -1554,7 +1559,7 @@ Six phases. Sequential. Do not start a phase until the previous phase's delivera
 - **Deliverable:** Authenticated API with working OTP login, all infrastructure wired
 
 ### Phase 2 — Core Commerce ⏱ Weeks 3–4
-- Products module: CRUD, categories (tree), variants, image upload with HTTPS CDN-compatible URLs
+- Products module: CRUD, categories (tree), variants, VPS image upload (5 MiB) + CDN URLs via `/api/v1/media/products/*`
 - Inventory module: stock tracking, `lowStockThreshold`, `lowStockAlerted` flag
 - Cart module: guest cart (session token), auth cart (userId), merge on login, `priceSnapshot`, cart expiry job
 - Orders module: order creation transaction (cart → order items + cart clear atomically), with inventory decrement in `order-processing` `process-order-update` after captured payment (`deduct-inventory`/`confirm-order` are delegation stubs)
@@ -1638,7 +1643,7 @@ Drop-in additions — each is a self-contained Fastify plugin, added to `app.ts`
 | **Subscription Orders** | Recurring orders with billing schedule (weekly ghee, monthly spice box, etc.) | Medium |
 | **Referral Program** | Referral codes, credit wallet, refer-a-friend tracking | Medium |
 | **Delivery Time Slots** | Time-window selection (morning/evening) for hyperlocal or perishable food delivery | Medium |
-| **Multi-Image Upload (R2)** | Cloudflare R2 storage adapter for scalable media storage, S3-compatible | Medium |
+| **Cloudflare R2 product media** | Implemented 2026-06: automatic R2 upload on admin image save; Ops UI config (`media` domain); batch multipart | — |
 | **Multi-Warehouse Inventory** | Zone-based stock allocation per fulfilment centre | Low |
 | **Product Q&A** | Customer questions on product pages, answered by admin | Low |
 | **Prometheus + Grafana full stack rollout** | Metrics endpoint and alert artifacts exist in backend; full per-client observability stack rollout remains optional operational work | Low |

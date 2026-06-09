@@ -47,7 +47,7 @@ DATABASE_URL="$MIGRATE_DATABASE_URL" npx prisma migrate deploy --schema prisma/s
 
 ## Phase 1 production `.env` (bootstrap-only)
 
-Copy to VPS `/var/www/raghava-organics/backend/.env` from vault. Template: [production.backend.env.example](./production.backend.env.example)
+Copy to VPS `/var/www/raghava-organics/backend/.env` from vault. Template: [production.backend.env.example](./production.backend.env.example) (**bootstrap only** — no `MEDIA_STORAGE_PROVIDER` or `R2_*`; configure Product Media in Ops UI after Phase 8).
 
 **Session refresh on production:** After TLS, confirm `TRUSTED_PROXY_ALLOWLIST_CIDR` includes your Nginx/proxy CIDR (via Ops UI or bootstrap `.env`) so refresh token device binding sees the real client IP. Frontend `NEXT_PUBLIC_API_BASE_URL` must be `https://<domain>/api/v1` (same origin as the storefront). Admins must re-login once after deploying the 2026-06-01 refresh-binding fix if reload still logs them out.
 
@@ -80,7 +80,7 @@ bash docs/clients/raghava-organics/scripts/phase7.5-nginx-tls-preflight.sh
 | Other sites | `ls /etc/nginx/sites-enabled/` — **do not remove** other clients' symlinks |
 | `default` site | **Do not** `rm sites-enabled/default` unless you verified it is unused |
 | Rate zones | Once per VPS: `rate-zones.conf.template` → `/etc/nginx/snippets/rate-zones.conf` + `include` in `nginx.conf` `http {}` |
-| Redis host port | Comment out `redis:` **`ports:`** in `backend/docker-compose.yml`; only one client can bind `0.0.0.0:6379` |
+| Redis host port | Production deploy uses `docker-compose.prod.yml`, which sets `redis.ports: !reset []` so Redis is **not** published on host `6379`. Local dev keeps `6379:6379` in base `docker-compose.yml`. On multi-client VPS, never bind host `6379` — only one client can own that port. |
 | Port conflict | `ss -tlnp \| grep -E '3001\|3101'` — must be free or owned by `raghava-organics-*` / PM2 |
 
 **Install (additive — this domain only):**
@@ -100,6 +100,24 @@ Templates: [backend/nginx/](../../../backend/nginx/)
 - `https://<PRODUCTION_DOMAIN>/api/v1/payments/webhook`
 - `https://<PRODUCTION_DOMAIN>/api/v1/shipping/webhook`
 
+## Product image storage (VPS + Cloudflare)
+
+After backend deploy, ensure writable media directory and matching CDN env:
+
+```bash
+sudo mkdir -p /var/www/raghava-organics/storage/media
+sudo chown -R deploy:deploy /var/www/raghava-organics/storage
+```
+
+| Variable | Where | Example |
+|----------|-------|---------|
+| `MEDIA_STORAGE_PROVIDER`, `R2_*` | **Ops UI** → Product Media | Not in `backend/.env`; restart API after save |
+| `NEXT_PUBLIC_IMAGE_CDN_URL` | `frontend/.env.production.local` | Same hostname as Ops `R2_PUBLIC_BASE_URL` |
+
+- Admin uploads: `POST /api/v1/admin/products/:id/images/upload` (multipart batch, max **5 MiB** per file; sort order assigned server-side).
+- Public serve: **`MEDIA_STORAGE_PROVIDER=r2`** → images at `R2_PUBLIC_BASE_URL` (Cloudflare CDN). **`local`** → `GET /api/v1/media/products/:productId/:filename`.
+- Details: [NEXTJS_FRONTEND_INTEGRATION_GUIDE.md](../../../backend/docs/NEXTJS_FRONTEND_INTEGRATION_GUIDE.md) §7.2, [CLIENT_VPS_SETUP_GUIDE.md](../../../backend/docs/CLIENT_VPS_SETUP_GUIDE.md) §7.
+
 ## Frontend production env
 
-See [frontend/.env.production.example](../../../frontend/.env.production.example) on VPS as `.env.production.local`.
+See [frontend/.env.production.example](../../../frontend/.env.production.example) on VPS as `.env.production.local` — includes `NEXT_PUBLIC_IMAGE_CDN_URL`.

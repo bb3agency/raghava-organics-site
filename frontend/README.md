@@ -1,36 +1,105 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Raghava Organics — Frontend (Next.js)
 
-## Getting Started
+Storefront, merchant admin (`/admin`), ops console (`/ops`), and auth flows.
 
-First, run the development server:
+## Getting started
+
+**Start the backend first**, then the frontend:
 
 ```bash
+# Terminal 1 — backend
+cd backend
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+# or: scripts\dev-up.cmd  (Docker + Prisma + server on Windows)
+
+# Terminal 2 — frontend
+cd frontend
+npm install
+npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Dev server: **http://localhost:3101** (also shown as Network URL, e.g. `http://192.168.1.4:3101`).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+`npm run dev` runs `scripts/ensure-backend-dev.mjs` automatically (`predev`). It probes `BACKEND_PROXY_URL` (default `http://127.0.0.1:3000`) and **exits with instructions** if the Fastify API is not reachable — avoiding broken `/api/v1/*` rewrites and `ECONNREFUSED` spam.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Copy `frontend/.env.example` → `.env.local`. For **phone testing on the same Wi‑Fi**:
 
-## Learn More
+```env
+ALLOWED_DEV_ORIGINS=192.168.1.4
+```
 
-To learn more about Next.js, take a look at the following resources:
+Use the IP printed by `npm run dev` (optional — `next.config.ts` also auto-detects LAN IPv4). Sign in at `http://<that-ip>:3101/admin/login` (not `localhost` if you browse via LAN IP — refresh cookies are host-scoped).
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Typography
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+[`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) loads **[Inter](https://fonts.google.com/specimen/Inter)** site-wide via `lib/fonts.ts` and `app/globals.css`.
 
-## Deploy on Vercel
+## Admin auth (quick reference)
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+| Route | Layout | Session behaviour |
+| --- | --- | --- |
+| `/admin/*` | `(admin)` → `AdminConsoleShell` | `AdminAuthProvider` restores from cookie before showing console |
+| `/admin/login` | `(auth)` | Form shown immediately; background restore may redirect to `/admin` |
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Details: `docs/FRONTEND_DEV_LOG.md` (§2026-06-03 — Admin session restore).
+
+## Admin forms — validation UX
+
+Merchant admin write forms use shared validation helpers:
+
+| Module | Purpose |
+| --- | --- |
+| `lib/admin-form-validation.ts` | Parse API `VALIDATION_ERROR` fields, field labels, banner summary, scroll-to-error |
+| `hooks/use-admin-form-validation.ts` | `validateRequired`, `handleSubmitError`, `fieldClassName` |
+| `components/admin/AdminFormField.tsx` | Label + inline error wrapper |
+
+Inputs use `data-admin-field="<key>"` and error rings with `!border-destructive` so highlight styles are not overridden by neutral border utilities.
+
+**Product create** requires Category + URL Slug (API contract) — see `AdminProductEditor.tsx`.
+
+## Admin product actions
+
+| UI label | API | Notes |
+| --- | --- | --- |
+| **Deactivate** | `DELETE /admin/products/:id` | Soft delete — reversible |
+| **Delete Permanently** | `DELETE /admin/products/:id/permanent` | Hard delete — `409` if orders/reviews exist |
+| Row menu | `AdminRowActionsMenu.tsx` | Portal-based menu (no shadcn dropdown) |
+
+## Admin settings
+
+Merchant admin configures 4 settings panels:
+1. **Store Profile** — Name, contact, compliance IDs (GSTIN, FSSAI)
+2. **Shipping** — Pickup pincode, minimum order value for free shipping
+3. **Inventory** — Default low-stock threshold (units)
+4. **Cash on Delivery** — COD enablement, customer cancellation window
+
+**Notification provider selection** is **ops-only** via `/ops/config` — not exposed in merchant admin. This consolidates infrastructure gates (email/SMS/WhatsApp provider availability) in one place and reduces redundancy.
+
+All settings panels are **mobile-optimized** for 375px viewports with 44px+ touch targets and responsive spacing.
+
+## Maintenance banner
+
+`MaintenanceBanner` in root layout polls maintenance status on **storefront** routes only — skipped on `/admin/*` and `/ops/*`.
+
+## Scripts
+
+| Command | Purpose |
+| --- | --- |
+| `npm run dev` | Next dev on port 3101 (runs backend health check first) |
+| `npm run build` | Production build |
+| `npm run typecheck` | `tsc --noEmit` |
+| `npm run lint` | ESLint |
+| `npm run test` | Vitest unit tests |
+
+## Storefront reviews
+
+When `FEATURE_REVIEWS_ENABLED=true` in backend `.env`:
+
+| Surface | Source |
+| --- | --- |
+| Homepage testimonials | `GET /reviews/recent?limit=3` via `TestimonialsSection` |
+| Product detail reviews | `GET /reviews/product/:slug` via `ProductReviewsSection` |
+
+Reviews appear on the storefront only after admin approval. Shared helpers: `lib/reviews-api.ts`, `lib/storefront-reviews.ts`, `lib/review-display.ts`.
+
+Integration docs: `backend/docs/NEXTJS_FRONTEND_INTEGRATION_GUIDE.md`.

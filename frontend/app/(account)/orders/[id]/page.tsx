@@ -7,6 +7,7 @@ import { getMyOrder, cancelMyOrder, retryPayment, createReturnRequest, type Orde
 import { getBrowserApiBaseUrl } from "@/lib/api-base";
 import { getApiErrorMessage } from "@/lib/error-messages";
 import { formatPrice } from "@/lib/format-price";
+import { formatPaymentModeLabel } from "@/lib/format-payment-mode";
 import { Button } from "@/components/ui/button";
 
 export default function AccountOrderDetailPage() {
@@ -92,7 +93,7 @@ export default function AccountOrderDetailPage() {
     if (!accessToken || !order) return;
 
     const selectedItems = Object.entries(returnItems)
-      .filter(([_, config]) => config.selected)
+      .filter(([, config]) => config.selected)
       .map(([orderItemId, config]) => ({
         orderItemId,
         quantity: config.quantity,
@@ -139,19 +140,22 @@ export default function AccountOrderDetailPage() {
   }
 
   const canCancel = ["PENDING_PAYMENT", "CONFIRMED", "PROCESSING"].includes(order.status);
-  const canRetry = order.status === "PENDING_PAYMENT" || order.status === "PAYMENT_FAILED";
+  const canRetry =
+    order.paymentMode !== "COD" &&
+    (order.status === "PENDING_PAYMENT" || order.status === "PAYMENT_FAILED");
+  const addr = order.shippingAddress;
 
   return (
     <section className="grid gap-6">
       <div className="grid gap-3 rounded-lg border border-border p-4">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
-            <h1 className="font-heading text-2xl font-semibold">{order.orderNumber}</h1>
+            <h1 className="font-heading text-lg font-semibold sm:text-2xl">{order.orderNumber}</h1>
             <p className="text-sm text-muted-foreground">
-              {order.status} · {order.paymentMode}
+              {order.status} · {formatPaymentModeLabel(order.paymentMode)}
             </p>
           </div>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
              {order.invoice?.hasPdf ? (
               <a
                 href={`${getBrowserApiBaseUrl()}/orders/${order.id}/invoice.pdf`}
@@ -207,11 +211,28 @@ export default function AccountOrderDetailPage() {
         </div>
       </div>
 
+      {addr ? (
+        <div className="grid gap-3 rounded-lg border border-border p-4">
+          <h2 className="font-heading text-lg font-semibold">Shipping address</h2>
+          <address className="text-sm not-italic text-muted-foreground">
+            <p className="font-medium text-foreground">{addr.fullName}</p>
+            <p>{addr.phone}</p>
+            <p>
+              {addr.line1}
+              {addr.line2 ? `, ${addr.line2}` : ""}
+            </p>
+            <p>
+              {addr.city}, {addr.state} {addr.pincode}
+            </p>
+          </address>
+        </div>
+      ) : null}
+
       <div className="grid gap-3 rounded-lg border border-border p-4">
         <h2 className="font-heading text-lg font-semibold">Items</h2>
         <div className="grid gap-4">
           {order.items?.map((item) => (
-            <div key={item.id} className="flex items-center justify-between text-sm">
+            <div key={item.id} className="flex flex-col gap-1 text-sm sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <p className="font-medium">{item.productName}</p>
                 <p className="text-muted-foreground">{item.variantName}</p>
@@ -258,7 +279,7 @@ export default function AccountOrderDetailPage() {
                     </label>
                   </div>
                   {config.selected && (
-                    <div className="pl-7 grid gap-3 mt-2 sm:grid-cols-3">
+                    <div className="pl-7 grid gap-3 mt-2">
                       <div>
                         <label className="text-xs font-medium block mb-1">Quantity</label>
                         <input
@@ -304,7 +325,7 @@ export default function AccountOrderDetailPage() {
              />
           </div>
 
-          <div className="flex justify-end gap-2 mt-2">
+          <div className="flex flex-col-reverse gap-2 mt-2 sm:flex-row sm:justify-end">
              <Button type="button" variant="outline" size="sm" disabled={busyAction === "return"} onClick={() => setShowReturnForm(false)}>
                 Cancel
              </Button>

@@ -25,7 +25,7 @@ cd backend && npm run verify:vps-preflight && npm run verify:bootstrap-env
 
 1. Confirm [VPS_INPUTS.md](./VPS_INPUTS.md) is complete (not committed — contains secrets)
 2. `bash docs/clients/raghava-organics/scripts/phase6-host-baseline.sh`
-3. Create host Postgres + copy `production.backend.env.example` → `backend/.env` on VPS
+3. Create host Postgres + copy `production.backend.env.example` → `backend/.env` on VPS (bootstrap only — **no** `MEDIA_STORAGE_PROVIDER` or `R2_*` keys in `.env`)
 4. `bash docs/clients/raghava-organics/scripts/phase7-backend-deploy.sh`
 5. `bash docs/clients/raghava-organics/scripts/phase7.5-nginx-tls-preflight.sh` then Nginx + Certbot ([VPS_DEPLOYMENT_PACK.md](./VPS_DEPLOYMENT_PACK.md) — multi-client VPS)
 6. `bash docs/clients/raghava-organics/scripts/phase10-frontend-deploy.sh` (before Ops browser UI)

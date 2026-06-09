@@ -15,7 +15,6 @@ const LOGOUT_COUNTDOWN_SEC = Math.ceil(LOGOUT_AFTER_WARNING_MS / 1000);
 export function AdminIdleTimeoutModal() {
   const accessToken = useAuthStore((s) => s.accessToken);
   const setAccessToken = useAuthStore((s) => s.setAccessToken);
-  const clearSession = useAuthStore((s) => s.clearSession);
   const [visible, setVisible] = useState(false);
   const [remainingSec, setRemainingSec] = useState(LOGOUT_COUNTDOWN_SEC);
   const [extending, setExtending] = useState(false);
@@ -31,12 +30,12 @@ export function AdminIdleTimeoutModal() {
       try {
         await logoutSession(accessToken);
       } finally {
-        clearSession();
+        useAuthStore.getState().logoutLocalSession();
         redirectToAdminLogin();
       }
     })();
     setVisible(false);
-  }, [accessToken, clearSession]);
+  }, [accessToken]);
 
   const handleExtend = useCallback(async () => {
     setExtending(true);

@@ -11,6 +11,7 @@ Checkpoint completed during Phase 4 kickoff (session setup only).
 - Environment files: `.env.example`, `.env.local` (gitignored)
 - AI rules: `.agents/rules/dev-rules.md`, `.cursor/rules/dev-rules.mdc`
 - Dev log: `docs/FRONTEND_DEV_LOG.md`
+- Typography: **Inter** sitewide (`lib/fonts.ts`, `app/globals.css`)
 
 ## Cloudflare Turnstile
 
@@ -111,7 +112,7 @@ If you skip dev bypass, ensure `RESEND_API_KEY` + `NOTIFY_EMAIL_ENABLED=true` in
 
 ## Before first feature slice
 
-1. Start backend per `../backend/README.md` §Local Development Quickstart
+1. Start backend per `../backend/README.md` §Local Development Quickstart (**required before frontend** — `npm run dev` in `frontend/` runs `ensure-backend-dev.mjs` and exits if the API is down)
 2. Verify health (direct): `curl http://127.0.0.1:3000/api/v1/health`
 3. Configure `frontend/.env.local` per `.env.example` (browser API on **storefront port**, not `:3000`)
 4. Start storefront: `cd frontend && npm run dev` (uses **webpack** dev on Windows — stable; see troubleshooting below)
@@ -149,3 +150,38 @@ Stop other `node.exe` dev servers, and exclude `frontend\.next` from real-time a
 ## Admin session refresh
 
 After admin OTP login, `refresh_token` must appear under **localhost:3101** in DevTools → Application → Cookies. Page reload on `/admin` calls `POST /auth/refresh` via the same origin (see `lib/restore-auth-session.ts`, `components/auth/AdminGuard.tsx`). Details: `../backend/docs/NEXTJS_FRONTEND_INTEGRATION_GUIDE.md` §1.0.1.
+
+## Product images (Cloudflare R2 + CDN)
+
+| Item | Local dev | Production |
+|------|-----------|------------|
+| Upload | Admin → Products → edit product → **Images** → choose one or more files (JPEG/PNG/WebP/GIF, **max 5 MB** each) | Same; backend auto-uploads to **Cloudflare R2** (`MEDIA_STORAGE_PROVIDER=r2`) |
+| API | `POST /admin/products/:id/images/upload` (multipart) | Requires admin JWT + `products:write` |
+| Public serve | `GET /api/v1/media/products/:productId/:filename` when `local` | Images served from `R2_PUBLIC_BASE_URL` |
+| CDN URL | `MEDIA_STORAGE_PROVIDER=local`; optional `NEXT_PUBLIC_IMAGE_CDN_URL=http://localhost:3101` | `R2_PUBLIC_BASE_URL` + matching `NEXT_PUBLIC_IMAGE_CDN_URL` |
+
+**Backend:** configure in **Ops UI** → Product Media (not `backend/.env`). Local dev: `MEDIA_STORAGE_PROVIDER=local`. Production: `r2` + R2 keys in Ops panel; restart API after save. Preflight: `cd backend && npm run verify:r2-media`.
+
+**Frontend** (`frontend/.env.local`):
+
+```bash
+# Must match R2_PUBLIC_BASE_URL in production
+# NEXT_PUBLIC_IMAGE_CDN_URL=http://localhost:3101
+```
+
+Catalog images are resolved in `lib/media-url.ts` (`resolveProductImageUrl`) via `lib/product-adapters.ts`.
+
+## Admin console integrity (2026-06-03)
+
+- **Product editor:** `AdminProductEditor` — `isActive`, `metaDescription`, `isFeatured`, variant `lowStockThreshold` on create; see `FRONTEND_DEV_LOG.md` §Admin data integrity.
+- **Date ranges:** `AdminDateRangePicker` on Dashboard, Orders, Payments, Coupons, Reviews (not in shell header).
+- **Live tables:** Payments show customer name/email; reviews show product name; shipments KPIs from API data.
+- **Tests:** Backend 897/897 unit; frontend `npm run build` clean.
+
+## Storefront customer journey (2026-06-03)
+
+Integrated paths documented in `FRONTEND_DEV_LOG.md` and `../backend/docs/NEXTJS_FRONTEND_INTEGRATION_GUIDE.md`:
+
+- Checkout: saved `addressId`, `/checkout/success`, guest → `/login?redirect=/checkout`
+- Auth: Turnstile, OTP resend, cookie restore + profile hydrate, cart merge after login
+- Account: `{ items, meta }` for addresses/orders; banned users blocked at `GET /users/me`

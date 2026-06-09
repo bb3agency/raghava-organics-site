@@ -12,7 +12,6 @@ const WARNING_LEAD_MS = 2 * 60 * 1000;
 export function AdminSessionWarning() {
   const accessToken = useAuthStore((state) => state.accessToken);
   const setAccessToken = useAuthStore((state) => state.setAccessToken);
-  const clearSession = useAuthStore((state) => state.clearSession);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [extending, setExtending] = useState(false);
   const [extendError, setExtendError] = useState<string | null>(null);
@@ -59,9 +58,9 @@ export function AdminSessionWarning() {
   }, [setAccessToken]);
 
   const handleSignInAgain = useCallback(() => {
-    clearSession();
+    useAuthStore.getState().logoutLocalSession();
     redirectToAdminLogin();
-  }, [clearSession]);
+  }, []);
 
   const visible =
     expiryMs !== null && nowMs >= expiryMs - WARNING_LEAD_MS && nowMs < expiryMs;

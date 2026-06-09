@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { AdminPagination } from "@/components/admin/AdminPagination";
 import { AdminTableScroll } from "@/components/admin/AdminTableScroll";
-import { Button } from "@/components/ui/button";
 import {
   buildAdminQuery,
   coercePaginatedResponse,
@@ -22,6 +21,7 @@ import { useAdminAuth } from "@/contexts/admin-auth-context";
 import { hasAdminPermission, ADMIN_PERMISSIONS } from "@/lib/permissions";
 import Image from "next/image";
 import Link from "next/link";
+import { Search, Check, X, Trash2, Eye, Loader2 } from "lucide-react";
 
 const PAGE_SIZE = 20;
 
@@ -123,81 +123,61 @@ export function AdminReviewsList({
 
   return (
     <>
-      <div className="mb-4 grid grid-cols-2 gap-3 rounded-xl border border-border/40 bg-card p-4 shadow-sm sm:flex sm:flex-row sm:flex-wrap sm:items-center sm:justify-between sm:gap-4">
-        <div className="col-span-2 flex w-full min-w-0 flex-col gap-3 sm:flex-1 sm:flex-row sm:flex-wrap sm:items-center">
-          <div className="relative w-full min-w-0 sm:max-w-sm sm:flex-1">
-            <div className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
-              <svg
-                className="w-4 h-4 text-muted-foreground"
-                aria-hidden="true"
-                xmlns="http://www.w3.org/2000/svg"
-                fill="none"
-                viewBox="0 0 20 20"
-              >
-                <path
-                  stroke="currentColor"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth="2"
-                  d="m19 19-4-4m0-7A7 7 0 1 1 1 8a7 7 0 0 1 14 0Z"
-                />
-              </svg>
-            </div>
-            <input
-              className="h-9 w-full rounded-md border border-border/50 bg-muted/20 pl-9 pr-3 text-sm focus:border-zinc-900 focus:outline-none"
-              placeholder="Search reviews by product or customer..."
-              value={searchInput}
-              onChange={(e) => setSearchInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  setSearch(searchInput.trim());
-                  setPage(1);
-                }
-              }}
-            />
-          </div>
-
-          <select
-            className="h-9 w-full rounded-md border border-border/50 bg-muted/20 px-3 text-sm font-medium text-foreground focus:border-zinc-900 focus:outline-none sm:w-auto sm:min-w-32"
-            value={ratingFilter}
-            onChange={(e) => setRatingFilter(e.target.value)}
-          >
-            <option value="">All Ratings</option>
-            <option value="5">5 Stars</option>
-            <option value="4">4 Stars</option>
-            <option value="3">3 Stars</option>
-            <option value="2">2 Stars</option>
-            <option value="1">1 Star</option>
-          </select>
-
-          <select
-            className="h-9 w-full rounded-md border border-border/50 bg-muted/20 px-3 text-sm font-medium text-foreground focus:border-zinc-900 focus:outline-none sm:w-auto sm:min-w-32"
-            value={approvedFilter}
-            onChange={(event) => setApprovedFilter(event.target.value)}
-          >
-            <option value="">All Status</option>
-            <option value="true">Published</option>
-            <option value="false">Pending</option>
-          </select>
+      <div className="mb-4 flex flex-col gap-3 rounded-xl border border-border/40 bg-card p-4 shadow-sm sm:flex-row sm:flex-wrap sm:items-center sm:gap-4">
+        <div className="relative flex-1 min-w-0 sm:max-w-sm">
+          <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+          <input
+            className="h-9 w-full rounded-md border border-border/50 bg-muted/20 pl-9 pr-3 text-sm focus:border-zinc-900 focus:outline-none"
+            placeholder="Search reviews by product or customer…"
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                setSearch(searchInput.trim());
+                setPage(1);
+              }
+            }}
+          />
         </div>
 
-        <Button
+        <select
+          className="h-9 rounded-md border border-border/50 bg-muted/20 px-3 text-sm font-medium text-foreground focus:border-zinc-900 focus:outline-none sm:min-w-32"
+          value={ratingFilter}
+          onChange={(e) => setRatingFilter(e.target.value)}
+        >
+          <option value="">All Ratings</option>
+          <option value="5">5 Stars</option>
+          <option value="4">4 Stars</option>
+          <option value="3">3 Stars</option>
+          <option value="2">2 Stars</option>
+          <option value="1">1 Star</option>
+        </select>
+
+        <select
+          className="h-9 rounded-md border border-border/50 bg-muted/20 px-3 text-sm font-medium text-foreground focus:border-zinc-900 focus:outline-none sm:min-w-32"
+          value={approvedFilter}
+          onChange={(e) => setApprovedFilter(e.target.value)}
+        >
+          <option value="">All Status</option>
+          <option value="true">Published</option>
+          <option value="false">Pending</option>
+        </select>
+
+        <button
           type="button"
-          variant="outline"
-          size="sm"
-          className="h-9 w-full col-span-2 gap-2 font-medium sm:w-auto sm:col-span-1"
+          className="flex h-9 items-center gap-1.5 rounded-md border border-border/50 bg-card px-3 text-sm font-medium text-foreground hover:bg-muted transition-colors"
           onClick={() => {
             setSearch(searchInput.trim());
             setPage(1);
           }}
         >
-          Filter
-        </Button>
+          Search
+        </button>
       </div>
 
       {loading ? (
-        <div className="flex h-[300px] w-full items-center justify-center">
-          <div className="h-8 w-8 animate-spin rounded-full border-4 border-zinc-900 border-t-transparent"></div>
+        <div className="flex h-48 w-full items-center justify-center">
+          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
         </div>
       ) : error ? (
         <div className="rounded-xl border border-destructive/20 bg-destructive/10 p-4 text-sm text-destructive font-medium">
@@ -360,103 +340,50 @@ export function AdminReviewsList({
                     <td className="px-3 py-4 text-right">
                       <div className="flex items-center justify-end gap-2">
                         <Link
-                          href={
-                            review.productSlug
-                              ? `/products/${review.productSlug}`
-                              : `/admin`
-                          }
-                          className="flex h-7 w-7 items-center justify-center rounded border border-border/50 text-muted-foreground hover:bg-muted hover:text-foreground"
+                          href={review.productSlug ? `/products/${review.productSlug}` : `/admin`}
+                          className="flex h-7 w-7 items-center justify-center rounded border border-border/50 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
                           title="View product"
                           target="_blank"
                         >
-                          <svg
-                            className="h-4 w-4"
-                            fill="none"
-                            viewBox="0 0 20 14"
-                            stroke="currentColor"
-                          >
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              strokeWidth={2}
-                              d="M10 10a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"
-                            />
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              strokeWidth={2}
-                              d="M10 13c-4.97 0-9-2.686-9-6s4.03-6 9-6 9 2.686 9 6-4.03 6-9 6Z"
-                            />
-                          </svg>
+                          <Eye className="h-3.5 w-3.5" />
                         </Link>
 
                         {canModerate && (!review.approved ? (
                           <button
                             type="button"
-                            className="flex h-7 w-7 items-center justify-center rounded border border-zinc-900/50 text-zinc-900 bg-zinc-100 hover:bg-zinc-200 transition-colors"
+                            className="flex h-7 w-7 items-center justify-center rounded border border-emerald-200 text-emerald-700 bg-emerald-50 hover:bg-emerald-100 transition-colors"
                             disabled={actionId === review.id}
                             onClick={() => void moderate(review.id, true)}
-                            title="Approve Review"
+                            title="Approve"
+                            aria-label="Approve review"
                           >
-                            <svg
-                              className="h-4 w-4"
-                              fill="none"
-                              viewBox="0 0 24 24"
-                              stroke="currentColor"
-                            >
-                              <path
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                strokeWidth={2}
-                                d="M5 13l4 4L19 7"
-                              />
-                            </svg>
+                            {actionId === review.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
                           </button>
                         ) : (
                           <button
                             type="button"
-                            className="flex h-7 w-7 items-center justify-center rounded border border-amber-500/50 text-amber-600 bg-amber-50 hover:bg-amber-100 transition-colors"
+                            className="flex h-7 w-7 items-center justify-center rounded border border-amber-200 text-amber-700 bg-amber-50 hover:bg-amber-100 transition-colors"
                             disabled={actionId === review.id}
                             onClick={() => void moderate(review.id, false)}
-                            title="Reject Review"
+                            title="Unpublish"
+                            aria-label="Unpublish review"
                           >
-                            <svg
-                              className="h-4 w-4"
-                              fill="none"
-                              viewBox="0 0 24 24"
-                              stroke="currentColor"
-                            >
-                              <path
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                strokeWidth={2}
-                                d="M6 18L18 6M6 6l12 12"
-                              />
-                            </svg>
+                            {actionId === review.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
                           </button>
                         ))}
 
-                        {canModerate && <button
-                          type="button"
-                          className="flex h-7 w-7 items-center justify-center rounded border border-rose-200 bg-rose-50 text-rose-600 hover:bg-rose-100 transition-colors"
-                          title="Delete review"
-                          disabled={actionId === review.id}
-                          onClick={() => void remove(review.id)}
-                        >
-                          <svg
-                            className="h-4 w-4"
-                            fill="none"
-                            viewBox="0 0 24 24"
-                            stroke="currentColor"
+                        {canModerate && (
+                          <button
+                            type="button"
+                            className="flex h-7 w-7 items-center justify-center rounded border border-rose-200 bg-rose-50 text-rose-600 hover:bg-rose-100 transition-colors"
+                            title="Delete review"
+                            aria-label="Delete review"
+                            disabled={actionId === review.id}
+                            onClick={() => void remove(review.id)}
                           >
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              strokeWidth={2}
-                              d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-                            />
-                          </svg>
-                        </button>}
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>

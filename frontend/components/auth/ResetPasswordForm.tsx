@@ -7,6 +7,7 @@ import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { resetPassword } from "@/lib/auth-api";
 import { getApiErrorMessage } from "@/lib/error-messages";
+import { useAuthStore } from "@/stores/auth";
 import { resetPasswordInputSchema } from "@/lib/validators";
 import { AuthErrorBanner } from "@/components/auth/AuthErrorBanner";
 
@@ -18,6 +19,7 @@ interface ResetPasswordFormProps {
 
 export function ResetPasswordForm({ token }: ResetPasswordFormProps) {
   const router = useRouter();
+  const clearSession = useAuthStore((s) => s.clearSession);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const form = useForm<FormValues>({
@@ -30,6 +32,7 @@ export function ResetPasswordForm({ token }: ResetPasswordFormProps) {
       setError(null);
       const result = await resetPassword(values);
       setSuccessMessage(result.message);
+      clearSession();
       setTimeout(() => {
         router.push("/login?reset=success");
       }, 2000);
