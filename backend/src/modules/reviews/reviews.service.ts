@@ -3,7 +3,13 @@ import { FastifyInstance } from 'fastify';
 import { AppError } from '@common/errors/app-error';
 import { ERROR_CODES } from '@common/errors/error-codes';
 import { featureFlags } from '@config/feature-flags';
-import { AdminReviewListQuery, CreateReviewInput, ModerateReviewInput, ReviewListQuery } from './reviews.types';
+import {
+  AdminReviewListQuery,
+  CreateReviewInput,
+  ModerateReviewInput,
+  RecentApprovedReviewsQuery,
+  ReviewListQuery
+} from './reviews.types';
 
 type ReviewWithUser = Prisma.ReviewGetPayload<{
   include: {
@@ -15,7 +21,7 @@ type ReviewWithUser = Prisma.ReviewGetPayload<{
       };
     };
   };
-}>;
+}> & { product?: { name: string; slug: string } | null };
 
 export class ReviewsService {
   constructor(private readonly fastify: FastifyInstance) {}
@@ -47,7 +53,11 @@ export class ReviewsService {
       select: { id: true }
     });
     if (!deliveredOrder) {
-      throw new AppError(ERROR_CODES.FORBIDDEN, 'Only delivered order purchasers can review this product', 403);
+      throw new AppError(
+        ERROR_CODES.FORBIDDEN,
+        'Only delivered order purchasers can review this product',
+        403
+      );
     }
 
     const existing = await this.fastify.prisma.review.findUnique({
@@ -117,15 +127,178 @@ export class ReviewsService {
     return this.listReviews({ productId: product.id, approved: true }, query, 'public');
   }
 
+  /**
+   * Latest merchant-approved reviews for storefront social proof (homepage testimonials).
+   * Ordered by approval time (`updatedAt` desc) among reviews with non-empty body text.
+   */
+  async listRecentApprovedReviews(query: RecentApprovedReviewsQuery) {
+    const limit = Math.min(Math.max(query.limit ?? 3, 1), 10);
+
+    if (!featureFlags.reviews) {
+      return {
+        items: [],
+        meta: {
+          page: 1,
+          limit,
+          total: 0,
+          totalPages: 0
+        }
+      };
+    }
+
+    const where: Prisma.ReviewWhereInput = {
+      approved: true,
+      body: { not: null },
+      NOT: { body: '' },
+      product: { isActive: true }
+    };
+
+    const include = {
+      user: {
+        select: {
+          id: true,
+          firstName: true,
+          lastName: true
+        }
+      },
+      product: {
+        select: {
+          name: true,
+          slug: true
+        }
+      }
+    } as const;
+
+    const batchSize = 20;
+    const maxScan = 200;
+    let skip = 0;
+    const candidates: ReviewWithUser[] = [];
+
+    while (candidates.length < limit && skip < maxScan) {
+      const batch = await this.fastify.prisma.review.findMany({
+        where,
+        skip,
+        take: batchSize,
+        orderBy: { updatedAt: 'desc' },
+        include
+      });
+      if (batch.length === 0) {
+        break;
+      }
+
+      for (const item of batch) {
+        if (typeof item.body === 'string' && item.body.trim().length > 0) {
+          candidates.push(item);
+          if (candidates.length >= limit) {
+            break;
+          }
+        }
+      }
+
+      skip += batch.length;
+      if (batch.length < batchSize) {
+        break;
+      }
+    }
+
+    const total = await this.fastify.prisma.review.count({ where });
+
+    const items = candidates
+      .slice(0, limit)
+      .map((item) => this.serializeReview(item, 'storefront'));
+
+    return {
+      items,
+      meta: {
+        page: 1,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit)
+      }
+    };
+  }
+
+  async adminReviewSummary(query: { from?: string; to?: string }) {
+    this.assertReviewsEnabled();
+    const where: Prisma.ReviewWhereInput = {
+      approved: true,
+      ...(query.from || query.to
+        ? {
+            createdAt: {
+              ...(query.from ? { gte: new Date(query.from) } : {}),
+              ...(query.to ? { lte: new Date(query.to) } : {})
+            }
+          }
+        : {})
+    };
+
+    const [aggregate, groups] = await Promise.all([
+      this.fastify.prisma.review.aggregate({
+        where,
+        _avg: { rating: true },
+        _count: { id: true }
+      }),
+      this.fastify.prisma.review.groupBy({
+        by: ['rating'],
+        where,
+        _count: { id: true }
+      })
+    ]);
+
+    const distribution: Record<'1' | '2' | '3' | '4' | '5', number> = {
+      '1': 0,
+      '2': 0,
+      '3': 0,
+      '4': 0,
+      '5': 0
+    };
+    for (const row of groups) {
+      const key = String(row.rating) as keyof typeof distribution;
+      if (key in distribution) {
+        distribution[key] = row._count.id;
+      }
+    }
+
+    return {
+      averageRating: aggregate._avg.rating,
+      totalApproved: aggregate._count.id,
+      distribution
+    };
+  }
+
   async adminListReviews(query: AdminReviewListQuery) {
     this.assertReviewsEnabled();
-    return this.listReviews(
-      {
-        ...(query.approved !== undefined ? { approved: query.approved } : {})
-      },
-      query,
-      'admin'
-    );
+    const searchTerm = query.search?.trim();
+    const where: Prisma.ReviewWhereInput = {
+      ...(query.approved !== undefined ? { approved: query.approved } : {}),
+      ...(query.ratingLte !== undefined || query.ratingGte !== undefined
+        ? {
+            rating: {
+              ...(query.ratingLte !== undefined ? { lte: query.ratingLte } : {}),
+              ...(query.ratingGte !== undefined ? { gte: query.ratingGte } : {})
+            }
+          }
+        : {}),
+      ...(searchTerm
+        ? {
+            OR: [
+              { body: { contains: searchTerm, mode: 'insensitive' } },
+              { user: { firstName: { contains: searchTerm, mode: 'insensitive' } } },
+              { user: { lastName: { contains: searchTerm, mode: 'insensitive' } } },
+              { product: { name: { contains: searchTerm, mode: 'insensitive' } } }
+            ]
+          }
+        : {}),
+      ...(query.from || query.to
+        ? {
+            createdAt: {
+              ...(query.from ? { gte: new Date(query.from) } : {}),
+              ...(query.to ? { lte: new Date(query.to) } : {})
+            }
+          }
+        : {})
+    };
+    return this.listReviews(where, query, 'admin');
   }
 
   async adminModerateReview(id: string, input: ModerateReviewInput) {
@@ -176,6 +349,12 @@ export class ReviewsService {
               firstName: true,
               lastName: true
             }
+          },
+          product: {
+            select: {
+              name: true,
+              slug: true
+            }
           }
         }
       }),
@@ -193,7 +372,18 @@ export class ReviewsService {
     };
   }
 
-  private serializeReview(review: ReviewWithUser, visibility: 'owner' | 'public' | 'admin' = 'owner') {
+  private serializePublicAuthor(user: { firstName: string | null; lastName: string | null }) {
+    return {
+      firstName: user.firstName?.trim() || 'Customer',
+      lastName: user.lastName?.trim() || ''
+    };
+  }
+
+  private serializeReview(
+    review: ReviewWithUser,
+    visibility: 'owner' | 'public' | 'admin' | 'storefront' = 'owner'
+  ) {
+    const author = this.serializePublicAuthor(review.user);
     const base = {
       id: review.id,
       rating: review.rating,
@@ -202,11 +392,20 @@ export class ReviewsService {
       approved: review.approved,
       createdAt: review.createdAt.toISOString(),
       updatedAt: review.updatedAt.toISOString(),
-      author: {
-        firstName: review.user.firstName,
-        lastName: review.user.lastName
-      }
+      author
     };
+    if (visibility === 'storefront') {
+      return {
+        id: review.id,
+        rating: review.rating,
+        body: review.body?.trim() ?? '',
+        images: review.images,
+        createdAt: review.createdAt.toISOString(),
+        author,
+        productName: review.product?.name ?? null,
+        productSlug: review.product?.slug ?? null
+      };
+    }
     if (visibility === 'public') {
       return base;
     }
@@ -220,6 +419,8 @@ export class ReviewsService {
       ...base,
       userId: review.userId,
       productId: review.productId,
+      productName: review.product?.name ?? null,
+      productSlug: review.product?.slug ?? null,
       orderId: review.orderId,
       author: {
         id: review.user.id,

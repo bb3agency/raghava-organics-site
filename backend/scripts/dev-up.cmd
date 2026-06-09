@@ -83,7 +83,13 @@ for /f "tokens=5" %%a in ('netstat -ano ^| findstr /R /C:":3000 .*LISTENING"') d
   echo   Killing stale PID %%a holding port 3000
   taskkill /F /PID %%a >nul 2>&1
 )
-REM Do NOT taskkill all node.exe — that terminates this dev-up.cmd parent and breaks startup.
+
+echo [3b/5] Releasing Prisma query-engine lock (other Node processes)...
+node scripts\prisma-generate-safe.js --release-lock-only
+if errorlevel 1 (
+  echo ERROR: Could not release Prisma engine lock. Close other dev servers and retry.
+  exit /b 1
+)
 
 echo [4/5] Ensuring Prisma database + migrations are ready...
 node scripts\dev-ensure-prisma-ready.js

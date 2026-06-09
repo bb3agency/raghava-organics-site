@@ -41,11 +41,12 @@ export const registerSchema = {
   body: {
     type: 'object',
     additionalProperties: false,
-    required: ['firstName', 'lastName', 'phone', 'email', 'password'],
+    // phone is optional for email-based registration; OTP signup has its own endpoint
+    required: ['firstName', 'lastName', 'email', 'password'],
     properties: {
       firstName: { type: 'string', maxLength: 100 },
       lastName: { type: 'string', maxLength: 100 },
-      phone: { type: 'string', maxLength: 20 },
+      phone: { anyOf: [{ type: 'string', minLength: 7, maxLength: 20 }, { type: 'null' }] },
       email: { type: 'string', format: 'email', maxLength: 255 },
       password: { type: 'string', minLength: 8, maxLength: 128 },
       turnstileToken: { type: 'string', maxLength: 4096 }
@@ -241,15 +242,48 @@ export const resetPasswordSchema = {
   }
 } as const;
 
+/**
+ * Lightweight existence check for a phone number or email.
+ * Used by login forms to give early "not registered" feedback before
+ * the user even enters a password or triggers the OTP flow.
+ * Rate-limited the same as other auth-sensitive endpoints.
+ */
+export const checkIdentifierSchema = {
+  params: emptyParamsSchema,
+  querystring: emptyQuerystringSchema,
+  body: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['identifier'],
+    properties: {
+      identifier: { type: 'string', minLength: 1, maxLength: 255 }
+    }
+  },
+  response: {
+    200: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['exists', 'identifierType', 'hasPhone'],
+      properties: {
+        exists: { type: 'boolean' },
+        identifierType: { type: 'string', enum: ['phone', 'email'], maxLength: 8 },
+        hasPhone: { type: 'boolean' }
+      }
+    },
+    ...standardErrorResponses
+  }
+} as const;
+
 export const loginSchema = {
   params: emptyParamsSchema,
   querystring: emptyQuerystringSchema,
   body: {
     type: 'object',
     additionalProperties: false,
-    required: ['email', 'password'],
+    // `identifier` accepts either a phone number or an email address.
+    required: ['identifier', 'password'],
     properties: {
-      email: { type: 'string', format: 'email', maxLength: 255 },
+      identifier: { type: 'string', minLength: 1, maxLength: 255 },
       password: { type: 'string', minLength: 8, maxLength: 128 },
       turnstileToken: { type: 'string', maxLength: 4096 }
     }

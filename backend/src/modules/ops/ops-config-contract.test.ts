@@ -41,6 +41,8 @@ describe('ops config contract', () => {
   it('exposes expected mutable keys in allowlist', () => {
     const mutableKeys = listOpsConfigMutableKeys();
     expect(mutableKeys).toContain('PAYMENT_PROVIDER');
+    expect(mutableKeys).toContain('MEDIA_STORAGE_PROVIDER');
+    expect(mutableKeys).toContain('R2_BUCKET_NAME');
     expect(mutableKeys).toContain('RAZORPAY_KEY_ID');
     expect(mutableKeys).toContain('OPS_METRICS_TOKEN');
     expect(mutableKeys).not.toContain('OPS_DB_ENCRYPTION_KEY');
@@ -139,6 +141,24 @@ describe('ops config contract', () => {
     expect(required).toContain('RAZORPAY_WEBHOOK_ALLOWLIST_CIDR');
   });
 
+  it('requires R2 keys when MEDIA_STORAGE_PROVIDER=r2', () => {
+    const required = computeRequiredOpsConfigKeys(
+      {
+        PAYMENT_PROVIDER: 'cod',
+        SHIPPING_PROVIDER: 'noop',
+        SMS_PROVIDER: 'noop',
+        MEDIA_STORAGE_PROVIDER: 'r2'
+      },
+      false
+    );
+
+    expect(required).toContain('R2_ACCOUNT_ID');
+    expect(required).toContain('R2_ACCESS_KEY_ID');
+    expect(required).toContain('R2_SECRET_ACCESS_KEY');
+    expect(required).toContain('R2_BUCKET_NAME');
+    expect(required).toContain('R2_PUBLIC_BASE_URL');
+  });
+
   it('detects missing strict keys', () => {
     const missing = findMissingStrictOpsConfigKeys({
       PAYMENT_PROVIDER: 'cod',
@@ -189,7 +209,8 @@ describe('ops config contract', () => {
       ['META_WHATSAPP_APP_SECRET'],
       ['OPS_METRICS_TOKEN'],
       ['REPLAY_APPROVAL_TOKEN'],
-      ['OPS_COOKIE_SECRET']
+      ['OPS_COOKIE_SECRET'],
+      ['R2_SECRET_ACCESS_KEY']
     ])('classifies %s as secret', (key) => {
       expect(isOpsConfigSecretKey(key)).toBe(true);
     });
@@ -228,7 +249,15 @@ describe('ops config contract', () => {
       ['OPS_METRICS_ALLOWLIST'],
       ['REPLAY_AUDIT_RETENTION_DAYS'],
       ['TRUSTED_PROXY_ALLOWLIST_CIDR'],
-      ['INVOICE_STORAGE_ROOT']
+      ['INVOICE_STORAGE_ROOT'],
+      ['MEDIA_STORAGE_PROVIDER'],
+      ['R2_ACCOUNT_ID'],
+      ['R2_ACCESS_KEY_ID'],
+      ['R2_BUCKET_NAME'],
+      ['R2_PUBLIC_BASE_URL'],
+      ['R2_ENDPOINT'],
+      ['MEDIA_STORAGE_ROOT'],
+      ['MEDIA_CDN_BASE_URL']
     ])('classifies %s as non-secret', (key) => {
       expect(isOpsConfigSecretKey(key)).toBe(false);
     });

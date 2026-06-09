@@ -11,6 +11,10 @@ import {
   type MaintenanceStatePrismaLike,
   type MaintenanceStateRedisLike
 } from '@common/reliability/maintenance-state';
+import {
+  attachRedisErrorListener,
+  buildStandardRedisOptions
+} from '@common/redis/redis-connection';
 import { createQueueRegistry as createRealQueueRegistry, type QueueRegistry } from '@queues/queue-registry';
 
 /**
@@ -21,6 +25,24 @@ import { createQueueRegistry as createRealQueueRegistry, type QueueRegistry } fr
  * each step (pick up → drain → flip → resume) in plain `docker compose logs`.
  */
 const log = pino({ name: 'cart-cleanup-worker' });
+
+function createEphemeralRedisClient(context: string): IORedis | null {
+  const redisUrl = process.env['REDIS_URL'];
+  if (!redisUrl) {
+    return null;
+  }
+
+  const client = new IORedis(redisUrl, buildStandardRedisOptions() as never);
+  attachRedisErrorListener(
+    client,
+    {
+      warn: (obj, msg) => log.warn(obj, msg),
+      error: (obj, msg) => log.error(obj, msg)
+    },
+    context
+  );
+  return client;
+}
 
 /**
  * Maximum time (ms) to wait for in-flight PENDING_PAYMENT orders to reach
@@ -280,10 +302,7 @@ export function createCartCleanupWorker(
         const prismaState = prisma as unknown as MaintenanceStatePrismaLike;
         let redisForState: MaintenanceStateRedisLike | null = null;
         try {
-          const redisUrl = process.env['REDIS_URL'];
-          if (redisUrl) {
-            redisForState = new IORedis(redisUrl, { maxRetriesPerRequest: null, family: 4 }) as unknown as MaintenanceStateRedisLike;
-          }
+          redisForState = createEphemeralRedisClient('cart-cleanup-maintenance-state') as unknown as MaintenanceStateRedisLike | null;
         } catch (redisErr) {
           log.warn({ err: redisErr, jobId: activationJobId }, '[maintenance-activation] failed to construct local Redis client; proceeding without cache write');
           redisForState = null;
@@ -713,11 +732,7 @@ export function createCartCleanupWorker(
         // ── Step 4: Publish restart signal ─────────────────────────────────────
         // The API process and worker-index both subscribe to SYSTEM_RESTART_CHANNEL.
         // Publishing here triggers graceful shutdown in both processes simultaneously.
-        const createPublisher = deps?.createPublisher ?? (() => {
-          const redisUrl = process.env['REDIS_URL'];
-          if (!redisUrl) return null;
-          return new IORedis(redisUrl, { maxRetriesPerRequest: null, family: 4 });
-        });
+        const createPublisher = deps?.createPublisher ?? (() => createEphemeralRedisClient('cart-cleanup-restart-publisher'));
 
         let publisher: (RestartPublisherLike & { quit: () => Promise<unknown> }) | null = null;
         try {

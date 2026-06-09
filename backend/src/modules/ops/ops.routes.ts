@@ -38,7 +38,7 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
                   additionalProperties: false,
                   required: ['domain', 'label', 'items'],
                   properties: {
-                    domain: { type: 'string', enum: ['core', 'payments', 'shipping', 'notifications', 'opsSecurity'], maxLength: 24 },
+                    domain: { type: 'string', enum: ['core', 'media', 'payments', 'shipping', 'notifications', 'opsSecurity'], maxLength: 24 },
                     label: { type: 'string', maxLength: 64 },
                     items: {
                       type: 'array',
@@ -105,7 +105,7 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
           additionalProperties: false,
           required: ['values'],
           properties: {
-            domain: { type: 'string', enum: ['core', 'payments', 'shipping', 'notifications', 'opsSecurity'], maxLength: 24 },
+            domain: { type: 'string', enum: ['core', 'media', 'payments', 'shipping', 'notifications', 'opsSecurity'], maxLength: 24 },
             values: {
               type: 'object',
               additionalProperties: true,
@@ -123,7 +123,7 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
               domain: {
                 anyOf: [
                   { type: 'null' },
-                  { type: 'string', enum: ['core', 'payments', 'shipping', 'notifications', 'opsSecurity'], maxLength: 24 }
+                  { type: 'string', enum: ['core', 'media', 'payments', 'shipping', 'notifications', 'opsSecurity'], maxLength: 24 }
                 ]
               },
               checkedKeys: { type: 'array', items: { type: 'string', maxLength: 120 } },
@@ -166,7 +166,7 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
         throw new AppError(ERROR_CODES.UNAUTHORISED, 'Ops authentication required', 401);
       }
       const body = request.body as {
-        domain?: 'core' | 'payments' | 'shipping' | 'notifications' | 'opsSecurity';
+        domain?: 'core' | 'media' | 'payments' | 'shipping' | 'notifications' | 'opsSecurity';
         values: Record<string, string | number | boolean | null | undefined>;
       };
       return opsService.validateConfigDraft({
@@ -191,7 +191,7 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
           type: 'object',
           additionalProperties: false,
           properties: {
-            domain: { type: 'string', enum: ['core', 'payments', 'shipping', 'notifications', 'opsSecurity'], maxLength: 24 }
+            domain: { type: 'string', enum: ['core', 'media', 'payments', 'shipping', 'notifications', 'opsSecurity'], maxLength: 24 }
           }
         },
         response: {
@@ -207,7 +207,7 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
                   additionalProperties: false,
                   required: ['domain', 'key', 'maskedValue', 'plaintextValue', 'keyVersion', 'requiresRestart', 'updatedAt'],
                   properties: {
-                    domain: { type: 'string', enum: ['core', 'payments', 'shipping', 'notifications', 'opsSecurity'], maxLength: 24 },
+                    domain: { type: 'string', enum: ['core', 'media', 'payments', 'shipping', 'notifications', 'opsSecurity'], maxLength: 24 },
                     key: { type: 'string', maxLength: 120 },
                     maskedValue: { type: 'string', maxLength: 300 },
                     // Plaintext value — returned for every active DB-overlay
@@ -235,7 +235,7 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
     },
     async (request) => {
       const query = request.query as {
-        domain?: 'core' | 'payments' | 'shipping' | 'notifications' | 'opsSecurity';
+        domain?: 'core' | 'media' | 'payments' | 'shipping' | 'notifications' | 'opsSecurity';
       };
       const items = await opsService.getStoredConfigSecrets(query.domain);
       return { items };
@@ -255,7 +255,7 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
           additionalProperties: false,
           required: ['values', 'challengeId', 'otpCode'],
           properties: {
-            domain: { type: 'string', enum: ['core', 'payments', 'shipping', 'notifications', 'opsSecurity'], maxLength: 24 },
+            domain: { type: 'string', enum: ['core', 'media', 'payments', 'shipping', 'notifications', 'opsSecurity'], maxLength: 24 },
             values: { type: 'object', additionalProperties: true, maxProperties: 50 },
             challengeId: { type: 'string', minLength: 1, maxLength: 80 },
             otpCode: { type: 'string', minLength: 6, maxLength: 6, pattern: '^[0-9]{6}$' }
@@ -269,7 +269,7 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
             properties: {
               valid: { type: 'boolean' },
               savedKeys: { type: 'array', items: { type: 'string', maxLength: 120 } },
-              domain: { type: 'string', enum: ['core', 'payments', 'shipping', 'notifications', 'opsSecurity'], maxLength: 24 },
+              domain: { type: 'string', enum: ['core', 'media', 'payments', 'shipping', 'notifications', 'opsSecurity'], maxLength: 24 },
               requiresRestart: { type: 'boolean' },
               masked: {
                 type: 'array',
@@ -295,7 +295,7 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
         throw new AppError(ERROR_CODES.UNAUTHORISED, 'Ops authentication required', 401);
       }
       const body = request.body as {
-        domain?: 'core' | 'payments' | 'shipping' | 'notifications' | 'opsSecurity';
+        domain?: 'core' | 'media' | 'payments' | 'shipping' | 'notifications' | 'opsSecurity';
         values: Record<string, string | number | boolean | null | undefined>;
         challengeId: string;
         otpCode: string;

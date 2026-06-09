@@ -209,7 +209,7 @@ describe('ProductsService analytics producers', () => {
     );
   });
 
-  it('requires in-stock variants when fetching product by slug', async () => {
+  it('fetches active variants with inventory included when fetching product by slug', async () => {
     const analyticsAdd = vi.fn().mockResolvedValue(undefined);
     const redis = createRedisMock();
     const findFirst = vi.fn().mockResolvedValue({
@@ -223,6 +223,9 @@ describe('ProductsService analytics producers', () => {
       prisma: {
         product: {
           findFirst
+        },
+        cartReservation: {
+          groupBy: vi.fn().mockResolvedValue([])
         }
       },
       queues: {
@@ -239,21 +242,22 @@ describe('ProductsService analytics producers', () => {
     const service = new ProductsService(fastify);
     await service.getProductBySlug('fresh-milk');
 
+    // Service now fetches all active variants and includes inventory for inStock calculation
+    // rather than filtering by stock level in the DB query itself.
     expect(findFirst).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
           slug: 'fresh-milk',
+          isActive: true,
           variants: expect.objectContaining({
             some: expect.objectContaining({
-              isActive: true,
-              inventory: {
-                is: {
-                  quantity: {
-                    gt: 0
-                  }
-                }
-              }
+              isActive: true
             })
+          })
+        }),
+        include: expect.objectContaining({
+          variants: expect.objectContaining({
+            include: expect.objectContaining({ inventory: true })
           })
         })
       })

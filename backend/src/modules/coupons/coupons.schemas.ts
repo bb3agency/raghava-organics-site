@@ -56,7 +56,7 @@ const couponSchema = {
   properties: {
     id: { type: 'string', maxLength: 64 },
     code: { type: 'string', maxLength: 50 },
-    type: { type: 'string', enum: ['PERCENTAGE_OFF', 'FLAT_AMOUNT_OFF', 'FREE_SHIPPING'], maxLength: 30 },
+    type: { type: 'string', enum: ['PERCENTAGE_OFF', 'FLAT_AMOUNT_OFF', 'FREE_SHIPPING', 'BUY_X_GET_Y'], maxLength: 30 },
     value: { type: 'integer', minimum: 0, maximum: 1000000000 },
     minOrderPaise: { type: 'integer', minimum: 0, maximum: 1000000000 },
     maxUsesTotal: { anyOf: [{ type: 'integer', minimum: 1, maximum: 1000000000 }, { type: 'null' }] },
@@ -68,7 +68,7 @@ const couponSchema = {
     status: { type: 'string', enum: ['active', 'expired', 'paused', 'deleted'], maxLength: 20 },
     applicableTo: { anyOf: [couponScopeSchema, { type: 'null' }] },
     // Audit fields
-    createdBy: { type: 'string', maxLength: 64 },
+    createdBy: { anyOf: [{ type: 'string', maxLength: 64 }, { type: 'null' }] },
     updatedBy: { anyOf: [{ type: 'string', maxLength: 64 }, { type: 'null' }] },
     deletedAt: { anyOf: [{ type: 'string', maxLength: 64 }, { type: 'null' }] },
     deletedBy: { anyOf: [{ type: 'string', maxLength: 64 }, { type: 'null' }] },
@@ -99,7 +99,10 @@ export const adminListCouponsSchema = {
       page: { type: 'integer', minimum: 1, maximum: 100000, default: 1 },
       limit: { type: 'integer', minimum: 1, maximum: 100, default: 20 },
       code: { type: 'string', maxLength: 50 },
-      status: { type: 'string', enum: ['active', 'expired', 'paused', 'deleted'], maxLength: 20 }
+      status: { type: 'string', enum: ['active', 'expired', 'paused', 'deleted'], maxLength: 20 },
+      type: { type: 'string', enum: ['PERCENTAGE_OFF', 'FLAT_AMOUNT_OFF', 'FREE_SHIPPING', 'BUY_X_GET_Y'], maxLength: 20 },
+      from: { type: 'string', format: 'date-time', maxLength: 64 },
+      to: { type: 'string', format: 'date-time', maxLength: 64 }
     }
   },
   response: {
@@ -186,11 +189,6 @@ export const adminUpdateCouponStatusSchema = {
 export const adminDeleteCouponSchema = {
   params: adminUpdateCouponSchema.params,
   querystring: emptyQuerystringSchema,
-  body: {
-    type: 'object',
-    additionalProperties: false,
-    properties: {}
-  },
   response: {
     200: {
       type: 'object',
@@ -211,7 +209,9 @@ export const adminCouponAnalyticsSchema = {
     additionalProperties: false,
     properties: {
       page: { type: 'integer', minimum: 1, maximum: 100000, default: 1 },
-      limit: { type: 'integer', minimum: 1, maximum: 100, default: 20 }
+      limit: { type: 'integer', minimum: 1, maximum: 100, default: 20 },
+      from: { type: 'string', format: 'date-time', maxLength: 64 },
+      to: { type: 'string', format: 'date-time', maxLength: 64 }
     }
   },
   response: {
@@ -261,11 +261,6 @@ export const adminRestoreCouponSchema = {
     }
   },
   querystring: emptyQuerystringSchema,
-  body: {
-    type: 'object',
-    additionalProperties: false,
-    properties: {}
-  },
   response: {
     200: couponSchema,
     ...standardAdminErrorResponses

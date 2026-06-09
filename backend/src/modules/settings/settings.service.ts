@@ -1,4 +1,5 @@
 import { FastifyInstance } from 'fastify';
+import { resolveNotificationRuntimeConfig } from '@common/notifications/notification-runtime-config';
 import { SmsTemplateRegistry } from '@modules/notifications/sms-template-registry';
 import { supportedEmailTemplates } from '@modules/notifications/templates/email-templates';
 import {
@@ -6,6 +7,7 @@ import {
   NotificationFlags,
   NotificationSettingsResponse,
   PrimaryNotificationChannel,
+  ProviderAvailability,
   ShippingSettingsResponse,
   StoreProfileResponse,
   UpdateInventorySettingsInput,
@@ -21,6 +23,55 @@ export class SettingsService {
   private static readonly defaultPickupPincode = '500001';
 
   constructor(private readonly fastify: FastifyInstance) {}
+
+  /**
+   * Resolves ops-layer provider availability without exposing any key values.
+   * Returns boolean flags only — safe to include in admin API responses.
+   */
+  private async resolveProviderAvailability(): Promise<ProviderAvailability> {
+    try {
+      const runtimeConfig = await resolveNotificationRuntimeConfig(this.fastify.prisma);
+      const flagEnabled = (key: string, fallback: boolean): boolean => {
+        const v = (runtimeConfig[key] ?? '').trim().toLowerCase();
+        return v === '' ? fallback : v === 'true';
+      };
+
+      const emailEnabled = flagEnabled('NOTIFY_EMAIL_ENABLED', true);
+      const smsEnabled = flagEnabled('NOTIFY_SMS_ENABLED', false);
+      const whatsappEnabled = flagEnabled('NOTIFY_WHATSAPP_ENABLED', false);
+      const smsProvider = ((runtimeConfig.SMS_PROVIDER ?? 'msg91').trim().toLowerCase()) as 'msg91' | 'fast2sms' | 'noop';
+
+      const emailProvisioned =
+        emailEnabled && !!(runtimeConfig.RESEND_API_KEY ?? '').trim();
+
+      const smsKeyPresent =
+        smsProvider === 'noop' ? true :
+        smsProvider === 'msg91' ? !!(runtimeConfig.MSG91_AUTH_KEY ?? '').trim() :
+        smsProvider === 'fast2sms' ? !!(runtimeConfig.FAST2SMS_API_KEY ?? '').trim() :
+        false;
+      const smsProvisioned = smsEnabled && smsKeyPresent;
+
+      const whatsappProvisioned =
+        whatsappEnabled &&
+        !!(runtimeConfig.META_WHATSAPP_ACCESS_TOKEN ?? '').trim() &&
+        !!(runtimeConfig.META_WHATSAPP_PHONE_NUMBER_ID ?? '').trim();
+
+      return {
+        emailProvisioned,
+        smsProvisioned,
+        whatsappProvisioned,
+        smsProvider: smsProvisioned ? smsProvider : null
+      };
+    } catch {
+      // If runtime config resolution fails (e.g. DB not reachable), assume unprovisioned
+      return {
+        emailProvisioned: false,
+        smsProvisioned: false,
+        whatsappProvisioned: false,
+        smsProvider: null
+      };
+    }
+  }
 
   private normalizePrimaryChannels(value: unknown): Record<string, PrimaryNotificationChannel> {
     const defaults = Object.fromEntries(
@@ -168,23 +219,27 @@ export class SettingsService {
   }
 
   async getNotificationSettings(): Promise<NotificationSettingsResponse> {
-    const settings = await this.fastify.prisma.storeSettings.findUnique({
-      where: { singletonKey: SettingsService.singletonKey },
-      select: {
-        notifyEmailEnabled: true,
-        notifySmsEnabled: true,
-        notifyWhatsappEnabled: true,
-        primaryNotificationChannels: true,
-        smsTemplates: true
-      }
-    });
+    const [settings, providerAvailability] = await Promise.all([
+      this.fastify.prisma.storeSettings.findUnique({
+        where: { singletonKey: SettingsService.singletonKey },
+        select: {
+          notifyEmailEnabled: true,
+          notifySmsEnabled: true,
+          notifyWhatsappEnabled: true,
+          primaryNotificationChannels: true,
+          smsTemplates: true
+        }
+      }),
+      this.resolveProviderAvailability()
+    ]);
 
     return {
       emailEnabled: settings?.notifyEmailEnabled ?? true,
       smsEnabled: settings?.notifySmsEnabled ?? false,
       whatsappEnabled: settings?.notifyWhatsappEnabled ?? false,
       primaryChannels: this.normalizePrimaryChannels(settings?.primaryNotificationChannels),
-      smsTemplates: SmsTemplateRegistry.normalizeTemplateOverrides(settings?.smsTemplates)
+      smsTemplates: SmsTemplateRegistry.normalizeTemplateOverrides(settings?.smsTemplates),
+      providerAvailability
     };
   }
 
@@ -224,12 +279,15 @@ export class SettingsService {
       }
     });
 
+    const providerAvailability = await this.resolveProviderAvailability();
+
     return {
       emailEnabled: updated.notifyEmailEnabled,
       smsEnabled: updated.notifySmsEnabled,
       whatsappEnabled: updated.notifyWhatsappEnabled,
       primaryChannels: this.normalizePrimaryChannels(updated.primaryNotificationChannels),
-      smsTemplates: SmsTemplateRegistry.normalizeTemplateOverrides(updated.smsTemplates)
+      smsTemplates: SmsTemplateRegistry.normalizeTemplateOverrides(updated.smsTemplates),
+      providerAvailability
     };
   }
 
@@ -294,21 +352,23 @@ export class SettingsService {
     };
   }
 
-  async getCodSettings(): Promise<{ isCodEnabled: boolean; cancellationWindowHours: number; sellerState: string | null }> {
+  async getCodSettings(): Promise<{ isCodEnabled: boolean; mobileOtpSignupEnabled: boolean; cancellationWindowHours: number; sellerState: string | null }> {
     const settings = await this.fastify.prisma.storeSettings.findUnique({
       where: { singletonKey: SettingsService.singletonKey },
-      select: { isCodEnabled: true, cancellationWindowHours: true, sellerState: true }
-    }) as { isCodEnabled: boolean; cancellationWindowHours: number; sellerState: string | null } | null;
+      select: { isCodEnabled: true, mobileOtpSignupEnabled: true, cancellationWindowHours: true, sellerState: true }
+    }) as { isCodEnabled: boolean; mobileOtpSignupEnabled: boolean; cancellationWindowHours: number; sellerState: string | null } | null;
     return {
       isCodEnabled: settings?.isCodEnabled ?? false,
+      mobileOtpSignupEnabled: settings?.mobileOtpSignupEnabled ?? false,
       cancellationWindowHours: settings?.cancellationWindowHours ?? 24,
       sellerState: settings?.sellerState ?? null
     };
   }
 
-  async updateCodSettings(input: { isCodEnabled?: boolean; cancellationWindowHours?: number; sellerState?: string | null }): Promise<{ isCodEnabled: boolean; cancellationWindowHours: number; sellerState: string | null }> {
+  async updateCodSettings(input: { isCodEnabled?: boolean; mobileOtpSignupEnabled?: boolean; cancellationWindowHours?: number; sellerState?: string | null }): Promise<{ isCodEnabled: boolean; mobileOtpSignupEnabled: boolean; cancellationWindowHours: number; sellerState: string | null }> {
     const updateData: Record<string, unknown> = {};
     if (input.isCodEnabled !== undefined) updateData['isCodEnabled'] = input.isCodEnabled;
+    if (input.mobileOtpSignupEnabled !== undefined) updateData['mobileOtpSignupEnabled'] = input.mobileOtpSignupEnabled;
     if (input.cancellationWindowHours !== undefined) updateData['cancellationWindowHours'] = Math.max(1, Math.floor(input.cancellationWindowHours));
     if (input.sellerState !== undefined) updateData['sellerState'] = input.sellerState;
 
@@ -321,8 +381,8 @@ export class SettingsService {
         defaultLowStockThreshold: 5,
         ...updateData
       },
-      select: { isCodEnabled: true, cancellationWindowHours: true, sellerState: true }
-    }) as { isCodEnabled: boolean; cancellationWindowHours: number; sellerState: string | null };
+      select: { isCodEnabled: true, mobileOtpSignupEnabled: true, cancellationWindowHours: true, sellerState: true }
+    }) as { isCodEnabled: boolean; mobileOtpSignupEnabled: boolean; cancellationWindowHours: number; sellerState: string | null };
     return updated;
   }
 
@@ -332,5 +392,22 @@ export class SettingsService {
       select: { defaultLowStockThreshold: true }
     });
     return settings?.defaultLowStockThreshold ?? 5;
+  }
+
+  /**
+   * Public storefront configuration — no auth required.
+   * Returns only the fields the customer-facing UI needs to render correctly.
+   * Never exposes sensitive fields (GSTIN, contact details, notification keys).
+   */
+  async getPublicStoreConfig(): Promise<{ isCodEnabled: boolean; minOrderValuePaise: number; mobileOtpSignupEnabled: boolean }> {
+    const settings = await this.fastify.prisma.storeSettings.findUnique({
+      where: { singletonKey: SettingsService.singletonKey },
+      select: { isCodEnabled: true, minOrderValuePaise: true, mobileOtpSignupEnabled: true }
+    }) as { isCodEnabled: boolean; minOrderValuePaise: number; mobileOtpSignupEnabled: boolean } | null;
+    return {
+      isCodEnabled: settings?.isCodEnabled ?? false,
+      minOrderValuePaise: settings?.minOrderValuePaise ?? 0,
+      mobileOtpSignupEnabled: settings?.mobileOtpSignupEnabled ?? false
+    };
   }
 }

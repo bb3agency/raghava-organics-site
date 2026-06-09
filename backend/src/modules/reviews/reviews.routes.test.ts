@@ -31,6 +31,10 @@ describe('reviews routes', () => {
 
     await registerReviewsRoutes(app);
 
+    const recentReviews = routes.find((route) => route.url === '/api/v1/reviews/recent' && route.method === 'GET');
+    expect(recentReviews).toBeDefined();
+    expect((recentReviews?.schema as { response?: Record<number, unknown> }).response?.[200]).toBeDefined();
+
     const productReviews = routes.find((route) => route.url === '/api/v1/reviews/product/:slug' && route.method === 'GET');
     expect(productReviews).toBeDefined();
     expect((productReviews?.schema as { response?: Record<number, unknown> }).response?.[200]).toBeDefined();
@@ -42,6 +46,11 @@ describe('reviews routes', () => {
     const createReview = routes.find((route) => route.url === '/api/v1/reviews' && route.method === 'POST');
     expect(createReview).toBeDefined();
     expect(createReview?.preHandler).toBeDefined();
+
+    const adminReviewSummary = routes.find(
+      (route) => route.url === '/api/v1/admin/reviews/summary' && route.method === 'GET'
+    );
+    expect(adminReviewSummary).toBeDefined();
 
     const adminReviews = routes.find((route) => route.url === '/api/v1/admin/reviews' && route.method === 'GET');
     expect(adminReviews).toBeDefined();

@@ -47,11 +47,11 @@ type GuardedRouteRecord = {
   permission: string;
 };
 
-/** Matches TS source (`adminPermissionGuard('x')`) and compiled JS (`adminPermissionGuard)('x')`). */
+/** Matches TS source and compiled JS; uses the primary (first) permission when guard accepts multiple. */
 function extractGuardPermission(configSource: string): string | undefined {
   const patterns = [
-    /(?:admin|ops)PermissionGuard\(['"]([^'"]+)['"]\)/,
-    /\.(?:admin|ops)PermissionGuard\)\(['"]([^'"]+)['"]\)/,
+    /(?:admin|ops)PermissionGuard\s*\(\s*['"]([^'"]+)['"]/,
+    /\.(?:admin|ops)PermissionGuard\)\s*\(\s*['"]([^'"]+)['"]/,
   ];
   for (const pattern of patterns) {
     const match = configSource.match(pattern);

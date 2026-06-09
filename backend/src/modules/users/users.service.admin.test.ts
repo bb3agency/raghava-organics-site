@@ -47,6 +47,42 @@ describe('UsersService admin APIs', () => {
     });
   });
 
+  it('applies banned and createdAt filters for admin user list', async () => {
+    const findMany = vi.fn().mockResolvedValue([]);
+    const count = vi.fn().mockResolvedValue(0);
+    const fastify = {
+      prisma: {
+        user: { findMany, count },
+        order: { groupBy: vi.fn().mockResolvedValue([]) },
+        $transaction: vi
+          .fn()
+          .mockImplementation(async (queries: Array<Promise<unknown>>) =>
+            Promise.all(queries)
+          )
+      }
+    } as unknown as FastifyInstance;
+
+    const service = new UsersService(fastify);
+    await service.adminListUsers({
+      banned: true,
+      from: '2026-05-01T00:00:00.000Z',
+      to: '2026-05-31T23:59:59.999Z'
+    });
+
+    expect(findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          role: 'CUSTOMER',
+          isBanned: true,
+          createdAt: {
+            gte: new Date('2026-05-01T00:00:00.000Z'),
+            lte: new Date('2026-05-31T23:59:59.999Z')
+          }
+        })
+      })
+    );
+  });
+
   it('returns addresses along with admin user detail', async () => {
     const fastify = {
       prisma: {

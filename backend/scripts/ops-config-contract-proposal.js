@@ -76,6 +76,9 @@ function suggestDomain(key) {
   if (key.startsWith('OPS_') || key === 'REPLAY_APPROVAL_TOKEN') {
     return 'opsSecurity';
   }
+  if (key.startsWith('R2_') || key.startsWith('MEDIA_')) {
+    return 'media';
+  }
   return 'core';
 }
 

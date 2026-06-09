@@ -2,7 +2,43 @@ import type { FastifyInstance } from 'fastify';
 import { describe, expect, it, vi } from 'vitest';
 import { OrdersService } from './orders.service';
 
+function makeOrderFastify() {
+  const orderFindMany = vi.fn().mockResolvedValue([]);
+  const orderCount = vi.fn().mockResolvedValue(0);
+  const fastify = {
+    prisma: {
+      order: { findMany: orderFindMany, count: orderCount },
+      $transaction: vi.fn().mockResolvedValue([[], 0])
+    }
+  } as unknown as FastifyInstance;
+  return { fastify, orderFindMany };
+}
+
 describe('OrdersService admin search filters', () => {
+  it('filters by paymentMode=COD', async () => {
+    const { fastify, orderFindMany } = makeOrderFastify();
+    const service = new OrdersService(fastify);
+    await service.adminListOrders({ paymentMode: 'COD' });
+    const where = orderFindMany.mock.calls[0]?.[0].where as Record<string, unknown>;
+    expect(where.paymentMode).toBe('COD');
+  });
+
+  it('sorts ascending when sort=oldest', async () => {
+    const { fastify, orderFindMany } = makeOrderFastify();
+    const service = new OrdersService(fastify);
+    await service.adminListOrders({ sort: 'oldest' });
+    const orderBy = orderFindMany.mock.calls[0]?.[0].orderBy as Record<string, unknown>;
+    expect(orderBy.createdAt).toBe('asc');
+  });
+
+  it('defaults to descending sort', async () => {
+    const { fastify, orderFindMany } = makeOrderFastify();
+    const service = new OrdersService(fastify);
+    await service.adminListOrders({});
+    const orderBy = orderFindMany.mock.calls[0]?.[0].orderBy as Record<string, unknown>;
+    expect(orderBy.createdAt).toBe('desc');
+  });
+
   it('includes customer first/last name in adminListOrders search filter', async () => {
     const orderFindMany = vi.fn().mockResolvedValue([]);
     const orderCount = vi.fn().mockResolvedValue(0);

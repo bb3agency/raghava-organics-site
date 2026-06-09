@@ -9,6 +9,8 @@ export type AdminOrderListQuery = {
   from?: string;
   to?: string;
   search?: string;
+  paymentMode?: 'PREPAID' | 'COD';
+  sort?: 'newest' | 'oldest';
 };
 
 export type AdminOrderExportQuery = {
@@ -16,6 +18,7 @@ export type AdminOrderExportQuery = {
   to: string;
   status?: OrderStatus;
   search?: string;
+  paymentMode?: 'PREPAID' | 'COD';
 };
 
 export type UpdateOrderStatusInput = {
@@ -82,6 +85,8 @@ export type AdminShipmentListQuery = {
   status?: string;
   awbNumber?: string;
   orderId?: string;
+  /** Matches AWB or order number (case-insensitive contains). */
+  search?: string;
   from?: string;
   to?: string;
 };
@@ -92,6 +97,8 @@ export type AdminPaymentListQuery = {
   status?: string;
   method?: string;
   orderId?: string;
+  /** Matches order number, provider payment ID, or customer name */
+  search?: string;
   from?: string;
   to?: string;
 };

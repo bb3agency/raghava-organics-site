@@ -51,6 +51,9 @@ function buildMockPrisma(userEmail: string | null, overrides?: Record<string, un
         return Promise.resolve({ count: 1 });
       })
     },
+    refreshToken: {
+      updateMany: vi.fn().mockResolvedValue({ count: 0 })
+    },
     opsUser: { findMany: vi.fn().mockResolvedValue([]) },
     adminInvite: { findMany: vi.fn().mockResolvedValue([]) },
     ...overrides
@@ -206,6 +209,10 @@ describe('AuthService resetPassword', () => {
       data: expect.objectContaining({ passwordHash: expect.any(String) })
     });
     expect(prismaMock.passwordResetToken.deleteMany).toHaveBeenCalledWith({ where: { userId: 'user_1' } });
+    expect(prismaMock.refreshToken.updateMany).toHaveBeenCalledWith({
+      where: { userId: 'user_1', revokedAt: null },
+      data: { revokedAt: expect.any(Date) }
+    });
   });
 
   it('throws INVALID_CREDENTIALS when token not found', async () => {

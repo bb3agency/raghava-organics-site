@@ -29,8 +29,8 @@ import { sendTechnicalFailureAlert } from '@modules/notifications/notification-f
 import { recordProcessCrash } from '@common/observability/metrics';
 import { isIpAllowlisted, parseWebhookIpAllowlist } from '@common/security/webhook-allowlist';
 import { applyOpsConfigRuntimeOverlay, type OpsConfigRuntimePrismaLike } from './modules/ops/ops-config-runtime';
-import Redis from 'ioredis';
-import { redisConfig } from '@config/redis.config';
+import type Redis from 'ioredis';
+import { guardRedisDuplicate } from '@common/redis/redis-connection';
 import { SYSTEM_RESTART_CHANNEL, type RestartSignalPayload } from '@common/restart/system-restart';
 
 function normalizeRoutePath(url: string): string {
@@ -44,6 +44,8 @@ function normalizeRoutePath(url: string): string {
 async function bootstrap(): Promise<void> {
   validateBootstrapEnv();
   const overlayReport = await applyOpsConfigRuntimeOverlay(prismaClient as unknown as OpsConfigRuntimePrismaLike);
+  const { resetProductMediaStorageCache } = await import('@modules/media/product-media-provider');
+  resetProductMediaStorageCache();
   refreshFeatureFlags();
   validateRuntimeEnv();
   const appConfig = getAppConfig();
@@ -134,7 +136,13 @@ async function bootstrap(): Promise<void> {
           return;
         }
 
-        const parsed = JSON.parse(payload.toString('utf8')) as unknown;
+        const text = payload.toString('utf8').trim();
+        if (text.length === 0) {
+          done(null, {});
+          return;
+        }
+
+        const parsed = JSON.parse(text) as unknown;
         done(null, parsed);
       } catch (error) {
         done(error as Error);
@@ -253,16 +261,30 @@ async function bootstrap(): Promise<void> {
   // so both the API container and the worker container restart cleanly when the
   // ops-triggered restart fires. Fastify.close() drains in-flight requests before
   // process.exit(0); Docker restart: unless-stopped brings the API back up.
-  restartSubscriber = new Redis(redisConfig.url, {
-    maxRetriesPerRequest: null,
-    retryStrategy: (times: number) => Math.min(times * 300, 3_000),
-    family: 4,
+  restartSubscriber = guardRedisDuplicate(fastify.redis, fastify.log, 'restart-subscriber', {
+    onPersistentError: (err) => {
+      void sendTechnicalFailureAlert({
+        prisma: prismaClient,
+        template: 'RestartSubscriberRedisError',
+        channel: 'UNKNOWN',
+        recipient: 'restart-subscriber',
+        errorMessage: err.message,
+        failureStage: 'CORE_LOGIC',
+        domain: 'infrastructure',
+        component: 'restart-subscriber'
+      });
+    }
   });
-  restartSubscriber.on('error', (err: unknown) => {
-    fastify.log.warn({ err }, 'Restart subscriber Redis error — restart signal may not be received');
+  try {
+    await restartSubscriber.subscribe(SYSTEM_RESTART_CHANNEL);
+  } catch (err) {
+    fastify.log.warn(
+      { err: err instanceof Error ? err.message : String(err) },
+      'Failed to subscribe to restart channel — auto-restart signals disabled until Redis pub/sub recovers'
+    );
     void sendTechnicalFailureAlert({
       prisma: prismaClient,
-      template: 'RestartSubscriberRedisError',
+      template: 'RestartSubscriberSubscribeFailed',
       channel: 'UNKNOWN',
       recipient: 'restart-subscriber',
       errorMessage: err instanceof Error ? err.message : String(err),
@@ -270,8 +292,7 @@ async function bootstrap(): Promise<void> {
       domain: 'infrastructure',
       component: 'restart-subscriber'
     });
-  });
-  await restartSubscriber.subscribe(SYSTEM_RESTART_CHANNEL);
+  }
   restartSubscriber.on('message', (channel: string, message: string) => {
     if (channel !== SYSTEM_RESTART_CHANNEL) return;
     let payload: Partial<RestartSignalPayload> = {};

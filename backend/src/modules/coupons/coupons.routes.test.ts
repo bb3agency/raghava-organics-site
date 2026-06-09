@@ -226,6 +226,7 @@ describe('coupons routes', () => {
 
     const del = routes.find((route) => route.url === '/api/v1/admin/coupons/:id' && route.method === 'DELETE');
     expect(del).toBeDefined();
+    expect((del?.schema as { body?: unknown }).body).toBeUndefined();
 
     const getById = routes.find((route) => route.url === '/api/v1/admin/coupons/:id' && route.method === 'GET');
     expect(getById).toBeDefined();
@@ -239,6 +240,7 @@ describe('coupons routes', () => {
     const restore = routes.find((route) => route.url === '/api/v1/admin/coupons/:id/restore' && route.method === 'POST');
     expect(restore).toBeDefined();
     expect(restore?.preHandler).toBeDefined();
+    expect((restore?.schema as { body?: unknown }).body).toBeUndefined();
 
     const auditLogs = routes.find((route) => route.url === '/api/v1/admin/coupons/:id/audit' && route.method === 'GET');
     expect(auditLogs).toBeDefined();

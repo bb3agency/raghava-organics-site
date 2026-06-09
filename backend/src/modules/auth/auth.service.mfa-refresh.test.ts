@@ -93,7 +93,7 @@ describe('AuthService refresh hardening + logout', () => {
 
     await expect(
       service.login(
-        { email: 'admin2@example.com', password: 'password-123' },
+        { identifier: 'admin2@example.com', password: 'password-123' },
         { clientIp: '127.0.0.1', audience: 'customer' }
       )
     ).rejects.toMatchObject({ code: 'INVALID_CREDENTIALS', statusCode: 401 });

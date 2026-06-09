@@ -164,7 +164,16 @@ export class CouponsService {
     const where: Prisma.CouponWhereInput = {
       // Exclude soft-deleted by default
       ...(includeDeleted ? {} : { deletedAt: null }),
+      ...(query.from || query.to
+        ? {
+            createdAt: {
+              ...(query.from ? { gte: new Date(query.from) } : {}),
+              ...(query.to ? { lte: new Date(query.to) } : {})
+            }
+          }
+        : {}),
       ...(query.code ? { code: { contains: query.code.trim().toUpperCase() } } : {}),
+      ...(query.type ? { type: query.type as CouponType } : {}),
       ...(query.status === 'paused'
         ? { isActive: false, deletedAt: null }
         : query.status === 'expired'
@@ -546,8 +555,11 @@ export class CouponsService {
     const limit = Math.min(query.limit ?? 20, 100);
     const skip = (page - 1) * limit;
 
+    const couponWhere = { deletedAt: null };
+
     const [coupons, total] = await this.fastify.prisma.$transaction([
       this.fastify.prisma.coupon.findMany({
+        where: couponWhere,
         orderBy: { createdAt: 'desc' },
         skip,
         take: limit,
@@ -557,13 +569,24 @@ export class CouponsService {
           usesCount: true
         }
       }),
-      this.fastify.prisma.coupon.count()
+      this.fastify.prisma.coupon.count({ where: couponWhere })
     ]);
+
+    const orderDateFilter =
+      query.from || query.to
+        ? {
+            createdAt: {
+              ...(query.from ? { gte: new Date(query.from) } : {}),
+              ...(query.to ? { lte: new Date(query.to) } : {})
+            }
+          }
+        : {};
 
     const items = await Promise.all(
       coupons.map(async (coupon) => {
         const aggregate = await this.fastify.prisma.order.aggregate({
           where: {
+            ...orderDateFilter,
             coupons: {
               some: { id: coupon.id }
             }

@@ -204,6 +204,13 @@ describe('users routes', () => {
     expect(deleteNote).toBeDefined();
     expect(deleteNote?.preHandler).toBeDefined();
 
+    const deleteAddress = routes.find(
+      (route) => route.url === '/api/v1/users/me/addresses/:id' && route.method === 'DELETE'
+    );
+    expect(deleteAddress).toBeDefined();
+    expect(deleteAddress?.preHandler).toBeDefined();
+    expect((deleteAddress?.schema as { body?: unknown }).body).toBeUndefined();
+
     await app.close();
   });
 });

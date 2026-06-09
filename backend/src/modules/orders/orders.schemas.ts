@@ -1,7 +1,16 @@
 import { OrderStatus } from '@prisma/client';
-import { standardAdminErrorResponses, standardErrorResponses } from '@common/errors/error-response.schema';
+import {
+  standardAdminErrorResponses,
+  standardErrorResponses
+} from '@common/errors/error-response.schema';
 
-const returnRequestStatusEnum = ['REQUESTED', 'APPROVED', 'REJECTED', 'PICKED_UP', 'REFUNDED'] as const;
+const returnRequestStatusEnum = [
+  'REQUESTED',
+  'APPROVED',
+  'REJECTED',
+  'PICKED_UP',
+  'REFUNDED'
+] as const;
 
 export const createReturnRequestSchema = {
   tags: ['orders'],
@@ -106,7 +115,17 @@ export const adminListReturnRequestsSchema = {
           items: {
             type: 'object',
             additionalProperties: false,
-            required: ['id', 'orderId', 'orderNumber', 'userId', 'customerEmail', 'customerName', 'status', 'reason', 'createdAt'],
+            required: [
+              'id',
+              'orderId',
+              'orderNumber',
+              'userId',
+              'customerEmail',
+              'customerName',
+              'status',
+              'reason',
+              'createdAt'
+            ],
             properties: {
               id: { type: 'string' },
               orderId: { type: 'string' },
@@ -139,7 +158,19 @@ export const adminGetReturnRequestSchema = {
     200: {
       type: 'object',
       additionalProperties: false,
-      required: ['id', 'orderId', 'orderNumber', 'userId', 'customerEmail', 'customerName', 'status', 'reason', 'items', 'createdAt', 'updatedAt'],
+      required: [
+        'id',
+        'orderId',
+        'orderNumber',
+        'userId',
+        'customerEmail',
+        'customerName',
+        'status',
+        'reason',
+        'items',
+        'createdAt',
+        'updatedAt'
+      ],
       properties: {
         id: { type: 'string' },
         orderId: { type: 'string' },
@@ -351,7 +382,9 @@ const orderStatusHistoryItemSchema = {
   required: ['id', 'fromStatus', 'toStatus', 'triggeredBy', 'note', 'createdAt'],
   properties: {
     id: { type: 'string', maxLength: 64 },
-    fromStatus: { anyOf: [{ type: 'string', enum: orderStatusValues, maxLength: 40 }, { type: 'null' }] },
+    fromStatus: {
+      anyOf: [{ type: 'string', enum: orderStatusValues, maxLength: 40 }, { type: 'null' }]
+    },
     toStatus: { type: 'string', enum: orderStatusValues, maxLength: 40 },
     triggeredBy: { type: 'string', maxLength: 40 },
     note: { anyOf: [{ type: 'string', maxLength: 500 }, { type: 'null' }] },
@@ -373,7 +406,16 @@ const creditNoteItemSchema = {
 const orderItemSchema = {
   type: 'object',
   additionalProperties: false,
-  required: ['id', 'variantId', 'productName', 'variantName', 'sku', 'quantity', 'unitPrice', 'totalPrice'],
+  required: [
+    'id',
+    'variantId',
+    'productName',
+    'variantName',
+    'sku',
+    'quantity',
+    'unitPrice',
+    'totalPrice'
+  ],
   properties: {
     id: { type: 'string', maxLength: 64 },
     variantId: { type: 'string', maxLength: 64 },
@@ -633,7 +675,9 @@ export const adminListOrdersSchema = {
       status: { type: 'string', enum: orderStatusValues, maxLength: 40 },
       from: { type: 'string', format: 'date-time', maxLength: 64 },
       to: { type: 'string', format: 'date-time', maxLength: 64 },
-      search: { type: 'string', maxLength: 100 }
+      search: { type: 'string', maxLength: 100 },
+      paymentMode: { type: 'string', enum: ['PREPAID', 'COD'], maxLength: 10 },
+      sort: { type: 'string', enum: ['newest', 'oldest'], maxLength: 10 }
     }
   },
   response: {
@@ -670,7 +714,8 @@ export const adminExportOrdersCsvSchema = {
       from: { type: 'string', format: 'date-time', maxLength: 64 },
       to: { type: 'string', format: 'date-time', maxLength: 64 },
       status: { type: 'string', enum: orderStatusValues, maxLength: 40 },
-      search: { type: 'string', maxLength: 100 }
+      search: { type: 'string', maxLength: 100 },
+      paymentMode: { type: 'string', enum: ['PREPAID', 'COD'], maxLength: 10 }
     }
   },
   response: {
@@ -1120,7 +1165,14 @@ export const adminOrderBoardSchema = {
         columns: {
           type: 'object',
           additionalProperties: false,
-          required: ['CONFIRMED', 'PROCESSING', 'SHIPPED', 'OUT_FOR_DELIVERY', 'DELIVERED', 'CANCELLED'],
+          required: [
+            'CONFIRMED',
+            'PROCESSING',
+            'SHIPPED',
+            'OUT_FOR_DELIVERY',
+            'DELIVERED',
+            'CANCELLED'
+          ],
           properties: {
             CONFIRMED: { type: 'array', items: boardOrderItemSchema },
             PROCESSING: { type: 'array', items: boardOrderItemSchema },
@@ -1159,6 +1211,7 @@ export const adminListShipmentsSchema = {
       status: { type: 'string', maxLength: 40 },
       awbNumber: { type: 'string', maxLength: 100 },
       orderId: { type: 'string', maxLength: 64 },
+      search: { type: 'string', maxLength: 100 },
       from: { type: 'string', maxLength: 64 },
       to: { type: 'string', maxLength: 64 }
     }
@@ -1174,16 +1227,28 @@ export const adminListShipmentsSchema = {
           items: {
             type: 'object',
             additionalProperties: false,
-            required: ['id', 'orderId', 'orderNumber', 'provider', 'status', 'createdAt', 'updatedAt'],
+            required: [
+              'id',
+              'orderId',
+              'orderNumber',
+              'customerName',
+              'provider',
+              'status',
+              'createdAt',
+              'updatedAt'
+            ],
             properties: {
               id: { type: 'string', maxLength: 64 },
               orderId: { type: 'string', maxLength: 64 },
               orderNumber: { type: 'string', maxLength: 64 },
+              customerName: { type: 'string', maxLength: 200 },
               provider: { type: 'string', maxLength: 40 },
               status: { type: 'string', maxLength: 40 },
               awbNumber: { anyOf: [{ type: 'string', maxLength: 100 }, { type: 'null' }] },
               trackingUrl: { anyOf: [{ type: 'string', maxLength: 500 }, { type: 'null' }] },
-              shiprocketShipmentId: { anyOf: [{ type: 'string', maxLength: 100 }, { type: 'null' }] },
+              shiprocketShipmentId: {
+                anyOf: [{ type: 'string', maxLength: 100 }, { type: 'null' }]
+              },
               labelUrl: { anyOf: [{ type: 'string', maxLength: 2048 }, { type: 'null' }] },
               pickupScheduledDate: { anyOf: [{ type: 'string', maxLength: 64 }, { type: 'null' }] },
               createdAt: { type: 'string', maxLength: 64 },
@@ -1209,6 +1274,7 @@ export const adminListPaymentsSchema = {
       status: { type: 'string', maxLength: 40 },
       method: { type: 'string', maxLength: 40 },
       orderId: { type: 'string', maxLength: 64 },
+      search: { type: 'string', maxLength: 100 },
       from: { type: 'string', maxLength: 64 },
       to: { type: 'string', maxLength: 64 }
     }
@@ -1224,11 +1290,23 @@ export const adminListPaymentsSchema = {
           items: {
             type: 'object',
             additionalProperties: false,
-            required: ['id', 'orderId', 'orderNumber', 'provider', 'status', 'amount', 'currency', 'createdAt', 'updatedAt'],
+            required: [
+              'id',
+              'orderId',
+              'orderNumber',
+              'provider',
+              'status',
+              'amount',
+              'currency',
+              'createdAt',
+              'updatedAt'
+            ],
             properties: {
               id: { type: 'string', maxLength: 64 },
               orderId: { type: 'string', maxLength: 64 },
               orderNumber: { type: 'string', maxLength: 64 },
+              customerName: { type: 'string', maxLength: 240 },
+              customerEmail: { anyOf: [{ type: 'string', maxLength: 320 }, { type: 'null' }] },
               provider: { type: 'string', maxLength: 40 },
               method: { anyOf: [{ type: 'string', maxLength: 40 }, { type: 'null' }] },
               status: { type: 'string', maxLength: 40 },
@@ -1268,7 +1346,14 @@ export const adminRetriggerNotificationSchema = {
     properties: {
       template: {
         type: 'string',
-        enum: ['OrderConfirmed', 'PaymentFailed', 'OrderShipped', 'OutForDelivery', 'OrderDelivered', 'OrderCancelled'],
+        enum: [
+          'OrderConfirmed',
+          'PaymentFailed',
+          'OrderShipped',
+          'OutForDelivery',
+          'OrderDelivered',
+          'OrderCancelled'
+        ],
         maxLength: 40
       },
       channels: {
@@ -1316,7 +1401,16 @@ export const adminGetShipmentByIdSchema = {
     200: {
       type: 'object',
       additionalProperties: false,
-      required: ['id', 'orderId', 'orderNumber', 'userId', 'provider', 'status', 'createdAt', 'updatedAt'],
+      required: [
+        'id',
+        'orderId',
+        'orderNumber',
+        'userId',
+        'provider',
+        'status',
+        'createdAt',
+        'updatedAt'
+      ],
       properties: {
         id: { type: 'string' },
         orderId: { type: 'string' },
@@ -1350,7 +1444,17 @@ export const adminGetPaymentByIdSchema = {
     200: {
       type: 'object',
       additionalProperties: false,
-      required: ['id', 'orderId', 'orderNumber', 'provider', 'status', 'amount', 'currency', 'createdAt', 'updatedAt'],
+      required: [
+        'id',
+        'orderId',
+        'orderNumber',
+        'provider',
+        'status',
+        'amount',
+        'currency',
+        'createdAt',
+        'updatedAt'
+      ],
       properties: {
         id: { type: 'string' },
         orderId: { type: 'string' },
@@ -1412,4 +1516,3 @@ export const adminGetOrderTimelineSchema = {
     ...standardAdminErrorResponses
   }
 } as const;
-

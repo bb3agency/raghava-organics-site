@@ -7,6 +7,7 @@ export type ProductListQuery = {
   tags?: string;
   sort?: 'price_asc' | 'price_desc' | 'newest' | 'popularity';
   inStock?: boolean;
+  isActive?: boolean;
   page?: number;
   limit?: number;
 };
@@ -21,6 +22,7 @@ export type CreateProductInput = {
   metaTitle?: string;
   metaDescription?: string;
   isFeatured?: boolean;
+  isActive?: boolean;
   images?: Array<{
     url: string;
     altText: string;
@@ -48,15 +50,20 @@ export type CreateCategoryInput = {
   slug: string;
   parentId?: string;
   imageUrl?: string;
+  isActive?: boolean;
 };
 
-export type UpdateCategoryInput = Partial<CreateCategoryInput> & {
+export type UpdateCategoryInput = Partial<Omit<CreateCategoryInput, 'parentId' | 'imageUrl'>> & {
+  parentId?: string | null;
+  imageUrl?: string | null;
   isActive?: boolean;
 };
 
 export type AdminCategoryListQuery = {
   page?: number;
   limit?: number;
+  search?: string;
+  isActive?: boolean;
 };
 
 export type ProductCsvImportInput = {

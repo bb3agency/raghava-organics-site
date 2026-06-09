@@ -79,12 +79,6 @@ const emptyQuerystringSchema = {
   properties: {}
 } as const;
 
-const emptyBodySchema = {
-  type: 'object',
-  additionalProperties: false,
-  properties: {}
-} as const;
-
 export const getMeSchema = {
   params: emptyParamsSchema,
   querystring: emptyQuerystringSchema,
@@ -215,7 +209,6 @@ export const deleteAddressSchema = {
     }
   },
   querystring: emptyQuerystringSchema,
-  body: emptyBodySchema,
   response: {
     200: {
       type: 'object',
@@ -291,7 +284,10 @@ export const adminListUsersSchema = {
     properties: {
       page: { type: 'integer', minimum: 1, maximum: 100000, default: 1 },
       limit: { type: 'integer', minimum: 1, maximum: 100, default: 20 },
-      search: { type: 'string', maxLength: 200 }
+      search: { type: 'string', maxLength: 200 },
+      banned: { type: 'boolean' },
+      from: { type: 'string', format: 'date-time', maxLength: 64 },
+      to: { type: 'string', format: 'date-time', maxLength: 64 }
     }
   },
   response: {

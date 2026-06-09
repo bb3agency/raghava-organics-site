@@ -31,6 +31,9 @@ export type AdminUsersListQuery = {
   page?: number;
   limit?: number;
   search?: string;
+  banned?: boolean;
+  from?: string;
+  to?: string;
 };
 
 export type AdminCustomerOrdersQuery = {

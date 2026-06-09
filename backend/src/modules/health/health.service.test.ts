@@ -70,6 +70,7 @@ describe('HealthService queue freshness threshold', () => {
     expect(result.degradationMode).toBe('runtime_config_missing');
     expect(result.runtimeConfigMissingKeys).toContain('PAYMENT_PROVIDER');
     expect(result.runtimeConfigMissingKeys).toContain('SHIPPING_PROVIDER');
+    expect(result.runtimeConfigMissingKeys).toContain('MEDIA_STORAGE_PROVIDER');
     expect(result.runtimeConfigMissingKeys).toContain('OPS_METRICS_TOKEN');
     expect(result.runtimeConfigMissingKeys).toContain('REPLAY_APPROVAL_TOKEN');
   });

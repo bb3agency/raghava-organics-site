@@ -41,7 +41,7 @@ const storeProfileSchema = {
 const notificationSettingsSchema = {
   type: 'object',
   additionalProperties: false,
-  required: ['emailEnabled', 'smsEnabled', 'whatsappEnabled', 'primaryChannels', 'smsTemplates'],
+  required: ['emailEnabled', 'smsEnabled', 'whatsappEnabled', 'primaryChannels', 'smsTemplates', 'providerAvailability'],
   properties: {
     emailEnabled: { type: 'boolean' },
     smsEnabled: { type: 'boolean' },
@@ -58,6 +58,27 @@ const notificationSettingsSchema = {
       type: 'object',
       additionalProperties: { type: 'string', maxLength: 320 },
       maxProperties: 50
+    },
+    /**
+     * Ops-layer provider availability. Read-only for admin layer.
+     * Computed from resolveNotificationRuntimeConfig() — boolean flags only,
+     * no API key values are exposed.
+     */
+    providerAvailability: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['emailProvisioned', 'smsProvisioned', 'whatsappProvisioned', 'smsProvider'],
+      properties: {
+        emailProvisioned: { type: 'boolean' },
+        smsProvisioned: { type: 'boolean' },
+        whatsappProvisioned: { type: 'boolean' },
+        smsProvider: {
+          anyOf: [
+            { type: 'string', enum: ['msg91', 'fast2sms', 'noop'] },
+            { type: 'null' }
+          ]
+        }
+      }
     }
   }
 } as const;
@@ -200,9 +221,10 @@ export const updateInventorySettingsSchema = {
 const codSettingsShape = {
   type: 'object',
   additionalProperties: false,
-  required: ['isCodEnabled', 'cancellationWindowHours'],
+  required: ['isCodEnabled', 'cancellationWindowHours', 'mobileOtpSignupEnabled'],
   properties: {
     isCodEnabled: { type: 'boolean' },
+    mobileOtpSignupEnabled: { type: 'boolean' },
     cancellationWindowHours: { type: 'integer', minimum: 1 },
     sellerState: { anyOf: [{ type: 'string', maxLength: 100 }, { type: 'null' }] }
   }
@@ -229,6 +251,7 @@ export const updateCodSettingsSchema = {
     additionalProperties: false,
     properties: {
       isCodEnabled: { type: 'boolean' },
+      mobileOtpSignupEnabled: { type: 'boolean' },
       cancellationWindowHours: { type: 'integer', minimum: 1, maximum: 720 },
       sellerState: { anyOf: [{ type: 'string', maxLength: 100 }, { type: 'null' }] }
     }
@@ -236,5 +259,30 @@ export const updateCodSettingsSchema = {
   response: {
     200: codSettingsShape,
     ...standardAdminErrorResponses
+  }
+} as const;
+
+/**
+ * Public storefront config — no auth required.
+ * Exposes only the storefront-relevant subset of StoreSettings that customer
+ * UI needs to render correctly (COD availability, minimum order enforcement).
+ * Never exposes sensitive fields (GSTIN, contact details, notification keys).
+ */
+export const getPublicStoreConfigSchema = {
+  tags: ['storefront', 'settings'],
+  summary: 'Public storefront configuration (COD, minimum order value)',
+  params: emptyParamsSchema,
+  querystring: emptyQuerystringSchema,
+  response: {
+    200: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['isCodEnabled', 'minOrderValuePaise', 'mobileOtpSignupEnabled'],
+      properties: {
+        isCodEnabled: { type: 'boolean' },
+        minOrderValuePaise: { type: 'integer', minimum: 0 },
+        mobileOtpSignupEnabled: { type: 'boolean' }
+      }
+    }
   }
 } as const;

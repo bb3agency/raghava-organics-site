@@ -5,7 +5,9 @@ import { jwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import { rolesGuard } from '@common/guards/roles.guard';
 import {
   adminCreateProductImageSchema,
+  adminUploadProductImageSchema,
   adminGetProductByIdSchema,
+  adminGetCategoryByIdSchema,
   adminImportProductsCsvSchema,
   adminListCategoriesSchema,
   adminListProductsSchema,
@@ -13,7 +15,9 @@ import {
   adminCreateProductSchema,
   adminCreateProductVariantSchema,
   adminDeleteCategorySchema,
+  adminHardDeleteCategorySchema,
   adminDeleteProductSchema,
+  adminHardDeleteProductSchema,
   adminDeleteProductVariantSchema,
   adminUpdateCategorySchema,
   adminUpdateProductSchema,
@@ -28,6 +32,7 @@ import {
 import { ProductsService } from './products.service';
 import { AppError } from '@common/errors/app-error';
 import { ERROR_CODES } from '@common/errors/error-codes';
+import { PRODUCT_IMAGE_MAX_BYTES } from '@modules/media/product-media.constants';
 import { idempotencyOnSend, idempotencyPreHandler } from '@common/idempotency/idempotency';
 import { routeRateLimitProfiles } from '@common/rate-limit/rate-limit-policies';
 import { loadShedGuard } from '@common/reliability/load-shed.guard';
@@ -219,6 +224,66 @@ export async function registerProductsRoutes(fastify: FastifyInstance): Promise<
     }
   );
 
+  fastify.post(
+    '/api/v1/admin/products/:id/images/upload',
+    {
+      schema: adminUploadProductImageSchema,
+      preHandler: [...adminGuard, adminPermissionGuard('products:write'), loadShedGuard, idempotencyPreHandler],
+      config: {
+        rateLimit: routeRateLimitProfiles.adminWrite
+      }
+    },
+    async (request) => {
+      if (!request.isMultipart()) {
+        throw new AppError(
+          ERROR_CODES.VALIDATION_ERROR,
+          'Image upload requires multipart/form-data',
+          400
+        );
+      }
+
+      const params = request.params as { id: string };
+      const files: Array<{ buffer: Buffer; mimeType: string | null }> = [];
+      let altText = '';
+
+      for await (const part of request.parts()) {
+        if (part.type === 'file' && (part.fieldname === 'file' || part.fieldname === 'files')) {
+          const buffer = await part.toBuffer();
+          if (buffer.length > PRODUCT_IMAGE_MAX_BYTES) {
+            throw new AppError(
+              ERROR_CODES.VALIDATION_ERROR,
+              `Image must be ${PRODUCT_IMAGE_MAX_BYTES / (1024 * 1024)} MB or smaller`,
+              400
+            );
+          }
+          files.push({ buffer, mimeType: part.mimetype });
+          continue;
+        }
+        if (part.type === 'field') {
+          const raw = part.value;
+          const value = (
+            typeof raw === 'string' ? raw : Buffer.isBuffer(raw) ? raw.toString('utf8') : ''
+          ).trim();
+          if (part.fieldname === 'altText') altText = value;
+        }
+      }
+
+      if (files.length === 0) {
+        throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Missing image file', 400);
+      }
+
+      const defaultAlt = altText || 'Product image';
+      const uploads = files.map((file) => ({
+        buffer: file.buffer,
+        mimeType: file.mimeType,
+        altText: defaultAlt
+      }));
+
+      const items = await productsService.adminUploadProductImages(params.id, uploads);
+      return items.length === 1 ? items[0] : { items };
+    }
+  );
+
   fastify.patch(
     '/api/v1/admin/products/:id/images/reorder',
     {
@@ -279,11 +344,26 @@ export async function registerProductsRoutes(fastify: FastifyInstance): Promise<
     }
   );
 
+  fastify.delete(
+    '/api/v1/admin/products/:id/permanent',
+    {
+      schema: adminHardDeleteProductSchema,
+      preHandler: [...adminGuard, adminPermissionGuard('products:write'), loadShedGuard, idempotencyPreHandler],
+      config: {
+        rateLimit: routeRateLimitProfiles.adminWrite
+      }
+    },
+    async (request) => {
+      const params = request.params as { id: string };
+      return productsService.adminHardDeleteProduct(params.id);
+    }
+  );
+
   fastify.get(
     '/api/v1/admin/categories',
     {
       schema: adminListCategoriesSchema,
-      preHandler: [...adminGuard, adminPermissionGuard('categories:read')],
+      preHandler: [...adminGuard, adminPermissionGuard('categories:read', 'products:read')],
       config: {
         rateLimit: routeRateLimitProfiles.adminRead
       }
@@ -301,6 +381,21 @@ export async function registerProductsRoutes(fastify: FastifyInstance): Promise<
       }
     },
     async (request) => productsService.adminCreateCategory(request.body as never)
+  );
+
+  fastify.get(
+    '/api/v1/admin/categories/:id',
+    {
+      schema: adminGetCategoryByIdSchema,
+      preHandler: [...adminGuard, adminPermissionGuard('categories:read', 'products:read')],
+      config: {
+        rateLimit: routeRateLimitProfiles.adminRead
+      }
+    },
+    async (request) => {
+      const params = request.params as { id: string };
+      return productsService.adminGetCategoryById(params.id);
+    }
   );
 
   fastify.patch(
@@ -330,6 +425,21 @@ export async function registerProductsRoutes(fastify: FastifyInstance): Promise<
     async (request) => {
       const params = request.params as { id: string };
       return productsService.adminDeleteCategory(params.id);
+    }
+  );
+
+  fastify.delete(
+    '/api/v1/admin/categories/:id/permanent',
+    {
+      schema: adminHardDeleteCategorySchema,
+      preHandler: [...adminGuard, adminPermissionGuard('categories:write'), loadShedGuard, idempotencyPreHandler],
+      config: {
+        rateLimit: routeRateLimitProfiles.adminWrite
+      }
+    },
+    async (request) => {
+      const params = request.params as { id: string };
+      return productsService.adminHardDeleteCategory(params.id);
     }
   );
 }

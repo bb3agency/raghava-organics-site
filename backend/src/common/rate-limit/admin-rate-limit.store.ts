@@ -39,17 +39,37 @@ export class AdminRateLimitStore {
     const windowStart = now - windowSeconds * 1000;
 
     if (this.redis) {
-      await this.redis.zremrangebyscore(key, 0, windowStart);
-      const count = await this.redis.zcard(key);
-      if (count >= maxRequests) {
-        return false;
-      }
+      try {
+        await this.redis.zremrangebyscore(key, 0, windowStart);
+        const count = await this.redis.zcard(key);
+        if (count >= maxRequests) {
+          return false;
+        }
 
-      await this.redis.zadd(key, now, `${now}:${Math.random().toString(36).slice(2)}`);
-      await this.redis.expire(key, windowSeconds);
-      return true;
+        await this.redis.zadd(key, now, `${now}:${Math.random().toString(36).slice(2)}`);
+        await this.redis.expire(key, windowSeconds);
+        return true;
+      } catch {
+        return this.checkLocalLimit(key, now, windowStart, maxRequests);
+      }
     }
 
+    return this.checkLocalLimit(key, now, windowStart, maxRequests);
+  }
+
+  /**
+   * Clears singleton and local fallback state.
+   */
+  static cleanup(): void {
+    AdminRateLimitStore.instance = null;
+  }
+
+  private checkLocalLimit(
+    key: string,
+    now: number,
+    windowStart: number,
+    maxRequests: number
+  ): boolean {
     let requests = this.localStore.get(key) ?? [];
     requests = requests.filter((timestamp) => timestamp > windowStart);
 
@@ -62,14 +82,6 @@ export class AdminRateLimitStore {
     this.localStore.set(key, requests);
     this.evictOldLocalEntries(windowStart);
     return true;
-  }
-
-  /**
-   * Clears singleton and local fallback state.
-   */
-  cleanup(): void {
-    this.localStore.clear();
-    AdminRateLimitStore.instance = null;
   }
 
   private evictOldLocalEntries(windowStart: number): void {

@@ -1,5 +1,11 @@
 import { FastifyInstance } from 'fastify';
 import Redis from 'ioredis';
+import {
+  attachRedisErrorListener,
+  buildStandardRedisOptions,
+  waitForRedisReady,
+  type RedisEventClient
+} from '@common/redis/redis-connection';
 import { redisConfig } from '@config/redis.config';
 import { sendTechnicalFailureAlert } from '@modules/notifications/notification-failure-alert';
 
@@ -25,55 +31,24 @@ export async function registerRedisPlugin(fastify: FastifyInstance, deps: RedisP
   const redisCtor = deps.redisCtor ?? ((url: string, options: Record<string, unknown>) => new Redis(url, options) as unknown as RedisClientLike);
   const redisUrl = deps.redisUrl ?? redisConfig.url;
   const redisReadyTimeoutMs = deps.readyTimeoutMs ?? 20_000;
-  const redis = redisCtor(redisUrl, {
-    maxRetriesPerRequest: null,
-    keepAlive: 5_000,
-    connectTimeout: 15_000,
-    enableOfflineQueue: true,
-    family: 4,                                              // Force IPv4 — avoids IPv6/localhost resolution issues on Windows
-    retryStrategy: (times: number) => Math.min(times * 300, 3_000),
-    reconnectOnError: () => true,                          // Reconnect on any error including ECONNABORTED
-  });
+  const redis = redisCtor(redisUrl, buildStandardRedisOptions());
 
-  // Prevent unhandled 'error' events from crashing the process
-  redis.on('error', (err: unknown) => {
-    const message = err instanceof Error ? err.message : String(err);
-    fastify.log.error({ err: message }, 'Redis client error');
-    void sendTechnicalFailureAlert({
-      prisma: fastify.prisma,
-      template: 'RedisClientError',
-      channel: 'UNKNOWN',
-      recipient: 'redis-runtime',
-      errorMessage: message,
-      failureStage: 'CORE_LOGIC',
-      domain: 'infrastructure',
-      component: 'redis-plugin'
-    });
-  });
-
-  // Wait for Redis to be ready before proceeding — prevents command timeouts
-  // on the first request after a slow container start.
-  // Fail fast with a clear boot error if Redis never becomes ready.
-  await new Promise<void>((resolve, reject) => {
-    if (redis.status === 'ready') {
-      resolve();
-      return;
+  attachRedisErrorListener(redis as unknown as RedisEventClient, fastify.log, 'redis-primary', {
+    onPersistentError: (err) => {
+      void sendTechnicalFailureAlert({
+        prisma: fastify.prisma,
+        template: 'RedisClientError',
+        channel: 'UNKNOWN',
+        recipient: 'redis-runtime',
+        errorMessage: err.message,
+        failureStage: 'CORE_LOGIC',
+        domain: 'infrastructure',
+        component: 'redis-plugin'
+      });
     }
-
-    const timeout = setTimeout(() => {
-      redis.off('ready', onReady);
-      reject(new Error(`Redis did not become ready within ${redisReadyTimeoutMs}ms`));
-    }, redisReadyTimeoutMs);
-
-    const onReady = () => {
-      clearTimeout(timeout);
-      resolve();
-    };
-
-    redis.once('ready', onReady);
-    // Do not reject on individual 'error' events — ioredis will retry automatically via retryStrategy.
-    // Timeout above prevents hanging forever when Redis is unavailable.
   });
+
+  await waitForRedisReady(redis as unknown as RedisEventClient & RedisClientLike, redisReadyTimeoutMs);
 
   fastify.decorate('redis', redis as unknown as RedisInstance);
 
@@ -81,4 +56,3 @@ export async function registerRedisPlugin(fastify: FastifyInstance, deps: RedisP
     await instance.redis.quit();
   });
 }
-

@@ -8,7 +8,7 @@ describe('validateRuntimeEnv', () => {
     vi.resetModules();
   });
 
-  const baseProductionEnv = {
+  const baseProductionEnv: Record<string, string> = {
     NODE_ENV: 'production',
     JWT_SECRET: 'jwt-secret-value-32chars-minimum-xx',
     JWT_REFRESH_SECRET: 'jwt-refresh-secret-value-32chars-min',
@@ -55,7 +55,8 @@ describe('validateRuntimeEnv', () => {
   });
 
   it('rejects missing TURNSTILE_SECRET_KEY in production-like profiles', async () => {
-    const { TURNSTILE_SECRET_KEY: _removed, ...envWithoutTurnstile } = baseProductionEnv;
+    const envWithoutTurnstile = { ...baseProductionEnv };
+    delete envWithoutTurnstile.TURNSTILE_SECRET_KEY;
     process.env = {
       ...originalEnv,
       ...envWithoutTurnstile,
@@ -73,7 +74,8 @@ describe('validateRuntimeEnv', () => {
   });
 
   it('allows boot without TURNSTILE_SECRET_KEY when TURNSTILE_SKIP_PRODUCTION_CHECK=true', async () => {
-    const { TURNSTILE_SECRET_KEY: _removed, ...envWithoutTurnstile } = baseProductionEnv;
+    const envWithoutTurnstile = { ...baseProductionEnv };
+    delete envWithoutTurnstile.TURNSTILE_SECRET_KEY;
     process.env = { ...originalEnv, ...envWithoutTurnstile, TURNSTILE_SKIP_PRODUCTION_CHECK: 'true' };
 
     const { validateRuntimeEnv } = await import('./app.config');

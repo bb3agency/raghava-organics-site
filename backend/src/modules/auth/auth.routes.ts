@@ -26,6 +26,7 @@ import {
   adminInviteCreateSchema,
   adminLoginRequestOtpSchema,
   adminLoginVerifyOtpSchema,
+  checkIdentifierSchema,
   forgotPasswordSchema,
   resetPasswordSchema,
   loginSchema,
@@ -228,6 +229,18 @@ export async function registerAuthRoutes(fastify: FastifyInstance): Promise<void
       }
     },
     async (request) => authService.resetPassword(request.body as never)
+  );
+
+  // Lightweight existence check — used by login forms to give early "not registered" feedback.
+  fastify.post(
+    '/api/v1/auth/check-identifier',
+    {
+      schema: checkIdentifierSchema,
+      config: {
+        rateLimit: routeRateLimitProfiles.authSensitive
+      }
+    },
+    async (request) => authService.checkIdentifier(request.body as never)
   );
 
   fastify.post(

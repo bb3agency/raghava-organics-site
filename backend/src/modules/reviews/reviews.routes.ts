@@ -10,9 +10,11 @@ import { loadShedGuard } from '@common/reliability/load-shed.guard';
 import {
   adminDeleteReviewSchema,
   adminListReviewsSchema,
+  adminReviewSummarySchema,
   createReviewSchema,
   listMyReviewsSchema,
   listProductReviewsSchema,
+  listRecentApprovedReviewsSchema,
   moderateReviewSchema
 } from './reviews.schemas';
 import { ReviewsService } from './reviews.service';
@@ -25,6 +27,17 @@ export async function registerReviewsRoutes(fastify: FastifyInstance): Promise<v
     await idempotencyOnSend(request, reply, payload);
     return payload;
   });
+
+  fastify.get(
+    '/api/v1/reviews/recent',
+    {
+      schema: listRecentApprovedReviewsSchema,
+      config: {
+        rateLimit: routeRateLimitProfiles.catalogRead
+      }
+    },
+    async (request) => reviewsService.listRecentApprovedReviews(request.query as never)
+  );
 
   fastify.get(
     '/api/v1/reviews/product/:slug',
@@ -68,6 +81,18 @@ export async function registerReviewsRoutes(fastify: FastifyInstance): Promise<v
       const user = getCurrentUser(request);
       return reviewsService.createReview(user.sub, request.body as never);
     }
+  );
+
+  fastify.get(
+    '/api/v1/admin/reviews/summary',
+    {
+      schema: adminReviewSummarySchema,
+      preHandler: [...adminGuard, adminPermissionGuard('reviews:read')],
+      config: {
+        rateLimit: routeRateLimitProfiles.adminRead
+      }
+    },
+    async (request) => reviewsService.adminReviewSummary(request.query as never)
   );
 
   fastify.get(

@@ -10,6 +10,7 @@ import {
   getCodSettingsSchema,
   getInventorySettingsSchema,
   getNotificationSettingsSchema,
+  getPublicStoreConfigSchema,
   getShippingSettingsSchema,
   getStoreProfileSchema,
   updateCodSettingsSchema,
@@ -23,6 +24,18 @@ import { SettingsService } from './settings.service';
 export async function registerSettingsRoutes(fastify: FastifyInstance): Promise<void> {
   const settingsService = new SettingsService(fastify);
   const adminGuard = [jwtAuthGuard, rolesGuard(Role.ADMIN)];
+
+  // ── Public storefront config — no auth ─────────────────────────────────────
+  // Returns only the customer-UI-relevant subset (COD availability, minimum
+  // order value). Never exposes sensitive fields.
+  fastify.get(
+    '/api/v1/store/config',
+    {
+      schema: getPublicStoreConfigSchema,
+      config: { rateLimit: routeRateLimitProfiles.catalogRead }
+    },
+    async () => settingsService.getPublicStoreConfig()
+  );
 
   fastify.addHook('onSend', async (request, reply, payload) => {
     await idempotencyOnSend(request, reply, payload);

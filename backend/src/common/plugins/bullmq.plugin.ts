@@ -1,10 +1,24 @@
 import { FastifyInstance } from 'fastify';
 import { recordQueueHealthSnapshot } from '@common/observability/metrics';
+import { guardRedisDuplicate } from '@common/redis/redis-connection';
 import { createQueueRegistry } from '@queues/queue-registry';
 import { sendTechnicalFailureAlert } from '@modules/notifications/notification-failure-alert';
 
 export async function registerBullmqPlugin(fastify: FastifyInstance): Promise<void> {
-  const connection = fastify.redis.duplicate();
+  const connection = guardRedisDuplicate(fastify.redis, fastify.log, 'bullmq-queues', {
+    onPersistentError: (err) => {
+      void sendTechnicalFailureAlert({
+        prisma: fastify.prisma,
+        template: 'BullmqRedisConnectionError',
+        channel: 'UNKNOWN',
+        recipient: 'bullmq-runtime',
+        errorMessage: err.message,
+        failureStage: 'CORE_LOGIC',
+        domain: 'queues',
+        component: 'bullmq-plugin'
+      });
+    }
+  });
   const queues = createQueueRegistry(connection);
 
   // Schedule recurring jobs after startup — fire-and-forget so they never block boot.

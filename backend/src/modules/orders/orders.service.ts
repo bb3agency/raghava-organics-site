@@ -1,5 +1,14 @@
 import { createHash, timingSafeEqual } from 'crypto';
-import { AnalyticsEventType, Coupon, CouponType, OrderStatus, PaymentProvider, PaymentStatus, Prisma, PrismaClient } from '@prisma/client';
+import {
+  AnalyticsEventType,
+  Coupon,
+  CouponType,
+  OrderStatus,
+  PaymentProvider,
+  PaymentStatus,
+  Prisma,
+  PrismaClient
+} from '@prisma/client';
 import { FastifyInstance } from 'fastify';
 import { AppError } from '@common/errors/app-error';
 import { ERROR_CODES } from '@common/errors/error-codes';
@@ -105,9 +114,27 @@ export class OrdersService {
       state?: unknown;
       pincode?: unknown;
     };
-    return [candidate.fullName, candidate.phone, candidate.line1, candidate.city, candidate.state, candidate.pincode].every(
-      (value) => typeof value === 'string' && value.trim().length > 0
-    );
+    return [
+      candidate.fullName,
+      candidate.phone,
+      candidate.line1,
+      candidate.city,
+      candidate.state,
+      candidate.pincode
+    ].every((value) => typeof value === 'string' && value.trim().length > 0);
+  }
+
+  private resolveShipmentCustomerName(order: {
+    shippingAddress: unknown;
+    user: { firstName: string | null; lastName: string | null };
+  }): string {
+    if (order.shippingAddress && typeof order.shippingAddress === 'object') {
+      const fullName = (order.shippingAddress as { fullName?: unknown }).fullName;
+      if (typeof fullName === 'string' && fullName.trim().length > 0) {
+        return fullName.trim();
+      }
+    }
+    return `${order.user.firstName ?? ''} ${order.user.lastName ?? ''}`.trim() || 'Customer';
   }
 
   private resolveShipActionState(input: {
@@ -126,8 +153,14 @@ export class OrdersService {
     if (input.awbNumber || input.shipmentStatus) {
       return { canShipNow: false, shipBlockReason: 'Shipment is already booked for this order.' };
     }
-    if ((input.paymentMode ?? 'PREPAID') !== 'COD' && input.paymentStatus !== PaymentStatus.CAPTURED) {
-      return { canShipNow: false, shipBlockReason: 'Captured payment is required before shipping prepaid orders.' };
+    if (
+      (input.paymentMode ?? 'PREPAID') !== 'COD' &&
+      input.paymentStatus !== PaymentStatus.CAPTURED
+    ) {
+      return {
+        canShipNow: false,
+        shipBlockReason: 'Captured payment is required before shipping prepaid orders.'
+      };
     }
     if (input.hasCompleteShippingAddress === false) {
       return { canShipNow: false, shipBlockReason: 'Shipping address is incomplete.' };
@@ -172,7 +205,10 @@ export class OrdersService {
         template: 'OrderShipped',
         channel: 'UNKNOWN',
         recipient: merchantRecipient,
-        errorMessage: error instanceof Error ? error.message : 'Unknown merchant shipment notification enqueue error',
+        errorMessage:
+          error instanceof Error
+            ? error.message
+            : 'Unknown merchant shipment notification enqueue error',
         failureStage: 'QUEUE_ENQUEUE',
         domain: 'orders',
         component: 'enqueue-merchant-shipment-notifications',
@@ -182,7 +218,10 @@ export class OrdersService {
       this.fastify.log.error(
         {
           orderId,
-          error: error instanceof Error ? error.message : 'Unknown merchant shipment notification enqueue error'
+          error:
+            error instanceof Error
+              ? error.message
+              : 'Unknown merchant shipment notification enqueue error'
         },
         'Failed to enqueue merchant shipment notifications'
       );
@@ -269,7 +308,11 @@ export class OrdersService {
         result: 'rejected',
         durationMs: Date.now() - startedAt
       });
-      throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Invalid occurredAt timestamp in shipping webhook payload', 400);
+      throw new AppError(
+        ERROR_CODES.VALIDATION_ERROR,
+        'Invalid occurredAt timestamp in shipping webhook payload',
+        400
+      );
     }
     const maxSkewEnvKey =
       (runtimeConfig.SHIPPING_PROVIDER ?? 'delhivery').trim().toLowerCase() === 'shiprocket'
@@ -277,7 +320,8 @@ export class OrdersService {
         : 'DELHIVERY_WEBHOOK_MAX_SKEW_SECONDS';
     const maxSkewRaw = runtimeConfig[maxSkewEnvKey];
     const maxSkewSeconds = Number(maxSkewRaw ?? 300);
-    const limitMs = (Number.isFinite(maxSkewSeconds) && maxSkewSeconds > 0 ? maxSkewSeconds : 300) * 1000;
+    const limitMs =
+      (Number.isFinite(maxSkewSeconds) && maxSkewSeconds > 0 ? maxSkewSeconds : 300) * 1000;
     if (Math.abs(Date.now() - eventMs) > limitMs) {
       recordWebhookEvent({
         provider: 'shipping',
@@ -285,7 +329,11 @@ export class OrdersService {
         result: 'rejected',
         durationMs: Date.now() - startedAt
       });
-      throw new AppError(ERROR_CODES.UNAUTHORISED, 'Shipping webhook event timestamp outside allowed window', 401);
+      throw new AppError(
+        ERROR_CODES.UNAUTHORISED,
+        'Shipping webhook event timestamp outside allowed window',
+        401
+      );
     }
   }
 
@@ -325,9 +373,17 @@ export class OrdersService {
     const cartService = new CartService(this.fastify);
     const serviceability = await cartService.checkPincodeServiceability(shippingAddress.pincode);
     if (!serviceability.serviceable) {
-      throw new AppError(ERROR_CODES.PINCODE_NOT_SERVICEABLE, 'Delivery is unavailable for this pincode', 422);
+      throw new AppError(
+        ERROR_CODES.PINCODE_NOT_SERVICEABLE,
+        'Delivery is unavailable for this pincode',
+        422
+      );
     }
-    const deliveryRates = await cartService.getDeliveryRates(userId, undefined, shippingAddress.pincode);
+    const deliveryRates = await cartService.getDeliveryRates(
+      userId,
+      undefined,
+      shippingAddress.pincode
+    );
     const storeSettings = await this.fastify.prisma.storeSettings.findUnique({
       where: { singletonKey: 'default' },
       select: { minOrderValuePaise: true }
@@ -335,7 +391,9 @@ export class OrdersService {
 
     const createdOrder = await this.fastify.prisma.$transaction(async (tx) => {
       await tx.$executeRaw`CREATE SEQUENCE IF NOT EXISTS order_number_seq START 1`;
-      const sequenceResult = await tx.$queryRaw<Array<{ nextval: bigint }>>`SELECT nextval('order_number_seq')`;
+      const sequenceResult = await tx.$queryRaw<
+        Array<{ nextval: bigint }>
+      >`SELECT nextval('order_number_seq')`;
       const sequenceNumber = Number(sequenceResult[0]?.nextval ?? 1n);
       const year = new Date().getFullYear();
       const orderNumber = `ORD-${year}-${String(sequenceNumber).padStart(5, '0')}`;
@@ -365,8 +423,9 @@ export class OrdersService {
       }
 
       for (const item of cart.items) {
-        const reservationDelegate = (tx as unknown as { cartReservation?: Prisma.TransactionClient['cartReservation'] })
-          .cartReservation;
+        const reservationDelegate = (
+          tx as unknown as { cartReservation?: Prisma.TransactionClient['cartReservation'] }
+        ).cartReservation;
         const reservedByOtherCarts = reservationDelegate
           ? await reservationDelegate.aggregate({
               where: {
@@ -377,13 +436,23 @@ export class OrdersService {
               _sum: { quantity: true }
             })
           : { _sum: { quantity: 0 } };
-        const available = Math.max((item.variant.inventory?.quantity ?? 0) - (reservedByOtherCarts._sum.quantity ?? 0), 0);
+        const available = Math.max(
+          (item.variant.inventory?.quantity ?? 0) - (reservedByOtherCarts._sum.quantity ?? 0),
+          0
+        );
         if (available < item.quantity) {
-          throw new AppError(ERROR_CODES.INSUFFICIENT_STOCK, `Insufficient stock for variant ${item.variantId}`, 422);
+          throw new AppError(
+            ERROR_CODES.INSUFFICIENT_STOCK,
+            `Insufficient stock for variant ${item.variantId}`,
+            422
+          );
         }
       }
 
-      const subtotal = cart.items.reduce((sum, item) => sum + item.priceSnapshot * item.quantity, 0);
+      const subtotal = cart.items.reduce(
+        (sum, item) => sum + item.priceSnapshot * item.quantity,
+        0
+      );
       const minimumOrderValue = storeSettings?.minOrderValuePaise ?? 0;
       if (subtotal < minimumOrderValue) {
         throw new AppError(
@@ -397,7 +466,8 @@ export class OrdersService {
         await this.validateOrderCoupon(effectiveCoupon, subtotal, userId, cart.items);
       }
       const discountAmount = this.calculateOrderDiscount(subtotal, effectiveCoupon, cart.items);
-      const shippingCharge = effectiveCoupon?.type === 'FREE_SHIPPING' ? 0 : deliveryRates.shippingCharge;
+      const shippingCharge =
+        effectiveCoupon?.type === 'FREE_SHIPPING' ? 0 : deliveryRates.shippingCharge;
       const total = Math.max(subtotal + shippingCharge - discountAmount, 0);
 
       const requestedPaymentMode = input.paymentMode ?? 'PREPAID';
@@ -407,17 +477,22 @@ export class OrdersService {
           select: { isCodEnabled: true }
         });
         if (!(codSettings as { isCodEnabled?: boolean } | null)?.isCodEnabled) {
-          throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Cash on Delivery is not available', 400);
+          throw new AppError(
+            ERROR_CODES.VALIDATION_ERROR,
+            'Cash on Delivery is not available',
+            400
+          );
         }
       }
-      const orderStatus = requestedPaymentMode === 'COD' ? OrderStatus.CONFIRMED : OrderStatus.PENDING_PAYMENT;
+      const orderStatus =
+        requestedPaymentMode === 'COD' ? OrderStatus.CONFIRMED : OrderStatus.PENDING_PAYMENT;
 
       const order = await tx.order.create({
         data: {
           orderNumber,
           userId,
           status: orderStatus,
-          ...(({ paymentMode: requestedPaymentMode }) as Record<string, unknown>),
+          ...({ paymentMode: requestedPaymentMode } as Record<string, unknown>),
           shippingAddress: {
             fullName: shippingAddress.fullName,
             phone: shippingAddress.phone,
@@ -464,7 +539,9 @@ export class OrdersService {
         });
       }
 
-      const initialStatus = (order as Record<string, unknown>)['status'] as OrderStatus ?? OrderStatus.PENDING_PAYMENT;
+      const initialStatus =
+        ((order as Record<string, unknown>)['status'] as OrderStatus) ??
+        OrderStatus.PENDING_PAYMENT;
       await tx.orderStatusHistory.create({
         data: {
           orderId: order.id,
@@ -476,7 +553,9 @@ export class OrdersService {
       });
 
       await tx.cartItem.deleteMany({ where: { cartId: cart.id } });
-      const reservationDelegate = (tx as unknown as { cartReservation?: Prisma.TransactionClient['cartReservation'] }).cartReservation;
+      const reservationDelegate = (
+        tx as unknown as { cartReservation?: Prisma.TransactionClient['cartReservation'] }
+      ).cartReservation;
       if (reservationDelegate) {
         // Keep reservation active during payment window so stock is hard-reserved until worker commit/release.
         await reservationDelegate.updateMany({
@@ -519,6 +598,24 @@ export class OrdersService {
       });
     });
     recordCheckoutPath('/api/v1/orders', 'success');
+
+    // COD orders are CONFIRMED immediately; enqueue the canonical side-effect
+    // handler so inventory is deducted, OrderConfirmed email is sent, and an
+    // invoice is generated — exactly mirroring the PREPAID worker path.
+    if (createdOrder.paymentMode === 'COD') {
+      await this.enqueueOutboxMessage(
+        'orderProcessing',
+        'process-order-update',
+        {
+          orderId: createdOrder.id,
+          toStatus: OrderStatus.CONFIRMED,
+          triggeredBy: 'COD_ORDER_CREATED',
+          note: 'COD order placed'
+        },
+        `process-order-update:confirmed:${createdOrder.id}`
+      );
+    }
+
     return createdOrder;
   }
 
@@ -558,7 +655,10 @@ export class OrdersService {
     });
   }
 
-  async getMyInvoicePdf(userId: string, orderId: string): Promise<{ invoiceNumber: string; content: Buffer }> {
+  async getMyInvoicePdf(
+    userId: string,
+    orderId: string
+  ): Promise<{ invoiceNumber: string; content: Buffer }> {
     const order = await this.fastify.prisma.order.findFirst({
       where: { id: orderId, userId },
       select: {
@@ -618,19 +718,28 @@ export class OrdersService {
         throw new AppError(ERROR_CODES.NOT_FOUND, 'Order not found', 404);
       }
 
-      if (!(existing.status === OrderStatus.CONFIRMED || existing.status === OrderStatus.PROCESSING)) {
-        throw new AppError(ERROR_CODES.INVALID_STATUS_TRANSITION, 'Order cannot be cancelled at current status', 409);
+      if (
+        !(existing.status === OrderStatus.CONFIRMED || existing.status === OrderStatus.PROCESSING)
+      ) {
+        throw new AppError(
+          ERROR_CODES.INVALID_STATUS_TRANSITION,
+          'Order cannot be cancelled at current status',
+          409
+        );
       }
 
-      const cancelSettingsDelegate = (tx as unknown as { storeSettings?: { findUnique: (args: unknown) => Promise<unknown> } })
-        .storeSettings;
+      const cancelSettingsDelegate = (
+        tx as unknown as { storeSettings?: { findUnique: (args: unknown) => Promise<unknown> } }
+      ).storeSettings;
       const cancelSettings = cancelSettingsDelegate
         ? await cancelSettingsDelegate.findUnique({
             where: { singletonKey: 'default' },
             select: { cancellationWindowHours: true }
           })
         : null;
-      const windowHours = (cancelSettings as { cancellationWindowHours?: number } | null)?.cancellationWindowHours ?? 24;
+      const windowHours =
+        (cancelSettings as { cancellationWindowHours?: number } | null)?.cancellationWindowHours ??
+        24;
       const windowExpiry = new Date(existing.createdAt.getTime() + windowHours * 60 * 60 * 1000);
       if (new Date() > windowExpiry) {
         throw new AppError(
@@ -668,7 +777,11 @@ export class OrdersService {
           input?.refundAmountPaise !== undefined &&
           (input.refundAmountPaise <= 0 || input.refundAmountPaise > existing.payment.amount)
         ) {
-          throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Invalid refund amount for captured payment', 400);
+          throw new AppError(
+            ERROR_CODES.VALIDATION_ERROR,
+            'Invalid refund amount for captured payment',
+            400
+          );
         }
         for (const item of existing.items) {
           await tx.inventory.updateMany({
@@ -721,7 +834,9 @@ export class OrdersService {
         await this.enqueueOutboxMessage('refunds', 'initiate-razorpay-refund', {
           orderId: updatedOrder.id,
           reason: refundReason,
-          ...(input?.refundAmountPaise !== undefined ? { refundAmountPaise: input.refundAmountPaise } : {}),
+          ...(input?.refundAmountPaise !== undefined
+            ? { refundAmountPaise: input.refundAmountPaise }
+            : {}),
           initiatedBy: 'CUSTOMER',
           sourceStatus: OrderStatus.CANCELLED
         });
@@ -748,7 +863,11 @@ export class OrdersService {
       }
     }
 
-    await this.enqueueOrderCancelledNotifications(updatedOrder.id, updatedOrder.user?.email ?? null, updatedOrder.user?.phone ?? null);
+    await this.enqueueOrderCancelledNotifications(
+      updatedOrder.id,
+      updatedOrder.user?.email ?? null,
+      updatedOrder.user?.phone ?? null
+    );
     recordCheckoutPath('/api/v1/orders/:id/cancel', 'success');
     return this.serializeOrder(updatedOrder, {
       exposeProviderReferences: false,
@@ -756,11 +875,7 @@ export class OrdersService {
     });
   }
 
-  async initiatePayment(
-    userId: string,
-    input: InitiatePaymentInput,
-    opts?: { clientIp?: string }
-  ) {
+  async initiatePayment(userId: string, input: InitiatePaymentInput, opts?: { clientIp?: string }) {
     const order = await this.fastify.prisma.order.findFirst({
       where: { id: input.orderId, userId }
     });
@@ -864,8 +979,15 @@ export class OrdersService {
       return { message: 'Payment already verified' };
     }
 
-    if (order.payment.status === PaymentStatus.CAPTURED && order.payment.providerPaymentId !== input.razorpayPaymentId) {
-      throw new AppError(ERROR_CODES.CONFLICT, 'Payment is already captured with a different provider payment id', 409);
+    if (
+      order.payment.status === PaymentStatus.CAPTURED &&
+      order.payment.providerPaymentId !== input.razorpayPaymentId
+    ) {
+      throw new AppError(
+        ERROR_CODES.CONFLICT,
+        'Payment is already captured with a different provider payment id',
+        409
+      );
     }
 
     const captureKey = this.buildScopedKey('rzp:capture', input.razorpayPaymentId);
@@ -975,7 +1097,11 @@ export class OrdersService {
           result: 'rejected',
           durationMs: Date.now() - startedAt
         });
-        throw new AppError(ERROR_CODES.PAYMENT_VERIFICATION_FAILED, 'Webhook event timestamp outside allowed window', 401);
+        throw new AppError(
+          ERROR_CODES.PAYMENT_VERIFICATION_FAILED,
+          'Webhook event timestamp outside allowed window',
+          401
+        );
       }
     }
 
@@ -1011,7 +1137,12 @@ export class OrdersService {
 
     const inboxEventKey = normalizedEventId ?? `${normalizedEvent}:${providerPaymentId}`;
     const payloadHash = createHash('sha256').update(webhookRawBytes).digest('hex');
-    const inboxState = await this.claimWebhookInboxEvent('razorpay', inboxEventKey, payloadHash, eventName);
+    const inboxState = await this.claimWebhookInboxEvent(
+      'razorpay',
+      inboxEventKey,
+      payloadHash,
+      eventName
+    );
     if (inboxState !== 'claimed') {
       recordWebhookEvent({
         provider: 'razorpay',
@@ -1071,7 +1202,8 @@ export class OrdersService {
       await this.fastify.redis.set(idempotencyKey, nextMarker, 'EX', 86400);
     }
 
-    const paymentJobName = eventName === 'payment.captured' ? 'deduct-inventory' : 'payment-webhook';
+    const paymentJobName =
+      eventName === 'payment.captured' ? 'deduct-inventory' : 'payment-webhook';
 
     if (paymentJobName === 'deduct-inventory') {
       const captureKey = this.buildScopedKey('rzp:capture', providerPaymentId);
@@ -1111,7 +1243,9 @@ export class OrdersService {
             traceId: traceContext?.traceId ?? null
           }
         },
-        paymentJobName === 'deduct-inventory' ? `deduct-inventory:${this.hashIdentifier(providerPaymentId)}` : undefined
+        paymentJobName === 'deduct-inventory'
+          ? `deduct-inventory:${this.hashIdentifier(providerPaymentId)}`
+          : undefined
       );
     } catch (error) {
       if (eventIdKey) {
@@ -1140,7 +1274,8 @@ export class OrdersService {
         template: eventName,
         channel: 'UNKNOWN',
         recipient: providerPaymentId,
-        errorMessage: error instanceof Error ? error.message : 'Unable to enqueue payment webhook processing',
+        errorMessage:
+          error instanceof Error ? error.message : 'Unable to enqueue payment webhook processing',
         failureStage: 'WEBHOOK_PROCESSING',
         domain: 'payments',
         component: 'razorpay-webhook-enqueue',
@@ -1213,7 +1348,11 @@ export class OrdersService {
     const startedAt = Date.now();
     const env = (runtimeConfig.NODE_ENV ?? process.env.NODE_ENV ?? 'development').toLowerCase();
     let activeProvider = (runtimeConfig.SHIPPING_PROVIDER ?? 'delhivery').trim().toLowerCase();
-    if (env === 'test' && activeProvider === 'delhivery' && typeof process.env.SHIPPING_PROVIDER === 'string') {
+    if (
+      env === 'test' &&
+      activeProvider === 'delhivery' &&
+      typeof process.env.SHIPPING_PROVIDER === 'string'
+    ) {
       activeProvider = process.env.SHIPPING_PROVIDER.trim().toLowerCase();
     }
     const isShiprocket = activeProvider === 'shiprocket';
@@ -1224,11 +1363,16 @@ export class OrdersService {
     if (isShiprocket) {
       effectiveWebhookSecret = (runtimeConfig.SHIPROCKET_WEBHOOK_TOKEN ?? '').trim();
     } else if (isNoopShipping) {
-      const headerToken = typeof authHeader === 'string' ? authHeader.replace(/^Bearer\s+/i, '').trim() : '';
+      const headerToken =
+        typeof authHeader === 'string' ? authHeader.replace(/^Bearer\s+/i, '').trim() : '';
       effectiveWebhookSecret = headerToken || 'noop';
     } else {
       let webhookSecret = (runtimeConfig.DELHIVERY_WEBHOOK_TOKEN ?? '').trim();
-      if (!webhookSecret && env === 'test' && typeof process.env.DELHIVERY_WEBHOOK_TOKEN === 'string') {
+      if (
+        !webhookSecret &&
+        env === 'test' &&
+        typeof process.env.DELHIVERY_WEBHOOK_TOKEN === 'string'
+      ) {
         webhookSecret = process.env.DELHIVERY_WEBHOOK_TOKEN.trim();
       }
       // Test-only: accept DELHIVERY_API_KEY as the secret if webhook token is unset and header uses Token <apiKey>
@@ -1251,7 +1395,11 @@ export class OrdersService {
       }
     }
     if (!effectiveWebhookSecret) {
-      throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Shipping webhook secret is not configured', 500);
+      throw new AppError(
+        ERROR_CODES.INTERNAL_ERROR,
+        'Shipping webhook secret is not configured',
+        500
+      );
     }
 
     let tokenValid: boolean;
@@ -1259,7 +1407,8 @@ export class OrdersService {
       // In noop/placeholder mode, accept any non-empty token to keep local simulations unblocked.
       tokenValid = typeof authHeader === 'string' && authHeader.trim().length > 0;
     } else if (isShiprocket) {
-      const headerToken = typeof authHeader === 'string' ? authHeader.replace(/^Bearer\s+/i, '') : '';
+      const headerToken =
+        typeof authHeader === 'string' ? authHeader.replace(/^Bearer\s+/i, '') : '';
       tokenValid = this.secureTokenMatch(headerToken, effectiveWebhookSecret);
     } else {
       const expectedToken = `Token ${effectiveWebhookSecret}`;
@@ -1306,7 +1455,12 @@ export class OrdersService {
       return { received: true };
     }
 
-    this.assertShippingWebhookOccurrenceSkew(parsed.occurredAt, startedAt, parsed.status, runtimeConfig);
+    this.assertShippingWebhookOccurrenceSkew(
+      parsed.occurredAt,
+      startedAt,
+      parsed.status,
+      runtimeConfig
+    );
 
     const shippingProviderKey = isShiprocket ? 'shiprocket' : 'delhivery';
     const idempotencyRef = `${parsed.awb}:${parsed.status}:${parsed.occurredAt ?? 'na'}`;
@@ -1324,8 +1478,15 @@ export class OrdersService {
 
     const inboxEventKey = `${parsed.awb}:${parsed.status}:${parsed.occurredAt ?? 'na'}`;
     const payloadHash = createHash('sha256').update(webhookRawBytes).digest('hex');
-    const inboxProviderKey: 'razorpay' | 'delhivery' | 'shiprocket' = isShiprocket ? 'shiprocket' : 'delhivery';
-    const inboxState = await this.claimWebhookInboxEvent(inboxProviderKey, inboxEventKey, payloadHash, parsed.status);
+    const inboxProviderKey: 'razorpay' | 'delhivery' | 'shiprocket' = isShiprocket
+      ? 'shiprocket'
+      : 'delhivery';
+    const inboxState = await this.claimWebhookInboxEvent(
+      inboxProviderKey,
+      inboxEventKey,
+      payloadHash,
+      parsed.status
+    );
     if (inboxState !== 'claimed') {
       recordWebhookEvent({
         provider: 'shipping',
@@ -1355,7 +1516,7 @@ export class OrdersService {
         },
         `update-shipment-status:${parsed.awb}:${parsed.status}:${parsed.occurredAt ?? 'na'}`
       );
-    } catch {
+    } catch (enqueueError) {
       await this.fastify.redis.del(idempotencyKey);
       await this.markWebhookInboxEvent(
         inboxProviderKey,
@@ -1367,6 +1528,18 @@ export class OrdersService {
         { status: parsed.status, occurredAt: parsed.occurredAt ?? null, queue: 'shipping' },
         'Unable to enqueue shipping webhook processing'
       );
+      await sendTechnicalFailureAlert({
+        prisma: this.fastify.prisma,
+        template: `${shippingProviderKey}.webhook.${parsed.status}`,
+        channel: 'UNKNOWN',
+        recipient: parsed.awb,
+        errorMessage: enqueueError instanceof Error ? enqueueError.message : 'Unable to enqueue shipping webhook processing',
+        failureStage: 'WEBHOOK_PROCESSING',
+        domain: 'shipping',
+        component: `${shippingProviderKey}-webhook-enqueue`,
+        queueName: 'shipping',
+        jobName: 'update-shipment-status'
+      });
       recordWebhookEvent({
         provider: 'shipping',
         event: parsed.status,
@@ -1392,6 +1565,7 @@ export class OrdersService {
     const toDate = query.to ? new Date(query.to) : undefined;
     const whereClause = {
       ...(query.status !== undefined ? { status: query.status } : {}),
+      ...(query.paymentMode !== undefined ? { paymentMode: query.paymentMode } : {}),
       ...((fromDate || toDate) && {
         createdAt: {
           ...(fromDate ? { gte: fromDate } : {}),
@@ -1402,8 +1576,12 @@ export class OrdersService {
         ? {
             OR: [
               { orderNumber: { contains: query.search.trim(), mode: 'insensitive' as const } },
-              { user: { firstName: { contains: query.search.trim(), mode: 'insensitive' as const } } },
-              { user: { lastName: { contains: query.search.trim(), mode: 'insensitive' as const } } },
+              {
+                user: { firstName: { contains: query.search.trim(), mode: 'insensitive' as const } }
+              },
+              {
+                user: { lastName: { contains: query.search.trim(), mode: 'insensitive' as const } }
+              },
               { user: { email: { contains: query.search.trim(), mode: 'insensitive' as const } } },
               { user: { phone: { contains: query.search.trim() } } }
             ]
@@ -1411,10 +1589,12 @@ export class OrdersService {
         : {})
     };
 
+    const sortDir = query.sort === 'oldest' ? ('asc' as const) : ('desc' as const);
+
     const [items, total] = await this.fastify.prisma.$transaction([
       this.fastify.prisma.order.findMany({
         where: whereClause,
-        orderBy: { createdAt: 'desc' },
+        orderBy: { createdAt: sortDir },
         skip,
         take: limit,
         select: {
@@ -1458,7 +1638,8 @@ export class OrdersService {
       items: items.map((item) => ({
         ...this.resolveShipActionState({
           status: item.status,
-          paymentMode: ((item as Record<string, unknown>)['paymentMode'] as string | undefined) ?? 'PREPAID',
+          paymentMode:
+            ((item as Record<string, unknown>)['paymentMode'] as string | undefined) ?? 'PREPAID',
           paymentStatus: item.payment?.status ?? null,
           shipmentStatus: item.shipment?.status ?? null,
           awbNumber: item.shipment?.awbNumber ?? null
@@ -1468,7 +1649,7 @@ export class OrdersService {
         orderNumber: item.orderNumber,
         userId: item.userId,
         status: item.status,
-        paymentMode: (item as Record<string, unknown>)['paymentMode'] as string ?? 'PREPAID',
+        paymentMode: ((item as Record<string, unknown>)['paymentMode'] as string) ?? 'PREPAID',
         subtotal: item.subtotal,
         shippingCharge: item.shippingCharge,
         discountAmount: item.discountAmount,
@@ -1576,7 +1757,8 @@ export class OrdersService {
       col.push({
         ...this.resolveShipActionState({
           status: order.status,
-          paymentMode: ((order as Record<string, unknown>)['paymentMode'] as string | undefined) ?? 'PREPAID',
+          paymentMode:
+            ((order as Record<string, unknown>)['paymentMode'] as string | undefined) ?? 'PREPAID',
           paymentStatus: order.payment?.status ?? null,
           shipmentStatus: order.shipment?.status ?? null,
           awbNumber: order.shipment?.awbNumber ?? null
@@ -1585,7 +1767,7 @@ export class OrdersService {
         id: order.id,
         orderNumber: order.orderNumber,
         status: order.status,
-        paymentMode: (order as Record<string, unknown>)['paymentMode'] as string ?? 'PREPAID',
+        paymentMode: ((order as Record<string, unknown>)['paymentMode'] as string) ?? 'PREPAID',
         total: order.total,
         createdAt: order.createdAt.toISOString(),
         customerName: `${order.user.firstName} ${order.user.lastName}`.trim(),
@@ -1606,7 +1788,11 @@ export class OrdersService {
       throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Invalid date range', 400);
     }
     if (fromDate > toDate) {
-      throw new AppError(ERROR_CODES.VALIDATION_ERROR, '`from` date must be before or equal to `to` date', 400);
+      throw new AppError(
+        ERROR_CODES.VALIDATION_ERROR,
+        '`from` date must be before or equal to `to` date',
+        400
+      );
     }
 
     const whereClause = {
@@ -1615,12 +1801,17 @@ export class OrdersService {
         lte: toDate
       },
       ...(query.status !== undefined ? { status: query.status } : {}),
+      ...(query.paymentMode !== undefined ? { paymentMode: query.paymentMode } : {}),
       ...(query.search !== undefined && query.search.trim().length > 0
         ? {
             OR: [
               { orderNumber: { contains: query.search.trim(), mode: 'insensitive' as const } },
-              { user: { firstName: { contains: query.search.trim(), mode: 'insensitive' as const } } },
-              { user: { lastName: { contains: query.search.trim(), mode: 'insensitive' as const } } },
+              {
+                user: { firstName: { contains: query.search.trim(), mode: 'insensitive' as const } }
+              },
+              {
+                user: { lastName: { contains: query.search.trim(), mode: 'insensitive' as const } }
+              },
               { user: { email: { contains: query.search.trim(), mode: 'insensitive' as const } } },
               { user: { phone: { contains: query.search.trim() } } }
             ]
@@ -1780,7 +1971,10 @@ export class OrdersService {
         return existing;
       }
 
-      if (existing.status === OrderStatus.PENDING_PAYMENT && input.status === OrderStatus.CONFIRMED) {
+      if (
+        existing.status === OrderStatus.PENDING_PAYMENT &&
+        input.status === OrderStatus.CONFIRMED
+      ) {
         throw new AppError(
           ERROR_CODES.INVALID_STATUS_TRANSITION,
           'Order confirmation is webhook-driven and cannot be set manually',
@@ -1804,7 +1998,11 @@ export class OrdersService {
           input.refundAmountPaise !== undefined &&
           (input.refundAmountPaise <= 0 || input.refundAmountPaise > existing.payment.amount)
         ) {
-          throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Invalid refund amount for captured payment', 400);
+          throw new AppError(
+            ERROR_CODES.VALIDATION_ERROR,
+            'Invalid refund amount for captured payment',
+            400
+          );
         }
         queuedRefund = true;
         refundReason = input.note?.trim() || 'Order refunded by admin';
@@ -1872,7 +2070,10 @@ export class OrdersService {
         }
       });
 
-      if (input.status === OrderStatus.CANCELLED && existing.payment?.status === PaymentStatus.CAPTURED) {
+      if (
+        input.status === OrderStatus.CANCELLED &&
+        existing.payment?.status === PaymentStatus.CAPTURED
+      ) {
         for (const item of existing.items) {
           await tx.inventory.updateMany({
             where: { variantId: item.variantId },
@@ -1915,13 +2116,25 @@ export class OrdersService {
       try {
         const refundAmountLabel =
           typeof input.refundAmountPaise === 'number' ? input.refundAmountPaise.toString() : 'full';
-        await this.enqueueOutboxMessage('refunds', 'initiate-razorpay-refund', {
-          orderId: refundOrderId,
-          reason: refundReason,
-          ...(input.refundAmountPaise !== undefined ? { refundAmountPaise: input.refundAmountPaise } : {}),
-          initiatedBy: 'ADMIN',
-          ...(refundSourceStatus ? { sourceStatus: refundSourceStatus } : {})
-        }, ['initiate-razorpay-refund', refundOrderId, refundAmountLabel, String(refundSourceStatus ?? 'na')].join(':'));
+        await this.enqueueOutboxMessage(
+          'refunds',
+          'initiate-razorpay-refund',
+          {
+            orderId: refundOrderId,
+            reason: refundReason,
+            ...(input.refundAmountPaise !== undefined
+              ? { refundAmountPaise: input.refundAmountPaise }
+              : {}),
+            initiatedBy: 'ADMIN',
+            ...(refundSourceStatus ? { sourceStatus: refundSourceStatus } : {})
+          },
+          [
+            'initiate-razorpay-refund',
+            refundOrderId,
+            refundAmountLabel,
+            String(refundSourceStatus ?? 'na')
+          ].join(':')
+        );
       } catch (error) {
         await sendTechnicalFailureAlert({
           prisma: this.fastify.prisma,
@@ -1974,7 +2187,11 @@ export class OrdersService {
     }
 
     if (!canTransitionOrder(existing.status, OrderStatus.SHIPPED)) {
-      throw new AppError(ERROR_CODES.INVALID_STATUS_TRANSITION, 'Order cannot be shipped at current status', 409);
+      throw new AppError(
+        ERROR_CODES.INVALID_STATUS_TRANSITION,
+        'Order cannot be shipped at current status',
+        409
+      );
     }
 
     const shipState = this.resolveShipActionState({
@@ -1988,7 +2205,11 @@ export class OrdersService {
       pickupPincodeConfigured: Boolean(pickupPincode)
     });
     if (!shipState.canShipNow) {
-      throw new AppError(ERROR_CODES.VALIDATION_ERROR, shipState.shipBlockReason ?? 'Order cannot be shipped', 422);
+      throw new AppError(
+        ERROR_CODES.VALIDATION_ERROR,
+        shipState.shipBlockReason ?? 'Order cannot be shipped',
+        422
+      );
     }
 
     try {
@@ -2016,8 +2237,9 @@ export class OrdersService {
     if (!shipment) {
       throw new AppError(ERROR_CODES.NOT_FOUND, 'Shipment not found for this order', 404);
     }
-    const shiprocketShipmentId = (shipment as typeof shipment & { shiprocketShipmentId?: string | null })
-      .shiprocketShipmentId;
+    const shiprocketShipmentId = (
+      shipment as typeof shipment & { shiprocketShipmentId?: string | null }
+    ).shiprocketShipmentId;
     if (!shiprocketShipmentId) {
       throw new AppError(
         ERROR_CODES.VALIDATION_ERROR,
@@ -2027,7 +2249,11 @@ export class OrdersService {
     }
     const provider = createShippingProvider();
     if (!provider?.schedulePickup) {
-      throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Schedule pickup is not supported by the active shipping provider', 501);
+      throw new AppError(
+        ERROR_CODES.INTERNAL_ERROR,
+        'Schedule pickup is not supported by the active shipping provider',
+        501
+      );
     }
     const result = await provider.schedulePickup(shiprocketShipmentId);
     if (result.pickupScheduledDate) {
@@ -2065,7 +2291,11 @@ export class OrdersService {
     }
     const provider = createShippingProvider();
     if (!provider?.generateLabel) {
-      throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Label generation is not supported by the active shipping provider', 501);
+      throw new AppError(
+        ERROR_CODES.INTERNAL_ERROR,
+        'Label generation is not supported by the active shipping provider',
+        501
+      );
     }
     const result = await provider.generateLabel(shiprocketShipmentId);
     await this.fastify.prisma.shipment.update({
@@ -2107,7 +2337,11 @@ export class OrdersService {
         OrderStatus.PROCESSING
       ];
       if (!cancellableStatuses.includes(existing.status)) {
-        throw new AppError(ERROR_CODES.INVALID_STATUS_TRANSITION, 'Order cannot be cancelled at current status', 409);
+        throw new AppError(
+          ERROR_CODES.INVALID_STATUS_TRANSITION,
+          'Order cannot be cancelled at current status',
+          409
+        );
       }
 
       const shouldRefund =
@@ -2115,7 +2349,11 @@ export class OrdersService {
         existing.payment?.status === PaymentStatus.PARTIALLY_REFUNDED;
       const nextOrderStatus = OrderStatus.CANCELLED;
       if (!canTransitionOrder(existing.status, nextOrderStatus)) {
-        throw new AppError(ERROR_CODES.INVALID_STATUS_TRANSITION, 'Order cannot be cancelled at current status', 409);
+        throw new AppError(
+          ERROR_CODES.INVALID_STATUS_TRANSITION,
+          'Order cannot be cancelled at current status',
+          409
+        );
       }
 
       if (existing.payment && shouldRefund) {
@@ -2126,7 +2364,11 @@ export class OrdersService {
           input?.refundAmountPaise !== undefined &&
           (input.refundAmountPaise <= 0 || input.refundAmountPaise > existing.payment.amount)
         ) {
-          throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Invalid refund amount for captured payment', 400);
+          throw new AppError(
+            ERROR_CODES.VALIDATION_ERROR,
+            'Invalid refund amount for captured payment',
+            400
+          );
         }
         queuedRefund = true;
         refundReason = input?.reason?.trim() || 'Order cancelled and refunded by admin';
@@ -2196,13 +2438,20 @@ export class OrdersService {
 
     if (queuedRefund) {
       try {
-        await this.enqueueOutboxMessage('refunds', 'initiate-razorpay-refund', {
-          orderId: updatedOrder.id,
-          reason: refundReason,
-          ...(input?.refundAmountPaise !== undefined ? { refundAmountPaise: input.refundAmountPaise } : {}),
-          initiatedBy: 'ADMIN',
-          sourceStatus: OrderStatus.CANCELLED
-        }, `initiate-razorpay-refund:${updatedOrder.id}:${input?.refundAmountPaise ?? 'full'}:cancelled`);
+        await this.enqueueOutboxMessage(
+          'refunds',
+          'initiate-razorpay-refund',
+          {
+            orderId: updatedOrder.id,
+            reason: refundReason,
+            ...(input?.refundAmountPaise !== undefined
+              ? { refundAmountPaise: input.refundAmountPaise }
+              : {}),
+            initiatedBy: 'ADMIN',
+            sourceStatus: OrderStatus.CANCELLED
+          },
+          `initiate-razorpay-refund:${updatedOrder.id}:${input?.refundAmountPaise ?? 'full'}:cancelled`
+        );
       } catch (error) {
         await sendTechnicalFailureAlert({
           prisma: this.fastify.prisma,
@@ -2263,40 +2512,71 @@ export class OrdersService {
 
     if (channels.includes('EMAIL')) {
       if (!email) {
-        throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Customer email is required for EMAIL channel', 400);
+        throw new AppError(
+          ERROR_CODES.VALIDATION_ERROR,
+          'Customer email is required for EMAIL channel',
+          400
+        );
       }
-      await this.enqueueOutboxMessage('notifications', 'send-email', {
-        to: email,
-        template: input.template,
-        data: { orderId: order.id }
-      }, `notifications:email:${order.id}:${input.template}`);
+      await this.enqueueOutboxMessage(
+        'notifications',
+        'send-email',
+        {
+          to: email,
+          template: input.template,
+          data: { orderId: order.id }
+        },
+        `notifications:email:${order.id}:${input.template}`
+      );
       queuedJobs += 1;
     }
 
     if (channels.includes('SMS')) {
       if (!phone) {
-        throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Customer phone is required for SMS channel', 400);
+        throw new AppError(
+          ERROR_CODES.VALIDATION_ERROR,
+          'Customer phone is required for SMS channel',
+          400
+        );
       }
-      await this.enqueueOutboxMessage('notifications', 'send-sms', {
-        phone,
-        template: input.template,
-        data: { orderId: order.id }
-      }, `notifications:sms:${order.id}:${input.template}`);
+      await this.enqueueOutboxMessage(
+        'notifications',
+        'send-sms',
+        {
+          phone,
+          template: input.template,
+          data: { orderId: order.id }
+        },
+        `notifications:sms:${order.id}:${input.template}`
+      );
       queuedJobs += 1;
     }
 
     if (channels.includes('WHATSAPP')) {
       if (!notificationFlags.whatsappEnabled) {
-        throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'WhatsApp notifications are disabled', 400);
+        throw new AppError(
+          ERROR_CODES.VALIDATION_ERROR,
+          'WhatsApp notifications are disabled',
+          400
+        );
       }
       if (!phone) {
-        throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Customer phone is required for WHATSAPP channel', 400);
+        throw new AppError(
+          ERROR_CODES.VALIDATION_ERROR,
+          'Customer phone is required for WHATSAPP channel',
+          400
+        );
       }
-      await this.enqueueOutboxMessage('notifications', 'send-whatsapp', {
-        phone,
-        template: input.template,
-        data: { orderId: order.id }
-      }, `notifications:whatsapp:${order.id}:${input.template}`);
+      await this.enqueueOutboxMessage(
+        'notifications',
+        'send-whatsapp',
+        {
+          phone,
+          template: input.template,
+          data: { orderId: order.id }
+        },
+        `notifications:whatsapp:${order.id}:${input.template}`
+      );
       queuedJobs += 1;
     }
 
@@ -2308,17 +2588,26 @@ export class OrdersService {
     };
   }
 
-  private async enqueueOrderCancelledNotifications(orderId: string, email: string | null, phone: string | null) {
+  private async enqueueOrderCancelledNotifications(
+    orderId: string,
+    email: string | null,
+    phone: string | null
+  ) {
     try {
       if (!email && !phone) {
         return;
       }
-      await this.enqueueOutboxMessage('notifications', 'send-primary', {
-        email,
-        phone,
-        template: 'OrderCancelled',
-        data: { orderId }
-      }, `notifications:primary:${orderId}:OrderCancelled`);
+      await this.enqueueOutboxMessage(
+        'notifications',
+        'send-primary',
+        {
+          email,
+          phone,
+          template: 'OrderCancelled',
+          data: { orderId }
+        },
+        `notifications:primary:${orderId}:OrderCancelled`
+      );
     } catch (error) {
       await sendTechnicalFailureAlert({
         prisma: this.fastify.prisma,
@@ -2346,7 +2635,11 @@ export class OrdersService {
     coupon: Coupon,
     subtotal: number,
     userId: string,
-    items: Array<{ priceSnapshot: number; quantity: number; variant: { productId: string; product: { categoryId: string } } }>
+    items: Array<{
+      priceSnapshot: number;
+      quantity: number;
+      variant: { productId: string; product: { categoryId: string } };
+    }>
   ) {
     if (!coupon.isActive) {
       throw new AppError(ERROR_CODES.NOT_FOUND, 'Coupon not found', 404);
@@ -2365,7 +2658,11 @@ export class OrdersService {
       throw new AppError(ERROR_CODES.COUPON_EXPIRED, 'Coupon has expired', 400);
     }
     if (subtotal < coupon.minOrderPaise) {
-      throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Cart total does not meet coupon minimum order value', 400);
+      throw new AppError(
+        ERROR_CODES.VALIDATION_ERROR,
+        'Cart total does not meet coupon minimum order value',
+        400
+      );
     }
     if (coupon.maxUsesTotal !== null && coupon.usesCount >= coupon.maxUsesTotal) {
       throw new AppError(ERROR_CODES.COUPON_USAGE_EXCEEDED, 'Coupon usage limit reached', 409);
@@ -2373,7 +2670,11 @@ export class OrdersService {
 
     const scopedSubtotal = this.resolveCouponEligibleSubtotal(coupon, items);
     if (this.hasCouponScope(coupon) && scopedSubtotal <= 0) {
-      throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Coupon is not applicable to cart items', 400);
+      throw new AppError(
+        ERROR_CODES.VALIDATION_ERROR,
+        'Coupon is not applicable to cart items',
+        400
+      );
     }
 
     const userUsageCount = await this.fastify.prisma.order.count({
@@ -2393,14 +2694,22 @@ export class OrdersService {
       }
     });
     if (coupon.maxUsesPerUser !== null && userUsageCount >= coupon.maxUsesPerUser) {
-      throw new AppError(ERROR_CODES.COUPON_USAGE_EXCEEDED, 'Coupon usage limit reached for this user', 409);
+      throw new AppError(
+        ERROR_CODES.COUPON_USAGE_EXCEEDED,
+        'Coupon usage limit reached for this user',
+        409
+      );
     }
   }
 
   private calculateOrderDiscount(
     subtotal: number,
     coupon: Coupon | null,
-    items: Array<{ priceSnapshot: number; quantity: number; variant: { productId: string; product: { categoryId: string } } }>
+    items: Array<{
+      priceSnapshot: number;
+      quantity: number;
+      variant: { productId: string; product: { categoryId: string } };
+    }>
   ): number {
     if (!coupon) {
       return 0;
@@ -2425,7 +2734,11 @@ export class OrdersService {
 
   private resolveCouponEligibleSubtotal(
     coupon: Coupon,
-    items: Array<{ priceSnapshot: number; quantity: number; variant: { productId: string; product: { categoryId: string } } }>
+    items: Array<{
+      priceSnapshot: number;
+      quantity: number;
+      variant: { productId: string; product: { categoryId: string } };
+    }>
   ) {
     const scope = this.parseCouponScope(coupon.applicableTo);
     if (!scope) {
@@ -2451,10 +2764,14 @@ export class OrdersService {
 
     const record = value as Record<string, unknown>;
     const productIds = Array.isArray(record.productIds)
-      ? record.productIds.filter((item): item is string => typeof item === 'string' && item.length > 0)
+      ? record.productIds.filter(
+          (item): item is string => typeof item === 'string' && item.length > 0
+        )
       : undefined;
     const categoryIds = Array.isArray(record.categoryIds)
-      ? record.categoryIds.filter((item): item is string => typeof item === 'string' && item.length > 0)
+      ? record.categoryIds.filter(
+          (item): item is string => typeof item === 'string' && item.length > 0
+        )
       : undefined;
 
     if ((productIds?.length ?? 0) === 0 && (categoryIds?.length ?? 0) === 0) {
@@ -2478,13 +2795,18 @@ export class OrdersService {
     payload: Record<string, unknown>
   ) {
     try {
-      await this.enqueueOutboxMessage('analytics', 'record-event', {
-        eventType,
-        sessionId,
-        userId,
-        payload,
-        occurredAt: new Date().toISOString()
-      }, `analytics:${eventType}:${sessionId}`);
+      await this.enqueueOutboxMessage(
+        'analytics',
+        'record-event',
+        {
+          eventType,
+          sessionId,
+          userId,
+          payload,
+          occurredAt: new Date().toISOString()
+        },
+        `analytics:${eventType}:${sessionId}`
+      );
     } catch (error) {
       await sendTechnicalFailureAlert({
         prisma: this.fastify.prisma,
@@ -2539,7 +2861,8 @@ export class OrdersService {
           template: this.resolveNotificationTemplateName(payload),
           channel: this.resolveNotificationFailureChannel(jobName),
           recipient: this.resolveNotificationRecipient(payload),
-          errorMessage: error instanceof Error ? error.message : 'Unknown notification enqueue error',
+          errorMessage:
+            error instanceof Error ? error.message : 'Unknown notification enqueue error',
           failureStage: 'QUEUE_ENQUEUE',
           queueName,
           jobName,
@@ -2550,10 +2873,11 @@ export class OrdersService {
           prisma: this.fastify.prisma,
           template: jobName,
           channel: 'UNKNOWN',
-          recipient: (typeof payload['orderId'] === 'string' ? payload['orderId'] : undefined)
-            ?? (typeof payload['userId'] === 'string' ? payload['userId'] : undefined)
-            ?? (typeof payload['sessionId'] === 'string' ? payload['sessionId'] : undefined)
-            ?? 'system-enqueue',
+          recipient:
+            (typeof payload['orderId'] === 'string' ? payload['orderId'] : undefined) ??
+            (typeof payload['userId'] === 'string' ? payload['userId'] : undefined) ??
+            (typeof payload['sessionId'] === 'string' ? payload['sessionId'] : undefined) ??
+            'system-enqueue',
           errorMessage: error instanceof Error ? error.message : 'Unknown queue enqueue error',
           failureStage: 'QUEUE_ENQUEUE',
           domain: queueName,
@@ -2708,11 +3032,22 @@ export class OrdersService {
     if (!order) {
       throw new AppError(ERROR_CODES.NOT_FOUND, 'Order not found', 404);
     }
-    if (order.status !== OrderStatus.PAYMENT_FAILED && order.status !== OrderStatus.PENDING_PAYMENT) {
-      throw new AppError(ERROR_CODES.INVALID_STATUS_TRANSITION, 'Payment retry is only allowed for failed or pending payment orders', 409);
+    if (
+      order.status !== OrderStatus.PAYMENT_FAILED &&
+      order.status !== OrderStatus.PENDING_PAYMENT
+    ) {
+      throw new AppError(
+        ERROR_CODES.INVALID_STATUS_TRANSITION,
+        'Payment retry is only allowed for failed or pending payment orders',
+        409
+      );
     }
     if ((order as Record<string, unknown>)['paymentMode'] === 'COD') {
-      throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'COD orders do not require payment retry', 400);
+      throw new AppError(
+        ERROR_CODES.VALIDATION_ERROR,
+        'COD orders do not require payment retry',
+        400
+      );
     }
     return this.initiatePayment(userId, { orderId }, opts);
   }
@@ -2720,7 +3055,10 @@ export class OrdersService {
   async createReturnRequest(
     userId: string,
     orderId: string,
-    input: { items: Array<{ orderItemId: string; quantity: number; reason?: string }>; reason: string }
+    input: {
+      items: Array<{ orderItemId: string; quantity: number; reason?: string }>;
+      reason: string;
+    }
   ) {
     const order = await this.fastify.prisma.order.findFirst({
       where: { id: orderId, userId },
@@ -2730,20 +3068,32 @@ export class OrdersService {
       throw new AppError(ERROR_CODES.NOT_FOUND, 'Order not found', 404);
     }
     if (order.status !== OrderStatus.DELIVERED) {
-      throw new AppError(ERROR_CODES.INVALID_STATUS_TRANSITION, 'Return requests can only be created for delivered orders', 409);
+      throw new AppError(
+        ERROR_CODES.INVALID_STATUS_TRANSITION,
+        'Return requests can only be created for delivered orders',
+        409
+      );
     }
 
     for (const reqItem of input.items) {
       const orderItem = order.items.find((oi) => oi.id === reqItem.orderItemId);
       if (!orderItem) {
-        throw new AppError(ERROR_CODES.NOT_FOUND, `Order item ${reqItem.orderItemId} not found`, 404);
+        throw new AppError(
+          ERROR_CODES.NOT_FOUND,
+          `Order item ${reqItem.orderItemId} not found`,
+          404
+        );
       }
       if (reqItem.quantity <= 0 || reqItem.quantity > orderItem.quantity) {
-        throw new AppError(ERROR_CODES.VALIDATION_ERROR, `Invalid return quantity for item ${reqItem.orderItemId}`, 400);
+        throw new AppError(
+          ERROR_CODES.VALIDATION_ERROR,
+          `Invalid return quantity for item ${reqItem.orderItemId}`,
+          400
+        );
       }
     }
 
-    const returnRequest = await this.fastify.prisma.returnRequest.create({
+    const returnRequest = (await this.fastify.prisma.returnRequest.create({
       data: {
         orderId,
         userId,
@@ -2751,7 +3101,7 @@ export class OrdersService {
         reason: input.reason,
         status: 'REQUESTED'
       }
-    }) as { id: string; orderId: string; status: string; reason: string; createdAt: Date };
+    })) as { id: string; orderId: string; status: string; reason: string; createdAt: Date };
 
     return {
       id: returnRequest.id,
@@ -2774,7 +3124,7 @@ export class OrdersService {
       throw new AppError(ERROR_CODES.NOT_FOUND, 'Return request not found', 404);
     }
 
-    const updated = await this.fastify.prisma.returnRequest.update({
+    const updated = (await this.fastify.prisma.returnRequest.update({
       where: { id: returnRequestId },
       data: {
         status: input.status,
@@ -2782,7 +3132,13 @@ export class OrdersService {
           ? `${input.adminNote} [admin:${adminUserId}]`
           : `Updated by admin [admin:${adminUserId}]`
       }
-    }) as { id: string; orderId: string; status: string; adminNote: string | null; updatedAt: Date };
+    })) as {
+      id: string;
+      orderId: string;
+      status: string;
+      adminNote: string | null;
+      updatedAt: Date;
+    };
 
     return {
       id: updated.id,
@@ -2793,7 +3149,11 @@ export class OrdersService {
     };
   }
 
-  async adminListReturnRequests(query: { status?: ReturnRequestStatus; page?: number; limit?: number }) {
+  async adminListReturnRequests(query: {
+    status?: ReturnRequestStatus;
+    page?: number;
+    limit?: number;
+  }) {
     const page = Math.max(1, query.page ?? 1);
     const limit = Math.min(100, Math.max(1, query.limit ?? 20));
     const skip = (page - 1) * limit;
@@ -2814,7 +3174,15 @@ export class OrdersService {
     ]);
 
     return {
-      items: (items as Array<Record<string, unknown> & { order: { orderNumber: string }; user: { email: string; firstName: string; lastName: string }; createdAt: Date }>).map((r) => ({
+      items: (
+        items as Array<
+          Record<string, unknown> & {
+            order: { orderNumber: string };
+            user: { email: string; firstName: string; lastName: string };
+            createdAt: Date;
+          }
+        >
+      ).map((r) => ({
         id: r.id,
         orderId: r.orderId,
         orderNumber: r.order.orderNumber,
@@ -2833,77 +3201,77 @@ export class OrdersService {
 
   private serializeOrder(
     order: {
-    id: string;
-    orderNumber: string;
-    userId: string;
-    status: OrderStatus;
-    shippingAddress: unknown;
-    subtotal: number;
-    shippingCharge: number;
-    discountAmount: number;
-    total: number;
-    notes: string | null;
-    createdAt: Date;
-    updatedAt: Date;
-    items: Array<{
       id: string;
-      variantId: string;
-      productName: string;
-      variantName: string;
-      sku: string;
-      quantity: number;
-      unitPrice: number;
-      totalPrice: number;
-    }>;
-    statusHistory: Array<{
-      id: string;
-      fromStatus: OrderStatus | null;
-      toStatus: OrderStatus;
-      triggeredBy: string;
-      note: string | null;
+      orderNumber: string;
+      userId: string;
+      status: OrderStatus;
+      shippingAddress: unknown;
+      subtotal: number;
+      shippingCharge: number;
+      discountAmount: number;
+      total: number;
+      notes: string | null;
       createdAt: Date;
-    }>;
-    payment: {
-      id: string;
-      provider: string;
-      providerOrderId: string;
-      providerPaymentId: string | null;
-      amount: number;
-      status: string;
-      method: string | null;
-      capturedAt: Date | null;
-      refundPendingAmountPaise: number;
-      refundedAmountPaise: number;
-    } | null;
-    invoice: {
-      invoiceNumber: string;
-      pdfUrl: string | null;
-      issuedAt: Date;
-    } | null;
-    shipment: {
-      id: string;
-      provider: string;
-      status: string;
-      awbNumber: string | null;
-      trackingUrl: string | null;
-      shiprocketShipmentId?: string | null;
-      labelUrl?: string | null;
-      pickupScheduledDate?: Date | null;
-      events?: Array<{
+      updatedAt: Date;
+      items: Array<{
         id: string;
-        shipmentId: string;
-        status: string;
-        location: string | null;
-        description: string;
-        occurredAt: Date;
+        variantId: string;
+        productName: string;
+        variantName: string;
+        sku: string;
+        quantity: number;
+        unitPrice: number;
+        totalPrice: number;
       }>;
-    } | null;
-    user?: {
-      firstName?: string | null;
-      lastName?: string | null;
-      email: string | null;
-      phone: string | null;
-    };
+      statusHistory: Array<{
+        id: string;
+        fromStatus: OrderStatus | null;
+        toStatus: OrderStatus;
+        triggeredBy: string;
+        note: string | null;
+        createdAt: Date;
+      }>;
+      payment: {
+        id: string;
+        provider: string;
+        providerOrderId: string;
+        providerPaymentId: string | null;
+        amount: number;
+        status: string;
+        method: string | null;
+        capturedAt: Date | null;
+        refundPendingAmountPaise: number;
+        refundedAmountPaise: number;
+      } | null;
+      invoice: {
+        invoiceNumber: string;
+        pdfUrl: string | null;
+        issuedAt: Date;
+      } | null;
+      shipment: {
+        id: string;
+        provider: string;
+        status: string;
+        awbNumber: string | null;
+        trackingUrl: string | null;
+        shiprocketShipmentId?: string | null;
+        labelUrl?: string | null;
+        pickupScheduledDate?: Date | null;
+        events?: Array<{
+          id: string;
+          shipmentId: string;
+          status: string;
+          location: string | null;
+          description: string;
+          occurredAt: Date;
+        }>;
+      } | null;
+      user?: {
+        firstName?: string | null;
+        lastName?: string | null;
+        email: string | null;
+        phone: string | null;
+      };
     },
     options?: {
       exposeProviderReferences?: boolean;
@@ -2914,7 +3282,8 @@ export class OrdersService {
     const exposeInternalReferences = options?.exposeInternalReferences ?? true;
     const shipActionState = this.resolveShipActionState({
       status: order.status,
-      paymentMode: ((order as Record<string, unknown>)['paymentMode'] as string | undefined) ?? 'PREPAID',
+      paymentMode:
+        ((order as Record<string, unknown>)['paymentMode'] as string | undefined) ?? 'PREPAID',
       paymentStatus: order.payment?.status ?? null,
       shipmentStatus: order.shipment?.status ?? null,
       awbNumber: order.shipment?.awbNumber ?? null,
@@ -2940,18 +3309,27 @@ export class OrdersService {
       items: order.items,
       statusHistory: order.statusHistory.map((history) => ({
         ...history,
-        note: exposeInternalReferences ? history.note : this.sanitizeCustomerVisibleNote(history.note),
+        note: exposeInternalReferences
+          ? history.note
+          : this.sanitizeCustomerVisibleNote(history.note),
         createdAt: history.createdAt.toISOString()
       })),
       creditNotes: order.statusHistory
         .map((history) => this.parseCreditNoteAudit(history.note))
-        .filter((entry): entry is { creditNoteNumber: string; originalInvoiceNumber: string; reason: string } => entry !== null),
+        .filter(
+          (
+            entry
+          ): entry is { creditNoteNumber: string; originalInvoiceNumber: string; reason: string } =>
+            entry !== null
+        ),
       payment: order.payment
         ? {
             ...(exposeInternalReferences ? { id: order.payment.id } : {}),
             provider: order.payment.provider,
             ...(exposeProviderReferences ? { providerOrderId: order.payment.providerOrderId } : {}),
-            ...(exposeProviderReferences ? { providerPaymentId: order.payment.providerPaymentId } : {}),
+            ...(exposeProviderReferences
+              ? { providerPaymentId: order.payment.providerPaymentId }
+              : {}),
             amount: order.payment.amount,
             status: order.payment.status,
             method: order.payment.method,
@@ -2974,11 +3352,15 @@ export class OrdersService {
             status: order.shipment.status,
             awb: order.shipment.awbNumber,
             trackingUrl: order.shipment.trackingUrl,
-            ...(exposeInternalReferences ? { shipmentLabelUrl: this.resolveShipmentLabelUrl(order.shipment) } : {}),
+            ...(exposeInternalReferences
+              ? { shipmentLabelUrl: this.resolveShipmentLabelUrl(order.shipment) }
+              : {}),
             ...(exposeInternalReferences && order.shipment.shiprocketShipmentId != null
               ? { shiprocketShipmentId: order.shipment.shiprocketShipmentId }
               : {}),
-            ...(exposeInternalReferences && order.shipment.labelUrl != null ? { labelUrl: order.shipment.labelUrl } : {}),
+            ...(exposeInternalReferences && order.shipment.labelUrl != null
+              ? { labelUrl: order.shipment.labelUrl }
+              : {}),
             ...(exposeInternalReferences && order.shipment.pickupScheduledDate != null
               ? { pickupScheduledDate: order.shipment.pickupScheduledDate.toISOString() }
               : {}),
@@ -3006,7 +3388,9 @@ export class OrdersService {
     };
   }
 
-  private parseCreditNoteAudit(note: string | null): { creditNoteNumber: string; originalInvoiceNumber: string; reason: string } | null {
+  private parseCreditNoteAudit(
+    note: string | null
+  ): { creditNoteNumber: string; originalInvoiceNumber: string; reason: string } | null {
     if (!note || !note.startsWith(OrdersService.creditNoteAuditPrefix)) {
       return null;
     }
@@ -3038,8 +3422,13 @@ export class OrdersService {
     if (settings?.pickupPincode) {
       return settings.pickupPincode;
     }
-    const runtimeConfig = await this.resolveRuntimeConfig(['SHIPROCKET_PICKUP_PINCODE', 'DELHIVERY_PICKUP_PINCODE']);
-    return runtimeConfig.SHIPROCKET_PICKUP_PINCODE ?? runtimeConfig.DELHIVERY_PICKUP_PINCODE ?? null;
+    const runtimeConfig = await this.resolveRuntimeConfig([
+      'SHIPROCKET_PICKUP_PINCODE',
+      'DELHIVERY_PICKUP_PINCODE'
+    ]);
+    return (
+      runtimeConfig.SHIPROCKET_PICKUP_PINCODE ?? runtimeConfig.DELHIVERY_PICKUP_PINCODE ?? null
+    );
   }
 
   private fingerprintIdentifier(value: string): string {
@@ -3059,10 +3448,19 @@ export class OrdersService {
     const limit = Math.min(query.limit ?? 20, 100);
     const skip = (page - 1) * limit;
 
+    const searchTerm = query.search?.trim();
     const where: Prisma.ShipmentWhereInput = {
       ...(query.status ? { status: query.status as import('@prisma/client').ShipmentStatus } : {}),
       ...(query.awbNumber ? { awbNumber: { contains: query.awbNumber, mode: 'insensitive' } } : {}),
       ...(query.orderId ? { orderId: query.orderId } : {}),
+      ...(searchTerm
+        ? {
+            OR: [
+              { awbNumber: { contains: searchTerm, mode: 'insensitive' } },
+              { order: { orderNumber: { contains: searchTerm, mode: 'insensitive' } } }
+            ]
+          }
+        : {}),
       ...(query.from || query.to
         ? {
             createdAt: {
@@ -3094,7 +3492,11 @@ export class OrdersService {
           order: {
             select: {
               orderNumber: true,
-              userId: true
+              userId: true,
+              shippingAddress: true,
+              user: {
+                select: { firstName: true, lastName: true }
+              }
             }
           }
         }
@@ -3107,6 +3509,7 @@ export class OrdersService {
         id: item.id,
         orderId: item.orderId,
         orderNumber: item.order.orderNumber,
+        customerName: this.resolveShipmentCustomerName(item.order),
         provider: item.provider,
         status: item.status,
         awbNumber: item.awbNumber,
@@ -3126,10 +3529,30 @@ export class OrdersService {
     const limit = Math.min(query.limit ?? 20, 100);
     const skip = (page - 1) * limit;
 
+    const searchTerm = query.search?.trim();
     const where: Prisma.PaymentWhereInput = {
       ...(query.status ? { status: query.status as PaymentStatus } : {}),
       ...(query.method ? { method: query.method } : {}),
       ...(query.orderId ? { orderId: query.orderId } : {}),
+      ...(searchTerm
+        ? {
+            OR: [
+              { providerPaymentId: { contains: searchTerm, mode: 'insensitive' } },
+              { order: { orderNumber: { contains: searchTerm, mode: 'insensitive' } } },
+              {
+                order: {
+                  user: { firstName: { contains: searchTerm, mode: 'insensitive' } }
+                }
+              },
+              {
+                order: {
+                  user: { lastName: { contains: searchTerm, mode: 'insensitive' } }
+                }
+              },
+              { order: { user: { email: { contains: searchTerm, mode: 'insensitive' } } } }
+            ]
+          }
+        : {}),
       ...(query.from || query.to
         ? {
             createdAt: {
@@ -3149,7 +3572,10 @@ export class OrdersService {
         include: {
           order: {
             select: {
-              orderNumber: true
+              orderNumber: true,
+              user: {
+                select: { firstName: true, lastName: true, email: true }
+              }
             }
           }
         }
@@ -3162,6 +3588,8 @@ export class OrdersService {
         id: item.id,
         orderId: item.orderId,
         orderNumber: item.order.orderNumber,
+        customerName: `${item.order.user.firstName} ${item.order.user.lastName}`.trim(),
+        customerEmail: item.order.user.email ?? null,
         provider: item.provider,
         method: item.method,
         status: item.status,
@@ -3184,23 +3612,59 @@ export class OrdersService {
    * @param returnRequestId - The return request UUID
    */
   async adminGetReturnRequest(returnRequestId: string) {
-    const returnRequest = await this.fastify.prisma.returnRequest.findUnique({
+    const returnRequest = (await this.fastify.prisma.returnRequest.findUnique({
       where: { id: returnRequestId },
       include: {
         order: { select: { orderNumber: true } },
         user: { select: { email: true, firstName: true, lastName: true } }
       }
-    }) as (Record<string, unknown> & {
-      id: string; orderId: string; userId: string;
-      order: { orderNumber: string };
-      user: { email: string; firstName: string; lastName: string };
-      status: string; reason: string; adminNote: string | null;
-      items: unknown; createdAt: Date; updatedAt: Date;
-    }) | null;
+    })) as
+      | (Record<string, unknown> & {
+          id: string;
+          orderId: string;
+          userId: string;
+          order: { orderNumber: string };
+          user: { email: string; firstName: string; lastName: string };
+          status: string;
+          reason: string;
+          adminNote: string | null;
+          items: Array<{ orderItemId: string; quantity: number; reason?: string }>;
+          createdAt: Date;
+          updatedAt: Date;
+        })
+      | null;
 
     if (!returnRequest) {
       throw new AppError(ERROR_CODES.NOT_FOUND, 'Return request not found', 404);
     }
+
+    // Enrich items with product/variant info from OrderItem records
+    const rawItems = Array.isArray(returnRequest.items) ? returnRequest.items : [];
+    const orderItemIds = rawItems.map((i) => i.orderItemId).filter(Boolean);
+
+    type OrderItemRow = { id: string; productName: string; variantName: string; sku: string; unitPrice: number; quantity: number };
+    const orderItems: OrderItemRow[] = orderItemIds.length > 0
+      ? await this.fastify.prisma.orderItem.findMany({
+          where: { id: { in: orderItemIds } },
+          select: { id: true, productName: true, variantName: true, sku: true, unitPrice: true, quantity: true }
+        })
+      : [];
+
+    const orderItemMap = new Map(orderItems.map((oi) => [oi.id, oi]));
+
+    const enrichedItems = rawItems.map((item) => {
+      const oi = orderItemMap.get(item.orderItemId);
+      return {
+        orderItemId: item.orderItemId,
+        quantity: item.quantity,
+        reason: item.reason ?? null,
+        productName: oi?.productName ?? null,
+        variantName: oi?.variantName ?? null,
+        sku: oi?.sku ?? null,
+        unitPrice: oi?.unitPrice ?? null,
+        orderedQuantity: oi?.quantity ?? null,
+      };
+    });
 
     return {
       id: returnRequest.id,
@@ -3212,7 +3676,7 @@ export class OrdersService {
       status: returnRequest.status,
       reason: returnRequest.reason,
       adminNote: returnRequest.adminNote,
-      items: returnRequest.items,
+      items: enrichedItems,
       createdAt: returnRequest.createdAt.toISOString(),
       updatedAt: returnRequest.updatedAt.toISOString()
     };
@@ -3230,15 +3694,21 @@ export class OrdersService {
     orderId: string,
     updates: Array<{ orderItemId: string; quantity: number }>
   ) {
-    const order = await this.fastify.prisma.order.findUnique({
+    const order = (await this.fastify.prisma.order.findUnique({
       where: { id: orderId },
       include: {
         items: true
       }
-    }) as (Record<string, unknown> & {
-      id: string; status: OrderStatus; subtotal: number; shippingCharge: number; discountAmount: number;
-      items: Array<{ id: string; quantity: number; unitPrice: number; totalPrice: number }>;
-    }) | null;
+    })) as
+      | (Record<string, unknown> & {
+          id: string;
+          status: OrderStatus;
+          subtotal: number;
+          shippingCharge: number;
+          discountAmount: number;
+          items: Array<{ id: string; quantity: number; unitPrice: number; totalPrice: number }>;
+        })
+      | null;
 
     if (!order) {
       throw new AppError(ERROR_CODES.NOT_FOUND, 'Order not found', 404);
@@ -3266,18 +3736,26 @@ export class OrdersService {
       });
 
     if (itemOps.length === 0) {
-      throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'No matching order items found for the provided IDs', 400);
+      throw new AppError(
+        ERROR_CODES.VALIDATION_ERROR,
+        'No matching order items found for the provided IDs',
+        400
+      );
     }
 
-    const updatedItems = await this.fastify.prisma.$transaction(itemOps) as Array<{
-      id: string; quantity: number; unitPrice: number; totalPrice: number;
+    const updatedItems = (await this.fastify.prisma.$transaction(itemOps)) as Array<{
+      id: string;
+      quantity: number;
+      unitPrice: number;
+      totalPrice: number;
     }>;
 
     const unchangedSubtotal = order.items
       .filter((item) => !updateMap.has(item.id))
       .reduce((sum, item) => sum + item.totalPrice, 0);
 
-    const newSubtotal = unchangedSubtotal + updatedItems.reduce((sum, item) => sum + item.totalPrice, 0);
+    const newSubtotal =
+      unchangedSubtotal + updatedItems.reduce((sum, item) => sum + item.totalPrice, 0);
     const newTotal = newSubtotal + order.shippingCharge - order.discountAmount;
 
     await this.fastify.prisma.order.update({
@@ -3434,4 +3912,3 @@ export class OrdersService {
     return null;
   }
 }
-

@@ -10,6 +10,7 @@ import { registerMaintenanceRoutes } from './modules/maintenance/maintenance.rou
 import { registerNotificationsWebhookRoutes } from './modules/notifications-webhook/notifications-webhook.routes';
 import { registerOrdersRoutes } from './modules/orders/orders.routes';
 import { registerOpsRoutes } from './modules/ops/ops.routes';
+import { registerMediaRoutes } from './modules/media/media.routes';
 import { registerProductsRoutes } from './modules/products/products.routes';
 import { registerQueuesRoutes } from './modules/queues/queues.routes';
 import { registerReviewsRoutes } from './modules/reviews/reviews.routes';
@@ -28,6 +29,7 @@ export async function registerApp(fastify: FastifyInstance): Promise<void> {
   await registerAuthRoutes(fastify);
   await registerCartRoutes(fastify);
   await registerUsersRoutes(fastify);
+  await registerMediaRoutes(fastify);
   await registerProductsRoutes(fastify);
   await registerWishlistRoutes(fastify);
   await registerReviewsRoutes(fastify);

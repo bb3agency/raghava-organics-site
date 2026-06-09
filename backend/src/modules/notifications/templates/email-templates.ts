@@ -178,7 +178,7 @@ export async function renderNotificationEmail(template: string, data: Record<str
     case 'PasswordReset':
       {
         const email = escapeHtml(data.email ?? 'N/A');
-        const resetUrl = String(data.resetUrl ?? 'N/A');
+        const resetUrl = typeof data.resetUrl === 'string' ? data.resetUrl : 'N/A';
         return {
           subject: 'Password reset request',
           html: await render(PasswordResetEmail(email, resetUrl))

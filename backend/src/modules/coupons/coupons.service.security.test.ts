@@ -3,7 +3,7 @@ import { AdminRateLimitStore } from '@common/rate-limit/admin-rate-limit.store';
 
 describe('coupon admin security controls', () => {
   beforeEach(() => {
-    AdminRateLimitStore.getInstance().cleanup();
+    AdminRateLimitStore.cleanup();
     vi.useRealTimers();
   });
 

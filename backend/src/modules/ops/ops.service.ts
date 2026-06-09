@@ -415,7 +415,7 @@ function validateSetupBaseUrl(rawUrl: string): void {
 }
 
 function toPrismaOpsConfigDomain(domain: OpsConfigDomain): 'CORE' | 'PAYMENTS' | 'SHIPPING' | 'NOTIFICATIONS' | 'OPS_SECURITY' {
-  if (domain === 'core') return 'CORE';
+  if (domain === 'core' || domain === 'media') return 'CORE';
   if (domain === 'payments') return 'PAYMENTS';
   if (domain === 'shipping') return 'SHIPPING';
   if (domain === 'notifications') return 'NOTIFICATIONS';
@@ -632,6 +632,10 @@ export class OpsService {
       OPS_SECURITY: 'opsSecurity'
     };
 
+    const mediaKeys = new Set(
+      OPS_CONFIG_OVERVIEW_GROUPS.find((group) => group.domain === 'media')?.items.map((item) => item.key) ?? []
+    );
+
     return rows.map((row: {
       domain: string;
       secretKey: string;
@@ -642,7 +646,7 @@ export class OpsService {
     }) => {
       const decrypted = decryptOpsConfigValue(row.encryptedValue);
       return {
-        domain: domainMap[row.domain] ?? 'core',
+        domain: mediaKeys.has(row.secretKey) ? 'media' : (domainMap[row.domain] ?? 'core'),
         key: row.secretKey,
         maskedValue: maskSecretValue(decrypted),
         plaintextValue: decrypted,
@@ -1527,6 +1531,23 @@ export class OpsService {
           key: 'SMS_PROVIDER',
           code: 'UNSUPPORTED_PROVIDER',
           message: `Unsupported SMS_PROVIDER: ${smsProvider}`
+        });
+      }
+    }
+
+    if (checkedKeys.includes('MEDIA_STORAGE_PROVIDER')) {
+      const mediaProvider = (draftEnv.MEDIA_STORAGE_PROVIDER ?? '').trim().toLowerCase();
+      if (mediaProvider && !['local', 'r2', 'cloudflare-r2'].includes(mediaProvider)) {
+        errors.push({
+          key: 'MEDIA_STORAGE_PROVIDER',
+          code: 'UNSUPPORTED_PROVIDER',
+          message: `Unsupported MEDIA_STORAGE_PROVIDER: ${mediaProvider}`
+        });
+      } else if (strictProfile && mediaProvider === 'local') {
+        warnings.push({
+          key: 'MEDIA_STORAGE_PROVIDER',
+          code: 'LOCAL_MEDIA_IN_STRICT_PROFILE',
+          message: 'MEDIA_STORAGE_PROVIDER=local is intended for development; use r2 in production.'
         });
       }
     }

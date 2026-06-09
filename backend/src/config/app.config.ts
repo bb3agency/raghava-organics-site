@@ -123,6 +123,18 @@ function validateConditionalEnv(): void {
   if (isStrictProfile) {
     requireEnv('OPS_DB_ENCRYPTION_KEY');
   }
+
+  const mediaProvider = (process.env.MEDIA_STORAGE_PROVIDER ?? '').trim().toLowerCase();
+  if (
+    mediaProvider &&
+    mediaProvider !== 'local' &&
+    mediaProvider !== 'r2' &&
+    mediaProvider !== 'cloudflare-r2'
+  ) {
+    throw new Error(
+      `Unsupported MEDIA_STORAGE_PROVIDER: ${mediaProvider}. Allowed: local, r2, cloudflare-r2`
+    );
+  }
 }
 
 function validateProductionProviderSafetyEnv(): void {
@@ -210,6 +222,7 @@ function validateProductionProviderSafetyEnv(): void {
     );
   }
   assertEnvNotPlaceholderIfPresent('TURNSTILE_SECRET_KEY');
+  // Product media (R2) credentials are DB-overlay via Ops config — enforced by /health/ready.
 }
 
 export function validateRuntimeEnv(): void {

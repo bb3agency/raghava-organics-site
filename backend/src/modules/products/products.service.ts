@@ -6,6 +6,14 @@ import { buildProductsListCacheKey, invalidateProductsListCache } from '@common/
 import { featureFlags } from '@config/feature-flags';
 import { SettingsService } from '@modules/settings/settings.service';
 import { sendTechnicalFailureAlert } from '@modules/notifications/notification-failure-alert';
+import { randomUUID } from 'node:crypto';
+import {
+  deleteHostedProductImage,
+  getProductMediaStorage,
+  hostedStorageReferenceFromUrl,
+  isHostedProductImageUrl
+} from '@modules/media/product-media-provider';
+import { assertProductImageUpload } from '@modules/media/product-media.validation';
 import {
   AdminCategoryListQuery,
   CreateProductImageInput,
@@ -128,8 +136,11 @@ export class ProductsService {
           });
 
     const reservationAwareItems = await this.applyReservationAwareAvailability(items, inStockOnly);
+    const serializedItems = reservationAwareItems.map((product) =>
+      this.serializePublicProductListItem(product)
+    );
     const response = {
-      items: reservationAwareItems,
+      items: serializedItems,
       meta: {
         page,
         limit,
@@ -151,14 +162,7 @@ export class ProductsService {
         isActive: true,
         variants: {
           some: {
-            isActive: true,
-            inventory: {
-              is: {
-                quantity: {
-                  gt: 0
-                }
-              }
-            }
+            isActive: true
           }
         }
       },
@@ -167,16 +171,10 @@ export class ProductsService {
         images: { orderBy: { sortOrder: 'asc' } },
         variants: {
           where: {
-            isActive: true,
-            inventory: {
-              is: {
-                quantity: {
-                  gt: 0
-                }
-              }
-            }
+            isActive: true
           },
-          orderBy: { price: 'asc' }
+          orderBy: { price: 'asc' },
+          include: { inventory: true }
         },
         reviews: {
           where: featureFlags.reviews ? { approved: true } : { id: '__reviews_disabled__' },
@@ -197,11 +195,15 @@ export class ProductsService {
       throw new AppError(ERROR_CODES.NOT_FOUND, 'Product not found', 404);
     }
 
-    const reservationAware = await this.applyReservationAwareAvailability([product], true);
+    const reservationAware = await this.applyReservationAwareAvailability([product], false);
     const resolvedProduct = reservationAware[0];
     if (!resolvedProduct) {
       throw new AppError(ERROR_CODES.NOT_FOUND, 'Product not found', 404);
     }
+
+    const inStock = resolvedProduct.variants.some(
+      (variant) => (variant.inventory?.quantity ?? 0) > 0
+    );
 
     await this.enqueueAnalyticsEvent(AnalyticsEventType.PRODUCT_VIEW, `product:${slug}`, {
       productId: resolvedProduct.id,
@@ -210,6 +212,8 @@ export class ProductsService {
 
     return {
       ...resolvedProduct,
+      inStock,
+      variants: resolvedProduct.variants.map(({ inventory: _inventory, ...variant }) => variant),
       reviews: (Array.isArray(resolvedProduct.reviews) ? resolvedProduct.reviews : []).map((review) => ({
         id: review.id,
         rating: review.rating,
@@ -250,10 +254,46 @@ export class ProductsService {
       }
     });
     if (existing) {
+      const updatePayload: UpdateProductInput = {};
+
+      if (input.name !== existing.name) {
+        updatePayload.name = input.name;
+      }
+      if (input.description !== existing.description) {
+        updatePayload.description = input.description;
+      }
+      if (input.categoryId !== existing.categoryId) {
+        updatePayload.categoryId = input.categoryId;
+      }
+      if (
+        input.tags !== undefined &&
+        JSON.stringify(input.tags ?? []) !== JSON.stringify(existing.tags ?? [])
+      ) {
+        updatePayload.tags = input.tags;
+      }
+      if (input.isFeatured !== undefined && input.isFeatured !== existing.isFeatured) {
+        updatePayload.isFeatured = input.isFeatured;
+      }
+      if (input.isActive !== undefined && input.isActive !== existing.isActive) {
+        updatePayload.isActive = input.isActive;
+      }
+      if (input.metaTitle !== undefined && input.metaTitle !== existing.metaTitle) {
+        updatePayload.metaTitle = input.metaTitle;
+      }
+      if (input.metaDescription !== undefined && input.metaDescription !== existing.metaDescription) {
+        updatePayload.metaDescription = input.metaDescription;
+      }
+
+      if (Object.keys(updatePayload).length > 0) {
+        return this.adminUpdateProduct(existing.id, updatePayload);
+      }
+
       return existing;
     }
 
-    const product = await this.fastify.prisma.product.create({
+    let product: Awaited<ReturnType<typeof this.fastify.prisma.product.create>>;
+    try {
+      product = await this.fastify.prisma.product.create({
       data: {
         name: input.name,
         slug: input.slug,
@@ -264,6 +304,7 @@ export class ProductsService {
         ...(input.metaTitle !== undefined ? { metaTitle: input.metaTitle } : {}),
         ...(input.metaDescription !== undefined ? { metaDescription: input.metaDescription } : {}),
         isFeatured: input.isFeatured ?? false,
+        isActive: input.isActive ?? true,
         ...(input.images && input.images.length > 0
           ? {
               images: {
@@ -303,6 +344,16 @@ export class ProductsService {
         variants: { where: { isActive: true }, orderBy: { price: 'asc' } }
       }
     });
+    } catch (err) {
+      const prismaErr = err as { code?: string; message?: string };
+      if (
+        prismaErr.code === 'P2002' ||
+        (typeof prismaErr.message === 'string' && prismaErr.message.includes('Unique constraint failed'))
+      ) {
+        throw new AppError(ERROR_CODES.CONFLICT, 'A variant with this SKU already exists. Please use a unique SKU.', 409);
+      }
+      throw err;
+    }
     await this.invalidateProductListCacheSafe();
     return product;
   }
@@ -495,24 +546,36 @@ export class ProductsService {
     this.assertValidCompareAtPrice(input.price, input.compareAtPrice);
     const defaultLowStockThreshold = await this.settingsService.resolveDefaultLowStockThreshold();
 
-    const created = await this.fastify.prisma.productVariant.create({
-      data: {
-        productId: product.id,
-        sku: input.sku.trim(),
-        name: input.name,
-        price: Math.floor(input.price),
-        ...(input.compareAtPrice !== undefined ? { compareAtPrice: Math.floor(input.compareAtPrice) } : {}),
-        ...(input.weight !== undefined ? { weight: Math.floor(input.weight) } : {}),
-        ...(input.attributes !== undefined ? { attributes: input.attributes as Prisma.InputJsonValue } : {}),
-        isActive: input.isActive ?? true,
-        inventory: {
-          create: {
-            quantity: Math.floor(input.quantity ?? 0),
-            lowStockThreshold: Math.floor(input.lowStockThreshold ?? defaultLowStockThreshold)
+    let created: Awaited<ReturnType<typeof this.fastify.prisma.productVariant.create>>;
+    try {
+      created = await this.fastify.prisma.productVariant.create({
+        data: {
+          productId: product.id,
+          sku: input.sku.trim(),
+          name: input.name,
+          price: Math.floor(input.price),
+          ...(input.compareAtPrice !== undefined ? { compareAtPrice: Math.floor(input.compareAtPrice) } : {}),
+          ...(input.weight !== undefined ? { weight: Math.floor(input.weight) } : {}),
+          ...(input.attributes !== undefined ? { attributes: input.attributes as Prisma.InputJsonValue } : {}),
+          isActive: input.isActive ?? true,
+          inventory: {
+            create: {
+              quantity: Math.floor(input.quantity ?? 0),
+              lowStockThreshold: Math.floor(input.lowStockThreshold ?? defaultLowStockThreshold)
+            }
           }
         }
+      });
+    } catch (err) {
+      const prismaErr = err as { code?: string; message?: string };
+      if (
+        prismaErr.code === 'P2002' ||
+        (typeof prismaErr.message === 'string' && prismaErr.message.includes('Unique constraint failed'))
+      ) {
+        throw new AppError(ERROR_CODES.CONFLICT, 'A variant with this SKU already exists. Please use a unique SKU.', 409);
       }
-    });
+      throw err;
+    }
     await this.invalidateProductListCacheSafe();
     return created;
   }
@@ -600,20 +663,50 @@ export class ProductsService {
       throw new AppError(ERROR_CODES.NOT_FOUND, 'Product not found', 404);
     }
 
-    const data: Prisma.ProductUpdateInput = {};
-    if (input.name !== undefined) data.name = input.name;
-    if (input.slug !== undefined) data.slug = input.slug;
-    if (input.description !== undefined) data.description = input.description;
+    const updateData: Prisma.ProductUpdateInput = {};
+    const updateManyData: Prisma.ProductUncheckedUpdateManyInput = {};
+
+    if (input.name !== undefined) {
+      updateData.name = input.name;
+      updateManyData.name = input.name;
+    }
+    if (input.slug !== undefined) {
+      updateData.slug = input.slug;
+      updateManyData.slug = input.slug;
+    }
+    if (input.description !== undefined) {
+      updateData.description = input.description;
+      updateManyData.description = input.description;
+    }
     if (input.categoryId !== undefined) {
       await this.assertCategoryExists(input.categoryId);
-      data.category = { connect: { id: input.categoryId } };
+      updateData.category = { connect: { id: input.categoryId } };
+      updateManyData.categoryId = input.categoryId;
     }
-    if (input.tags !== undefined) data.tags = input.tags;
-    if (input.attributes !== undefined) data.attributes = input.attributes as Prisma.InputJsonValue;
-    if (input.metaTitle !== undefined) data.metaTitle = input.metaTitle;
-    if (input.metaDescription !== undefined) data.metaDescription = input.metaDescription;
-    if (input.isFeatured !== undefined) data.isFeatured = input.isFeatured;
-    if (input.isActive !== undefined) data.isActive = input.isActive;
+    if (input.tags !== undefined) {
+      updateData.tags = input.tags;
+      updateManyData.tags = input.tags;
+    }
+    if (input.attributes !== undefined) {
+      updateData.attributes = input.attributes as Prisma.InputJsonValue;
+      updateManyData.attributes = input.attributes as Prisma.InputJsonValue;
+    }
+    if (input.metaTitle !== undefined) {
+      updateData.metaTitle = input.metaTitle;
+      updateManyData.metaTitle = input.metaTitle;
+    }
+    if (input.metaDescription !== undefined) {
+      updateData.metaDescription = input.metaDescription;
+      updateManyData.metaDescription = input.metaDescription;
+    }
+    if (input.isFeatured !== undefined) {
+      updateData.isFeatured = input.isFeatured;
+      updateManyData.isFeatured = input.isFeatured;
+    }
+    if (input.isActive !== undefined) {
+      updateData.isActive = input.isActive;
+      updateManyData.isActive = input.isActive;
+    }
 
     const productDelegate = this.fastify.prisma.product as unknown as {
       updateMany?: (args: { where: Record<string, unknown>; data: Record<string, unknown> }) => Promise<{ count: number }>;
@@ -629,7 +722,7 @@ export class ProductsService {
           id,
           updatedAt: existing.updatedAt
         },
-        data: data as unknown as Record<string, unknown>
+        data: updateManyData as unknown as Record<string, unknown>
       });
 
       if (updateResult.count === 0) {
@@ -638,7 +731,7 @@ export class ProductsService {
     } else {
       await productDelegate.update({
         where: { id },
-        data: data as unknown as Record<string, unknown>
+        data: updateData as unknown as Record<string, unknown>
       });
     }
 
@@ -676,7 +769,7 @@ export class ProductsService {
         data: { isActive: false }
       });
 
-      if (deactivateResult.count === 0) {
+      if (deactivateResult.count === 0 && existing.isActive) {
         throw new AppError(ERROR_CODES.CONFLICT, 'Product state changed concurrently', 409);
       }
     } else {
@@ -687,6 +780,49 @@ export class ProductsService {
     }
     await this.invalidateProductListCacheSafe();
     return { message: 'Product deactivated' };
+  }
+
+  async adminHardDeleteProduct(id: string) {
+    const existing = await this.fastify.prisma.product.findUnique({
+      where: { id },
+      include: {
+        images: { select: { url: true } },
+        variants: { select: { id: true } }
+      }
+    });
+    if (!existing) {
+      throw new AppError(ERROR_CODES.NOT_FOUND, 'Product not found', 404);
+    }
+
+    const variantIds = existing.variants.map((variant) => variant.id);
+    const [orderItemCount, reviewCount] = await Promise.all([
+      variantIds.length > 0
+        ? this.fastify.prisma.orderItem.count({ where: { variantId: { in: variantIds } } })
+        : Promise.resolve(0),
+      this.fastify.prisma.review.count({ where: { productId: id } })
+    ]);
+
+    if (orderItemCount > 0 || reviewCount > 0) {
+      throw new AppError(
+        ERROR_CODES.CONFLICT,
+        'Cannot permanently delete a product with order history or customer reviews',
+        409
+      );
+    }
+
+    if (variantIds.length > 0) {
+      await this.fastify.prisma.cartItem.deleteMany({ where: { variantId: { in: variantIds } } });
+    }
+
+    for (const image of existing.images) {
+      if (isHostedProductImageUrl(image.url)) {
+        await deleteHostedProductImage(image.url);
+      }
+    }
+
+    await this.fastify.prisma.product.delete({ where: { id } });
+    await this.invalidateProductListCacheSafe();
+    return { message: 'Product permanently deleted' };
   }
 
   async adminListProducts(query: ProductListQuery) {
@@ -701,7 +837,7 @@ export class ProductsService {
           .filter((tag) => tag.length > 0)
       : [];
 
-    const inStockOnly = query.inStock === true;
+    const inStockFilter = query.inStock;
     const priceFilter: Prisma.IntFilter | undefined = query.minPrice !== undefined || query.maxPrice !== undefined
       ? {
           ...(query.minPrice !== undefined ? { gte: query.minPrice } : {}),
@@ -709,36 +845,62 @@ export class ProductsService {
         }
       : undefined;
     const skuFilter = ('sku' in query ? (query as { sku?: string }).sku : undefined)?.trim() || undefined;
-    const variantWhere: Prisma.ProductVariantWhereInput = {
+    const baseVariantWhere: Prisma.ProductVariantWhereInput = {
       ...(priceFilter ? { price: priceFilter } : {}),
-      ...(inStockOnly ? { inventory: { is: { quantity: { gt: 0 } } } } : {}),
       ...(skuFilter ? { sku: { contains: skuFilter, mode: 'insensitive' as const } } : {})
     };
 
-    const hasVariantFilter =
+    const hasNonStockVariantFilter =
       query.minPrice !== undefined ||
       query.maxPrice !== undefined ||
-      inStockOnly ||
       !!skuFilter;
+
+    const stockVariantConstraint: Prisma.ProductWhereInput | null =
+      inStockFilter === true
+        ? {
+            variants: {
+              some: {
+                ...baseVariantWhere,
+                inventory: { is: { quantity: { gt: 0 } } }
+              }
+            }
+          }
+        : inStockFilter === false
+          ? {
+              AND: [
+                { variants: { none: { inventory: { is: { quantity: { gt: 0 } } } } } },
+                ...(hasNonStockVariantFilter
+                  ? [{ variants: { some: baseVariantWhere } }]
+                  : [])
+              ]
+            }
+          : hasNonStockVariantFilter
+            ? { variants: { some: baseVariantWhere } }
+            : null;
+
+    const variantWhereForInclude: Prisma.ProductVariantWhereInput =
+      inStockFilter === true
+        ? { ...baseVariantWhere, inventory: { is: { quantity: { gt: 0 } } } }
+        : baseVariantWhere;
 
     const where: Prisma.ProductWhereInput = {
       ...(query.category ? { category: { slug: query.category } } : {}),
+      ...(query.isActive !== undefined ? { isActive: query.isActive } : {}),
       ...(query.search
         ? {
             OR: [
               { name: { contains: query.search, mode: 'insensitive' } },
-              { description: { contains: query.search, mode: 'insensitive' } }
+              { description: { contains: query.search, mode: 'insensitive' } },
+              {
+                variants: {
+                  some: { sku: { contains: query.search, mode: 'insensitive' } }
+                }
+              }
             ]
           }
         : {}),
       ...(tagsFilter.length > 0 ? { tags: { hasSome: tagsFilter } } : {}),
-      ...(hasVariantFilter
-        ? {
-            variants: {
-              some: variantWhere
-            }
-          }
-        : {})
+      ...(stockVariantConstraint ?? {})
     };
 
     const [items, total] = await this.fastify.prisma.$transaction([
@@ -751,7 +913,7 @@ export class ProductsService {
           category: true,
           images: { orderBy: { sortOrder: 'asc' } },
           variants: {
-            where: variantWhere,
+            where: variantWhereForInclude,
             orderBy: { price: query.sort === 'price_desc' ? 'desc' : 'asc' }
           }
         }
@@ -789,8 +951,108 @@ export class ProductsService {
     return product;
   }
 
+  private assertProductImageUrl(url: string): void {
+    const trimmed = url.trim();
+    if (isHostedProductImageUrl(trimmed)) {
+      if (!hostedStorageReferenceFromUrl(trimmed)) {
+        throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Invalid hosted product image URL', 400);
+      }
+      return;
+    }
+    if (!/^https:\/\/.+/i.test(trimmed)) {
+      throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Image URL must be https:// or a hosted media path', 400);
+    }
+  }
+
+  async adminUploadProductImage(
+    productId: string,
+    input: { buffer: Buffer; mimeType?: string | null; altText: string }
+  ) {
+    const [image] = await this.adminUploadProductImages(productId, [input]);
+    return image;
+  }
+
+  async adminUploadProductImages(
+    productId: string,
+    inputs: Array<{ buffer: Buffer; mimeType?: string | null; altText: string }>
+  ) {
+    if (inputs.length === 0) {
+      throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'At least one image file is required', 400);
+    }
+
+    await this.assertProductExists(productId);
+    const existingCount = await this.fastify.prisma.productImage.count({
+      where: { productId }
+    });
+    if (existingCount + inputs.length > ProductsService.maxProductImages) {
+      throw new AppError(
+        ERROR_CODES.VALIDATION_ERROR,
+        `A product can have at most ${ProductsService.maxProductImages} images`,
+        400
+      );
+    }
+
+    const storage = getProductMediaStorage();
+    const uploaded: Awaited<ReturnType<ProductsService['adminCreateProductImage']>>[] = [];
+    // Track successfully saved storage objects so we can roll them back on failure.
+    const savedStorageRefs: string[] = [];
+    const maxSortRow = await this.fastify.prisma.productImage.aggregate({
+      where: { productId },
+      _max: { sortOrder: true }
+    });
+    let nextSortOrder = (maxSortRow._max.sortOrder ?? -1) + 1;
+
+    try {
+      for (const input of inputs) {
+        const mime = assertProductImageUpload({
+          buffer: input.buffer,
+          ...(input.mimeType != null ? { declaredMime: input.mimeType } : {})
+        });
+        const imageId = randomUUID();
+        const saved = await storage.saveProductImage({
+          productId,
+          imageId,
+          mime,
+          content: input.buffer
+        });
+        savedStorageRefs.push(saved.storageReference);
+        // Create DB row directly to avoid double-count check in adminCreateProductImage
+        // (batch-level count guard was done above for the whole batch).
+        const image = await this.fastify.prisma.productImage.create({
+          data: {
+            productId,
+            url: saved.publicUrl,
+            altText: input.altText,
+            sortOrder: nextSortOrder
+          }
+        });
+        nextSortOrder += 1;
+        uploaded.push(image);
+      }
+    } catch (err) {
+      // Best-effort cleanup: delete any storage objects saved before the failure.
+      // We only clean up references that don't yet have a DB row (the ones after
+      // the last successful prisma.create). The already-persisted rows are
+      // returned intact so the caller can surface partial success if needed.
+      const persistedCount = uploaded.length;
+      const orphanedRefs = savedStorageRefs.slice(persistedCount);
+      for (const ref of orphanedRefs) {
+        try {
+          await storage.deleteProductImage(ref);
+        } catch {
+          // Log but don't mask the original error.
+        }
+      }
+      throw err;
+    }
+
+    await this.invalidateProductListCacheSafe();
+    return uploaded;
+  }
+
   async adminCreateProductImage(productId: string, input: CreateProductImageInput) {
     await this.assertProductExists(productId);
+    this.assertProductImageUrl(input.url);
     const existingCount = await this.fastify.prisma.productImage.count({
       where: { productId }
     });
@@ -871,14 +1133,25 @@ export class ProductsService {
     await this.assertProductExists(productId);
     const image = await this.fastify.prisma.productImage.findFirst({
       where: { id: imageId, productId },
-      select: { id: true }
+      select: { id: true, url: true }
     });
     if (!image) {
       throw new AppError(ERROR_CODES.NOT_FOUND, 'Product image not found', 404);
     }
+    if (isHostedProductImageUrl(image.url)) {
+      await deleteHostedProductImage(image.url);
+    }
     await this.fastify.prisma.productImage.delete({ where: { id: imageId } });
     await this.invalidateProductListCacheSafe();
     return { message: 'Product image deleted' };
+  }
+
+  async adminGetCategoryById(id: string) {
+    const category = await this.fastify.prisma.category.findUnique({ where: { id } });
+    if (!category) {
+      throw new AppError(ERROR_CODES.NOT_FOUND, 'Category not found', 404);
+    }
+    return category;
   }
 
   async adminListCategories(query: AdminCategoryListQuery) {
@@ -886,13 +1159,26 @@ export class ProductsService {
     const limit = Math.min(query.limit ?? 20, 100);
     const skip = (page - 1) * limit;
 
+    const where: Prisma.CategoryWhereInput = {
+      ...(query.isActive !== undefined ? { isActive: query.isActive } : {}),
+      ...(query.search
+        ? {
+            OR: [
+              { name: { contains: query.search, mode: 'insensitive' as const } },
+              { slug: { contains: query.search, mode: 'insensitive' as const } }
+            ]
+          }
+        : {})
+    };
+
     const [items, total] = await this.fastify.prisma.$transaction([
       this.fastify.prisma.category.findMany({
+        where,
         orderBy: [{ parentId: 'asc' }, { name: 'asc' }],
         skip,
         take: limit
       }),
-      this.fastify.prisma.category.count()
+      this.fastify.prisma.category.count({ where })
     ]);
 
     return {
@@ -907,9 +1193,14 @@ export class ProductsService {
   }
 
   async adminCreateCategory(input: CreateCategoryInput) {
+    if (input.parentId) {
+      await this.assertValidCategoryParent(null, input.parentId);
+    }
+
     const data: Prisma.CategoryCreateInput = {
       name: input.name,
-      slug: input.slug
+      slug: input.slug,
+      isActive: input.isActive ?? true
     };
     if (input.parentId !== undefined) {
       data.parent = { connect: { id: input.parentId } };
@@ -918,11 +1209,21 @@ export class ProductsService {
       data.imageUrl = input.imageUrl;
     }
 
-    const createdCategory = await this.fastify.prisma.category.upsert({
-      where: { slug: input.slug },
-      create: data,
-      update: { name: data.name }
-    });
+    const existing = await this.fastify.prisma.category.findUnique({ where: { slug: input.slug } });
+    if (existing) {
+      const updatePayload: UpdateCategoryInput = {};
+      if (input.name !== existing.name) updatePayload.name = input.name;
+      if (input.parentId !== undefined && input.parentId !== existing.parentId) updatePayload.parentId = input.parentId;
+      if (input.imageUrl !== undefined && input.imageUrl !== existing.imageUrl) updatePayload.imageUrl = input.imageUrl;
+      if (input.isActive !== undefined && input.isActive !== existing.isActive) updatePayload.isActive = input.isActive;
+
+      if (Object.keys(updatePayload).length > 0) {
+        return this.adminUpdateCategory(existing.id, updatePayload);
+      }
+      return existing;
+    }
+
+    const createdCategory = await this.fastify.prisma.category.create({ data });
     await this.invalidateProductListCacheSafe();
     return createdCategory;
   }
@@ -932,12 +1233,33 @@ export class ProductsService {
     if (!existing) {
       throw new AppError(ERROR_CODES.NOT_FOUND, 'Category not found', 404);
     }
-    const data: Prisma.CategoryUpdateInput = {};
-    if (input.name !== undefined) data.name = input.name;
-    if (input.slug !== undefined) data.slug = input.slug;
-    if (input.parentId !== undefined) data.parent = input.parentId ? { connect: { id: input.parentId } } : { disconnect: true };
-    if (input.imageUrl !== undefined) data.imageUrl = input.imageUrl;
-    if (input.isActive !== undefined) data.isActive = input.isActive;
+
+    if (input.parentId !== undefined) {
+      await this.assertValidCategoryParent(id, input.parentId);
+    }
+
+    const updateData: Prisma.CategoryUpdateInput = {};
+    const updateManyData: Prisma.CategoryUncheckedUpdateManyInput = {};
+    if (input.name !== undefined) {
+      updateData.name = input.name;
+      updateManyData.name = input.name;
+    }
+    if (input.slug !== undefined) {
+      updateData.slug = input.slug;
+      updateManyData.slug = input.slug;
+    }
+    if (input.parentId !== undefined) {
+      updateData.parent = input.parentId ? { connect: { id: input.parentId } } : { disconnect: true };
+      updateManyData.parentId = input.parentId ?? null;
+    }
+    if (input.imageUrl !== undefined) {
+      updateData.imageUrl = input.imageUrl;
+      updateManyData.imageUrl = input.imageUrl;
+    }
+    if (input.isActive !== undefined) {
+      updateData.isActive = input.isActive;
+      updateManyData.isActive = input.isActive;
+    }
 
     const categoryDelegate = this.fastify.prisma.category as unknown as {
       updateMany?: (args: { where: Record<string, unknown>; data: Record<string, unknown> }) => Promise<{ count: number }>;
@@ -953,7 +1275,7 @@ export class ProductsService {
           id,
           updatedAt: existing.updatedAt
         },
-        data: data as unknown as Record<string, unknown>
+        data: updateManyData as unknown as Record<string, unknown>
       });
 
       if (updateResult.count === 0) {
@@ -962,7 +1284,7 @@ export class ProductsService {
     } else {
       await categoryDelegate.update({
         where: { id },
-        data: data as unknown as Record<string, unknown>
+        data: updateData as unknown as Record<string, unknown>
       });
     }
 
@@ -971,6 +1293,20 @@ export class ProductsService {
     });
     await this.invalidateProductListCacheSafe();
     return updatedCategory;
+  }
+
+  async adminHardDeleteCategory(id: string) {
+    const existing = await this.fastify.prisma.category.findUnique({ where: { id } });
+    if (!existing) {
+      throw new AppError(ERROR_CODES.NOT_FOUND, 'Category not found', 404);
+    }
+    const productCount = await this.fastify.prisma.product.count({ where: { categoryId: id } });
+    if (productCount > 0) {
+      throw new AppError(ERROR_CODES.CONFLICT, `Cannot permanently delete: ${productCount} product(s) use this category. Reassign or delete them first.`, 409);
+    }
+    await this.fastify.prisma.category.delete({ where: { id } });
+    await this.invalidateProductListCacheSafe();
+    return { message: 'Category permanently deleted' };
   }
 
   async adminDeleteCategory(id: string) {
@@ -987,17 +1323,10 @@ export class ProductsService {
       'mock' in (categoryDelegate.update as unknown as Record<string, unknown>);
 
     if (categoryDelegate.updateMany && !preferUpdateForMock) {
-      const deactivateResult = await categoryDelegate.updateMany({
-        where: {
-          id,
-          isActive: true
-        },
+      await categoryDelegate.updateMany({
+        where: { id },
         data: { isActive: false }
       });
-
-      if (deactivateResult.count === 0) {
-        throw new AppError(ERROR_CODES.CONFLICT, 'Category state changed concurrently', 409);
-      }
     } else {
       await categoryDelegate.update({
         where: { id },
@@ -1027,7 +1356,8 @@ export class ProductsService {
           images: { orderBy: { sortOrder: 'asc' } },
           variants: {
             where: input.inStockVariantWhere,
-            orderBy: { price: input.variantOrder }
+            orderBy: { price: input.variantOrder },
+            include: { inventory: true }
           }
         }
       }),
@@ -1050,6 +1380,42 @@ export class ProductsService {
     });
     if (!category) {
       throw new AppError(ERROR_CODES.NOT_FOUND, 'Category not found', 404);
+    }
+  }
+
+  private async assertValidCategoryParent(
+    categoryId: string | null,
+    parentId: string | null
+  ): Promise<void> {
+    if (!parentId) {
+      return;
+    }
+    if (categoryId && parentId === categoryId) {
+      throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Category cannot be its own parent', 400);
+    }
+
+    await this.assertCategoryExists(parentId);
+
+    if (!categoryId) {
+      return;
+    }
+
+    let currentId: string | null = parentId;
+    const visited = new Set<string>();
+    while (currentId) {
+      if (currentId === categoryId) {
+        throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Category parent would create a cycle', 400);
+      }
+      if (visited.has(currentId)) {
+        break;
+      }
+      visited.add(currentId);
+      const ancestor: { parentId: string | null } | null =
+        await this.fastify.prisma.category.findUnique({
+          where: { id: currentId },
+          select: { parentId: true }
+        });
+      currentId = ancestor?.parentId ?? null;
     }
   }
 
@@ -1151,7 +1517,8 @@ export class ProductsService {
         images: { orderBy: { sortOrder: 'asc' } },
         variants: {
           where: input.inStockVariantWhere,
-          orderBy: { price: input.variantOrder }
+          orderBy: { price: input.variantOrder },
+          include: { inventory: true }
         }
       }
     });
@@ -1254,7 +1621,8 @@ export class ProductsService {
         images: { orderBy: { sortOrder: 'asc' } },
         variants: {
           where: input.inStockVariantWhere,
-          orderBy: { price: 'asc' }
+          orderBy: { price: 'asc' },
+          include: { inventory: true }
         }
       }
     });
@@ -1419,6 +1787,30 @@ export class ProductsService {
     }
 
     await this.fastify.queues[queueName].add(jobName, payload, jobId ? { jobId } : undefined);
+  }
+
+  private serializePublicProductListItem(
+    product: {
+      variants: Array<{
+        id: string;
+        name: string;
+        sku: string;
+        price: number;
+        compareAtPrice: number | null;
+        isActive: boolean;
+        inventory?: { quantity: number } | null;
+      }>;
+      [key: string]: unknown;
+    }
+  ) {
+    const inStock = product.variants.some(
+      (variant) => (variant.inventory?.quantity ?? 0) > 0
+    );
+    return {
+      ...product,
+      inStock,
+      variants: product.variants.map(({ inventory: _inventory, ...variant }) => variant)
+    };
   }
 
   private async applyReservationAwareAvailability<T extends { variants: Array<{ id: string; inventory?: { quantity: number } | null }> }>(

@@ -100,7 +100,15 @@ async function main() {
     process.exit(1);
   }
 
-  const connection = new IORedis(redisUrl, { maxRetriesPerRequest: null, family: 4 });
+  const connection = new IORedis(redisUrl, {
+    maxRetriesPerRequest: null,
+    family: 4,
+    keepAlive: 5_000,
+    connectTimeout: 15_000,
+    enableOfflineQueue: true,
+    retryStrategy: (times) => Math.min(times * 300, 3_000),
+    reconnectOnError: () => true
+  });
   connection.on('error', (err) => {
     process.stderr.write(`Redis error: ${err && err.message ? err.message : err}\n`);
   });

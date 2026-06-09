@@ -152,19 +152,27 @@ function ensureDatabaseExists(databaseName) {
   logger.success('Created Prisma target database.', { databaseName });
 }
 
+function runPrismaGenerateSafe() {
+  const safeScript = path.join(__dirname, 'prisma-generate-safe.js');
+  const args = [safeScript];
+  if (process.platform === 'win32') {
+    args.push('--kill-lockers');
+  }
+
+  logger.info('Running Prisma client generation (safe retries)...');
+  const generateResult = runCommand(process.execPath, args, {
+    cwd: PROJECT_ROOT,
+    stdio: 'inherit'
+  });
+
+  if (generateResult.status !== 0) {
+    fatalWithCommandFailure('Prisma generate failed.', generateResult);
+  }
+}
+
 function runPrismaBootstrap(skipGenerate = false) {
   if (!skipGenerate) {
-    logger.info('Running Prisma client generation...');
-    const generateResult = runPrismaCommand(['generate', '--schema', PRISMA_SCHEMA_PATH]);
-    if (generateResult.status !== 0) {
-      fatalWithCommandFailure('Prisma generate failed.', generateResult);
-    }
-    if ((generateResult.stdout ?? '').trim()) {
-      process.stdout.write(generateResult.stdout);
-    }
-    if ((generateResult.stderr ?? '').trim()) {
-      process.stderr.write(generateResult.stderr);
-    }
+    runPrismaGenerateSafe();
   } else {
     logger.info('Skipping Prisma client generation (--skip-generate flag set).');
   }

@@ -36,6 +36,7 @@ const REDUCED_MODE_MUTATION_PREFIXES = ['/api/v1/orders', '/api/v1/payments/init
 const ALWAYS_ALLOWED_PREFIXES = [
   '/api/v1/health',
   '/api/v1/auth',
+  '/api/v1/media',
   '/api/v1/payments/webhook',
   '/api/v1/shipping/webhook',
   '/api/v1/notifications/webhook',

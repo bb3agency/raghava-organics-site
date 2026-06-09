@@ -63,6 +63,10 @@ describe('products routes', () => {
     expect(adminDeleteProduct).toBeDefined();
     expect(adminDeleteProduct?.preHandler).toBeDefined();
 
+    const adminHardDeleteProduct = routes.find((route) => route.url === '/api/v1/admin/products/:id/permanent' && route.method === 'DELETE');
+    expect(adminHardDeleteProduct).toBeDefined();
+    expect(adminHardDeleteProduct?.preHandler).toBeDefined();
+
     const adminCreateVariant = routes.find((route) => route.url === '/api/v1/admin/products/:id/variants' && route.method === 'POST');
     expect(adminCreateVariant).toBeDefined();
     expect(adminCreateVariant?.preHandler).toBeDefined();
@@ -79,6 +83,12 @@ describe('products routes', () => {
     expect(adminCreateImage).toBeDefined();
     expect(adminCreateImage?.preHandler).toBeDefined();
 
+    const adminUploadImage = routes.find(
+      (route) => route.url === '/api/v1/admin/products/:id/images/upload' && route.method === 'POST'
+    );
+    expect(adminUploadImage).toBeDefined();
+    expect(adminUploadImage?.preHandler).toBeDefined();
+
     const adminReorderImages = routes.find((route) => route.url === '/api/v1/admin/products/:id/images/reorder' && route.method === 'PATCH');
     expect(adminReorderImages).toBeDefined();
     expect(adminReorderImages?.preHandler).toBeDefined();
@@ -94,6 +104,10 @@ describe('products routes', () => {
     const adminUpdateCategory = routes.find((route) => route.url === '/api/v1/admin/categories/:id' && route.method === 'PATCH');
     expect(adminUpdateCategory).toBeDefined();
     expect(adminUpdateCategory?.preHandler).toBeDefined();
+
+    const adminGetCategoryById = routes.find((route) => route.url === '/api/v1/admin/categories/:id' && route.method === 'GET');
+    expect(adminGetCategoryById).toBeDefined();
+    expect(adminGetCategoryById?.preHandler).toBeDefined();
 
     const adminDeleteCategory = routes.find((route) => route.url === '/api/v1/admin/categories/:id' && route.method === 'DELETE');
     expect(adminDeleteCategory).toBeDefined();
@@ -124,6 +138,7 @@ describe('products routes', () => {
       { method: 'PATCH', url: '/api/v1/admin/products/:id/variants/:variantId' },
       { method: 'DELETE', url: '/api/v1/admin/products/:id/variants/:variantId' },
       { method: 'POST', url: '/api/v1/admin/products/:id/images' },
+      { method: 'POST', url: '/api/v1/admin/products/:id/images/upload' },
       { method: 'PATCH', url: '/api/v1/admin/products/:id/images/reorder' },
       { method: 'DELETE', url: '/api/v1/admin/products/:id/images/:imageId' },
       { method: 'POST', url: '/api/v1/admin/products/import-csv' },

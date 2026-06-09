@@ -1,9 +1,37 @@
-import { standardAdminErrorResponses, standardErrorResponses } from '@common/errors/error-response.schema';
+import {
+  standardAdminErrorResponses,
+  standardErrorResponses
+} from '@common/errors/error-response.schema';
+import { adminUploadProductImageSchema } from '@modules/media/media.schemas';
+
+/** HTTPS CDN URL or VPS-hosted media path served via Cloudflare origin. */
+const productImageUrlProperty = {
+  type: 'string',
+  maxLength: 1000,
+  anyOf: [
+    { type: 'string', format: 'uri', pattern: '^https://.+' },
+    {
+      type: 'string',
+      pattern: '^/api/v1/media/products/[a-zA-Z0-9-]+/[a-zA-Z0-9._-]+\\.(jpg|jpeg|png|webp|gif)$'
+    }
+  ]
+} as const;
 
 const productListItemSchema = {
   type: 'object',
   additionalProperties: false,
-  required: ['id', 'name', 'slug', 'description', 'tags', 'isFeatured', 'category', 'images', 'variants'],
+  required: [
+    'id',
+    'name',
+    'slug',
+    'description',
+    'tags',
+    'isFeatured',
+    'isActive',
+    'category',
+    'images',
+    'variants'
+  ],
   properties: {
     id: { type: 'string', maxLength: 64 },
     name: { type: 'string', maxLength: 200 },
@@ -11,6 +39,9 @@ const productListItemSchema = {
     description: { type: 'string', maxLength: 5000 },
     tags: { type: 'array', items: { type: 'string', maxLength: 50 } },
     isFeatured: { type: 'boolean' },
+    isActive: { type: 'boolean' },
+    inStock: { type: 'boolean' },
+    metaDescription: { anyOf: [{ type: 'string', maxLength: 500 }, { type: 'null' }] },
     category: {
       type: 'object',
       additionalProperties: false,
@@ -46,7 +77,9 @@ const productListItemSchema = {
           name: { type: 'string', maxLength: 100 },
           sku: { type: 'string', maxLength: 100 },
           price: { type: 'integer', minimum: 0, maximum: 1000000000 },
-          compareAtPrice: { anyOf: [{ type: 'integer', minimum: 0, maximum: 1000000000 }, { type: 'null' }] },
+          compareAtPrice: {
+            anyOf: [{ type: 'integer', minimum: 0, maximum: 1000000000 }, { type: 'null' }]
+          },
           isActive: { type: 'boolean' }
         }
       }
@@ -66,7 +99,7 @@ const emptyQuerystringSchema = {
   properties: {}
 } as const;
 
-const categorySchema = {
+const publicCategorySchema = {
   type: 'object',
   additionalProperties: false,
   required: ['id', 'name', 'slug', 'parentId'],
@@ -75,6 +108,22 @@ const categorySchema = {
     name: { type: 'string', maxLength: 100 },
     slug: { type: 'string', maxLength: 100 },
     parentId: { type: ['string', 'null'], maxLength: 64 }
+  }
+} as const;
+
+const categorySchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['id', 'name', 'slug', 'parentId', 'isActive', 'createdAt'],
+  properties: {
+    id: { type: 'string', maxLength: 64 },
+    name: { type: 'string', maxLength: 100 },
+    slug: { type: 'string', maxLength: 100 },
+    parentId: { type: ['string', 'null'], maxLength: 64 },
+    imageUrl: { type: ['string', 'null'], maxLength: 500 },
+    isActive: { type: 'boolean' },
+    createdAt: { type: 'string', maxLength: 64 },
+    updatedAt: { type: 'string', maxLength: 64 }
   }
 } as const;
 
@@ -123,7 +172,11 @@ export const listProductsSchema = {
       minPrice: { type: 'integer', minimum: 0, maximum: 1000000000 },
       maxPrice: { type: 'integer', minimum: 0, maximum: 1000000000 },
       tags: { type: 'string', maxLength: 500 },
-      sort: { type: 'string', enum: ['price_asc', 'price_desc', 'newest', 'popularity'], maxLength: 20 },
+      sort: {
+        type: 'string',
+        enum: ['price_asc', 'price_desc', 'newest', 'popularity'],
+        maxLength: 20
+      },
       inStock: { type: 'boolean' },
       page: { type: 'integer', minimum: 1, maximum: 100000, default: 1 },
       limit: { type: 'integer', minimum: 1, maximum: 100, default: 20 }
@@ -175,7 +228,7 @@ export const listCategoriesSchema = {
   response: {
     200: {
       type: 'array',
-      items: categorySchema
+      items: publicCategorySchema
     },
     ...standardErrorResponses
   }
@@ -231,7 +284,7 @@ const adminProductInputProperties = {
       additionalProperties: false,
       required: ['url', 'altText', 'sortOrder'],
       properties: {
-        url: { type: 'string', format: 'uri', maxLength: 1000, pattern: '^https://.+' },
+        url: productImageUrlProperty,
         altText: { type: 'string', maxLength: 200 },
         sortOrder: { type: 'integer', minimum: 0, maximum: 1000 }
       }
@@ -279,7 +332,7 @@ export const adminCreateProductImageSchema = {
     additionalProperties: false,
     required: ['url', 'altText', 'sortOrder'],
     properties: {
-      url: { type: 'string', format: 'uri', maxLength: 1000, pattern: '^https://.+' },
+      url: productImageUrlProperty,
       altText: { type: 'string', maxLength: 200 },
       sortOrder: { type: 'integer', minimum: 0, maximum: 1000 }
     }
@@ -289,6 +342,8 @@ export const adminCreateProductImageSchema = {
     ...standardAdminErrorResponses
   }
 } as const;
+
+export { adminUploadProductImageSchema };
 
 export const adminReorderProductImagesSchema = {
   params: {
@@ -464,7 +519,8 @@ export const adminListProductsSchema = {
     additionalProperties: false,
     properties: {
       ...listProductsSchema.querystring.properties,
-      sku: { type: 'string', maxLength: 100 }
+      sku: { type: 'string', maxLength: 100 },
+      isActive: { type: 'boolean' }
     }
   },
   response: {
@@ -554,12 +610,57 @@ export const adminDeleteProductSchema = {
   }
 } as const;
 
+export const adminHardDeleteProductSchema = {
+  params: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['id'],
+    properties: { id: { type: 'string', maxLength: 64 } }
+  },
+  querystring: emptyQuerystringSchema,
+  response: {
+    200: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['message'],
+      properties: {
+        message: { type: 'string', maxLength: 100 }
+      }
+    },
+    ...standardAdminErrorResponses
+  }
+} as const;
+
 const adminCategoryInputProperties = {
   name: { type: 'string', maxLength: 100 },
   slug: { type: 'string', maxLength: 100 },
   parentId: { type: 'string', maxLength: 64 },
   imageUrl: { type: 'string', maxLength: 500 },
   isActive: { type: 'boolean' }
+} as const;
+
+const adminCategoryUpdateInputProperties = {
+  name: { type: 'string', maxLength: 100 },
+  slug: { type: 'string', maxLength: 100 },
+  parentId: { type: ['string', 'null'], maxLength: 64 },
+  imageUrl: { type: ['string', 'null'], maxLength: 500 },
+  isActive: { type: 'boolean' }
+} as const;
+
+export const adminGetCategoryByIdSchema = {
+  params: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['id'],
+    properties: {
+      id: { type: 'string', maxLength: 64 }
+    }
+  },
+  querystring: emptyQuerystringSchema,
+  response: {
+    200: categorySchema,
+    ...standardAdminErrorResponses
+  }
 } as const;
 
 export const adminCreateCategorySchema = {
@@ -589,10 +690,29 @@ export const adminUpdateCategorySchema = {
     type: 'object',
     additionalProperties: false,
     minProperties: 1,
-    properties: adminCategoryInputProperties
+    properties: adminCategoryUpdateInputProperties
   },
   response: {
     200: categorySchema,
+    ...standardAdminErrorResponses
+  }
+} as const;
+
+export const adminHardDeleteCategorySchema = {
+  params: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['id'],
+    properties: { id: { type: 'string', maxLength: 64 } }
+  },
+  querystring: emptyQuerystringSchema,
+  response: {
+    200: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['message'],
+      properties: { message: { type: 'string', maxLength: 100 } }
+    },
     ...standardAdminErrorResponses
   }
 } as const;
@@ -624,6 +744,8 @@ export const adminListCategoriesSchema = {
     type: 'object',
     additionalProperties: false,
     properties: {
+      search: { type: 'string', maxLength: 200 },
+      isActive: { type: 'boolean' },
       page: { type: 'integer', minimum: 1, maximum: 100000, default: 1 },
       limit: { type: 'integer', minimum: 1, maximum: 100, default: 20 }
     }
@@ -634,7 +756,7 @@ export const adminListCategoriesSchema = {
       additionalProperties: false,
       required: ['items', 'meta'],
       properties: {
-        items: listCategoriesSchema.response[200],
+        items: { type: 'array', items: categorySchema },
         meta: {
           type: 'object',
           additionalProperties: false,
@@ -651,4 +773,3 @@ export const adminListCategoriesSchema = {
     ...standardAdminErrorResponses
   }
 } as const;
-

@@ -182,4 +182,20 @@ describe('adminPermissionGuard', () => {
     await expect(guard(request, {} as unknown as AdminGuardReply)).resolves.toBeUndefined();
     expect(request.adminControlDecision?.role).toBe('developer');
   });
+
+  it('allows any listed permission when guard accepts multiple permissions', async () => {
+    const guard = adminPermissionGuard('categories:read', 'products:read');
+    await expect(
+      guard(
+        {
+          user: {
+            sub: 'admin_1',
+            role: Role.ADMIN,
+            permissions: ['products:read']
+          }
+        } as unknown as AdminGuardRequest,
+        {} as unknown as AdminGuardReply
+      )
+    ).resolves.toBeUndefined();
+  });
 });

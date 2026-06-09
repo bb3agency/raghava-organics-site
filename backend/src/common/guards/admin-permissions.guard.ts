@@ -26,7 +26,12 @@ function isScopeEnforcementEnabled(): boolean {
   return true;
 }
 
-export function adminPermissionGuard(requiredPermission: AdminPermission) {
+export function adminPermissionGuard(...requiredPermissions: AdminPermission[]) {
+  const [primaryPermission] = requiredPermissions;
+  if (!primaryPermission) {
+    throw new Error('adminPermissionGuard requires at least one permission');
+  }
+
   return async function enforceAdminPermission(
     request: FastifyRequest,
     _reply: FastifyReply
@@ -39,16 +44,20 @@ export function adminPermissionGuard(requiredPermission: AdminPermission) {
     }
 
     const permissions = request.user.permissions ?? [];
-    const policy = resolveAdminControlPolicy(requiredPermission);
+    const policy = resolveAdminControlPolicy(primaryPermission);
     const dutyRole = resolveAdminDutyRole(permissions);
     const method = typeof request.method === 'string' ? request.method.toUpperCase() : 'GET';
     const isMutation = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method);
 
-    if (!permissions.includes('*') && !permissions.includes(requiredPermission)) {
+    const hasRequiredPermission =
+      permissions.includes('*') ||
+      requiredPermissions.some((permission) => permissions.includes(permission));
+
+    if (!hasRequiredPermission) {
       throw new AppError(ERROR_CODES.FORBIDDEN, 'Insufficient permissions', 403, {
         kind: 'permission',
         hintKey: 'permission_missing',
-        requiredPermission,
+        requiredPermission: primaryPermission,
         role: dutyRole
       });
     }
@@ -59,7 +68,7 @@ export function adminPermissionGuard(requiredPermission: AdminPermission) {
         kind: 'permission',
         hintKey: 'developer_role_required',
         layer: policy.layer,
-        requiredPermission
+        requiredPermission: primaryPermission
       });
     }
 
@@ -68,12 +77,12 @@ export function adminPermissionGuard(requiredPermission: AdminPermission) {
         kind: 'permission',
         hintKey: 'sensitive_control_requires_elevated_role',
         ownerRole: policy.ownerRole,
-        requiredPermission
+        requiredPermission: primaryPermission
       });
     }
 
     request.adminControlDecision = {
-      permission: requiredPermission,
+      permission: primaryPermission,
       layer: policy.layer,
       role: dutyRole,
       requiresApproval: policy.requiresApproval

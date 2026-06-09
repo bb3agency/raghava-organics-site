@@ -1,7 +1,14 @@
 import dotenv from 'dotenv';
-import IORedis, { RedisOptions } from 'ioredis';
+import IORedis from 'ioredis';
 import pino from 'pino';
 import { Queue } from 'bullmq';
+import {
+  attachRedisErrorListener,
+  buildStandardRedisOptions,
+  guardRedisDuplicate,
+  installGuardedIORedisDuplicate,
+  waitForRedisReady
+} from '@common/redis/redis-connection';
 import { validateBootstrapEnv } from '@config/app.config';
 import { refreshFeatureFlags } from '@config/feature-flags';
 import prismaClient from '../../src/database/prisma.service';
@@ -215,17 +222,45 @@ async function bootstrapWorkers(): Promise<void> {
   }, 'Ops DB runtime config overlay applied for workers');
 
   // --- Redis connection hardening (R2) ---
-  // BullMQ requires maxRetriesPerRequest: null — different from the API process.
-  // keepAlive, connectTimeout, and retryStrategy prevent silent connection drops.
-  const workerRedisOptions: RedisOptions = {
-    maxRetriesPerRequest: null,   // BullMQ requirement
-    keepAlive: 10_000,            // TCP keepalive every 10s
-    connectTimeout: 10_000,       // Fail fast at boot if Redis is unreachable
-    retryStrategy: (times: number) => Math.min(times * 200, 5_000),
+  // BullMQ requires maxRetriesPerRequest: null — shared options also add keepAlive
+  // and reconnect-on-error so transient Docker/Windows network blips recover cleanly.
+  const workerRedisLog = {
+    warn: (obj: Record<string, unknown>, msg: string) => logger.warn(obj, msg),
+    error: (obj: Record<string, unknown>, msg: string) => logger.error(obj, msg)
+  };
+  const workerRedisPersistentAlert = (template: string, component: string) => (err: Error) => {
+    void sendTechnicalFailureAlert({
+      prisma: prismaClient,
+      template,
+      channel: 'UNKNOWN',
+      recipient: 'worker-runtime',
+      errorMessage: err.message,
+      failureStage: 'CORE_LOGIC',
+      domain: 'workers',
+      component
+    });
   };
 
-  const redis = new IORedis(redisUrl, workerRedisOptions);
-  const workerRedis = redis.duplicate();
+  const redis = new IORedis(
+    redisUrl,
+    buildStandardRedisOptions({
+      keepAlive: 10_000,
+      connectTimeout: 10_000,
+      retryStrategy: (times: number) => Math.min(times * 200, 5_000)
+    }) as never
+  );
+  attachRedisErrorListener(redis, workerRedisLog, 'worker-redis-primary', {
+    onPersistentError: workerRedisPersistentAlert('WorkerRedisPrimary', 'worker-redis-primary')
+  });
+  const workerRedis: IORedis = guardRedisDuplicate(redis, workerRedisLog, 'worker-redis-shared', {
+    onPersistentError: workerRedisPersistentAlert('WorkerRedisWorker', 'worker-redis-worker')
+  });
+
+  installGuardedIORedisDuplicate(IORedis, workerRedisLog, {
+    onPersistentError: workerRedisPersistentAlert('WorkerRedisBullMqDuplicate', 'worker-redis-bullmq-duplicate')
+  });
+
+  await waitForRedisReady(redis);
 
   // --- Auto-resume queues left paused by a prior worker exit (R4 — May 26, 2026) ---
   //
@@ -325,34 +360,6 @@ async function bootstrapWorkers(): Promise<void> {
     });
   }
 
-  // Error listeners prevent unhandled 'error' events from crashing the worker process
-  redis.on('error', (err) => {
-    logger.error({ err: err.message }, 'Worker Redis client error (primary)');
-    void sendTechnicalFailureAlert({
-      prisma: prismaClient,
-      template: 'WorkerRedisPrimary',
-      channel: 'UNKNOWN',
-      recipient: 'worker-runtime',
-      errorMessage: err.message,
-      failureStage: 'CORE_LOGIC',
-      domain: 'workers',
-      component: 'worker-redis-primary'
-    });
-  });
-  workerRedis.on('error', (err) => {
-    logger.error({ err: err.message }, 'Worker Redis client error (worker)');
-    void sendTechnicalFailureAlert({
-      prisma: prismaClient,
-      template: 'WorkerRedisWorker',
-      channel: 'UNKNOWN',
-      recipient: 'worker-runtime',
-      errorMessage: err.message,
-      failureStage: 'CORE_LOGIC',
-      domain: 'workers',
-      component: 'worker-redis-worker'
-    });
-  });
-
   const orderProcessingWorker = createOrderProcessingWorker(workerRedis);
   const shippingWorker = createShippingWorker(workerRedis);
   const notificationsWorker = createNotificationsWorker(workerRedis);
@@ -367,19 +374,8 @@ async function bootstrapWorkers(): Promise<void> {
   // --- DLQ connection fix (R3) ---
   // Use workerRedis.duplicate() to preserve password, TLS, and db config from the
   // original Redis URL. The previous host/port extraction lost these settings.
-  const dlqConnection = workerRedis.duplicate();
-  dlqConnection.on('error', (err) => {
-    logger.error({ err: err.message }, 'Worker Redis client error (DLQ)');
-    void sendTechnicalFailureAlert({
-      prisma: prismaClient,
-      template: 'WorkerRedisDlq',
-      channel: 'UNKNOWN',
-      recipient: 'worker-runtime',
-      errorMessage: err.message,
-      failureStage: 'CORE_LOGIC',
-      domain: 'workers',
-      component: 'worker-redis-dlq'
-    });
+  const dlqConnection: IORedis = guardRedisDuplicate(workerRedis, workerRedisLog, 'worker-redis-dlq', {
+    onPersistentError: workerRedisPersistentAlert('WorkerRedisDlq', 'worker-redis-dlq')
   });
 
   const deadLetterQueue = new Queue('dead-letter', {
@@ -475,20 +471,17 @@ async function bootstrapWorkers(): Promise<void> {
   let shiprocketRefreshQueue: Queue | null = null;
   let shiprocketRefreshConnection: IORedis | null = null;
   if ((process.env.SHIPPING_PROVIDER ?? 'delhivery').trim().toLowerCase() === 'shiprocket') {
-    shiprocketRefreshConnection = workerRedis.duplicate();
-    shiprocketRefreshConnection.on('error', (err) => {
-      logger.error({ err: err.message }, 'Worker Redis client error (Shiprocket refresh queue)');
-      void sendTechnicalFailureAlert({
-        prisma: prismaClient,
-        template: 'WorkerRedisShiprocketRefresh',
-        channel: 'UNKNOWN',
-        recipient: 'worker-runtime',
-        errorMessage: err.message,
-        failureStage: 'CORE_LOGIC',
-        domain: 'workers',
-        component: 'worker-redis-shiprocket-refresh'
-      });
-    });
+    shiprocketRefreshConnection = guardRedisDuplicate(
+      workerRedis,
+      workerRedisLog,
+      'worker-redis-shiprocket-refresh',
+      {
+        onPersistentError: workerRedisPersistentAlert(
+          'WorkerRedisShiprocketRefresh',
+          'worker-redis-shiprocket-refresh'
+        )
+      }
+    );
     shiprocketRefreshQueue = new Queue('shipping', { connection: shiprocketRefreshConnection });
     shiprocketRefreshQueue
       .add(
@@ -518,7 +511,7 @@ async function bootstrapWorkers(): Promise<void> {
 
   // --- Shutdown orchestration ---
   // restartSubscriber is declared here so shutdown() can close it on any exit path.
-  let restartSubscriber: ReturnType<typeof workerRedis.duplicate> | null = null;
+  let restartSubscriber: IORedis | null = null;
   let shuttingDown = false;
 
   const shutdown = async () => {
@@ -570,17 +563,15 @@ async function bootstrapWorkers(): Promise<void> {
   // scheduled-process-restart BullMQ job fires. This ensures the worker process
   // also initiates a graceful shutdown alongside the API process.
   // A duplicate connection is used because ioredis pub/sub mode blocks the connection.
-  restartSubscriber = workerRedis.duplicate();
-  restartSubscriber.on('error', (err) => {
-    logger.warn({ err: err.message }, 'Restart subscriber Redis error — restart signal may not be received');
-  });
-  restartSubscriber.subscribe(SYSTEM_RESTART_CHANNEL, (err) => {
-    if (err) {
-      logger.warn({ err: err.message }, 'Failed to subscribe to restart channel');
-    }
-  }).catch((err) => {
-    logger.warn({ err: err.message }, 'Failed to subscribe to restart channel');
-  });
+  restartSubscriber = guardRedisDuplicate(workerRedis, workerRedisLog, 'worker-restart-subscriber');
+  try {
+    await restartSubscriber.subscribe(SYSTEM_RESTART_CHANNEL);
+  } catch (err) {
+    logger.warn(
+      { err: err instanceof Error ? err.message : String(err) },
+      'Failed to subscribe to restart channel — auto-restart signals disabled until Redis pub/sub recovers'
+    );
+  }
   restartSubscriber.on('message', (channel: string) => {
     if (channel !== SYSTEM_RESTART_CHANNEL) return;
     logger.info('System restart signal received — initiating graceful worker shutdown');

@@ -23,7 +23,7 @@ function parseEnabledFlag(value: string | undefined, defaultValue: boolean): boo
 }
 
 export function resolveOtpNotifyToggles(
-  storeFlags?: OtpChannelFlags | undefined,
+  storeFlags?: OtpChannelFlags,
   runtime?: NodeJS.ProcessEnv
 ): OtpNotifyToggles {
   const env = runtime ?? process.env;

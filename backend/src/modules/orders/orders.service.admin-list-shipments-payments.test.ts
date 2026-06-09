@@ -48,6 +48,25 @@ describe('OrdersService adminListShipments', () => {
     );
   });
 
+  it('passes search filter for AWB and order number', async () => {
+    const fastify = makeFastify();
+    const service = new OrdersService(fastify);
+
+    await service.adminListShipments({ search: 'AWB123' });
+
+    const shipmentFindMany = (fastify.prisma.shipment as unknown as { findMany: ReturnType<typeof vi.fn> }).findMany;
+    expect(shipmentFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          OR: [
+            { awbNumber: { contains: 'AWB123', mode: 'insensitive' } },
+            { order: { orderNumber: { contains: 'AWB123', mode: 'insensitive' } } }
+          ]
+        })
+      })
+    );
+  });
+
   it('respects pagination parameters', async () => {
     const fastify = makeFastify([], 50);
     const service = new OrdersService(fastify);
@@ -87,6 +106,28 @@ describe('OrdersService adminListPayments', () => {
     const paymentFindMany = (fastify.prisma.payment as unknown as { findMany: ReturnType<typeof vi.fn> }).findMany;
     expect(paymentFindMany).toHaveBeenCalledWith(
       expect.objectContaining({ where: expect.objectContaining({ status: 'CAPTURED' }) })
+    );
+  });
+
+  it('passes search filter for order number and provider payment ID', async () => {
+    const fastify = makeFastify();
+    const service = new OrdersService(fastify);
+
+    await service.adminListPayments({ search: 'pay_abc123' });
+
+    const paymentFindMany = (fastify.prisma.payment as unknown as { findMany: ReturnType<typeof vi.fn> }).findMany;
+    expect(paymentFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          OR: [
+            { providerPaymentId: { contains: 'pay_abc123', mode: 'insensitive' } },
+            { order: { orderNumber: { contains: 'pay_abc123', mode: 'insensitive' } } },
+            { order: { user: { firstName: { contains: 'pay_abc123', mode: 'insensitive' } } } },
+            { order: { user: { lastName: { contains: 'pay_abc123', mode: 'insensitive' } } } },
+            { order: { user: { email: { contains: 'pay_abc123', mode: 'insensitive' } } } }
+          ]
+        })
+      })
     );
   });
 

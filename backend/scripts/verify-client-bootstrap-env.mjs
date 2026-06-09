@@ -181,6 +181,21 @@ if (!(env.OPS_METRICS_TOKEN ?? "").trim()) {
   warnings.push("OPS_METRICS_TOKEN is not set — /ops/metrics will be inaccessible until configured.");
 }
 
+const legacyMediaKeys = [
+  "MEDIA_STORAGE_PROVIDER",
+  "R2_ACCOUNT_ID",
+  "R2_ACCESS_KEY_ID",
+  "R2_SECRET_ACCESS_KEY",
+  "R2_BUCKET_NAME",
+  "R2_PUBLIC_BASE_URL",
+];
+const hasLegacyMediaInEnv = legacyMediaKeys.some((key) => (env[key] ?? "").trim());
+if (hasLegacyMediaInEnv) {
+  warnings.push(
+    "Product media / R2 keys are configured in backend/.env — move them to the Ops config panel (Product Media domain) and remove from .env after restart."
+  );
+}
+
 if (warnings.length) {
   console.warn("Warnings:");
   for (const w of warnings) console.warn(`  - ${w}`);

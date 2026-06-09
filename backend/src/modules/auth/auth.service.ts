@@ -36,16 +36,22 @@ type PublicUser = {
 type RegisterInput = {
   firstName: string;
   lastName: string;
-  phone: string;
+  /** Optional for email-based registration. Required implicitly for OTP signup (separate endpoint). */
+  phone?: string | null;
   email: string;
   password: string;
   turnstileToken?: string;
 };
 
 type LoginInput = {
-  email: string;
+  /** Accepts either an email address or a phone number. */
+  identifier: string;
   password: string;
   turnstileToken?: string;
+};
+
+type CheckIdentifierInput = {
+  identifier: string;
 };
 
 type OtpInput = {
@@ -520,10 +526,13 @@ export class AuthService {
       subject: emailNorm,
       ...(context?.risk ? { risk: context.risk } : {})
     });
+    const phoneNorm = input.phone?.trim() || null;
+    const whereOrClauses: Array<{ email?: string; phone?: string }> = [{ email: emailNorm }];
+    if (phoneNorm) {
+      whereOrClauses.push({ phone: phoneNorm });
+    }
     const existingUser = await this.fastify.prisma.user.findFirst({
-      where: {
-        OR: [{ email: emailNorm }, { phone: input.phone }]
-      }
+      where: { OR: whereOrClauses }
     });
     if (existingUser) {
       throw new AppError(ERROR_CODES.CONFLICT, 'User already exists', 409);
@@ -539,7 +548,7 @@ export class AuthService {
       data: {
         firstName: input.firstName,
         lastName: input.lastName,
-        phone: input.phone,
+        phone: phoneNorm,
         email: emailNorm,
         passwordHash
       }
@@ -908,31 +917,91 @@ export class AuthService {
       await tx.passwordResetToken.deleteMany({
         where: { userId: tokenRecord.userId }
       });
+      // Revoke all active refresh sessions so existing logins cannot continue
+      // with a compromised (pre-reset) password.
+      await tx.refreshToken.updateMany({
+        where: { userId: tokenRecord.userId, revokedAt: null },
+        data: { revokedAt: new Date() }
+      });
     });
 
     return { message: 'Password has been reset successfully' };
   }
 
+  /**
+   * Lightweight identifier check used by login forms.
+   * Returns whether a phone number or email address belongs to a registered user.
+   * Deliberately does NOT reveal any account details beyond existence.
+   */
+  async checkIdentifier(input: CheckIdentifierInput): Promise<{
+    exists: boolean;
+    identifierType: 'phone' | 'email';
+    hasPhone: boolean;
+  }> {
+    const raw = input.identifier.trim();
+    const identifierType: 'phone' | 'email' = raw.includes('@') ? 'email' : 'phone';
+
+    if (identifierType === 'email') {
+      const user = await this.fastify.prisma.user.findUnique({
+        where: { email: raw.toLowerCase() },
+        select: { id: true, phone: true }
+      });
+      return {
+        exists: !!user,
+        identifierType,
+        hasPhone: !!user?.phone
+      };
+    } else {
+      const user = await this.fastify.prisma.user.findFirst({
+        where: { phone: raw },
+        select: { id: true, phone: true }
+      });
+      return {
+        exists: !!user,
+        identifierType,
+        hasPhone: !!user?.phone
+      };
+    }
+  }
+
   async login(input: LoginInput, context?: LoginContext): Promise<AuthResult> {
     const clientIp = context?.clientIp ?? 'unknown';
     const audience = context?.audience ?? 'customer';
-    const emailNorm = input.email.trim().toLowerCase();
+
+    // Normalise identifier: lowercase for email, keep as-is for phone.
+    const raw = input.identifier.trim();
+    const isEmail = raw.includes('@');
+    const identifierNorm = isEmail ? raw.toLowerCase() : raw;
+
     if (audience === 'customer') {
       await this.validateAuthChallenge({
         action: 'login',
         ...(input.turnstileToken ? { token: input.turnstileToken } : {}),
         clientIp,
-        subject: emailNorm,
+        subject: identifierNorm,
         ...(context?.risk ? { risk: context.risk } : {})
       });
     }
-    await this.assertAuthNotTemporarilyLocked(emailNorm, clientIp, audience);
+    await this.assertAuthNotTemporarilyLocked(identifierNorm, clientIp, audience);
 
-    const user = await this.fastify.prisma.user.findUnique({
-      where: { email: emailNorm }
-    });
+    // Look up user by email or phone depending on what was entered.
+    const user = isEmail
+      ? await this.fastify.prisma.user.findUnique({ where: { email: identifierNorm } })
+      : await this.fastify.prisma.user.findFirst({ where: { phone: identifierNorm } });
+
     if (!user) {
-      const retryAfterSeconds = await this.registerFailedAuthAttempt(emailNorm, clientIp, audience);
+      const retryAfterSeconds = await this.registerFailedAuthAttempt(identifierNorm, clientIp, audience);
+      if (retryAfterSeconds !== null) {
+        throw new AppError(ERROR_CODES.RATE_LIMIT_EXCEEDED, 'Too many attempts. Try again later.', 429, {
+          retryAfterSeconds
+        });
+      }
+      throw new AppError(ERROR_CODES.INVALID_CREDENTIALS, 'Invalid credentials', 401);
+    }
+
+    // Guard: passwordHash should always be set, but handle the null case gracefully.
+    if (!user.passwordHash) {
+      const retryAfterSeconds = await this.registerFailedAuthAttempt(identifierNorm, clientIp, audience);
       if (retryAfterSeconds !== null) {
         throw new AppError(ERROR_CODES.RATE_LIMIT_EXCEEDED, 'Too many attempts. Try again later.', 429, {
           retryAfterSeconds
@@ -943,7 +1012,7 @@ export class AuthService {
 
     const validPassword = await bcrypt.compare(input.password, user.passwordHash);
     if (!validPassword) {
-      const retryAfterSeconds = await this.registerFailedAuthAttempt(emailNorm, clientIp, audience);
+      const retryAfterSeconds = await this.registerFailedAuthAttempt(identifierNorm, clientIp, audience);
       if (retryAfterSeconds !== null) {
         throw new AppError(ERROR_CODES.RATE_LIMIT_EXCEEDED, 'Too many attempts. Try again later.', 429, {
           retryAfterSeconds
@@ -952,7 +1021,7 @@ export class AuthService {
       throw new AppError(ERROR_CODES.INVALID_CREDENTIALS, 'Invalid credentials', 401);
     }
     if (user.role === Role.ADMIN && audience === 'customer') {
-      const retryAfterSeconds = await this.registerFailedAuthAttempt(emailNorm, clientIp, audience);
+      const retryAfterSeconds = await this.registerFailedAuthAttempt(identifierNorm, clientIp, audience);
       if (retryAfterSeconds !== null) {
         throw new AppError(ERROR_CODES.RATE_LIMIT_EXCEEDED, 'Too many attempts. Try again later.', 429, {
           retryAfterSeconds
@@ -962,7 +1031,7 @@ export class AuthService {
     }
 
     if (!context?.skipClearOnSuccess) {
-      await this.clearFailedAuthAttempts(emailNorm, clientIp, audience);
+      await this.clearFailedAuthAttempts(identifierNorm, clientIp, audience);
     }
     return this.issueTokensForUser(user, this.deriveTokenIssueContext(context));
   }
@@ -1259,9 +1328,7 @@ export class AuthService {
     if (!user) {
       throw new AppError(ERROR_CODES.UNAUTHORISED, 'User not found', 401);
     }
-    if (user.role === Role.ADMIN && user.isBanned) {
-      throw new AppError(ERROR_CODES.UNAUTHORISED, 'Admin account not found or inactive', 401);
-    }
+    // Ban check handled inside issueTokensForUser for all roles
 
     const issued = await this.issueTokensForUser(user, {
       sessionId: payload.sid,
@@ -1308,8 +1375,13 @@ export class AuthService {
   }
 
   private async issueTokensForUser(user: User, tokenContext: TokenIssueContext): Promise<AuthResult> {
-    if (user.role === Role.ADMIN && user.isBanned) {
-      throw new AppError(ERROR_CODES.UNAUTHORISED, 'Admin account not found or inactive', 401);
+    if (user.isBanned) {
+      const isAdmin = user.role === Role.ADMIN;
+      throw new AppError(
+        ERROR_CODES.UNAUTHORISED,
+        isAdmin ? 'Admin account not found or inactive' : 'Your account has been suspended. Please contact support.',
+        401
+      );
     }
 
     // PERMISSION SNAPSHOT CAVEAT: admin permissions are resolved from the DB at token issuance and

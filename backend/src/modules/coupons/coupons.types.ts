@@ -29,11 +29,17 @@ export type AdminListCouponsQuery = {
   limit?: number;
   code?: string;
   status?: 'active' | 'expired' | 'paused';
+  /** Filter by CouponType: PERCENTAGE_OFF | FLAT_AMOUNT_OFF | FREE_SHIPPING */
+  type?: 'PERCENTAGE_OFF' | 'FLAT_AMOUNT_OFF' | 'FREE_SHIPPING';
+  from?: string;
+  to?: string;
 };
 
 export type CouponAnalyticsQuery = {
   page?: number;
   limit?: number;
+  from?: string;
+  to?: string;
 };
 
 // Extended status with deleted state

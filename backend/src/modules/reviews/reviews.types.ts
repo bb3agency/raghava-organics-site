@@ -11,8 +11,18 @@ export type ReviewListQuery = {
   limit?: number;
 };
 
+export type RecentApprovedReviewsQuery = {
+  limit?: number;
+};
+
 export type AdminReviewListQuery = {
   approved?: boolean;
+  ratingLte?: number;
+  ratingGte?: number;
+  /** Full-text search on reviewer name or review body */
+  search?: string;
+  from?: string;
+  to?: string;
   page?: number;
   limit?: number;
 };

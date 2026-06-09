@@ -1,4 +1,4 @@
-export type OpsConfigDomain = 'core' | 'payments' | 'shipping' | 'notifications' | 'opsSecurity';
+export type OpsConfigDomain = 'core' | 'media' | 'payments' | 'shipping' | 'notifications' | 'opsSecurity';
 
 export type OpsConfigOverviewItem = {
   key: string;
@@ -32,6 +32,51 @@ export const OPS_CONFIG_OVERVIEW_GROUPS: Array<{
       { key: 'JWT_SECRET', mutableViaOps: true, requiresRestart: true },
       { key: 'JWT_REFRESH_SECRET', mutableViaOps: true, requiresRestart: true },
       { key: 'INVOICE_STORAGE_ROOT', mutableViaOps: true, requiresRestart: true }
+    ]
+  },
+  {
+    domain: 'media',
+    label: 'Product Media (Cloudflare R2)',
+    items: [
+      {
+        key: 'MEDIA_STORAGE_PROVIDER',
+        mutableViaOps: true,
+        requiresRestart: true,
+        runtimeSource: 'db-overlay',
+        note: 'local = VPS disk + origin serve; r2 = automatic upload to Cloudflare R2 on each admin image save.'
+      },
+      { key: 'R2_ACCOUNT_ID', mutableViaOps: true, requiresRestart: true, runtimeSource: 'db-overlay' },
+      { key: 'R2_ACCESS_KEY_ID', mutableViaOps: true, requiresRestart: true, runtimeSource: 'db-overlay' },
+      { key: 'R2_SECRET_ACCESS_KEY', mutableViaOps: true, requiresRestart: true, runtimeSource: 'db-overlay' },
+      { key: 'R2_BUCKET_NAME', mutableViaOps: true, requiresRestart: true, runtimeSource: 'db-overlay' },
+      {
+        key: 'R2_PUBLIC_BASE_URL',
+        mutableViaOps: true,
+        requiresRestart: true,
+        runtimeSource: 'db-overlay',
+        note: 'Public CDN hostname on the R2 bucket (custom domain). Pair with storefront NEXT_PUBLIC_IMAGE_CDN_URL.'
+      },
+      {
+        key: 'R2_ENDPOINT',
+        mutableViaOps: true,
+        requiresRestart: true,
+        runtimeSource: 'db-overlay',
+        note: 'Optional S3 API endpoint override. Default: https://<account_id>.r2.cloudflarestorage.com'
+      },
+      {
+        key: 'MEDIA_STORAGE_ROOT',
+        mutableViaOps: true,
+        requiresRestart: true,
+        runtimeSource: 'db-overlay',
+        note: 'Used when MEDIA_STORAGE_PROVIDER=local (dev). Optional legacy VPS path for delete fallback.'
+      },
+      {
+        key: 'MEDIA_CDN_BASE_URL',
+        mutableViaOps: true,
+        requiresRestart: true,
+        runtimeSource: 'db-overlay',
+        note: 'Fallback public origin for local provider URLs. Prefer R2_PUBLIC_BASE_URL in production.'
+      }
     ]
   },
   {
@@ -138,6 +183,23 @@ const OPS_CONFIG_REQUIRED_BY_PROVIDER: Record<string, Record<string, string[]>> 
     msg91: ['MSG91_AUTH_KEY', 'MSG91_SENDER_ID'],
     fast2sms: ['FAST2SMS_API_KEY'],
     noop: []
+  },
+  MEDIA_STORAGE_PROVIDER: {
+    r2: [
+      'R2_ACCOUNT_ID',
+      'R2_ACCESS_KEY_ID',
+      'R2_SECRET_ACCESS_KEY',
+      'R2_BUCKET_NAME',
+      'R2_PUBLIC_BASE_URL'
+    ],
+    local: [],
+    'cloudflare-r2': [
+      'R2_ACCOUNT_ID',
+      'R2_ACCESS_KEY_ID',
+      'R2_SECRET_ACCESS_KEY',
+      'R2_BUCKET_NAME',
+      'R2_PUBLIC_BASE_URL'
+    ]
   }
 };
 
@@ -218,7 +280,12 @@ function getProviderValue(draftEnv: NodeJS.ProcessEnv, key: string): string {
  *   isOpsConfigSecretKey('OPS_COOKIE_SECRET')                  // true  (exact match)
  */
 export function isOpsConfigSecretKey(key: string): boolean {
-  if (key.endsWith('_KEY_ID') || key.endsWith('_FROM') || key.endsWith('_EMAIL')) {
+  if (
+    key.endsWith('_KEY_ID') ||
+    key.endsWith('_FROM') ||
+    key.endsWith('_EMAIL') ||
+    key === 'R2_ACCESS_KEY_ID'
+  ) {
     return false;
   }
   return /(_SECRET|_TOKEN|_PASSWORD|_AUTH_KEY|_API_KEY|_APP_SECRET|OPS_METRICS_TOKEN|REPLAY_APPROVAL_TOKEN|OPS_COOKIE_SECRET)/.test(
@@ -260,7 +327,12 @@ export function resolveOpsConfigDomainForKey(key: string): OpsConfigDomain | nul
 }
 
 export function computeRequiredOpsConfigKeys(draftEnv: NodeJS.ProcessEnv, strictProfile: boolean): string[] {
-  const required = new Set<string>(['PAYMENT_PROVIDER', 'SHIPPING_PROVIDER', 'SMS_PROVIDER']);
+  const required = new Set<string>([
+    'PAYMENT_PROVIDER',
+    'SHIPPING_PROVIDER',
+    'SMS_PROVIDER',
+    'MEDIA_STORAGE_PROVIDER'
+  ]);
 
   for (const [providerKey, providerMap] of Object.entries(OPS_CONFIG_REQUIRED_BY_PROVIDER)) {
     const hasExplicitProvider = (draftEnv[providerKey] ?? '').trim().length > 0;

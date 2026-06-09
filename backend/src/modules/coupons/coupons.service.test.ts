@@ -267,6 +267,49 @@ describe('CouponsService', () => {
         })
       );
     });
+
+    it('filters coupons by createdAt when from and to are provided', async () => {
+      const fastify = createMockFastify({
+        couponFindMany: [],
+        couponCount: 0
+      });
+
+      const service = CouponsService.getInstance(fastify);
+      await service.adminListCoupons(
+        {
+          from: '2026-05-01T00:00:00.000Z',
+          to: '2026-05-31T23:59:59.999Z'
+        },
+        false
+      );
+
+      expect(fastify.prisma.coupon.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            createdAt: {
+              gte: new Date('2026-05-01T00:00:00.000Z'),
+              lte: new Date('2026-05-31T23:59:59.999Z')
+            }
+          })
+        })
+      );
+    });
+
+    it('filters coupons by type when type is provided', async () => {
+      const fastify = createMockFastify({
+        couponFindMany: [],
+        couponCount: 0
+      });
+
+      const service = CouponsService.getInstance(fastify);
+      await service.adminListCoupons({ type: 'PERCENTAGE_OFF' }, false);
+
+      expect(fastify.prisma.coupon.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ type: CouponType.PERCENTAGE_OFF })
+        })
+      );
+    });
   });
 
   describe('Audit Logging', () => {

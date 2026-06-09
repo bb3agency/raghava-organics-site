@@ -26,6 +26,13 @@ export class UsersService {
     if (!user) {
       throw new AppError(ERROR_CODES.NOT_FOUND, 'User not found', 404);
     }
+    if (user.isBanned) {
+      throw new AppError(
+        ERROR_CODES.UNAUTHORISED,
+        'Your account has been suspended. Please contact support.',
+        401
+      );
+    }
 
     return {
       id: user.id,
@@ -213,11 +220,19 @@ export class UsersService {
           id: true,
           orderNumber: true,
           status: true,
+          paymentMode: true,
           subtotal: true,
           shippingCharge: true,
           discountAmount: true,
           total: true,
           createdAt: true,
+          invoice: {
+            select: {
+              invoiceNumber: true,
+              pdfUrl: true,
+              issuedAt: true
+            }
+          },
           shipment: {
             select: {
               status: true,
@@ -243,12 +258,21 @@ export class UsersService {
         id: order.id,
         orderNumber: order.orderNumber,
         status: order.status,
+        paymentMode: (order as Record<string, unknown>).paymentMode ?? null,
         subtotal: order.subtotal,
         shippingCharge: order.shippingCharge,
         discountAmount: order.discountAmount,
         total: order.total,
-        createdAt: order.createdAt.toISOString()
-        ,
+        createdAt: order.createdAt.toISOString(),
+        invoice: (order as Record<string, unknown>).invoice
+          ? {
+              hasPdf: !!((order as Record<string, unknown>).invoice as Record<string, unknown> | null)?.pdfUrl,
+              invoiceNumber: ((order as Record<string, unknown>).invoice as Record<string, unknown> | null)?.invoiceNumber ?? null,
+              issuedAt: ((order as Record<string, unknown>).invoice as Record<string, unknown> | null)?.issuedAt
+                ? new Date(((order as Record<string, unknown>).invoice as Record<string, unknown>).issuedAt as string | Date).toISOString()
+                : null
+            }
+          : null,
         shipmentStatus: order.shipment?.status ?? null,
         awb: order.shipment?.awbNumber ?? null,
         trackingUrl: order.shipment?.trackingUrl ?? null,
@@ -271,6 +295,15 @@ export class UsersService {
     const search = query.search?.trim();
     const whereClause = {
       role: 'CUSTOMER' as const,
+      ...(query.banned !== undefined ? { isBanned: query.banned } : {}),
+      ...(query.from || query.to
+        ? {
+            createdAt: {
+              ...(query.from ? { gte: new Date(query.from) } : {}),
+              ...(query.to ? { lte: new Date(query.to) } : {})
+            }
+          }
+        : {}),
       ...(search && search.length > 0
         ? {
             OR: [
