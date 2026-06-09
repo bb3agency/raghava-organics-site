@@ -94,7 +94,6 @@ const inputCls = (hasError?: boolean) =>
 // ── Type Option Cards ────────────────────────────────────────────────────────
 
 interface TypeCardProps {
-  value: AdminCreateCouponInput["type"];
   active: boolean;
   icon: React.ElementType;
   label: string;
@@ -102,7 +101,7 @@ interface TypeCardProps {
   onClick: () => void;
 }
 
-function TypeCard({ active, icon: Icon, label, desc, onClick }: Omit<TypeCardProps, "value">) {
+function TypeCard({ active, icon: Icon, label, desc, onClick }: TypeCardProps) {
   return (
     <button
       type="button"
@@ -401,7 +400,6 @@ export function AdminCouponForm({
                 <Field label="Discount Type" required>
                   <div className="grid grid-cols-3 gap-2">
                     <TypeCard
-                      value="PERCENTAGE_OFF"
                       active={type === "PERCENTAGE_OFF"}
                       icon={Percent}
                       label="Percentage"
@@ -409,7 +407,6 @@ export function AdminCouponForm({
                       onClick={() => { setType("PERCENTAGE_OFF"); setValue(""); }}
                     />
                     <TypeCard
-                      value="FLAT_AMOUNT_OFF"
                       active={type === "FLAT_AMOUNT_OFF"}
                       icon={Banknote}
                       label="Flat Amount"
@@ -417,7 +414,6 @@ export function AdminCouponForm({
                       onClick={() => { setType("FLAT_AMOUNT_OFF"); setValue(""); }}
                     />
                     <TypeCard
-                      value="FREE_SHIPPING"
                       active={type === "FREE_SHIPPING"}
                       icon={Truck}
                       label="Free Ship"

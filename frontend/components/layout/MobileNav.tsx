@@ -14,7 +14,7 @@ import {
   Loader2,
   Tag,
 } from "lucide-react";
-import { APP_NAME } from "@/lib/constants";
+import { APP_NAME, BRAND_LOGO_SRC } from "@/lib/constants";
 import { useUiStore } from "@/stores/ui";
 import { useAuthStore } from "@/stores/auth";
 import { logoutSession } from "@/lib/auth-api";
@@ -184,7 +184,7 @@ export function MobileNav({ minOrderValuePaise = 0 }: MobileNavProps) {
             onClick={close}
           >
             <Image
-              src="/images/raghava-organics-logo.png"
+              src={BRAND_LOGO_SRC}
               alt="Raghava Organics"
               width={28}
               height={28}

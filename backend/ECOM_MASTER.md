@@ -1536,7 +1536,7 @@ warranty       String?
 - ~30 minutes to brand all 8 templates
 
 ### 12.5 Admin Dashboard Branding
-- Replace `/public/logo.png`
+- Replace `frontend/public/images/raghava-organics-logo.png` (path constant: `BRAND_LOGO_SRC` in `frontend/lib/constants.ts`)
 - Update 5 CSS variables in `/src/styles/theme.css`
 - Set `NEXT_PUBLIC_STORE_NAME` in admin `.env`
 - **Total: ~15 minutes**

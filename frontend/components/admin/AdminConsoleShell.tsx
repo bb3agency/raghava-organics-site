@@ -26,6 +26,7 @@ import { AdminSearchPanel } from "@/components/admin/AdminSearchPanel";
 import { AdminNotificationsPanel } from "@/components/admin/AdminNotificationsPanel";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { BRAND_LOGO_SRC } from "@/lib/constants";
 import { useAuthStore } from "@/stores/auth";
 import { canViewAdminRoute } from "@/lib/permissions";
 import { redirectToAdminLogin } from "@/lib/admin-auth-navigation";
@@ -274,7 +275,7 @@ function AdminConsoleFrame({ children }: { children: ReactNode }) {
               {/* Mobile/tablet: show brand; desktop: show page title (sidebar has brand) */}
               <div className="flex items-center gap-2.5 lg:hidden min-w-0">
                 <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white border border-zinc-200 overflow-hidden">
-                  <Image src="/logo.png" alt="Logo" width={36} height={36} className="object-contain" />
+                  <Image src={BRAND_LOGO_SRC} alt="Logo" width={36} height={36} className="object-contain" />
                 </div>
                 <div className="flex flex-col min-w-0">
                   <span className="font-heading text-sm font-bold tracking-tight text-foreground leading-none truncate">
@@ -414,7 +415,7 @@ function AdminSidebarBrand() {
   return (
     <div className="flex items-center gap-2.5 px-5 py-4">
       <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white border border-zinc-200 overflow-hidden">
-        <Image src="/logo.png" alt="Logo" width={36} height={36} className="object-contain" />
+        <Image src={BRAND_LOGO_SRC} alt="Logo" width={36} height={36} className="object-contain" />
       </div>
       <div className="flex flex-col min-w-0">
         <span className="font-heading text-[14px] font-bold tracking-tight text-foreground leading-none truncate">

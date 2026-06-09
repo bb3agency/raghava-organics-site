@@ -3,7 +3,7 @@
 import Link from "next/link";
 import Image from "next/image";
 import { Phone, Menu, Leaf } from "lucide-react";
-import { APP_NAME } from "@/lib/constants";
+import { APP_NAME, BRAND_LOGO_SRC } from "@/lib/constants";
 import { MainNav } from "@/components/layout/MainNav";
 import { SearchInput } from "@/components/shared/SearchInput";
 import { MobileNav } from "@/components/layout/MobileNav";
@@ -51,7 +51,7 @@ export function Header({ categories, minOrderValuePaise = 0 }: HeaderProps) {
             className="flex shrink-0 items-center gap-1.5 sm:gap-2 font-heading text-lg sm:text-2xl font-bold tracking-tight text-[#23403d]"
             aria-label={`${APP_NAME} home`}
           >
-            <Image src="/images/raghava-organics-logo.png" alt="Raghava Organics Logo" width={36} height={36} className="size-8 sm:size-9 shrink-0 object-contain" />
+            <Image src={BRAND_LOGO_SRC} alt="Raghava Organics Logo" width={36} height={36} className="size-8 sm:size-9 shrink-0 object-contain" />
             <span className="truncate">{APP_NAME}</span>
           </Link>
         </div>
