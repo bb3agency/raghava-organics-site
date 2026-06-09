@@ -218,30 +218,6 @@ function PrimaryButton(text: string, href: string): ReactElement {
   );
 }
 
-function SecondaryButton(text: string, href: string): ReactElement {
-  return el('table', { cellPadding: 0, cellSpacing: 0, style: { margin: '12px 0' } },
-    el('tr', null,
-      el('td', {
-        style: {
-          border: `2px solid ${B.green}`,
-          borderRadius: '100px',
-          padding: '12px 28px'
-        }
-      },
-        el('a', {
-          href,
-          style: {
-            color: B.green,
-            fontSize: '14px',
-            fontWeight: 700,
-            textDecoration: 'none',
-            display: 'block'
-          }
-        }, text)
-      )
-    )
-  );
-}
 
 function FallbackLink(href: string): ReactElement {
   return el('p', {
