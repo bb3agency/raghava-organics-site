@@ -8,7 +8,9 @@ import { Rating } from "@/components/shared/Rating";
 import { ProductVariantSelector } from "@/components/product/ProductVariantSelector";
 import { ProductReviewsSection } from "@/components/product/ProductReviewsSection";
 import { ProductViewTracker } from "@/components/shared/ProductViewTracker";
+import { ShareProductButton } from "@/components/product/ShareProductButton";
 import { getPublicStoreConfig } from "@/lib/storefront-settings";
+import { STOREFRONT_URL } from "@/lib/constants";
 import type { Product } from "@/types/product";
 
 interface ProductDetailPageProps {
@@ -47,6 +49,7 @@ export default async function ProductDetailPage({ params }: ProductDetailPagePro
   const activeVariant =
     product.variants.find((v) => v.isActive) ?? product.variants[0];
   const storeConfig = await getPublicStoreConfig();
+  const productUrl = `${STOREFRONT_URL}/products/${product.slug}`;
 
   return (
     <div className="bg-[#eff5ee] min-h-screen pb-16">
@@ -103,19 +106,25 @@ export default async function ProductDetailPage({ params }: ProductDetailPagePro
               </p>
             ) : null}
 
-            {/* Stock indicator */}
-            <div className="flex items-center gap-2 text-sm font-bold">
-              {product.inStock ? (
-                <>
-                  <span className="inline-block size-2 rounded-full bg-[#00aa63]" aria-hidden />
-                  <span className="text-[#00aa63]">In stock, ready to ship</span>
-                </>
-              ) : (
-                <>
-                  <span className="inline-block size-2 rounded-full bg-[#ec6e55]" aria-hidden />
-                  <span className="text-[#ec6e55]">Out of stock</span>
-                </>
-              )}
+            {/* Stock indicator + share */}
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2 text-sm font-bold">
+                {product.inStock ? (
+                  <>
+                    <span className="inline-block size-2 rounded-full bg-[#00aa63]" aria-hidden />
+                    <span className="text-[#00aa63]">In stock, ready to ship</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="inline-block size-2 rounded-full bg-[#ec6e55]" aria-hidden />
+                    <span className="text-[#ec6e55]">Out of stock</span>
+                  </>
+                )}
+              </div>
+              <ShareProductButton
+                productName={product.name}
+                productUrl={productUrl}
+              />
             </div>
 
             <ProductVariantSelector

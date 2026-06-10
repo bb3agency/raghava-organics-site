@@ -48,6 +48,8 @@ import { uploadAdminProductImages } from "@/lib/admin-product-media";
 import { useAdminFormValidation } from "@/hooks/use-admin-form-validation";
 import { formatAdminValidationSummary } from "@/lib/admin-form-validation";
 import { fetchPublicStoreConfigClient } from "@/lib/storefront-settings";
+import { STOREFRONT_URL } from "@/lib/constants";
+import { AdminCopyLinkButton } from "@/components/admin/AdminCopyLinkButton";
 import { AdminTableScroll } from "@/components/admin/AdminTableScroll";
 import {
   buildPrimaryVariantPricePatch,
@@ -1119,6 +1121,18 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
                     </span>
                   ) : null}
                 </label>
+
+                {/* Storefront link — only shown for existing products with a saved slug */}
+                {!isCreate && slug ? (
+                  <div className="grid gap-1.5">
+                    <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+                      Storefront Link
+                    </span>
+                    <AdminCopyLinkButton
+                      url={`${STOREFRONT_URL}/products/${slug}`}
+                    />
+                  </div>
+                ) : null}
               </div>
 
               <label className="grid gap-1.5 text-xs font-bold text-muted-foreground uppercase tracking-wider">

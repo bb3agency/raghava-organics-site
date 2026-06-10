@@ -32,7 +32,7 @@ type RedisErrorListenerOptions = {
 
 type IORedisDuplicateClass = {
   prototype: {
-    duplicate: (...args: unknown[]) => unknown;
+    duplicate: (override?: Record<string, unknown>) => unknown;
   };
 };
 
@@ -149,8 +149,11 @@ export function installGuardedIORedisDuplicate(
   const originalDuplicate = redisClass.prototype.duplicate;
   let duplicateCounter = 0;
 
-  redisClass.prototype.duplicate = function duplicateWithErrorGuard(this: RedisEventClient, ...args: unknown[]) {
-    const duplicate = originalDuplicate.apply(this, args) as RedisEventClient;
+  redisClass.prototype.duplicate = function duplicateWithErrorGuard(
+    this: RedisEventClient,
+    override?: Record<string, unknown>
+  ) {
+    const duplicate = originalDuplicate.call(this, override) as RedisEventClient;
     duplicateCounter += 1;
     attachRedisErrorListener(duplicate, log, `ioredis-duplicate-${duplicateCounter}`, options);
     return duplicate;

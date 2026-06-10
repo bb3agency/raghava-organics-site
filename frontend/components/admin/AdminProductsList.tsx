@@ -36,6 +36,7 @@ import {
   Plus,
   Image as ImageIcon,
 } from "lucide-react";
+import { STOREFRONT_URL } from "@/lib/constants";
 import Image from "next/image";
 
 const PAGE_SIZE = 8;
@@ -549,6 +550,7 @@ export function AdminProductsList() {
                             {canWrite && (
                               <AdminRowActionsMenu
                                 disabled={isDeleting === product.id}
+                                storefrontUrl={product.slug ? `${STOREFRONT_URL}/products/${product.slug}` : undefined}
                                 onDeletePermanently={() =>
                                   void handleHardDeleteProduct(product.id, product.name)
                                 }
