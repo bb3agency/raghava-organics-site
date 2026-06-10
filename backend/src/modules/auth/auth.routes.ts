@@ -3,7 +3,7 @@ import { Role } from '@prisma/client';
 import { AppError } from '@common/errors/app-error';
 import { ERROR_CODES } from '@common/errors/error-codes';
 import { getCurrentUser } from '@common/decorators/current-user';
-import { jwtAuthGuard } from '@common/guards/jwt-auth.guard';
+import { jwtVerifyGuard } from '@common/guards/jwt-auth.guard';
 import { opsAuthGuard } from '@common/guards/ops-auth.guard';
 import { opsPermissionGuard } from '@common/guards/ops-permissions.guard';
 import { rolesGuard } from '@common/guards/roles.guard';
@@ -299,7 +299,7 @@ export async function registerAuthRoutes(fastify: FastifyInstance): Promise<void
     {
       schema: logoutSchema,
       preHandler: [
-        jwtAuthGuard,
+        jwtVerifyGuard,
         async (request, reply) => {
           if (request.user?.role === Role.CUSTOMER || request.user?.role === Role.ADMIN) {
             return;

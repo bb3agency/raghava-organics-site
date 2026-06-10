@@ -2,7 +2,7 @@ import {
   fetchStorefrontProducts,
   prioritizeFeaturedProducts,
 } from "@/lib/storefront-products";
-import { ProductGrid } from "@/components/product/ProductGrid";
+import { ProductCarousel } from "@/components/product/ProductCarousel";
 import { SectionHeading } from "./SectionHeading";
 import { Leaf } from "lucide-react";
 
@@ -54,7 +54,7 @@ export async function FeaturedProducts() {
           cta={{ label: "Shop all products", href: "/products" }}
           className="mb-10 lg:mb-12"
         />
-        <ProductGrid products={items} />
+        <ProductCarousel products={items} />
       </div>
     </section>
   );

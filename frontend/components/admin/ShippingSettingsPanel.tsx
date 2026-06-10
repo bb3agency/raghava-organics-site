@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRefetchKey } from "@/hooks/use-refetch-key";
 import { useAuthenticatedApi } from "@/hooks/use-authenticated-api";
 import { useAdminAuth } from "@/contexts/admin-auth-context";
 import { ADMIN_PERMISSIONS, hasAdminPermission } from "@/lib/permissions";
@@ -13,6 +14,8 @@ export function ShippingSettingsPanel() {
   const api = useAuthenticatedApi();
   const { adminUser } = useAdminAuth();
   const canWrite = hasAdminPermission(adminUser, ADMIN_PERMISSIONS.settingsWrite);
+  const refetchKey = useRefetchKey();
+
   const [settings, setSettings] = useState<AdminShippingSettings | null>(null);
   const [pickupPincode, setPickupPincode] = useState("");
   // Displayed and entered in rupees (₹). Multiplied ×100 on save, divided ÷100 on load.
@@ -39,7 +42,7 @@ export function ShippingSettingsPanel() {
     return () => {
       cancelled = true;
     };
-  }, [api]);
+  }, [api, refetchKey]);
 
   async function onSave() {
     if (!canWrite) return;

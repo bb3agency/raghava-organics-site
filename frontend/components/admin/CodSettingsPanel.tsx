@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRefetchKey } from "@/hooks/use-refetch-key";
 import { useAuthenticatedApi } from "@/hooks/use-authenticated-api";
 import { useAdminAuth } from "@/contexts/admin-auth-context";
 import { ADMIN_PERMISSIONS, hasAdminPermission } from "@/lib/permissions";
@@ -19,6 +20,8 @@ export function CodSettingsPanel() {
   const api = useAuthenticatedApi();
   const { adminUser } = useAdminAuth();
   const canWrite = hasAdminPermission(adminUser, ADMIN_PERMISSIONS.settingsWrite);
+  const refetchKey = useRefetchKey();
+
   const [settings, setSettings] = useState<CodSettings | null>(null);
   const [isCodEnabled, setIsCodEnabled] = useState(true);
   const [cancellationWindowHours, setCancellationWindowHours] = useState(24);
@@ -49,7 +52,7 @@ export function CodSettingsPanel() {
     return () => {
       cancelled = true;
     };
-  }, [api]);
+  }, [api, refetchKey]);
 
   const onSave = async () => {
     if (!canWrite) return;

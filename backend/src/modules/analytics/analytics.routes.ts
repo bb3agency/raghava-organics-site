@@ -1,4 +1,4 @@
-import { Role } from '@prisma/client';
+import { AnalyticsEventType, Role } from '@prisma/client';
 import { FastifyInstance } from 'fastify';
 import { adminPermissionGuard } from '@common/guards/admin-permissions.guard';
 import { jwtAuthGuard } from '@common/guards/jwt-auth.guard';
@@ -8,6 +8,7 @@ import { routeRateLimitProfiles } from '@common/rate-limit/rate-limit-policies';
 import { loadShedGuard } from '@common/reliability/load-shed.guard';
 import {
   analyticsCategoryBreakdownSchema,
+  analyticsEventRecordSchema,
   analyticsFunnelSchema,
   analyticsInventoryAlertsSchema,
   analyticsInboxReplaySchema,
@@ -30,6 +31,33 @@ export async function registerAnalyticsRoutes(fastify: FastifyInstance): Promise
     await idempotencyOnSend(request, reply, payload);
     return payload;
   });
+
+  // ── Public event ingestion (storefront → analytics) ─────────────────────
+  fastify.post(
+    '/api/v1/analytics/event',
+    {
+      schema: analyticsEventRecordSchema,
+      config: {
+        rateLimit: routeRateLimitProfiles.cartOps
+      }
+    },
+    async (request, reply) => {
+      const body = request.body as {
+        eventType: string;
+        sessionId: string;
+        userId?: string;
+        payload?: Record<string, unknown>;
+      };
+      const result = await service.recordEvent({
+        eventType: body.eventType as AnalyticsEventType,
+        sessionId: body.sessionId,
+        ...(body.userId ? { userId: body.userId } : {}),
+        ...(body.payload ? { payload: body.payload } : {})
+      });
+      reply.status(201);
+      return result;
+    }
+  );
 
   fastify.get(
     '/api/v1/admin/analytics/revenue',

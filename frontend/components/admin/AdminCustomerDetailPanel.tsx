@@ -102,12 +102,19 @@ export function AdminCustomerDetailPanel({ customerId }: AdminCustomerDetailPane
             <span className="text-muted-foreground">Joined:</span>{" "}
             {formatAdminDate(profile.createdAt)}
           </p>
-          <div>
-            <AdminStatusBadge
-              label={profile.isVerified ? "Verified" : "Unverified"}
-              tone={profile.isVerified ? "success" : "warning"}
-            />
-          </div>
+          {profile.isBanned ? (
+            <div className="space-y-1 sm:col-span-2">
+              <AdminStatusBadge label="Banned" tone="destructive" />
+              {profile.bannedAt ? (
+                <p className="text-xs text-muted-foreground">
+                  Since {formatAdminDate(profile.bannedAt)}
+                </p>
+              ) : null}
+              {profile.bannedReason ? (
+                <p className="text-xs text-muted-foreground">{profile.bannedReason}</p>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       </AdminSection>
 
@@ -265,6 +272,7 @@ export function AdminCustomerDetailPanel({ customerId }: AdminCustomerDetailPane
                   .then(() => {
                     setMessage("Customer banned.");
                     notifyAdminDataChanged(["customers", "dashboard"]);
+                    return load();
                   })
                   .catch((err) => setError(getApiErrorMessageWithHint(err)));
               }}
@@ -283,6 +291,7 @@ export function AdminCustomerDetailPanel({ customerId }: AdminCustomerDetailPane
                   .then(() => {
                     setMessage("Customer unbanned.");
                     notifyAdminDataChanged(["customers", "dashboard"]);
+                    return load();
                   })
                   .catch((err) => setError(getApiErrorMessageWithHint(err)));
               }}

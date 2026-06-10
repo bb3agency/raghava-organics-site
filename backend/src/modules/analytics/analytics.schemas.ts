@@ -514,6 +514,42 @@ export const analyticsInboxReplayPreviewSchema = {
   }
 } as const;
 
+export const analyticsEventRecordSchema = {
+  params: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {}
+  },
+  querystring: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {}
+  },
+  body: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['eventType', 'sessionId'],
+    properties: {
+      eventType: {
+        type: 'string',
+        enum: ['PRODUCT_VIEW', 'ADD_TO_CART', 'CHECKOUT_STARTED', 'PAYMENT_INITIATED', 'PURCHASE', 'SEARCH'],
+        maxLength: 50
+      },
+      sessionId: { type: 'string', minLength: 1, maxLength: 128 },
+      userId: { type: 'string', maxLength: 64 },
+      payload: { type: 'object' }
+    }
+  },
+  response: {
+    201: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['ok'],
+      properties: { ok: { type: 'boolean' } }
+    }
+  }
+} as const;
+
 export const analyticsInboxReplaySchema = {
   params: {
     type: 'object',

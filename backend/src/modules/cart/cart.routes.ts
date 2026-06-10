@@ -4,6 +4,7 @@ import { FastifyInstance, FastifyRequest } from 'fastify';
 import { AppError } from '@common/errors/app-error';
 import { getCurrentUser } from '@common/decorators/current-user';
 import { ERROR_CODES } from '@common/errors/error-codes';
+import { assertAuthAccountActive } from '@common/guards/auth-account-status';
 import { routeRateLimitProfiles } from '@common/rate-limit/rate-limit-policies';
 import { idempotencyOnSend, idempotencyPreHandler } from '@common/idempotency/idempotency';
 import {
@@ -80,8 +81,21 @@ async function getOptionalUserId(
   try {
     const decoded = fastify.jwt.verify<{ sub: string; role: Role }>(token);
     request.user = decoded;
+
+    const account = await fastify.prisma.user.findUnique({
+      where: { id: decoded.sub },
+      select: { id: true, role: true, isBanned: true }
+    });
+    assertAuthAccountActive(
+      { sub: decoded.sub, role: decoded.role as 'CUSTOMER' | 'ADMIN' },
+      account
+    );
+
     return getCurrentUser(request).sub;
-  } catch {
+  } catch (error) {
+    if (error instanceof AppError && error.statusCode === 401) {
+      throw error;
+    }
     return undefined;
   }
 }

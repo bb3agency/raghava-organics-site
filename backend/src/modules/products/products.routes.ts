@@ -63,7 +63,7 @@ export async function registerProductsRoutes(fastify: FastifyInstance): Promise<
         rateLimit: routeRateLimitProfiles.catalogRead
       }
     },
-    async () => productsService.listCategories()
+    async (request) => productsService.listCategories(request.query as never)
   );
 
   fastify.get(

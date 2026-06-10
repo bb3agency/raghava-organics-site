@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRefetchKey } from "@/hooks/use-refetch-key";
 import { useAuthenticatedApi } from "@/hooks/use-authenticated-api";
 import { useAdminAuth } from "@/contexts/admin-auth-context";
 import { ADMIN_PERMISSIONS, hasAdminPermission } from "@/lib/permissions";
@@ -13,6 +14,8 @@ export function InventorySettingsPanel() {
   const api = useAuthenticatedApi();
   const { adminUser } = useAdminAuth();
   const canWrite = hasAdminPermission(adminUser, ADMIN_PERMISSIONS.settingsWrite);
+  const refetchKey = useRefetchKey();
+
   const [threshold, setThreshold] = useState(0);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -34,7 +37,7 @@ export function InventorySettingsPanel() {
     return () => {
       cancelled = true;
     };
-  }, [api]);
+  }, [api, refetchKey]);
 
   async function onSave() {
     if (!canWrite) return;

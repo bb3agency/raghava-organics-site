@@ -10,6 +10,9 @@ function makeUserFastify(overrides: Record<string, unknown> = {}): FastifyInstan
         update: vi.fn().mockResolvedValue(null),
         ...overrides
       },
+      refreshToken: {
+        updateMany: vi.fn().mockResolvedValue({ count: 1 })
+      },
       userAdminNote: {
         findMany: vi.fn().mockResolvedValue([]),
         create: vi.fn().mockResolvedValue(null),
@@ -71,6 +74,11 @@ describe('UsersService adminBanUser', () => {
     expect(result.isBanned).toBe(true);
     expect(result.bannedAt).toBe('2026-01-01T00:00:00.000Z');
     expect(result.bannedReason).toContain('spam');
+    expect(fastify.prisma.refreshToken.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { userId: 'uid_1', revokedAt: null }
+      })
+    );
   });
 });
 

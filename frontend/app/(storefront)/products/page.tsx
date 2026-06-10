@@ -56,7 +56,6 @@ export default async function ProductsPage({ searchParams }: ProductsPageProps) 
       ? category.replace(/-/g, " ")
       : "Shop All Products";
 
-  const total = meta?.total ?? products.length;
   const totalPages = meta?.totalPages ?? 1;
 
   return (
@@ -78,11 +77,6 @@ export default async function ProductsPage({ searchParams }: ProductsPageProps) 
               {q ? "Search" : category ? category.replace(/-/g, " ") : "Shop"}
             </span>
           </nav>
-          <p className="mt-3 text-sm font-medium text-[#23403d]/75">
-            {total > 0
-              ? `${total} active product${total !== 1 ? "s" : ""} in catalog`
-              : "Live catalog — products appear here when marked Active in admin"}
-          </p>
         </div>
         <div
           className="absolute -bottom-16 -right-16 size-64 rounded-full bg-[#c5dac2] opacity-40 blur-3xl"

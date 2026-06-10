@@ -113,27 +113,27 @@ describe('ProductsService analytics producers', () => {
   it('enqueues SEARCH event when listProducts has search query', async () => {
     const analyticsAdd = vi.fn().mockResolvedValue(undefined);
     const redis = createRedisMock();
-    const queryRaw = vi.fn()
-      .mockResolvedValueOnce([{ id: 'prod_1', rank: 0.9 }])
-      .mockResolvedValueOnce([{ total: 1n }]);
-    const findMany = vi.fn().mockResolvedValue([
-      {
-        id: 'prod_1',
-        slug: 'milk',
-        name: 'Milk',
-        description: 'Fresh milk',
-        tags: [],
-        isFeatured: false,
-        category: { id: 'cat_1', name: 'Dairy', slug: 'dairy' },
-        variants: []
-      }
-    ]);
+    const product = {
+      id: 'prod_1',
+      slug: 'milk',
+      name: 'Milk',
+      description: 'Fresh milk',
+      tags: [],
+      isFeatured: false,
+      category: { id: 'cat_1', name: 'Dairy', slug: 'dairy' },
+      variants: []
+    };
+    const findMany = vi.fn().mockResolvedValue([product]);
+    const count = vi.fn().mockResolvedValue(1);
     const fastify = {
       prisma: {
-        $queryRaw: queryRaw,
+        $transaction: vi.fn(async (ops: Array<Promise<unknown>>) => Promise.all(ops)),
         product: {
           findMany,
-          count: vi.fn()
+          count
+        },
+        cartReservation: {
+          groupBy: vi.fn().mockResolvedValue([])
         }
       },
       queues: {

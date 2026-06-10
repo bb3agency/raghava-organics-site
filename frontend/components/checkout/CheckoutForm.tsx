@@ -1,12 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useForm } from "react-hook-form";
+import Image from "next/image";
+import { useForm, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { MapPin, AlertTriangle } from "lucide-react";
+import { MapPin, AlertTriangle, ShoppingBag, Truck, Tag } from "lucide-react";
 import { checkPincodeServiceability, getDeliveryRates } from "@/lib/cart-api";
 import { getApiErrorMessage, getApiErrorMessageWithHint } from "@/lib/error-messages";
 import { ApiError } from "@/lib/api";
@@ -111,8 +112,8 @@ export function CheckoutForm({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- load once per token
   }, [accessToken]);
 
-  const pincode = form.watch("pincode");
-  const paymentMode = form.watch("paymentMode");
+  const pincode = useWatch({ control: form.control, name: "pincode" });
+  const paymentMode = useWatch({ control: form.control, name: "paymentMode" });
 
   useEffect(() => {
     if (!accessToken || !pincode || pincode.length !== 6) {
@@ -166,15 +167,20 @@ export function CheckoutForm({
 
   if (!accessToken) {
     return (
-      <div className="rounded-[20px] bg-white p-6 shadow-sm text-center">
-        <p className="mb-4 text-sm font-medium text-[#767676]">
+      <div className="rounded-[20px] bg-white p-8 shadow-sm text-center">
+        <div className="mb-4 flex justify-center">
+          <div className="flex size-16 items-center justify-center rounded-full bg-[#eff5ee]">
+            <ShoppingBag className="size-8 text-[#23403d]" aria-hidden />
+          </div>
+        </div>
+        <p className="mb-6 text-sm font-medium text-[#767676]">
           Please sign in to place an order.
         </p>
         <Link
           href="/login?redirect=/checkout"
           className="inline-flex h-12 items-center justify-center rounded-full bg-[#23403d] px-8 text-sm font-bold text-white transition-colors hover:bg-[#ec6e55]"
         >
-          Sign in
+          Sign in to continue
         </Link>
       </div>
     );
@@ -344,12 +350,13 @@ export function CheckoutForm({
   });
 
   return (
-    <form onSubmit={submit} className="grid gap-5 rounded-[20px] bg-white p-4 shadow-sm sm:gap-6 sm:p-6 lg:p-8">
+    <form onSubmit={submit} className="grid gap-6 rounded-[20px] bg-white p-4 shadow-sm sm:p-6 lg:p-8">
       <h2 className="font-heading text-xl font-bold text-[#23403d]">Shipping Details</h2>
 
+      {/* ── Saved Addresses ───────────────────────────────────────────── */}
       {savedAddresses.length > 0 && (
         <div className="grid gap-2">
-          <p className="text-sm font-bold text-[#767676] flex items-center gap-1">
+          <p className="flex items-center gap-1.5 text-sm font-bold text-[#767676]">
             <MapPin className="size-4" aria-hidden /> Saved addresses
           </p>
           <div className="flex flex-wrap gap-2">
@@ -379,27 +386,71 @@ export function CheckoutForm({
         </div>
       )}
 
+      {/* ── Cart Item Cards ───────────────────────────────────────────── */}
       {cartItems.length > 0 && (
-        <div className="rounded-[12px] border border-[#efe8e4] bg-[#faf3ef] px-4 py-3 text-sm">
-          <p className="font-bold text-[#23403d] mb-1">Order summary</p>
-          {cartItems.map((item) => (
-            <div key={item.id} className="flex justify-between text-xs text-[#767676]">
-              <span>{item.variant?.name ?? "Item"} × {item.quantity}</span>
-              <span>{formatPrice(item.priceSnapshot * item.quantity)}</span>
-            </div>
-          ))}
-          <div className="mt-2 border-t border-[#efe8e4] pt-2 flex flex-col gap-1.5 text-xs">
-            <div className="flex justify-between text-[#767676]">
+        <div className="rounded-[16px] border border-[#efe8e4] bg-[#faf3ef] overflow-hidden">
+          <div className="flex items-center gap-2 border-b border-[#efe8e4] bg-white px-4 py-3">
+            <ShoppingBag className="size-4 text-[#23403d]" aria-hidden />
+            <span className="text-sm font-bold text-[#23403d]">
+              Your items ({cartItems.length})
+            </span>
+          </div>
+
+          <div className="divide-y divide-[#efe8e4]">
+            {cartItems.map((item) => {
+              const displayName =
+                item.variant?.name && item.variant.name !== "Default"
+                  ? item.variant.name
+                  : item.variant?.sku ?? "Item";
+              return (
+                <div key={item.id} className="flex items-center gap-3 px-4 py-3">
+                  {/* Thumbnail */}
+                  <div className="relative size-12 shrink-0 overflow-hidden rounded-[8px] bg-white shadow-sm">
+                    <Image
+                      src="/images/product-placeholder.svg"
+                      alt={displayName}
+                      fill
+                      className="object-contain p-1.5"
+                      sizes="48px"
+                    />
+                    {/* Quantity badge */}
+                    <span className="absolute -right-1.5 -top-1.5 flex size-5 items-center justify-center rounded-full bg-[#23403d] text-[10px] font-bold text-white">
+                      {item.quantity}
+                    </span>
+                  </div>
+
+                  {/* Name + SKU */}
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-xs font-bold text-[#23403d] sm:text-sm">
+                      {displayName}
+                    </p>
+                    <p className="text-[10px] text-[#767676]">SKU: {item.variant?.sku}</p>
+                  </div>
+
+                  {/* Line total */}
+                  <span className="shrink-0 text-sm font-bold text-[#ec6e55]">
+                    {formatPrice(item.priceSnapshot * item.quantity)}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Mini totals */}
+          <div className="border-t border-[#efe8e4] bg-white px-4 py-3 space-y-1.5">
+            <div className="flex justify-between text-xs text-[#767676]">
               <span>Subtotal</span>
-              <span>{formatPrice(cartSubtotal)}</span>
+              <span className="font-medium">{formatPrice(cartSubtotal)}</span>
             </div>
-            {cartDiscount > 0 ? (
-              <div className="flex justify-between text-[#00aa63]">
-                <span>Discount</span>
-                <span>-{formatPrice(cartDiscount)}</span>
+            {cartDiscount > 0 && (
+              <div className="flex items-center justify-between text-xs text-[#00aa63]">
+                <span className="flex items-center gap-1">
+                  <Tag className="size-3" aria-hidden /> Discount
+                </span>
+                <span className="font-bold">−{formatPrice(cartDiscount)}</span>
               </div>
-            ) : null}
-            <div className="flex justify-between font-bold text-[#23403d]">
+            )}
+            <div className="flex justify-between border-t border-[#efe8e4] pt-1.5 text-sm font-bold text-[#23403d]">
               <span>Total</span>
               <span>{formatPrice(cartPayableTotal)}</span>
             </div>
@@ -407,6 +458,7 @@ export function CheckoutForm({
         </div>
       )}
 
+      {/* ── Alerts ───────────────────────────────────────────────────── */}
       {!configAvailable ? (
         <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
           Store settings are temporarily unavailable. Please refresh the page before placing an order.
@@ -422,6 +474,7 @@ export function CheckoutForm({
         </div>
       ) : null}
 
+      {/* ── Address Fields ────────────────────────────────────────────── */}
       <div className="grid gap-4 md:grid-cols-2">
         <div className="grid gap-1.5">
           <label className="text-sm font-bold text-[#23403d]" htmlFor="fullName">Full Name</label>
@@ -474,7 +527,7 @@ export function CheckoutForm({
         />
       </div>
 
-      <div className="grid gap-3 grid-cols-1 sm:gap-4 sm:grid-cols-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-4">
         <div className="grid gap-1.5">
           <label className="text-sm font-bold text-[#23403d]" htmlFor="city">City</label>
           <input
@@ -503,7 +556,7 @@ export function CheckoutForm({
       </div>
 
       {!selectedAddressId && (
-        <label className="flex items-center gap-2 text-sm font-medium text-[#23403d] cursor-pointer">
+        <label className="flex cursor-pointer items-center gap-2 text-sm font-medium text-[#23403d]">
           <input
             type="checkbox"
             className="size-4 accent-[#ec6e55]"
@@ -513,23 +566,29 @@ export function CheckoutForm({
         </label>
       )}
 
-      <fieldset className="grid gap-3 pt-4 border-t border-[#efe8e4]">
-        <legend className="text-lg font-bold text-[#23403d] mb-2">Payment Method</legend>
-        <label className="flex items-center gap-3 text-sm font-bold text-[#23403d] cursor-pointer">
+      {/* ── Payment Method ────────────────────────────────────────────── */}
+      <fieldset className="grid gap-3 border-t border-[#efe8e4] pt-5">
+        <legend className="text-lg font-bold text-[#23403d] mb-1">Payment Method</legend>
+        <label className="flex cursor-pointer items-center gap-3 rounded-[12px] border border-[#efe8e4] bg-[#faf3ef] px-4 py-3 text-sm font-bold text-[#23403d] transition-colors has-[:checked]:border-[#23403d] has-[:checked]:bg-white">
           <input type="radio" value="PREPAID" className="size-4 accent-[#ec6e55]" {...form.register("paymentMode")} />
-          Pay online (Razorpay — UPI, Cards, Wallets)
+          <span>Pay online</span>
+          <span className="ml-auto text-xs font-medium text-[#767676]">Razorpay — UPI, Cards, Wallets</span>
         </label>
         {isCodEnabled ? (
-          <label className="flex items-center gap-3 text-sm font-bold text-[#23403d] cursor-pointer">
+          <label className="flex cursor-pointer items-center gap-3 rounded-[12px] border border-[#efe8e4] bg-[#faf3ef] px-4 py-3 text-sm font-bold text-[#23403d] transition-colors has-[:checked]:border-[#23403d] has-[:checked]:bg-white">
             <input type="radio" value="COD" className="size-4 accent-[#ec6e55]" {...form.register("paymentMode")} />
-            Cash on Delivery
+            <span>Cash on Delivery</span>
+            <span className="ml-auto text-xs font-medium text-[#767676]">Pay when delivered</span>
           </label>
         ) : (
-          <p className="text-xs font-bold text-[#767676]">COD is currently disabled by store settings.</p>
+          <p className="rounded-[12px] border border-[#efe8e4] bg-[#faf3ef] px-4 py-3 text-xs font-medium text-[#767676]">
+            Cash on Delivery is currently disabled by store settings.
+          </p>
         )}
       </fieldset>
 
-      <div className="grid gap-1.5 border-t border-[#efe8e4] pt-4">
+      {/* ── Order Notes ───────────────────────────────────────────────── */}
+      <div className="grid gap-1.5 border-t border-[#efe8e4] pt-5">
         <label className="text-sm font-bold text-[#23403d]" htmlFor="notes">
           Order Notes <span className="font-normal text-[#767676]">(optional)</span>
         </label>
@@ -541,36 +600,42 @@ export function CheckoutForm({
         />
       </div>
 
-      <div className="grid gap-2 border-t border-[#efe8e4] pt-4">
-        <h3 className="text-lg font-bold text-[#23403d]">Order summary</h3>
+      {/* ── Order Summary (pre-submit) ─────────────────────────────────── */}
+      <div className="grid gap-2.5 rounded-[16px] border border-[#efe8e4] bg-[#faf3ef] p-4">
+        <div className="flex items-center gap-2 mb-1">
+          <Truck className="size-4 text-[#23403d]" aria-hidden />
+          <h3 className="text-sm font-bold text-[#23403d]">Order total</h3>
+        </div>
         <div className="flex justify-between text-sm text-[#767676]">
           <span>Subtotal</span>
-          <span>{formatPrice(cartSubtotal)}</span>
+          <span className="font-medium">{formatPrice(cartSubtotal)}</span>
         </div>
-        {cartDiscount > 0 ? (
-          <div className="flex justify-between text-sm text-[#767676]">
+        {cartDiscount > 0 && (
+          <div className="flex justify-between text-sm text-[#00aa63]">
             <span>Discount</span>
-            <span>-{formatPrice(cartDiscount)}</span>
+            <span className="font-bold">−{formatPrice(cartDiscount)}</span>
           </div>
-        ) : null}
+        )}
         <div className="flex justify-between text-sm text-[#767676]">
           <span>Shipping</span>
-          <span>
+          <span className={shippingQuoteLoading ? "animate-pulse text-[#767676]" : "font-medium text-[#23403d]"}>
             {shippingQuoteLoading
               ? "Calculating…"
               : shippingQuoteError
-                ? "Unavailable"
+                ? "—"
                 : pincode?.length === 6
                   ? hasShippingQuote
                     ? shippingCharge === 0
                       ? "Free"
                       : formatPrice(shippingCharge)
-                    : "Enter pincode"
+                    : "—"
                   : "Enter pincode"}
           </span>
         </div>
         {shippingQuoteError ? (
-          <p className="text-xs text-red-600">{shippingQuoteError}</p>
+          <p className="rounded-[8px] bg-amber-50 px-3 py-2 text-xs font-medium text-amber-700">
+            {shippingQuoteError}
+          </p>
         ) : null}
         {shippingQuote && shippingQuote.estimatedDays > 0 ? (
           <p className="text-xs text-[#767676]">
@@ -578,20 +643,19 @@ export function CheckoutForm({
             {shippingQuote.estimatedDays === 1 ? "" : "s"}
           </p>
         ) : null}
-        <div className="flex justify-between border-t border-[#efe8e4] pt-2 text-sm font-bold text-[#23403d]">
+        <div className="flex justify-between border-t border-[#efe8e4] pt-2.5 text-base font-bold text-[#23403d]">
           <span>{hasShippingQuote ? "Estimated total" : "Cart total"}</span>
-          <span>{formatPrice(estimatedPayableTotal)}</span>
+          <span className="text-[#ec6e55]">{formatPrice(estimatedPayableTotal)}</span>
         </div>
-        <p className="text-xs text-[#767676]">
-          {hasShippingQuote
-            ? "Final total is confirmed when your order is placed."
-            : "Enter a valid pincode to preview shipping."}
-        </p>
+        {!hasShippingQuote && pincode?.length !== 6 && (
+          <p className="text-xs text-[#767676]">Enter a valid pincode to preview shipping.</p>
+        )}
       </div>
 
+      {/* ── Place Order ───────────────────────────────────────────────── */}
       <button
         type="submit"
-        className="mt-2 h-12 w-full rounded-full bg-[#23403d] text-sm font-bold text-white transition-transform hover:-translate-y-1 hover:bg-[#ec6e55] hover:shadow-lg disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0 sm:h-14"
+        className="h-14 w-full rounded-full bg-[#23403d] text-sm font-bold text-white shadow-md transition-all hover:-translate-y-0.5 hover:bg-[#ec6e55] hover:shadow-lg disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0"
         disabled={submitting || checkoutBlocked}
       >
         {submitting
@@ -604,10 +668,10 @@ export function CheckoutForm({
       </button>
 
       {error ? (
-        <div className="rounded-[10px] bg-red-50 px-4 py-3 text-sm font-bold text-red-600">
+        <div className="rounded-[12px] border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">
           {error}
           {error.includes("order history") && (
-            <Link href="/orders" className="ml-2 underline">Go to orders</Link>
+            <Link href="/orders" className="ml-2 font-bold underline">Go to orders</Link>
           )}
         </div>
       ) : null}

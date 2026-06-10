@@ -170,7 +170,7 @@ async function resolveFailureAlertRecipients(prisma: PrismaClient): Promise<stri
     prisma.user.findMany({
       where: {
         role: Role.ADMIN,
-        isVerified: true,
+        isBanned: false,
         email: { not: null }
       },
       select: { email: true }

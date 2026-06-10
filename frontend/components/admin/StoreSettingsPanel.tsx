@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRefetchKey } from "@/hooks/use-refetch-key";
 import { useAuthenticatedApi } from "@/hooks/use-authenticated-api";
 import { useAdminAuth } from "@/contexts/admin-auth-context";
 import { ADMIN_PERMISSIONS, hasAdminPermission } from "@/lib/permissions";
@@ -29,6 +30,8 @@ export function StoreSettingsPanel() {
   const api = useAuthenticatedApi();
   const { adminUser } = useAdminAuth();
   const canWrite = hasAdminPermission(adminUser, ADMIN_PERMISSIONS.settingsWrite);
+
+  const refetchKey = useRefetchKey();
 
   const [gstin, setGstin] = useState("");
   const [fssaiNumber, setFssaiNumber] = useState("");
@@ -72,7 +75,7 @@ export function StoreSettingsPanel() {
     return () => {
       cancelled = true;
     };
-  }, [api]);
+  }, [api, refetchKey]);
 
   async function onSave() {
     if (!canWrite) return;

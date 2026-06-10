@@ -14,7 +14,7 @@ describe('UsersService admin APIs', () => {
               phone: '9999999999',
               firstName: 'Test',
               lastName: 'User',
-              isVerified: true,
+              isBanned: false,
               createdAt: new Date('2026-04-27T00:00:00.000Z')
             }
           ]),
@@ -93,7 +93,9 @@ describe('UsersService admin APIs', () => {
             phone: '9999999999',
             firstName: 'Test',
             lastName: 'User',
-            isVerified: true,
+            isBanned: false,
+            bannedAt: null,
+            bannedReason: null,
             createdAt: new Date('2026-04-27T00:00:00.000Z'),
             addresses: [
               {
@@ -119,6 +121,9 @@ describe('UsersService admin APIs', () => {
 
     expect(result.addresses).toHaveLength(1);
     expect(result.addresses[0]?.id).toBe('addr_1');
+    expect(result.isBanned).toBe(false);
+    expect(result.bannedAt).toBeNull();
+    expect(result.bannedReason).toBeNull();
   });
 
   it('returns paginated customer orders with shipment projection', async () => {
@@ -231,7 +236,9 @@ describe('UsersService admin APIs', () => {
             phone: '9999999998',
             firstName: 'U',
             lastName: 'Two',
-            isVerified: true,
+            isBanned: false,
+            bannedAt: null,
+            bannedReason: null,
             createdAt: new Date('2026-04-27T00:00:00.000Z'),
             addresses: [],
             orders: [

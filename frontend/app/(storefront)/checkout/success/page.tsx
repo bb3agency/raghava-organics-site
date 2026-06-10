@@ -7,13 +7,21 @@ import { CheckCircle, Package, ArrowRight, ShoppingBag } from "lucide-react";
 import { useAuthStore } from "@/stores/auth";
 import { getMyOrder, type OrderSummary } from "@/lib/orders-api";
 import { formatPrice } from "@/lib/format-price";
+import { trackEvent } from "@/lib/analytics";
 import { formatPaymentModeLabel } from "@/lib/format-payment-mode";
 
 function SuccessContent() {
   const searchParams = useSearchParams();
   const orderId = searchParams.get("orderId");
   const accessToken = useAuthStore((s) => s.accessToken);
+  const userId = useAuthStore((s) => s.user?.id);
   const [order, setOrder] = useState<OrderSummary | null>(null);
+
+  useEffect(() => {
+    if (orderId) {
+      trackEvent("PURCHASE", { orderId }, userId);
+    }
+  }, [orderId, userId]);
 
   useEffect(() => {
     let cancelled = false;

@@ -179,6 +179,22 @@ function AdminRevenueAnalyticsPanel({
   );
 }
 
+const FUNNEL_STEP_LABELS: Record<string, string> = {
+  PRODUCT_VIEW: "Product Views",
+  ADD_TO_CART: "Added to Cart",
+  CHECKOUT_STARTED: "Started Checkout",
+  PAYMENT_INITIATED: "Began Payment",
+  PURCHASE: "Completed Purchase",
+};
+
+const FUNNEL_STEP_COLORS: Record<string, string> = {
+  PRODUCT_VIEW: "bg-blue-500",
+  ADD_TO_CART: "bg-indigo-500",
+  CHECKOUT_STARTED: "bg-violet-500",
+  PAYMENT_INITIATED: "bg-orange-500",
+  PURCHASE: "bg-emerald-500",
+};
+
 function AdminFunnelPanel({ from, to }: { from: string; to: string }) {
   const api = useAuthenticatedApi();
   const [loading, setLoading] = useState(true);
@@ -208,38 +224,122 @@ function AdminFunnelPanel({ from, to }: { from: string; to: string }) {
   }, [api, from, to]);
 
   const steps = ensureArray<AdminAnalyticsFunnel["steps"][number]>(data?.steps);
+  const topCount = steps[0]?.count ?? 0;
 
   return (
     <AdminSection
       title="Conversion funnel"
+      description="How many visitors turn into buyers at each stage"
       loading={loading}
       error={error}
-      empty={!loading && !error && steps.length === 0}
-      emptyMessage="No funnel data."
+      empty={!loading && !error && steps.every((s) => s.count === 0)}
+      emptyMessage="No funnel data yet. Tracking events will appear here once customers browse your store."
     >
-      <div className="overflow-x-auto rounded-md border border-border">
-        <table className="w-full text-left text-sm">
-          <thead className="border-b border-border bg-muted/50 text-xs uppercase text-muted-foreground">
-            <tr>
-              <th className="px-3 py-2 font-medium">Step</th>
-              <th className="px-3 py-2 font-medium">Count</th>
-              <th className="px-3 py-2 font-medium">Conversion %</th>
-            </tr>
-          </thead>
-          <tbody>
-            {steps.map((step) => (
-              <tr
-                key={step.eventType}
-                className="border-b border-border last:border-0"
-              >
-                <td className="px-3 py-2">{step.eventType}</td>
-                <td className="px-3 py-2">{step.count}</td>
-                <td className="px-3 py-2">{step.conversionRatePercent}%</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <div className="space-y-1">
+        {steps.map((step, idx) => {
+          const label = FUNNEL_STEP_LABELS[step.eventType] ?? step.eventType;
+          const barColor = FUNNEL_STEP_COLORS[step.eventType] ?? "bg-primary";
+          const barWidth = topCount > 0 ? (step.count / topCount) * 100 : 0;
+          const prevCount = idx > 0 ? steps[idx - 1]?.count : undefined;
+          const dropOff =
+            typeof prevCount === "number" && prevCount > 0
+              ? prevCount - step.count
+              : null;
+          const dropOffPct =
+            typeof prevCount === "number" && prevCount > 0
+              ? Math.round(((prevCount - step.count) / prevCount) * 100)
+              : null;
+
+          return (
+            <div key={step.eventType}>
+              {/* Drop-off indicator between steps */}
+              {idx > 0 && dropOff !== null && dropOff > 0 && (
+                <div className="flex items-center gap-2 py-1 pl-3">
+                  <div className="h-4 w-px bg-border" />
+                  <span className="text-xs text-muted-foreground">
+                    ↓ {dropOff.toLocaleString()} left ({dropOffPct}% dropped off)
+                  </span>
+                </div>
+              )}
+              {idx > 0 && (dropOff === null || dropOff === 0) && (
+                <div className="py-1 pl-3">
+                  <div className="h-4 w-px bg-border" />
+                </div>
+              )}
+
+              {/* Step card */}
+              <div className="rounded-lg border border-border bg-background/60 p-4">
+                <div className="mb-2 flex items-center justify-between gap-4">
+                  <div className="flex items-center gap-2">
+                    <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-bold text-muted-foreground">
+                      {idx + 1}
+                    </span>
+                    <span className="text-sm font-medium text-foreground">{label}</span>
+                  </div>
+                  <div className="flex items-center gap-3 text-right">
+                    <span className="text-lg font-bold text-foreground tabular-nums">
+                      {step.count.toLocaleString()}
+                    </span>
+                    {idx > 0 && (
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-xs font-bold ${
+                          step.conversionRatePercent >= 50
+                            ? "bg-emerald-100 text-emerald-700"
+                            : step.conversionRatePercent >= 20
+                              ? "bg-amber-100 text-amber-700"
+                              : "bg-red-100 text-red-700"
+                        }`}
+                      >
+                        {step.conversionRatePercent}% of views
+                      </span>
+                    )}
+                    {idx === 0 && (
+                      <span className="rounded-full bg-blue-100 px-2 py-0.5 text-xs font-bold text-blue-700">
+                        Top of funnel
+                      </span>
+                    )}
+                  </div>
+                </div>
+                {/* Progress bar */}
+                <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+                  <div
+                    className={`h-2 rounded-full transition-all duration-500 ${barColor}`}
+                    style={{ width: `${Math.max(barWidth, barWidth > 0 ? 2 : 0)}%` }}
+                  />
+                </div>
+              </div>
+            </div>
+          );
+        })}
       </div>
+
+      {/* Summary row */}
+      {steps.length > 0 && topCount > 0 && (
+        <div className="mt-4 flex flex-wrap gap-4 rounded-lg border border-border bg-muted/30 p-4">
+          <div className="text-center">
+            <p className="text-xs text-muted-foreground">Overall conversion</p>
+            <p className="text-xl font-bold text-foreground">
+              {steps[steps.length - 1]?.conversionRatePercent ?? 0}%
+            </p>
+            <p className="text-xs text-muted-foreground">views → purchases</p>
+          </div>
+          <div className="h-10 w-px self-center bg-border" />
+          <div className="text-center">
+            <p className="text-xs text-muted-foreground">Total purchases</p>
+            <p className="text-xl font-bold text-emerald-600">
+              {(steps.find((s) => s.eventType === "PURCHASE")?.count ?? 0).toLocaleString()}
+            </p>
+          </div>
+          <div className="h-10 w-px self-center bg-border" />
+          <div className="text-center">
+            <p className="text-xs text-muted-foreground">Cart add rate</p>
+            <p className="text-xl font-bold text-foreground">
+              {steps.find((s) => s.eventType === "ADD_TO_CART")?.conversionRatePercent ?? 0}%
+            </p>
+            <p className="text-xs text-muted-foreground">of product views</p>
+          </div>
+        </div>
+      )}
     </AdminSection>
   );
 }

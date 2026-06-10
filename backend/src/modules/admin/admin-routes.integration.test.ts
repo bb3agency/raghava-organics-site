@@ -53,7 +53,7 @@ describe('admin routes integration', () => {
           phone: null,
           firstName: 'User',
           lastName: 'One',
-          isVerified: true,
+          isBanned: false,
           totalOrders: 0,
           totalSpendPaise: 0,
           createdAt: new Date().toISOString()
@@ -67,7 +67,9 @@ describe('admin routes integration', () => {
       phone: null,
       firstName: 'User',
       lastName: 'One',
-      isVerified: true,
+      isBanned: false,
+      bannedAt: null,
+      bannedReason: null,
       createdAt: new Date().toISOString(),
       addresses: [],
       orders: []

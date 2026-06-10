@@ -90,6 +90,23 @@ export class AnalyticsService {
     };
   }
 
+  async recordEvent(input: {
+    eventType: AnalyticsEventType;
+    sessionId: string;
+    userId?: string;
+    payload?: Record<string, unknown>;
+  }) {
+    await this.fastify.prisma.analyticsEvent.create({
+      data: {
+        eventType: input.eventType,
+        sessionId: input.sessionId,
+        ...(input.userId ? { userId: input.userId } : {}),
+        payload: (input.payload ?? {}) as Prisma.InputJsonValue
+      }
+    });
+    return { ok: true };
+  }
+
   async getFunnel(query: AnalyticsFunnelQuery) {
     const { from, to } = this.resolveRange(query.from, query.to);
     const eventTypes: AnalyticsEventType[] = [

@@ -151,6 +151,15 @@
     }
 }
 
+/* Hide scrollbar cross-browser */
+.scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+    display: none;
+}
+
 /* Ops control plane — scoped via .dark.ops-console on the shell root (see OpsConsoleShell) */
 .ops-console {
     --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;

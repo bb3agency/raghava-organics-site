@@ -62,7 +62,9 @@ const usersServiceState = vi.hoisted(() => ({
     phone: '9999999999',
     firstName: 'First',
     lastName: 'Last',
-    isVerified: true,
+    isBanned: false,
+    bannedAt: null,
+    bannedReason: null,
     createdAt: new Date().toISOString(),
     addresses: [],
     orders: []

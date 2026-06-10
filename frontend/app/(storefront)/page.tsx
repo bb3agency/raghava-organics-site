@@ -31,9 +31,11 @@ function ProductSectionSkeleton({
     <section className={background}>
       <div className="mx-auto w-full max-w-[1440px] px-4 py-16 sm:px-6 sm:py-20 lg:px-8 lg:py-24">
         <div className="mb-10 h-12 w-2/3 max-w-md animate-pulse rounded-2xl bg-[#eff5ee]" />
-        <div className="grid grid-cols-2 gap-4 sm:gap-5 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-          {Array.from({ length: 8 }).map((_, i) => (
-            <ProductCardSkeleton key={i} />
+        <div className="flex gap-4 overflow-hidden">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <div key={i} className="w-[220px] shrink-0">
+              <ProductCardSkeleton />
+            </div>
           ))}
         </div>
       </div>

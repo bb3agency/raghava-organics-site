@@ -7,6 +7,7 @@ import { addCartItem } from "@/lib/cart-api";
 import { useAuthStore } from "@/stores/auth";
 import { useCartStore } from "@/stores/cart";
 import { getApiErrorMessage } from "@/lib/error-messages";
+import { trackEvent } from "@/lib/analytics";
 
 interface AddToCartButtonProps {
   variantId: string;
@@ -38,6 +39,7 @@ export function AddToCartButton({
       setError(null);
       const cart = await addCartItem({ variantId, quantity }, accessToken);
       setCart(cart);
+      trackEvent("ADD_TO_CART", { variantId, quantity });
       if (!accessToken) {
         markPendingMerge();
       }

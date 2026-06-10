@@ -226,7 +226,13 @@ export const getProductBySlugSchema = {
 
 export const listCategoriesSchema = {
   params: emptyParamsSchema,
-  querystring: emptyQuerystringSchema,
+  querystring: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      search: { type: 'string', maxLength: 200 }
+    }
+  },
   response: {
     200: {
       type: 'array',

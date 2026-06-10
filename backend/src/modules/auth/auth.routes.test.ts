@@ -212,6 +212,27 @@ describe('auth routes logout role handling', () => {
     await app.close();
   });
 
+  it('allows banned customer logout so sessions can be cleared', async () => {
+    const { app } = createApp();
+    await registerAuthRoutes(app);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/logout',
+      headers: {
+        'x-role': 'CUSTOMER',
+        cookie: 'refresh_token=abc'
+      },
+      payload: {}
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ message: 'Logged out successfully' });
+    expect(response.headers['set-cookie']).toContain('refresh_token=');
+
+    await app.close();
+  });
+
   it('registers 2-step admin login routes (request-otp and verify-otp)', async () => {
     const { app } = createApp();
     await registerAuthRoutes(app);

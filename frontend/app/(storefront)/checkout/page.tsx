@@ -1,7 +1,8 @@
 import Script from "next/script";
 import Link from "next/link";
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, CreditCard, Banknote, Truck, ShieldCheck, AlertCircle } from "lucide-react";
 import { CheckoutForm } from "@/components/checkout/CheckoutForm";
+import { CheckoutStartedTracker } from "@/components/checkout/CheckoutStartedTracker";
 import { getPublicStoreConfig } from "@/lib/storefront-settings";
 import { formatPrice } from "@/lib/format-price";
 
@@ -38,6 +39,7 @@ export default async function CheckoutPage() {
       </section>
 
       {/* ── Main Content ──────────────────────────────────────────────── */}
+      <CheckoutStartedTracker />
       <section className="mx-auto w-full max-w-[1440px] px-4 pt-6 sm:pt-12 lg:px-8">
         <div className="grid gap-6 sm:gap-8 lg:grid-cols-[60%_40%] lg:items-start">
           <CheckoutForm
@@ -46,31 +48,74 @@ export default async function CheckoutPage() {
             configAvailable={storeConfig.configAvailable}
           />
 
-          <aside className="rounded-[20px] bg-white p-4 shadow-sm sm:p-6 lg:p-8">
-            <h2 className="mb-4 font-heading text-lg font-bold text-[#23403d] sm:mb-6 sm:text-xl">
-              Checkout Information
+          {/* ── Info Sidebar ─────────────────────────────────────────────── */}
+          <aside className="flex flex-col gap-4 rounded-[20px] bg-white p-4 shadow-sm sm:p-6 lg:p-8">
+            <h2 className="font-heading text-lg font-bold text-[#23403d] sm:text-xl">
+              Order Information
             </h2>
-            <ul className="list-disc space-y-3 pl-5 text-sm font-medium text-[#767676]">
-              <li>
-                <strong className="text-[#23403d]">Pay online:</strong> Processed via Razorpay securely — UPI, cards, wallets, net banking.
-              </li>
+
+            <div className="flex flex-col gap-3">
+              {/* Pay online */}
+              <div className="flex items-start gap-3 rounded-[12px] bg-[#faf3ef] p-3">
+                <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-[#23403d]">
+                  <CreditCard className="size-4 text-white" aria-hidden />
+                </div>
+                <div>
+                  <p className="text-sm font-bold text-[#23403d]">Pay online</p>
+                  <p className="mt-0.5 text-xs text-[#767676]">Processed securely via Razorpay — UPI, cards, wallets, net banking.</p>
+                </div>
+              </div>
+
+              {/* COD */}
               {storeConfig.isCodEnabled ? (
-                <li>
-                  <strong className="text-[#23403d]">Cash on Delivery:</strong> Pay in cash when your order arrives. No online payment needed.
-                </li>
+                <div className="flex items-start gap-3 rounded-[12px] bg-[#faf3ef] p-3">
+                  <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-[#23403d]">
+                    <Banknote className="size-4 text-white" aria-hidden />
+                  </div>
+                  <div>
+                    <p className="text-sm font-bold text-[#23403d]">Cash on Delivery</p>
+                    <p className="mt-0.5 text-xs text-[#767676]">Pay in cash when your order arrives. No online payment needed.</p>
+                  </div>
+                </div>
               ) : (
-                <li className="text-[#767676]">
-                  Cash on Delivery is currently disabled. Only online payment is accepted.
-                </li>
+                <div className="flex items-start gap-3 rounded-[12px] border border-amber-200 bg-amber-50 p-3">
+                  <AlertCircle className="mt-0.5 size-4 shrink-0 text-amber-600" aria-hidden />
+                  <p className="text-xs text-amber-800">Cash on Delivery is currently disabled. Only online payment is accepted.</p>
+                </div>
               )}
+
+              {/* Shipping */}
+              <div className="flex items-start gap-3 rounded-[12px] bg-[#faf3ef] p-3">
+                <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-[#23403d]">
+                  <Truck className="size-4 text-white" aria-hidden />
+                </div>
+                <div>
+                  <p className="text-sm font-bold text-[#23403d]">Shipping</p>
+                  <p className="mt-0.5 text-xs text-[#767676]">Shipping and totals are calculated live based on your pincode.</p>
+                </div>
+              </div>
+
+              {/* Minimum order */}
               {storeConfig.minOrderValuePaise > 0 && (
-                <li>
-                  <strong className="text-[#23403d]">Minimum order:</strong>{" "}
-                  {formatPrice(storeConfig.minOrderValuePaise)} cart subtotal — orders below this cannot be placed.
-                </li>
+                <div className="flex items-start gap-3 rounded-[12px] bg-[#faf3ef] p-3">
+                  <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-[#23403d]">
+                    <ShieldCheck className="size-4 text-white" aria-hidden />
+                  </div>
+                  <div>
+                    <p className="text-sm font-bold text-[#23403d]">Minimum order</p>
+                    <p className="mt-0.5 text-xs text-[#767676]">
+                      {formatPrice(storeConfig.minOrderValuePaise)} cart subtotal required to place an order.
+                    </p>
+                  </div>
+                </div>
               )}
-              <li>Shipping and total amounts are calculated live from the server based on your pincode.</li>
-            </ul>
+            </div>
+
+            {/* Trust badge */}
+            <p className="mt-2 flex items-center justify-center gap-1.5 text-xs font-bold text-[#767676]">
+              <ShieldCheck className="size-3.5 text-[#23403d]" aria-hidden />
+              100% secure & encrypted checkout
+            </p>
           </aside>
         </div>
       </section>

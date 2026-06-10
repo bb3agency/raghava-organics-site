@@ -153,45 +153,45 @@ describe('CartService mergeGuestCart coupon preservation', () => {
       },
       items: [{ variantId: 'variant_1', quantity: 1, priceSnapshot: 1000 }]
     };
-    fastify.prisma.$transaction = vi.fn().mockImplementation(async (fn) => {
-      const tx = {
-        cart: {
-          upsert: vi.fn().mockResolvedValue({ id: 'user_cart_1', couponId: null }),
-          findUnique: vi.fn().mockResolvedValue(guestCart),
-          update: vi.fn().mockResolvedValue(undefined),
-          delete: vi.fn().mockResolvedValue(undefined),
-          findUniqueOrThrow: vi.fn().mockResolvedValue({
-            id: 'user_cart_1',
-            userId: 'user_1',
-            sessionToken: null,
-            coupon: guestCart.coupon,
-            items: [
-              {
-                id: 'item_1',
-                variantId: 'variant_1',
-                quantity: 1,
-                priceSnapshot: 1000,
-                variant: {
-                  id: 'variant_1',
-                  name: 'Variant 1',
-                  sku: 'SKU-1',
-                  price: 1000,
-                  productId: 'product_1',
-                  product: { categoryId: 'category_1' }
-                }
+    const mergeTx = {
+      cart: {
+        upsert: vi.fn().mockResolvedValue({ id: 'user_cart_1', couponId: null }),
+        findUnique: vi.fn().mockResolvedValue(guestCart),
+        update: vi.fn().mockResolvedValue(undefined),
+        delete: vi.fn().mockResolvedValue(undefined),
+        findUniqueOrThrow: vi.fn().mockResolvedValue({
+          id: 'user_cart_1',
+          userId: 'user_1',
+          sessionToken: null,
+          coupon: guestCart.coupon,
+          items: [
+            {
+              id: 'item_1',
+              variantId: 'variant_1',
+              quantity: 1,
+              priceSnapshot: 1000,
+              variant: {
+                id: 'variant_1',
+                name: 'Variant 1',
+                sku: 'SKU-1',
+                price: 1000,
+                productId: 'product_1',
+                product: { categoryId: 'category_1' }
               }
-            ]
-          })
-        },
-        cartItem: {
-          findFirst: vi.fn().mockResolvedValue(null),
-          create: vi.fn().mockResolvedValue(undefined)
-        },
-        order: { count: vi.fn().mockResolvedValue(0) },
-        storeSettings: { findUnique: vi.fn().mockResolvedValue({ minOrderValuePaise: 0 }) }
-      };
-      return fn(tx);
-    });
+            }
+          ]
+        })
+      },
+      cartItem: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        create: vi.fn().mockResolvedValue(undefined)
+      },
+      order: { count: vi.fn().mockResolvedValue(0) },
+      storeSettings: { findUnique: vi.fn().mockResolvedValue({ minOrderValuePaise: 0 }) }
+    };
+    fastify.prisma.$transaction = vi.fn().mockImplementation(
+      async (fn: (trx: typeof mergeTx) => Promise<unknown>) => fn(mergeTx)
+    );
 
     await service.mergeGuestCart('user_1', 'session_1');
 

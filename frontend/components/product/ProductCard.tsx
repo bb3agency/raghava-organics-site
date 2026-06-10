@@ -3,15 +3,15 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useState } from "react";
-import { Eye, Heart, Leaf, ShoppingBag, Sparkles } from "lucide-react";
+import { Heart, ShoppingCart, Sparkles } from "lucide-react";
 import type { Product } from "@/types/product";
-import { PriceDisplay } from "@/components/shared/PriceDisplay";
 import { AddToCartButton } from "@/components/cart/AddToCartButton";
 import { useAuthStore } from "@/stores/auth";
 import { useWishlistStore } from "@/stores/wishlist";
 import { addToWishlist, removeFromWishlist } from "@/lib/wishlist-api";
 import { cn } from "@/lib/utils";
 import { useStoreConfig } from "@/components/providers/StoreConfigProvider";
+import { formatPrice } from "@/lib/format-price";
 
 const PLACEHOLDER_IMAGE = "/images/product-placeholder.svg";
 
@@ -43,10 +43,8 @@ export function ProductCard({
       return;
     }
     if (loading) return;
-
     setLoading(true);
     toggleItem(product.id, !inWishlist);
-
     try {
       if (inWishlist) {
         await removeFromWishlist(product.id, accessToken);
@@ -62,138 +60,164 @@ export function ProductCard({
   };
 
   const activeVariant =
-    product.variants.find((variant) => variant.isActive) ?? product.variants[0];
+    product.variants.find((v) => v.isActive) ?? product.variants[0];
   const hasDiscount =
     typeof activeVariant?.compareAtPrice === "number" &&
     activeVariant.compareAtPrice > activeVariant.price;
   const discountPct =
     hasDiscount && activeVariant?.compareAtPrice
-      ? Math.round(
-          (1 - activeVariant.price / activeVariant.compareAtPrice) * 100,
-        )
+      ? Math.round((1 - activeVariant.price / activeVariant.compareAtPrice) * 100)
       : 0;
 
   const imageSrc = image?.url && image.url !== "/next.svg" ? image.url : PLACEHOLDER_IMAGE;
-  const shortDescription = product.description.trim().slice(0, 72);
+  const shortDescription = product.description.trim().slice(0, 80);
+
+  // Show up to 4 variant name chips (e.g. "500g", "1kg")
+  const variantLabels = product.variants
+    .filter((v) => v.isActive && v.name)
+    .slice(0, 4)
+    .map((v) => v.name);
+  const showVariants = variantLabels.length > 1;
 
   return (
     <article
       className={cn(
-        "group relative flex h-full flex-col overflow-hidden rounded-2xl border border-[#e3ebe1] bg-white shadow-[0_8px_30px_-20px_rgba(35,64,61,0.35)] transition-all duration-300 hover:-translate-y-1 hover:border-[#c5dac2] hover:shadow-[0_18px_40px_-18px_rgba(35,64,61,0.22)]",
+        "group relative flex h-full flex-col overflow-hidden rounded-2xl border border-[#e8ede7] bg-white shadow-sm transition-all duration-300 hover:-translate-y-0.5 hover:shadow-md",
         className,
       )}
     >
+      {/* Image */}
       <div className="relative">
         <Link
           href={`/products/${product.slug}`}
-          className="relative block aspect-[4/5] overflow-hidden bg-gradient-to-b from-[#f4faf2] via-[#eff5ee] to-[#e8f0e6]"
+          className="relative block aspect-square overflow-hidden bg-[#fafafa]"
         >
           <Image
             src={imageSrc}
             alt={image?.altText ?? product.name}
             fill
             priority={priority}
-            className="object-contain p-5 transition-transform duration-500 group-hover:scale-105"
+            className="object-contain p-4 transition-transform duration-500 group-hover:scale-105"
             sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 25vw"
           />
-          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-white/90 to-transparent" />
         </Link>
 
-        <div className="absolute left-3 top-3 flex flex-col gap-1.5">
+        {/* Badges top-left */}
+        <div className="absolute left-2.5 top-2.5 flex flex-wrap gap-1">
           {product.isFeatured ? (
-            <span className="inline-flex items-center gap-1 rounded-full bg-[#ec6e55] px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-white shadow-sm">
-              <Sparkles className="size-3" aria-hidden />
+            <span className="inline-flex items-center gap-0.5 rounded-sm bg-[#ec6e55] px-2 py-0.5 text-[9px] font-extrabold uppercase tracking-wide text-white">
+              <Sparkles className="size-2.5" aria-hidden />
               Featured
             </span>
           ) : null}
           {hasDiscount && discountPct > 0 ? (
-            <span className="rounded-full bg-[#23403d] px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-white shadow-sm">
+            <span className="rounded-sm bg-[#d94f3a] px-2 py-0.5 text-[9px] font-extrabold uppercase tracking-wide text-white">
               -{discountPct}%
             </span>
           ) : null}
           {!product.inStock ? (
-            <span className="rounded-full bg-[#767676] px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-white shadow-sm">
+            <span className="rounded-sm bg-[#d94f3a] px-2 py-0.5 text-[9px] font-extrabold uppercase tracking-wide text-white">
               Out of stock
             </span>
           ) : null}
         </div>
 
-        <div className="absolute right-3 top-3 flex flex-col gap-2 opacity-100 transition-all duration-300 lg:translate-x-2 lg:opacity-0 lg:group-hover:translate-x-0 lg:group-hover:opacity-100">
-          {wishlistEnabled ? (
-            <button
-              type="button"
-              className={cn(
-                "flex size-9 items-center justify-center rounded-full border border-white/80 bg-white/95 text-[#23403d] shadow-md backdrop-blur-sm transition-colors hover:bg-[#ec6e55] hover:text-white",
-                inWishlist && "bg-[#ec6e55] text-white",
-                loading && "opacity-60",
-              )}
-              aria-label={inWishlist ? "Remove from wishlist" : "Add to wishlist"}
-              onClick={handleWishlistToggle}
-              disabled={loading}
-            >
-              <Heart className={cn("size-4", inWishlist && "fill-current")} />
-            </button>
-          ) : null}
-          <Link
-            href={`/products/${product.slug}`}
-            className="flex size-9 items-center justify-center rounded-full border border-white/80 bg-white/95 text-[#23403d] shadow-md backdrop-blur-sm transition-colors hover:bg-[#23403d] hover:text-white"
-            aria-label={`View ${product.name}`}
+        {/* Wishlist button top-right */}
+        {wishlistEnabled ? (
+          <button
+            type="button"
+            className={cn(
+              "absolute right-2.5 top-2.5 flex size-8 items-center justify-center rounded-full border border-[#e8ede7] bg-white/95 text-[#23403d] shadow-sm transition-colors hover:bg-[#ec6e55] hover:text-white",
+              inWishlist && "bg-[#ec6e55] text-white",
+              loading && "opacity-60",
+            )}
+            aria-label={inWishlist ? "Remove from wishlist" : "Add to wishlist"}
+            onClick={handleWishlistToggle}
+            disabled={loading}
           >
-            <Eye className="size-4" />
-          </Link>
-        </div>
+            <Heart className={cn("size-3.5", inWishlist && "fill-current")} />
+          </button>
+        ) : null}
       </div>
 
-      <div className="flex flex-1 flex-col px-4 pb-4 pt-3">
-        {product.category.slug ? (
-          <Link
-            href={`/categories/${product.category.slug}`}
-            className="mb-1 inline-flex items-center gap-1 text-[11px] font-bold uppercase tracking-wider text-[#767676] transition-colors hover:text-[#ec6e55]"
-          >
-            <Leaf className="size-3" aria-hidden />
-            {product.category.name}
-          </Link>
-        ) : null}
+      {/* Stock status bar */}
+      <div className="h-1 w-full bg-[#f0f0f0]" aria-hidden>
+        {product.inStock && (
+          <div className="h-full w-full bg-[#ec6e55]" />
+        )}
+      </div>
 
-        <Link href={`/products/${product.slug}`} className="mb-1.5">
-          <h3 className="line-clamp-2 min-h-[2.5rem] font-heading text-sm font-bold leading-snug text-[#23403d] transition-colors group-hover:text-[#ec6e55] sm:text-base">
+      {/* Content */}
+      <div className="flex flex-1 flex-col p-3.5">
+        <Link href={`/products/${product.slug}`} className="mb-1">
+          <h3 className="line-clamp-2 text-sm font-bold leading-snug text-[#1a2e2c] transition-colors group-hover:text-[#ec6e55]">
             {product.name}
           </h3>
         </Link>
 
         {shortDescription ? (
-          <p className="mb-3 line-clamp-2 text-xs leading-relaxed text-[#767676]">
+          <p className="mb-2.5 line-clamp-2 text-[11px] leading-relaxed text-[#888]">
             {shortDescription}
-            {product.description.length > 72 ? "…" : ""}
+            {product.description.length > 80 ? "…" : ""}
           </p>
         ) : (
-          <div className="mb-3 min-h-[2rem]" />
+          <div className="mb-2.5 min-h-[1.5rem]" />
         )}
 
-        <div className="mb-4 mt-auto">
-          <PriceDisplay
-            pricePaise={activeVariant?.price ?? 0}
-            originalPricePaise={
-              hasDiscount ? (activeVariant?.compareAtPrice ?? undefined) : undefined
-            }
-          />
+        {/* Variant chips */}
+        {showVariants ? (
+          <div className="mb-2.5 flex flex-wrap gap-1">
+            {variantLabels.map((label) => (
+              <span
+                key={label}
+                className="rounded border border-[#e8ede7] px-1.5 py-0.5 text-[10px] font-semibold text-[#555]"
+              >
+                {label}
+              </span>
+            ))}
+          </div>
+        ) : null}
+
+        {/* Bottom row: category + price + cart */}
+        <div className="mt-auto flex items-end justify-between gap-2 pt-1">
+          <div>
+            {product.category.name ? (
+              <Link
+                href={`/categories/${product.category.slug}`}
+                className="mb-0.5 block text-[10px] font-semibold uppercase tracking-wide text-[#999] transition-colors hover:text-[#ec6e55]"
+              >
+                {product.category.name}
+              </Link>
+            ) : null}
+            <div className="flex items-baseline gap-1.5">
+              {hasDiscount && activeVariant?.compareAtPrice ? (
+                <span className="text-[11px] text-[#aaa] line-through">
+                  {formatPrice(activeVariant.compareAtPrice)}
+                </span>
+              ) : null}
+              <span className="text-sm font-extrabold text-[#ec6e55]">
+                {formatPrice(activeVariant?.price ?? 0)}
+              </span>
+            </div>
+          </div>
+
+          {product.inStock && activeVariant ? (
+            <AddToCartButton
+              variantId={activeVariant.id}
+              className="flex size-9 shrink-0 items-center justify-center rounded-xl border border-[#e8ede7] bg-white text-[#23403d] shadow-sm transition-all hover:border-[#ec6e55] hover:bg-[#ec6e55] hover:text-white"
+              label=""
+              icon={<ShoppingCart className="size-4" />}
+            />
+          ) : (
+            <Link
+              href={`/products/${product.slug}`}
+              className="flex size-9 shrink-0 items-center justify-center rounded-xl border border-[#e8ede7] bg-[#f7fbf6] text-[#23403d] transition-colors hover:border-[#23403d]"
+              aria-label={`View ${product.name}`}
+            >
+              <ShoppingCart className="size-4 opacity-40" />
+            </Link>
+          )}
         </div>
-
-        {product.inStock && activeVariant ? (
-          <AddToCartButton
-            variantId={activeVariant.id}
-            className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-full bg-[#23403d] text-sm font-bold text-white transition-all hover:bg-[#ec6e55] hover:shadow-md"
-            label="Add to cart"
-            icon={<ShoppingBag className="size-4" />}
-          />
-        ) : (
-          <Link
-            href={`/products/${product.slug}`}
-            className="inline-flex h-10 w-full items-center justify-center rounded-full border border-[#dbe8d8] bg-[#f7fbf6] text-sm font-bold text-[#23403d] transition-colors hover:border-[#23403d]"
-          >
-            View product
-          </Link>
-        )}
       </div>
     </article>
   );

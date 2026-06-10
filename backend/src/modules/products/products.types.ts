@@ -1,3 +1,7 @@
+export type PublicCategoryListQuery = {
+  search?: string;
+};
+
 export type ProductListQuery = {
   category?: string;
   search?: string;

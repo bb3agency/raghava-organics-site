@@ -159,91 +159,91 @@ export function CartWorkspace({
           </div>
 
           <div className="flex flex-col divide-y divide-[#efe8e4]">
-            {items.map((item) => (
-              <article
-                key={item.id}
-                className="grid grid-cols-1 gap-3 p-4 sm:gap-4 sm:p-6 md:grid-cols-[3fr_1fr_1.5fr_1fr_auto] md:items-center"
-              >
-                {/* Product Info */}
-                <div className="flex items-center gap-4">
-                  <div className="relative size-16 shrink-0 overflow-hidden rounded-[10px] bg-[#faf3ef] sm:size-20">
-                    <Image
-                      src="/images/product-placeholder.svg"
-                      alt={item.variant.name}
-                      fill
-                      className="object-contain p-2"
-                      sizes="80px"
-                    />
-                  </div>
-                  <div className="flex flex-col">
-                    {/* Backend CartItem only carries variant.name — show it as-is,
-                        except hide "(Default)" which means single-variant product */}
-                    <span className="text-sm font-bold text-[#23403d] sm:text-base">
-                      {item.variant.name === "Default"
-                        ? item.variant.sku
-                        : item.variant.name}
-                    </span>
-                    <p className="mt-1 text-xs font-bold text-[#767676]">SKU: {item.variant.sku}</p>
-
-                    {/* Mobile Only Price */}
-                    <div className="mt-2 font-bold text-[#ec6e55] md:hidden">
-                      {formatPrice(item.variant.price)}
+            {items.map((item) => {
+              const displayName =
+                item.variant.name === "Default" ? item.variant.sku : item.variant.name;
+              const isLoading = loadingItemId === item.id;
+              return (
+                <article
+                  key={item.id}
+                  className={`grid grid-cols-1 gap-3 p-4 transition-opacity sm:gap-4 sm:p-6 md:grid-cols-[3fr_1fr_1.5fr_1fr_auto] md:items-center ${isLoading ? "opacity-50" : ""}`}
+                >
+                  {/* Product Info */}
+                  <div className="flex items-center gap-4">
+                    <div className="relative size-16 shrink-0 overflow-hidden rounded-[12px] bg-[#faf3ef] shadow-sm sm:size-20">
+                      <Image
+                        src="/images/product-placeholder.svg"
+                        alt={displayName}
+                        fill
+                        className="object-contain p-2"
+                        sizes="80px"
+                      />
+                    </div>
+                    <div className="flex min-w-0 flex-col">
+                      <span className="truncate text-sm font-bold text-[#23403d] sm:text-base">
+                        {displayName}
+                      </span>
+                      <p className="mt-0.5 text-xs text-[#767676]">SKU: {item.variant.sku}</p>
+                      {/* Mobile Only Price */}
+                      <div className="mt-2 text-sm font-bold text-[#ec6e55] md:hidden">
+                        {formatPrice(item.variant.price)} each
+                      </div>
                     </div>
                   </div>
-                </div>
 
-                {/* Desktop Price */}
-                <div className="hidden text-center font-bold text-[#ec6e55] md:block">
-                  {formatPrice(item.variant.price)}
-                </div>
+                  {/* Desktop Price */}
+                  <div className="hidden text-center text-sm font-bold text-[#ec6e55] md:block">
+                    {formatPrice(item.variant.price)}
+                  </div>
 
-                {/* Quantity Control */}
-                <div className="flex items-center justify-start md:justify-center">
-                  <div className="flex h-10 items-center rounded-full border border-[#efe8e4] bg-[#faf3ef] px-1.5 sm:h-11 sm:px-2">
+                  {/* Quantity Control */}
+                  <div className="flex items-center justify-start gap-3 md:justify-center">
+                    <div className="flex h-10 items-center rounded-full border border-[#efe8e4] bg-[#faf3ef] px-1.5 sm:h-11 sm:px-2">
+                      <button
+                        type="button"
+                        className="flex size-7 items-center justify-center rounded-full text-[#767676] transition-all hover:bg-white hover:text-[#23403d] hover:shadow-sm disabled:opacity-40 sm:size-8"
+                        onClick={() => handleQuantity(item.id, Math.max(1, item.quantity - 1))}
+                        disabled={isLoading || item.quantity <= 1}
+                        aria-label="Decrease quantity"
+                      >
+                        <Minus className="size-3" />
+                      </button>
+                      <span className="w-8 text-center text-sm font-bold text-[#23403d]">
+                        {item.quantity}
+                      </span>
+                      <button
+                        type="button"
+                        className="flex size-7 items-center justify-center rounded-full text-[#767676] transition-all hover:bg-white hover:text-[#23403d] hover:shadow-sm disabled:opacity-40 sm:size-8"
+                        onClick={() => handleQuantity(item.id, item.quantity + 1)}
+                        disabled={isLoading}
+                        aria-label="Increase quantity"
+                      >
+                        <Plus className="size-3" />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Subtotal */}
+                  <div className="flex items-center justify-between font-bold text-[#23403d] md:block md:text-right">
+                    <span className="text-xs text-[#767676] md:hidden">Subtotal:</span>
+                    <span className="text-sm">{formatPrice(item.lineTotal)}</span>
+                  </div>
+
+                  {/* Remove */}
+                  <div className="flex justify-end md:block">
                     <button
                       type="button"
-                      className="flex size-7 items-center justify-center rounded-full text-[#767676] hover:bg-white hover:text-[#23403d] hover:shadow-sm transition-all disabled:opacity-50 sm:size-8"
-                      onClick={() => handleQuantity(item.id, Math.max(1, item.quantity - 1))}
-                      disabled={loadingItemId === item.id}
-                      aria-label="Decrease quantity"
+                      className="flex size-8 items-center justify-center rounded-full bg-[#faf3ef] text-[#767676] transition-colors hover:bg-red-50 hover:text-red-500 disabled:opacity-40"
+                      onClick={() => handleRemove(item.id)}
+                      disabled={isLoading}
+                      aria-label={`Remove ${displayName}`}
                     >
-                      <Minus className="size-3" />
-                    </button>
-                    <span className="w-8 text-center text-sm font-bold text-[#23403d]">
-                      {item.quantity}
-                    </span>
-                    <button
-                      type="button"
-                      className="flex size-7 items-center justify-center rounded-full text-[#767676] hover:bg-white hover:text-[#23403d] hover:shadow-sm transition-all disabled:opacity-50 sm:size-8"
-                      onClick={() => handleQuantity(item.id, item.quantity + 1)}
-                      disabled={loadingItemId === item.id}
-                      aria-label="Increase quantity"
-                    >
-                      <Plus className="size-3" />
+                      <X className="size-4" />
                     </button>
                   </div>
-                </div>
-
-                {/* Subtotal */}
-                <div className="flex items-center justify-between font-bold text-[#23403d] md:block md:text-right">
-                  <span className="text-sm text-[#767676] md:hidden">Subtotal:</span>
-                  <span>{formatPrice(item.lineTotal)}</span>
-                </div>
-
-                {/* Remove */}
-                <div className="flex justify-end md:block">
-                  <button
-                    type="button"
-                    className="flex size-8 items-center justify-center rounded-full bg-[#faf3ef] text-[#767676] hover:bg-[#ec6e55] hover:text-white transition-colors disabled:opacity-50"
-                    onClick={() => handleRemove(item.id)}
-                    disabled={loadingItemId === item.id}
-                    aria-label="Remove item"
-                  >
-                    <X className="size-4" />
-                  </button>
-                </div>
-              </article>
-            ))}
+                </article>
+              );
+            })}
           </div>
         </div>
 

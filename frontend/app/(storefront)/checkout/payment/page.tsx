@@ -7,6 +7,7 @@ import { useAuthStore } from "@/stores/auth";
 import { useCartStore } from "@/stores/cart";
 import { getMyOrder, retryPayment, verifyPayment, type OrderSummary } from "@/lib/orders-api";
 import { getApiErrorMessage } from "@/lib/error-messages";
+import { trackEvent } from "@/lib/analytics";
 import { formatPrice } from "@/lib/format-price";
 import { Button } from "@/components/ui/button";
 import { createIdempotencyKey } from "@/lib/idempotency";
@@ -120,6 +121,7 @@ function PaymentContent() {
         }
       });
 
+      trackEvent("PAYMENT_INITIATED", { orderId: order.id }, user?.id);
       razorpay.open();
     } catch (err) {
       setError(getApiErrorMessage(err));

@@ -7,6 +7,7 @@ import { ProductGallery } from "@/components/product/ProductGallery";
 import { Rating } from "@/components/shared/Rating";
 import { ProductVariantSelector } from "@/components/product/ProductVariantSelector";
 import { ProductReviewsSection } from "@/components/product/ProductReviewsSection";
+import { ProductViewTracker } from "@/components/shared/ProductViewTracker";
 import { getPublicStoreConfig } from "@/lib/storefront-settings";
 import type { Product } from "@/types/product";
 
@@ -49,6 +50,7 @@ export default async function ProductDetailPage({ params }: ProductDetailPagePro
 
   return (
     <div className="bg-[#eff5ee] min-h-screen pb-16">
+      <ProductViewTracker productId={product.id} productName={product.name} />
       <div className="mx-auto max-w-[1440px] px-4 py-4 sm:py-8 lg:px-8">
         {/* Breadcrumb */}
         <nav className="mb-4 flex flex-wrap items-center gap-1.5 text-xs font-bold text-[#767676] sm:mb-8 sm:gap-2 sm:text-sm" aria-label="Breadcrumb">

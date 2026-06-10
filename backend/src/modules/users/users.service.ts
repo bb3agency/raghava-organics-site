@@ -46,6 +46,21 @@ export class UsersService {
   }
 
   async patchMe(userId: string, input: UpdateProfileInput) {
+    const existing = await this.fastify.prisma.user.findUnique({
+      where: { id: userId },
+      select: { isBanned: true }
+    });
+    if (!existing) {
+      throw new AppError(ERROR_CODES.NOT_FOUND, 'User not found', 404);
+    }
+    if (existing.isBanned) {
+      throw new AppError(
+        ERROR_CODES.UNAUTHORISED,
+        'Your account has been suspended. Please contact support.',
+        401
+      );
+    }
+
     if (input.email) {
       const existingEmail = await this.fastify.prisma.user.findFirst({
         where: {
@@ -328,7 +343,7 @@ export class UsersService {
           phone: true,
           firstName: true,
           lastName: true,
-          isVerified: true,
+          isBanned: true,
           createdAt: true
         }
       }),
@@ -481,7 +496,9 @@ export class UsersService {
       phone: user.phone,
       firstName: user.firstName,
       lastName: user.lastName,
-      isVerified: user.isVerified,
+      isBanned: user.isBanned,
+      bannedAt: user.bannedAt?.toISOString() ?? null,
+      bannedReason: user.bannedReason,
       createdAt: user.createdAt.toISOString(),
       addresses: user.addresses,
       orders: user.orders.map((order) => ({
@@ -534,6 +551,11 @@ export class UsersService {
         bannedReason: `${reason} [admin:${adminUserId}]`
       },
       select: { id: true, isBanned: true, bannedAt: true, bannedReason: true }
+    });
+
+    await this.fastify.prisma.refreshToken.updateMany({
+      where: { userId, revokedAt: null },
+      data: { revokedAt: new Date() }
     });
 
     return {

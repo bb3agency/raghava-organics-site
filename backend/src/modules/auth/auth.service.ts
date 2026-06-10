@@ -550,7 +550,8 @@ export class AuthService {
         lastName: input.lastName,
         phone: phoneNorm,
         email: emailNorm,
-        passwordHash
+        passwordHash,
+        isVerified: true
       }
     });
 
@@ -1421,6 +1422,14 @@ export class AuthService {
         isAdmin ? 'Admin account not found or inactive' : 'Your account has been suspended. Please contact support.',
         401
       );
+    }
+
+    if (user.role === Role.CUSTOMER && !user.isVerified) {
+      await this.fastify.prisma.user.updateMany({
+        where: { id: user.id, isVerified: false },
+        data: { isVerified: true }
+      });
+      user = { ...user, isVerified: true };
     }
 
     // PERMISSION SNAPSHOT CAVEAT: admin permissions are resolved from the DB at token issuance and

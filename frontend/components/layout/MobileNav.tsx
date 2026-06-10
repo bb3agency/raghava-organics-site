@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { usePathname, useRouter } from "next/navigation";
 import Image from "next/image";
 import {
   X,
@@ -9,8 +10,6 @@ import {
   Search,
   Store,
   ShoppingBag,
-  Package,
-  ChevronRight,
   Loader2,
   Tag,
 } from "lucide-react";
@@ -22,72 +21,13 @@ import { formatPrice } from "@/lib/format-price";
 import { useCartStore } from "@/stores/cart";
 import { useSessionBootstrap } from "@/hooks/use-session-bootstrap";
 import { useState, useEffect, useRef, useCallback } from "react";
-import { apiClient } from "@/lib/api";
-import { mapProductListResponse } from "@/lib/product-adapters";
-import { resolveProductImageUrl } from "@/lib/media-url";
-import type { Product } from "@/types/product";
-import { PriceDisplay } from "@/components/shared/PriceDisplay";
-
-// ── Inline search hook ──────────────────────────────────────────────────────
-
-interface SearchResult {
-  products: Product[];
-  total: number;
-}
-
-function useLiveSearch(query: string, enabled: boolean) {
-  const [results, setResults] = useState<SearchResult | null>(null);
-  const [loading, setLoading] = useState(false);
-  const abortRef = useRef<AbortController | null>(null);
-
-  useEffect(() => {
-    const q = query.trim();
-    if (!enabled || q.length < 2) {
-      setResults(null);
-      setLoading(false);
-      return;
-    }
-
-    setLoading(true);
-    abortRef.current?.abort();
-    const controller = new AbortController();
-    abortRef.current = controller;
-
-    const timer = setTimeout(async () => {
-      try {
-        const payload = await apiClient<unknown>(
-          `/products?search=${encodeURIComponent(q)}&limit=6&page=1&sort=newest&inStock=false`,
-          { signal: controller.signal },
-        );
-        if (controller.signal.aborted) return;
-        const products = mapProductListResponse(payload);
-        const meta = (payload as { meta?: { total?: number } }).meta;
-        setResults({ products, total: meta?.total ?? products.length });
-      } catch {
-        if (!controller.signal.aborted) {
-          setResults({ products: [], total: 0 });
-        }
-      } finally {
-        if (!controller.signal.aborted) setLoading(false);
-      }
-    }, 300);
-
-    return () => {
-      clearTimeout(timer);
-      controller.abort();
-    };
-  }, [query, enabled]);
-
-  return { results, loading };
-}
-
-// ── Price helpers ────────────────────────────────────────────────────────────
-
-function getProductPrice(product: Product): number {
-  const activeVariant =
-    product.variants.find((v) => v.isActive) ?? product.variants[0];
-  return activeVariant?.price ?? 0;
-}
+import { StorefrontSearchDropdown } from "@/components/shared/StorefrontSearchDropdown";
+import { useStorefrontSearch } from "@/hooks/use-storefront-search";
+import {
+  buildStorefrontSearchPath,
+  normalizeStorefrontSearchQuery,
+  STOREFRONT_SEARCH_MIN_CHARS,
+} from "@/lib/storefront-search";
 
 // ── Component ────────────────────────────────────────────────────────────────
 
@@ -109,12 +49,16 @@ export function MobileNav({ minOrderValuePaise = 0 }: MobileNavProps) {
 
   const isSignedIn = Boolean(accessToken);
   const isCheckingSession = sessionStatus === "checking" && !accessToken;
+  const pathname = usePathname();
+  const router = useRouter();
+  const authRedirect = ["/login", "/register"].includes(pathname) ? "" : `?redirect=${encodeURIComponent(pathname)}`;
 
   const [searchQuery, setSearchQuery] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
-  const { results, loading } = useLiveSearch(searchQuery, mobileMenuOpen);
-  const showResults =
-    searchQuery.trim().length >= 2 && (loading || results !== null);
+  const { results, loading, showPanel } = useStorefrontSearch(
+    searchQuery,
+    mobileMenuOpen,
+  );
 
   const close = useCallback(() => {
     setMobileMenuOpen(false);
@@ -216,14 +160,16 @@ export function MobileNav({ minOrderValuePaise = 0 }: MobileNavProps) {
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter" && searchQuery.trim()) {
+                if (e.key === "Enter") {
+                  const normalized = normalizeStorefrontSearchQuery(searchQuery);
+                  if (normalized.length < STOREFRONT_SEARCH_MIN_CHARS) return;
                   close();
-                  window.location.href = `/search?q=${encodeURIComponent(searchQuery.trim())}`;
+                  router.push(buildStorefrontSearchPath(normalized));
                 }
               }}
-              placeholder="Search products..."
+              placeholder="Search products and categories..."
               className="h-10 w-full rounded-full border border-[#efe8e4] bg-[#faf3ef] pl-9 pr-10 text-sm font-medium text-[#23403d] placeholder:text-[#767676] focus:border-[#23403d] focus:outline-none focus:ring-1 focus:ring-[#23403d]"
-              aria-label="Search products"
+              aria-label="Search products and categories"
             />
             {searchQuery && (
               <button
@@ -237,80 +183,16 @@ export function MobileNav({ minOrderValuePaise = 0 }: MobileNavProps) {
             )}
           </div>
 
-          {/* Live search results dropdown */}
-          {showResults && (
-            <div className="absolute left-4 right-4 top-full z-10 mt-1 max-h-72 overflow-y-auto rounded-2xl border border-[#efe8e4] bg-white shadow-xl">
-              {loading && !results && (
-                <div className="flex items-center justify-center py-6">
-                  <Loader2 className="size-5 animate-spin text-[#ec6e55]" />
-                </div>
-              )}
-              {results && results.products.length === 0 && !loading && (
-                <div className="px-4 py-5 text-center text-sm font-medium text-[#767676]">
-                  No products found for &ldquo;{searchQuery}&rdquo;
-                </div>
-              )}
-              {results && results.products.length > 0 && (
-                <>
-                  <div className="border-b border-[#efe8e4] px-4 py-2">
-                    <p className="text-xs font-bold uppercase tracking-wide text-[#767676]">
-                      Products
-                    </p>
-                  </div>
-                  <ul>
-                    {results.products.map((product) => {
-                      const price = getProductPrice(product);
-                      const img = resolveProductImageUrl(product.images?.[0]?.url);
-                      return (
-                        <li key={product.id}>
-                          <Link
-                            href={`/products/${product.slug}`}
-                            onClick={close}
-                            className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-[#faf3ef]"
-                          >
-                            {img && img !== "/next.svg" ? (
-                              <Image
-                                src={img}
-                                alt={product.name}
-                                width={40}
-                                height={40}
-                                className="size-10 flex-shrink-0 rounded-lg object-cover"
-                              />
-                            ) : (
-                              <div className="flex size-10 flex-shrink-0 items-center justify-center rounded-lg bg-[#eff5ee]">
-                                <Package className="size-4 text-[#23403d]" />
-                              </div>
-                            )}
-                            <div className="min-w-0 flex-1">
-                              <p className="truncate text-sm font-bold text-[#23403d]">
-                                {product.name}
-                              </p>
-                              {price > 0 && (
-                                <p className="text-xs font-bold text-[#ec6e55]">
-                                  <PriceDisplay pricePaise={price} />
-                                </p>
-                              )}
-                            </div>
-                            <ChevronRight className="size-4 flex-shrink-0 text-[#767676]" />
-                          </Link>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                  {results.total > results.products.length && (
-                    <Link
-                      href={`/search?q=${encodeURIComponent(searchQuery.trim())}`}
-                      onClick={close}
-                      className="flex items-center justify-center gap-2 border-t border-[#efe8e4] py-3 text-xs font-bold text-[#ec6e55] transition-colors hover:text-[#23403d]"
-                    >
-                      See all {results.total} results
-                      <ChevronRight className="size-3.5" />
-                    </Link>
-                  )}
-                </>
-              )}
+          {showPanel ? (
+            <div className="absolute left-4 right-4 top-full z-10 mt-1">
+              <StorefrontSearchDropdown
+                query={searchQuery}
+                results={results}
+                loading={loading}
+                onNavigate={close}
+              />
             </div>
-          )}
+          ) : null}
         </div>
 
         {/* Navigation */}
@@ -390,14 +272,14 @@ export function MobileNav({ minOrderValuePaise = 0 }: MobileNavProps) {
           ) : (
             <>
               <Link
-                href="/login"
+                href={`/login${authRedirect}`}
                 onClick={close}
                 className="flex items-center justify-center gap-2 rounded-xl bg-[#23403d] px-4 py-3 text-sm font-bold text-white transition-colors hover:bg-[#ec6e55]"
               >
                 <LogOut className="size-4" /> Sign In
               </Link>
               <Link
-                href="/register"
+                href={`/register${authRedirect}`}
                 onClick={close}
                 className="flex items-center justify-center gap-2 rounded-xl border-2 border-[#23403d] px-4 py-3 text-sm font-bold text-[#23403d] transition-colors hover:border-[#ec6e55] hover:text-[#ec6e55]"
               >

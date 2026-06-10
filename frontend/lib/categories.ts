@@ -31,9 +31,18 @@ const DEFAULT_META = {
   color: "bg-[#f5f5f5]",
 };
 
-export async function getStoreCategories(): Promise<CategoryWithMeta[]> {
+export async function getStoreCategories(
+  search?: string,
+): Promise<CategoryWithMeta[]> {
   try {
-    const categories = await apiClient<ProductCategory[]>("/products/categories");
+    const params = new URLSearchParams();
+    if (search?.trim()) {
+      params.set("search", search.trim());
+    }
+    const suffix = params.size > 0 ? `?${params.toString()}` : "";
+    const categories = await apiClient<ProductCategory[]>(
+      `/products/categories${suffix}`,
+    );
     
     return categories.map((cat) => {
       const meta = CATEGORY_META_FALLBACKS[cat.slug] || DEFAULT_META;

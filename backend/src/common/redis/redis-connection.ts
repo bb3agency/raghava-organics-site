@@ -32,8 +32,7 @@ type RedisErrorListenerOptions = {
 
 type IORedisDuplicateClass = {
   prototype: {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- monkey-patch entry point for ioredis/BullMQ
-    duplicate: (...args: any[]) => any;
+    duplicate: (...args: unknown[]) => unknown;
   };
 };
 

@@ -121,14 +121,13 @@ export class ProductsService {
           ...(query.maxPrice !== undefined ? { maxPrice: query.maxPrice } : {})
         })
       : normalizedSearch && normalizedSearch.length > 0
-        ? await this.queryProductsWithFullTextSearch({
+        ? await this.queryProductsWithContainsSearch({
             search: normalizedSearch,
             tagsFilter,
-            page,
+            skip,
             limit,
             variantOrder: query.sort === 'price_desc' ? 'desc' : 'asc',
             inStockVariantWhere,
-            inStockOnly,
             ...(categorySlug !== undefined ? { categorySlug } : {}),
             ...(query.minPrice !== undefined ? { minPrice: query.minPrice } : {}),
             ...(query.maxPrice !== undefined ? { maxPrice: query.maxPrice } : {})
@@ -235,9 +234,20 @@ export class ProductsService {
     };
   }
 
-  async listCategories() {
+  async listCategories(query?: { search?: string }) {
+    const search = query?.search?.trim();
     return this.fastify.prisma.category.findMany({
-      where: { isActive: true },
+      where: {
+        isActive: true,
+        ...(search
+          ? {
+              OR: [
+                { name: { contains: search, mode: 'insensitive' } },
+                { slug: { contains: search, mode: 'insensitive' } }
+              ]
+            }
+          : {})
+      },
       orderBy: [{ parentId: 'asc' }, { name: 'asc' }]
     });
   }
@@ -1431,6 +1441,52 @@ export class ProductsService {
     return { message: 'Category deactivated' };
   }
 
+  private async queryProductsWithContainsSearch(input: {
+    search: string;
+    categorySlug?: string;
+    tagsFilter: string[];
+    minPrice?: number;
+    maxPrice?: number;
+    skip: number;
+    limit: number;
+    inStockVariantWhere: Prisma.ProductVariantWhereInput;
+    variantOrder: 'asc' | 'desc';
+  }) {
+    const where: Prisma.ProductWhereInput = {
+      isActive: true,
+      variants: { some: input.inStockVariantWhere },
+      ...(input.categorySlug ? { category: { slug: input.categorySlug } } : {}),
+      ...(input.tagsFilter.length > 0 ? { tags: { hasSome: input.tagsFilter } } : {}),
+      OR: [
+        { name: { contains: input.search, mode: 'insensitive' } },
+        { description: { contains: input.search, mode: 'insensitive' } },
+        { tags: { hasSome: [input.search] } },
+        {
+          category: {
+            name: { contains: input.search, mode: 'insensitive' }
+          }
+        },
+        {
+          variants: {
+            some: {
+              ...input.inStockVariantWhere,
+              sku: { contains: input.search, mode: 'insensitive' }
+            }
+          }
+        }
+      ]
+    };
+
+    return this.queryProductsWithoutSearch({
+      where,
+      skip: input.skip,
+      limit: input.limit,
+      orderBy: { createdAt: 'desc' },
+      inStockVariantWhere: input.inStockVariantWhere,
+      variantOrder: input.variantOrder
+    });
+  }
+
   private async queryProductsWithoutSearch(input: {
     where: Prisma.ProductWhereInput;
     skip: number;
@@ -1649,8 +1705,22 @@ export class ProductsService {
       ? Prisma.sql`AND v.price <= ${input.maxPrice}`
       : Prisma.empty;
     const inStockCondition = input.inStockOnly ? Prisma.sql`AND i.quantity > 0` : Prisma.empty;
-    const searchCondition = input.search && input.search.length > 0
-      ? Prisma.sql`AND p.search_vector @@ plainto_tsquery('english', ${input.search})`
+    const searchPattern =
+      input.search && input.search.length > 0 ? `%${input.search}%` : null;
+    const searchCondition = searchPattern
+      ? Prisma.sql`AND (
+          p.name ILIKE ${searchPattern}
+          OR p.description ILIKE ${searchPattern}
+          OR c.name ILIKE ${searchPattern}
+          OR ${input.search} = ANY(p.tags)
+          OR EXISTS (
+            SELECT 1
+            FROM "ProductVariant" v_search
+            WHERE v_search."productId" = p.id
+              AND v_search."isActive" = true
+              AND v_search.sku ILIKE ${searchPattern}
+          )
+        )`
       : Prisma.empty;
 
     const rankedRows = await this.fastify.prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`

@@ -470,7 +470,7 @@ export interface AdminUserListItem {
   phone: string | null;
   firstName: string;
   lastName: string;
-  isVerified: boolean;
+  isBanned: boolean;
   totalOrders: number;
   totalSpendPaise: number;
   createdAt: string;
@@ -507,7 +507,9 @@ export interface AdminCustomerProfile {
   phone: string | null;
   firstName: string;
   lastName: string;
-  isVerified: boolean;
+  isBanned: boolean;
+  bannedAt: string | null;
+  bannedReason: string | null;
   createdAt: string;
   addresses: AdminCustomerAddress[];
   orders: AdminCustomerOrderSummary[];

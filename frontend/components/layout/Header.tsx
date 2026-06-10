@@ -57,8 +57,8 @@ export function Header({ categories, minOrderValuePaise = 0 }: HeaderProps) {
         </div>
 
         {/* Central Search (Desktop) */}
-        <div className="hidden flex-1 max-w-2xl lg:block">
-          <div className="relative w-full">
+        <div className="hidden flex-1 max-w-2xl overflow-visible lg:block">
+          <div className="relative z-[60] w-full">
             <SearchInput />
           </div>
         </div>

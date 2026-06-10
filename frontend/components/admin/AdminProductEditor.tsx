@@ -50,6 +50,12 @@ import { formatAdminValidationSummary } from "@/lib/admin-form-validation";
 import { fetchPublicStoreConfigClient } from "@/lib/storefront-settings";
 import { AdminTableScroll } from "@/components/admin/AdminTableScroll";
 import {
+  buildPrimaryVariantPricePatch,
+  mergePrimaryVariantPrices,
+  parseRupeesToPaise,
+  primaryVariantPricingFromApi,
+} from "@/lib/admin-product-pricing";
+import {
   assertClientProductImageFile,
   MAX_PRODUCT_IMAGES,
   PRODUCT_IMAGE_ACCEPT,
@@ -107,14 +113,6 @@ function emptyVariant(): VariantDraft {
   };
 }
 
-function parsePaiseInput(value: string): number | undefined {
-  const trimmed = value.trim();
-  if (!trimmed) return undefined;
-  const parsed = Number(trimmed);
-  if (!Number.isFinite(parsed) || parsed < 0) return undefined;
-  return Math.round(parsed * 100);
-}
-
 interface AdminProductEditorProps {
   productId?: string;
 }
@@ -156,6 +154,9 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
   const [description, setDescription] = useState("");
   const [shortDesc, setShortDesc] = useState("");
   const [lowStockThreshold, setLowStockThreshold] = useState("10");
+  const [editPrimaryPrice, setEditPrimaryPrice] = useState("");
+  const [editPrimaryCompareAtPrice, setEditPrimaryCompareAtPrice] =
+    useState("");
   const [status, setStatus] = useState("Draft");
   const [categoryId, setCategoryId] = useState("");
   const [tagsText, setTagsText] = useState("");
@@ -226,6 +227,12 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
       setHsnCode(normalized.attributes?.hsnCode ?? "");
       // Map isActive → Status dropdown: true = "Active", false = "Draft"
       setStatus(normalized.isActive ? "Active" : "Draft");
+      const primaryVariant = normalized.variants[0];
+      if (primaryVariant) {
+        const pricing = primaryVariantPricingFromApi(primaryVariant);
+        setEditPrimaryPrice(pricing.priceRupees);
+        setEditPrimaryCompareAtPrice(pricing.compareAtPriceRupees);
+      }
     } catch (err) {
       setError(getApiErrorMessage(err));
     } finally {
@@ -292,6 +299,12 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
           isEmpty: () => !createVariants[0]?.pricePaise.trim(),
         },
       );
+    } else {
+      requiredChecks.push({
+        field: "price",
+        label: "Price",
+        isEmpty: () => !editPrimaryPrice.trim(),
+      });
     }
 
     const requiredResult = validateRequired(requiredChecks);
@@ -310,7 +323,7 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
       if (isCreate) {
         const variants = createVariants
           .map((variant) => {
-            const price = parsePaiseInput(variant.pricePaise);
+            const price = parseRupeesToPaise(variant.pricePaise);
             if (
               !variant.sku.trim() ||
               !variant.name.trim() ||
@@ -318,7 +331,9 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
             ) {
               return null;
             }
-            const compareAtPrice = parsePaiseInput(variant.compareAtPricePaise);
+            const compareAtPrice = parseRupeesToPaise(
+              variant.compareAtPricePaise,
+            );
             const qtyStr = variant.initialQuantity.trim();
             const quantity =
               qtyStr !== "" &&
@@ -431,6 +446,21 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
       }
 
       if (!productId) return;
+      const primaryVariant = product?.variants[0];
+      const pricePatch = primaryVariant
+        ? buildPrimaryVariantPricePatch(
+            editPrimaryPrice,
+            editPrimaryCompareAtPrice,
+          )
+        : null;
+      if (pricePatch && !pricePatch.ok) {
+        const priceError = { price: pricePatch.message };
+        applyFieldErrors(priceError);
+        setError(formatAdminValidationSummary(priceError));
+        setSaving(false);
+        return;
+      }
+
       const productIsActive = status === "Active";
       const updated = await api<AdminProductDetail>(
         `/admin/products/${productId}`,
@@ -464,7 +494,25 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
           }),
         },
       );
-      const normalizedUpdated = normalizeProductDetail(updated);
+      let normalizedUpdated = normalizeProductDetail(updated);
+
+      if (primaryVariant && pricePatch?.ok) {
+        await api(`/admin/products/${productId}/variants/${primaryVariant.id}`, {
+          method: "PATCH",
+          idempotencyKey: createIdempotencyKey(),
+          body: JSON.stringify({
+            price: pricePatch.price,
+            compareAtPrice: pricePatch.compareAtPrice,
+          }),
+        });
+        normalizedUpdated = mergePrimaryVariantPrices(
+          normalizedUpdated,
+          primaryVariant.id,
+          pricePatch.price,
+          pricePatch.compareAtPrice,
+        );
+      }
+
       setProduct(normalizedUpdated);
       setSuccess("Product saved.");
       notifyAdminDataChanged(["products", "inventory", "dashboard"]);
@@ -547,7 +595,7 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
     draft: VariantDraft,
   ) {
     if (!canWrite || !productId) return;
-    const price = parsePaiseInput(draft.pricePaise);
+    const price = parseRupeesToPaise(draft.pricePaise);
     if (price === undefined) {
       setError("Variant price must be a non-negative number (rupees).");
       return;
@@ -556,7 +604,7 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
     setError(null);
     setSuccess(null);
     try {
-      const compareAtPrice = parsePaiseInput(draft.compareAtPricePaise);
+      const compareAtPrice = parseRupeesToPaise(draft.compareAtPricePaise);
       await api(`/admin/products/${productId}/variants/${variant.id}`, {
         method: "PATCH",
         idempotencyKey: createIdempotencyKey(),
@@ -580,7 +628,7 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
 
   async function addVariant() {
     if (!canWrite || !productId) return;
-    const price = parsePaiseInput(newVariant.pricePaise);
+    const price = parseRupeesToPaise(newVariant.pricePaise);
     if (
       !newVariant.sku.trim() ||
       !newVariant.name.trim() ||
@@ -593,7 +641,7 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
     setError(null);
     setSuccess(null);
     try {
-      const compareAtPrice = parsePaiseInput(newVariant.compareAtPricePaise);
+      const compareAtPrice = parseRupeesToPaise(newVariant.compareAtPricePaise);
       await api(`/admin/products/${productId}/variants`, {
         method: "POST",
         idempotencyKey: createIdempotencyKey(),
@@ -1285,16 +1333,17 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
                       value={
                         isCreate
                           ? createVariants[0]?.pricePaise || ""
-                          : product?.variants[0]?.price
-                            ? String(product.variants[0].price / 100)
-                            : ""
+                          : editPrimaryPrice
                       }
                       onChange={(event) => {
                         if (isCreate) {
                           updateFirstVariant("pricePaise", event.target.value);
+                        } else {
+                          clearFieldError("price");
+                          setEditPrimaryPrice(event.target.value);
                         }
                       }}
-                      disabled={!isCreate || !canWrite}
+                      disabled={!canWrite}
                     />
                   </div>
                   {getFieldError("price") ? (
@@ -1321,9 +1370,7 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
                       value={
                         isCreate
                           ? createVariants[0]?.compareAtPricePaise || ""
-                          : product?.variants[0]?.compareAtPrice
-                            ? String(product.variants[0].compareAtPrice / 100)
-                            : ""
+                          : editPrimaryCompareAtPrice
                       }
                       onChange={(event) => {
                         if (isCreate) {
@@ -1331,9 +1378,11 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
                             "compareAtPricePaise",
                             event.target.value,
                           );
+                        } else {
+                          setEditPrimaryCompareAtPrice(event.target.value);
                         }
                       }}
-                      disabled={!isCreate || !canWrite}
+                      disabled={!canWrite}
                     />
                   </div>
                 </label>

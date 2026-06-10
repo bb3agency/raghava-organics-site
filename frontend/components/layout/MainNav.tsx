@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, usePathname } from "next/navigation";
 import { User, LogOut, LayoutDashboard, ShoppingCart } from "lucide-react";
 import { useAuthStore } from "@/stores/auth";
 import { canAccessAdmin } from "@/lib/permissions";
@@ -17,15 +17,19 @@ export function MainNav() {
   useCartSync();
   useWishlistSync();
   const router = useRouter();
+  const pathname = usePathname();
+  const authRedirect = ["/login", "/register"].includes(pathname) ? "" : `?redirect=${encodeURIComponent(pathname)}`;
   const user = useAuthStore((s) => s.user);
   const accessToken = useAuthStore((s) => s.accessToken);
+  const sessionStatus = useAuthStore((s) => s.storefrontSessionStatus);
   const clearCart = useCartStore((s) => s.clearCart);
-  
+
   const cartItems = useCartStore((s) => s.items);
   const cartCount = cartItems.reduce((sum, item) => sum + item.quantity, 0);
   const cartTotal = cartItems.reduce((sum, item) => sum + item.lineTotal, 0);
-  
+
   const isSignedIn = Boolean(accessToken);
+  const isCheckingSession = sessionStatus === "checking" && !accessToken;
   const showAdmin = canAccessAdmin(user);
 
   const onSignOut = async () => {
@@ -49,7 +53,12 @@ export function MainNav() {
         </div>
         
         <div className="hidden flex-col lg:flex">
-          {isSignedIn ? (
+          {isCheckingSession ? (
+            <>
+              <span className="h-3 w-16 animate-pulse rounded bg-[#efe8e4]" aria-hidden />
+              <span className="mt-1 h-4 w-20 animate-pulse rounded bg-[#efe8e4]" aria-hidden />
+            </>
+          ) : isSignedIn ? (
             <>
               <span className="text-xs font-bold text-[#767676]">Hello, {user?.firstName || 'User'}</span>
               <span className="text-sm font-bold text-[#23403d]">My Account</span>
@@ -70,7 +79,9 @@ export function MainNav() {
                 <LayoutDashboard className="size-4" /> Admin Panel
               </Link>
             )}
-            {isSignedIn ? (
+            {isCheckingSession ? (
+              <div className="px-5 py-3 text-sm text-[#767676]">Checking session…</div>
+            ) : isSignedIn ? (
               <>
                 <Link href="/dashboard" className="flex items-center gap-3 px-5 py-3 text-sm font-bold text-[#23403d] hover:bg-[#faf3ef] hover:text-[#ec6e55]">
                   <User className="size-4" /> Dashboard
@@ -81,10 +92,10 @@ export function MainNav() {
               </>
             ) : (
               <>
-                <Link href="/login" className="flex items-center gap-3 px-5 py-3 text-sm font-bold text-[#23403d] hover:bg-[#faf3ef] hover:text-[#ec6e55]">
+                <Link href={`/login${authRedirect}`} className="flex items-center gap-3 px-5 py-3 text-sm font-bold text-[#23403d] hover:bg-[#faf3ef] hover:text-[#ec6e55]">
                   <LogOut className="size-4" /> Sign In
                 </Link>
-                <Link href="/register" className="flex items-center gap-3 px-5 py-3 text-sm font-bold text-[#23403d] hover:bg-[#faf3ef] hover:text-[#ec6e55]">
+                <Link href={`/register${authRedirect}`} className="flex items-center gap-3 px-5 py-3 text-sm font-bold text-[#23403d] hover:bg-[#faf3ef] hover:text-[#ec6e55]">
                   <User className="size-4" /> Register
                 </Link>
               </>

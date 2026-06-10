@@ -262,14 +262,14 @@ export const listOrdersSchema = {
 const adminUserListItemSchema = {
   type: 'object',
   additionalProperties: false,
-  required: ['id', 'email', 'phone', 'firstName', 'lastName', 'isVerified', 'totalOrders', 'totalSpendPaise', 'createdAt'],
+  required: ['id', 'email', 'phone', 'firstName', 'lastName', 'isBanned', 'totalOrders', 'totalSpendPaise', 'createdAt'],
   properties: {
     id: { type: 'string', maxLength: 64 },
     email: { anyOf: [{ type: 'string', maxLength: 255 }, { type: 'null' }] },
     phone: { anyOf: [{ type: 'string', maxLength: 20 }, { type: 'null' }] },
     firstName: { type: 'string', maxLength: 100 },
     lastName: { type: 'string', maxLength: 100 },
-    isVerified: { type: 'boolean' },
+    isBanned: { type: 'boolean' },
     totalOrders: { type: 'integer', minimum: 0, maximum: 1000000000 },
     totalSpendPaise: { type: 'integer', minimum: 0, maximum: 1000000000000 },
     createdAt: { type: 'string', maxLength: 64 }
@@ -337,7 +337,7 @@ export const adminGetUserByIdSchema = {
         'phone',
         'firstName',
         'lastName',
-        'isVerified',
+        'isBanned',
         'createdAt',
         'addresses',
         'orders'
@@ -348,7 +348,9 @@ export const adminGetUserByIdSchema = {
         phone: { anyOf: [{ type: 'string', maxLength: 20 }, { type: 'null' }] },
         firstName: { type: 'string', maxLength: 100 },
         lastName: { type: 'string', maxLength: 100 },
-        isVerified: { type: 'boolean' },
+        isBanned: { type: 'boolean' },
+        bannedAt: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+        bannedReason: { anyOf: [{ type: 'string' }, { type: 'null' }] },
         createdAt: { type: 'string', maxLength: 64 },
         addresses: {
           type: 'array',

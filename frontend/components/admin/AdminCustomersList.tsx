@@ -393,12 +393,12 @@ export function AdminCustomersList({
                       </td>
                       <td className="px-4 py-3 text-center">
                         <div
-                          className={`mx-auto inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium ${customer.isVerified ? "bg-emerald-50 text-emerald-700" : "bg-gray-100 text-gray-700"}`}
+                          className={`mx-auto inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium ${customer.isBanned ? "bg-red-50 text-red-700" : "bg-emerald-50 text-emerald-700"}`}
                         >
                           <div
-                            className={`h-1.5 w-1.5 rounded-full ${customer.isVerified ? "bg-emerald-500" : "bg-gray-400"}`}
+                            className={`h-1.5 w-1.5 rounded-full ${customer.isBanned ? "bg-red-500" : "bg-emerald-500"}`}
                           />
-                          {customer.isVerified ? "Active" : "Inactive"}
+                          {customer.isBanned ? "Banned" : "Active"}
                         </div>
                       </td>
                       <td className="px-4 py-3 text-muted-foreground">

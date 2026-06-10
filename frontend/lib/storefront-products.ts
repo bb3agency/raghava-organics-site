@@ -1,5 +1,6 @@
 import { apiClient } from "@/lib/api";
 import { mapProductListResponse } from "@/lib/product-adapters";
+import { normalizeStorefrontSearchQuery } from "@/lib/storefront-search";
 import type { Product } from "@/types/product";
 
 export type StorefrontProductSort =
@@ -80,7 +81,10 @@ export async function fetchStorefrontProducts(
     sort,
     inStock: String(inStock),
   });
-  if (search?.trim()) params.set("search", search.trim());
+  const normalizedSearch = search
+    ? normalizeStorefrontSearchQuery(search)
+    : "";
+  if (normalizedSearch) params.set("search", normalizedSearch);
   if (category?.trim()) params.set("category", category.trim());
 
   try {

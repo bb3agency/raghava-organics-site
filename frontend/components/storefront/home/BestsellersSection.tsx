@@ -1,5 +1,5 @@
 import { fetchStorefrontProducts } from "@/lib/storefront-products";
-import { ProductGrid } from "@/components/product/ProductGrid";
+import { ProductCarousel } from "@/components/product/ProductCarousel";
 import { SectionHeading } from "./SectionHeading";
 
 export async function BestsellersSection() {
@@ -20,7 +20,7 @@ export async function BestsellersSection() {
           cta={{ label: "View bestsellers", href: "/products?sort=popularity" }}
           className="mb-10 lg:mb-12"
         />
-        <ProductGrid products={products.slice(0, 10)} />
+        <ProductCarousel products={products.slice(0, 10)} />
       </div>
     </section>
   );
