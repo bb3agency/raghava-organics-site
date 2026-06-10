@@ -330,7 +330,7 @@ describe('OpsService failcase coverage', () => {
         method: 'POST'
       })
     ).rejects.toMatchObject({
-      code: ERROR_CODES.UNAUTHORISED,
+      code: ERROR_CODES.INVALID_CREDENTIALS,
       statusCode: 401
     });
 
@@ -341,6 +341,33 @@ describe('OpsService failcase coverage', () => {
         status: 'FAILED'
       }
     });
+  });
+
+  it('verifyEmailOtp accepts OTP input with non-digit separators', async () => {
+    const { service, mocks } = createOpsServiceHarness();
+
+    const expectedCodeHash = crypto.createHash('sha256').update('654321').digest('hex');
+    mocks.opsOtpChallengeFindUnique.mockResolvedValue({
+      id: 'challenge_spaced',
+      opsUserId: 'ops_1',
+      action: 'config-save',
+      status: 'PENDING',
+      codeHash: expectedCodeHash,
+      expiresAt: new Date(Date.now() + 60_000),
+      failedAttempts: 0
+    });
+    mocks.opsOtpChallengeUpdateMany.mockResolvedValue({ count: 1 });
+
+    await expect(
+      service.verifyEmailOtp({
+        opsUserId: 'ops_1',
+        challengeId: 'challenge_spaced',
+        code: '654 321',
+        requestIp: '127.0.0.1',
+        requestPath: '/api/v1/ops/config/save',
+        method: 'POST'
+      })
+    ).resolves.toEqual({ verified: true });
   });
 
   it('verifyEmailOtp allows idempotent retry for already VERIFIED challenge when code still matches', async () => {

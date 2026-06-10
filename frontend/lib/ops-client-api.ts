@@ -2,6 +2,8 @@
 
 import { getBrowserApiBaseUrl, getInternalApiBaseUrl } from "@/lib/api-base";
 import { apiClient, ApiError } from "@/lib/api";
+import { isOpsSessionAuthFailure } from "@/lib/error-messages";
+import { normalizeOtpCodeInput } from "@/lib/otp-code";
 import type { ReadinessStatus } from "@/types/api";
 
 export type OpsPermission = "ops:read" | "ops:write";
@@ -266,6 +268,10 @@ export async function requestOpsLoginOtp(input: {
   });
 }
 
+function normalizedOtpCode(value: string): string {
+  return normalizeOtpCodeInput(value);
+}
+
 export async function verifyOpsLoginOtp(input: {
   email: string;
   otp: string;
@@ -284,7 +290,7 @@ export async function verifyOpsLoginOtp(input: {
     expiresAt: string;
   }>("/ops/auth/login/verify-otp", {
     method: "POST",
-    body: JSON.stringify(input),
+    body: JSON.stringify({ ...input, otp: normalizeOtpCodeInput(input.otp) }),
   });
   return {
     ...result,
@@ -332,7 +338,7 @@ export async function setOpsLoadShedMode(input: {
 }> {
   return opsFetch("/ops/load-shed", {
     method: "POST",
-    body: JSON.stringify(input),
+    body: JSON.stringify({ ...input, otpCode: normalizedOtpCode(input.otpCode) }),
   });
 }
 
@@ -351,7 +357,10 @@ export async function verifyOpsOtpChallenge(input: {
 }): Promise<{ verified: boolean }> {
   return opsFetch("/ops/otp/verify", {
     method: "POST",
-    body: JSON.stringify({ challengeId: input.challengeId, code: input.code }),
+    body: JSON.stringify({
+      challengeId: input.challengeId,
+      code: normalizeOtpCodeInput(input.code),
+    }),
   });
 }
 
@@ -387,7 +396,7 @@ export async function saveOpsConfigClient(input: {
 }): Promise<OpsConfigSaveResponse> {
   return opsFetch("/ops/config/save", {
     method: "POST",
-    body: JSON.stringify(input),
+    body: JSON.stringify({ ...input, otpCode: normalizedOtpCode(input.otpCode) }),
   });
 }
 
@@ -490,7 +499,7 @@ export async function revokeOpsInviteClient(input: {
     method: "POST",
     body: JSON.stringify({
       challengeId: input.challengeId,
-      otpCode: input.otpCode,
+      otpCode: normalizedOtpCode(input.otpCode),
     }),
   });
 }
@@ -535,7 +544,7 @@ export async function revokeAdminInviteClient(input: {
     method: "POST",
     body: JSON.stringify({
       challengeId: input.challengeId,
-      otpCode: input.otpCode,
+      otpCode: normalizedOtpCode(input.otpCode),
     }),
   });
 }
@@ -584,7 +593,7 @@ export async function deactivateOpsUserClient(input: {
     body: JSON.stringify({
       reason: input.reason,
       challengeId: input.challengeId,
-      otpCode: input.otpCode,
+      otpCode: normalizedOtpCode(input.otpCode),
     }),
   });
 }
@@ -627,7 +636,7 @@ export async function deactivateMerchantAdminUserClient(input: {
     body: JSON.stringify({
       reason: input.reason,
       challengeId: input.challengeId,
-      otpCode: input.otpCode,
+      otpCode: normalizedOtpCode(input.otpCode),
     }),
   });
 }
@@ -639,7 +648,7 @@ export async function scheduleOpsSystemRestart(input: {
 }): Promise<{ jobId: string; scheduledFor: string }> {
   return opsFetch("/ops/system/restart", {
     method: "POST",
-    body: JSON.stringify(input),
+    body: JSON.stringify({ ...input, otpCode: normalizedOtpCode(input.otpCode) }),
   });
 }
 
@@ -663,5 +672,5 @@ export function getOpsQueuesBoardUrl(): string {
 }
 
 export function isOpsUnauthorisedError(error: unknown): boolean {
-  return error instanceof ApiError && error.status === 401;
+  return isOpsSessionAuthFailure(error);
 }

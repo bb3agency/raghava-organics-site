@@ -1,4 +1,6 @@
 import { apiClient } from "@/lib/api";
+import { getApiErrorMessageWithHint } from "@/lib/error-messages";
+import { normalizeOtpCodeInput } from "@/lib/otp-code";
 
 export interface SendOpsSetupOtpInput {
   token: string;
@@ -33,6 +35,8 @@ export async function sendOpsSetupOtp(input: SendOpsSetupOtpInput) {
 export async function consumeOpsInvite(input: ConsumeOpsInviteInput) {
   return apiClient<ConsumeOpsInviteResponse>("/ops/invites/consume", {
     method: "POST",
-    body: JSON.stringify(input),
+    body: JSON.stringify({ ...input, otp: normalizeOtpCodeInput(input.otp) }),
   });
 }
+
+export { getApiErrorMessageWithHint as getOpsSetupErrorMessage };

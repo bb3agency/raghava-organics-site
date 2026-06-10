@@ -13,6 +13,7 @@ import { AppError } from '@common/errors/app-error';
 import { ERROR_CODES } from '@common/errors/error-codes';
 
 const SHIPROCKET_BASE_URL = 'https://apiv2.shiprocket.in/v1/external';
+const DEFAULT_PICKUP_LOCATION = 'Primary';
 const TOKEN_TTL_MS = 9 * 24 * 60 * 60 * 1000; // 9 days (buffer before 10d expiry)
 const REQUEST_TIMEOUT_MS = 10_000; // 10s abort timeout on every fetch
 
@@ -20,6 +21,8 @@ type ShiprocketAdapterOptions = {
   email: string;
   password: string;
   baseUrl?: string;
+  /** Must match the pickup location nickname in Shiprocket dashboard (Settings → Pickup Addresses). */
+  pickupLocation?: string;
 };
 
 type ShiprocketCourierCompany = {
@@ -87,6 +90,7 @@ export default class ShiprocketAdapter implements ShippingProviderAdapter {
   private readonly email: string;
   private readonly password: string;
   private readonly baseUrl: string;
+  private readonly pickupLocation: string;
   private token: string | null = null;
   private tokenExpiry = 0;
 
@@ -94,6 +98,9 @@ export default class ShiprocketAdapter implements ShippingProviderAdapter {
     this.email = options.email;
     this.password = options.password;
     this.baseUrl = options.baseUrl ?? SHIPROCKET_BASE_URL;
+    const configuredLocation = options.pickupLocation?.trim();
+    this.pickupLocation =
+      configuredLocation && configuredLocation.length > 0 ? configuredLocation : DEFAULT_PICKUP_LOCATION;
   }
 
   private async getToken(): Promise<string> {
@@ -287,7 +294,7 @@ export default class ShiprocketAdapter implements ShippingProviderAdapter {
     const createPayload = {
       order_id: input.orderNumber,
       order_date: orderDate,
-      pickup_location: 'Primary',
+      pickup_location: this.pickupLocation,
       billing_customer_name: input.customer.fullName,
       billing_last_name: '',
       billing_address: input.customer.line1,

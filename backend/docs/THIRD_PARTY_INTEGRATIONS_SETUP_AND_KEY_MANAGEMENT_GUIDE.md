@@ -73,6 +73,7 @@ Cross-cutting credential governance notes:
   - `SHIPROCKET_PASSWORD`
   - `SHIPROCKET_WEBHOOK_TOKEN`
   - `SHIPROCKET_PICKUP_PINCODE`
+  - `SHIPROCKET_PICKUP_LOCATION`
   - `SHIPROCKET_BASE_URL` (optional override)
   - `SHIPROCKET_WEBHOOK_ALLOWLIST_CIDR`
 
@@ -340,6 +341,10 @@ SHIPROCKET_WEBHOOK_ALLOWLIST_CIDR=
 
 # Pickup location pincode (your warehouse/fulfillment center)
 SHIPROCKET_PICKUP_PINCODE=560001
+
+# Pickup address nickname — must match Shiprocket Dashboard → Settings → Pickup Addresses
+# (defaults to Primary when unset)
+SHIPROCKET_PICKUP_LOCATION=Primary
 
 # Optional: Override base URL (defaults to https://apiv2.shiprocket.in/v1/external)
 SHIPROCKET_BASE_URL=

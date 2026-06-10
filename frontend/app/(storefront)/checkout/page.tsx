@@ -1,16 +1,21 @@
+import type { Metadata } from "next";
+import { connection } from "next/server";
 import Script from "next/script";
 import Link from "next/link";
 import { ChevronRight, CreditCard, Banknote, Truck, ShieldCheck, AlertCircle } from "lucide-react";
 import { CheckoutForm } from "@/components/checkout/CheckoutForm";
 import { CheckoutStartedTracker } from "@/components/checkout/CheckoutStartedTracker";
+import { NOINDEX_METADATA } from "@/lib/seo";
 import { getPublicStoreConfig } from "@/lib/storefront-settings";
 import { formatPrice } from "@/lib/format-price";
 
-export const metadata = {
+export const metadata: Metadata = {
   title: "Checkout",
+  ...NOINDEX_METADATA,
 };
 
 export default async function CheckoutPage() {
+  await connection();
   const storeConfig = await getPublicStoreConfig();
 
   return (

@@ -52,8 +52,28 @@ export function getErrorMessage(code: string): string {
   return ERROR_MESSAGES[code] ?? ERROR_MESSAGES.UNKNOWN_ERROR;
 }
 
+export function getOpsLoginErrorMessage(error: unknown): string {
+  if (error instanceof ApiError) {
+    const opsOtpMessage = getOpsOtpErrorMessage(error);
+    if (opsOtpMessage) {
+      return opsOtpMessage;
+    }
+    if (error.code === "INVALID_CREDENTIALS") {
+      const message = (error.message ?? "").toLowerCase();
+      if (message.includes("otp") || message.includes("login code")) {
+        return "That login code is invalid or has expired. Request a new code and try again.";
+      }
+    }
+  }
+  return getApiErrorMessage(error);
+}
+
 export function getAdminLoginErrorMessage(error: unknown): string {
   if (error instanceof ApiError) {
+    const otpMessage = getOpsOtpErrorMessage(error);
+    if (otpMessage) {
+      return otpMessage;
+    }
     if (error.code === "INVALID_CREDENTIALS") {
       const message = (error.message ?? "").toLowerCase();
       if (message.includes("otp") || message.includes("login code") || message.includes("one-time")) {
@@ -100,6 +120,10 @@ function getAuthChallengeErrorMessage(error: ApiError): string | null {
 
 export function getApiErrorMessage(error: unknown): string {
   if (error instanceof ApiError) {
+    const otpMessage = getOpsOtpErrorMessage(error);
+    if (otpMessage) {
+      return otpMessage;
+    }
     const challengeMessage = getAuthChallengeErrorMessage(error);
     if (challengeMessage) {
       return challengeMessage;
@@ -139,8 +163,64 @@ function readHintKey(error: ApiError): string | undefined {
   return undefined;
 }
 
+function readAttemptsRemaining(error: ApiError): number | undefined {
+  if (
+    typeof error.details === "object" &&
+    error.details !== null &&
+    "attemptsRemaining" in (error.details as Record<string, unknown>)
+  ) {
+    const value = (error.details as { attemptsRemaining?: unknown }).attemptsRemaining;
+    return typeof value === "number" ? value : undefined;
+  }
+  return undefined;
+}
+
+function getOpsOtpErrorMessage(error: ApiError): string | null {
+  const hintKey = readHintKey(error);
+  const serverMessage = (error.message ?? "").toLowerCase();
+
+  if (hintKey === "otp_invalid" || hintKey === "admin_login_otp_invalid") {
+    return "That verification code is invalid or has expired. Request a new code and try again.";
+  }
+
+  if (hintKey === "ops_login_otp_invalid") {
+    const remaining = readAttemptsRemaining(error);
+    if (remaining !== undefined && remaining > 0) {
+      return `That login code is incorrect. ${remaining} attempt${remaining === 1 ? "" : "s"} remaining.`;
+    }
+    return "That login code is invalid or has expired. Request a new code and try again.";
+  }
+
+  if (hintKey === "ops_otp_invalid") {
+    const remaining = readAttemptsRemaining(error);
+    if (remaining !== undefined && remaining > 0) {
+      return `The verification code is incorrect. ${remaining} attempt${remaining === 1 ? "" : "s"} remaining.`;
+    }
+    return 'The verification code is incorrect. Click "Send OTP to email" to request a new code.';
+  }
+
+  if (hintKey === "ops_otp_expired" || (error.code === "TOKEN_EXPIRED" && serverMessage.includes("otp challenge"))) {
+    return 'Your verification code has expired. Click "Send OTP to email" to request a new code.';
+  }
+
+  if (error.code === "UNAUTHORISED" && serverMessage.includes("invalid otp")) {
+    return "The verification code is incorrect. Check the latest email and try again, or request a new code.";
+  }
+
+  if (error.code === "UNAUTHORISED" && serverMessage.includes("ops authentication required")) {
+    return "Your ops session expired. Sign in again, then request a new OTP and retry.";
+  }
+
+  return null;
+}
+
 export function getApiErrorMessageWithHint(error: unknown): string {
   if (error instanceof ApiError) {
+    const opsOtpMessage = getOpsOtpErrorMessage(error);
+    if (opsOtpMessage) {
+      return opsOtpMessage;
+    }
+
     const serverMessage = (error.message ?? "").trim();
     if (
       serverMessage &&
@@ -225,6 +305,58 @@ export function isAuthFailureCode(code: string): boolean {
  * the UI should clear the challenge/OTP state so the user requests a fresh
  * code instead of resubmitting the same one.
  */
+const OPS_OTP_HINT_KEYS = new Set([
+  "ops_otp_invalid",
+  "ops_otp_expired",
+  "ops_otp_invalid_format",
+  "ops_login_otp_invalid",
+  "otp_invalid",
+  "otp_invalid_format",
+  "admin_login_otp_invalid",
+]);
+
+/**
+ * True when a 401 means the ops browser session is missing/expired — not a wrong OTP.
+ */
+export function isOpsSessionAuthFailure(error: unknown): boolean {
+  if (!(error instanceof ApiError) || error.status !== 401) {
+    return false;
+  }
+
+  const hintKey = readHintKey(error);
+  if (hintKey && OPS_OTP_HINT_KEYS.has(hintKey)) {
+    return false;
+  }
+
+  const serverMessage = (error.message ?? "").toLowerCase();
+  if (error.code === "INVALID_CREDENTIALS") {
+    return false;
+  }
+  if (error.code === "TOKEN_EXPIRED" && serverMessage.includes("otp challenge")) {
+    return false;
+  }
+
+  return error.code === "UNAUTHORISED" || error.code === "TOKEN_EXPIRED";
+}
+
+export function isOpsOtpVerificationError(error: unknown): boolean {
+  if (!(error instanceof ApiError)) {
+    return false;
+  }
+  const hintKey = readHintKey(error);
+  if (hintKey && OPS_OTP_HINT_KEYS.has(hintKey)) {
+    return true;
+  }
+  if (error.code === "INVALID_CREDENTIALS") {
+    const serverMessage = (error.message ?? "").toLowerCase();
+    return serverMessage.includes("otp");
+  }
+  if (error.code === "UNAUTHORISED") {
+    return (error.message ?? "").toLowerCase().includes("invalid otp");
+  }
+  return false;
+}
+
 export function isOpsOtpChallengeConsumed(error: unknown): boolean {
   if (!(error instanceof ApiError)) {
     return false;
@@ -232,9 +364,14 @@ export function isOpsOtpChallengeConsumed(error: unknown): boolean {
   const hintKey = readHintKey(error);
   if (
     hintKey === "ops_otp_challenge_not_pending" ||
-    hintKey === "ops_otp_challenge_consumed_concurrently"
+    hintKey === "ops_otp_challenge_consumed_concurrently" ||
+    hintKey === "ops_otp_expired"
   ) {
     return true;
+  }
+  if (hintKey === "ops_otp_invalid") {
+    const remaining = readAttemptsRemaining(error);
+    return remaining !== undefined && remaining <= 0;
   }
   // Backstop: any CONFLICT 409 on an ops critical-OTP route means the
   // challenge is no longer usable (verifyEmailOtp is the only 409-producing
@@ -251,10 +388,18 @@ export function shouldAttemptTokenRefresh(error: ApiError): boolean {
 }
 
 export function shouldForceLogin(error: ApiError): boolean {
-  return (
-    error.status === 401 &&
-    (error.code === "UNAUTHORISED" || error.code === "INVALID_CREDENTIALS")
-  );
+  if (error.status !== 401) {
+    return false;
+  }
+  // Wrong OTP/password must not clear an otherwise valid access-token session.
+  if (error.code === "INVALID_CREDENTIALS") {
+    return false;
+  }
+  const hintKey = readHintKey(error);
+  if (hintKey && OPS_OTP_HINT_KEYS.has(hintKey)) {
+    return false;
+  }
+  return error.code === "UNAUTHORISED" || error.code === "TOKEN_EXPIRED";
 }
 
 export function isApiErrorWithCode(error: unknown, code: string): boolean {

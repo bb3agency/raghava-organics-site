@@ -3,13 +3,24 @@ import { standardErrorResponses } from '@common/errors/error-response.schema';
 const cartItemSchema = {
   type: 'object',
   additionalProperties: false,
-  required: ['id', 'variantId', 'quantity', 'priceSnapshot', 'lineTotal', 'variant'],
+  required: ['id', 'variantId', 'quantity', 'priceSnapshot', 'lineTotal', 'product', 'variant'],
   properties: {
     id: { type: 'string', maxLength: 64 },
     variantId: { type: 'string', maxLength: 64 },
     quantity: { type: 'integer', minimum: 1, maximum: 1000 },
     priceSnapshot: { type: 'integer', minimum: 0, maximum: 1000000000 },
     lineTotal: { type: 'integer', minimum: 0, maximum: 1000000000 },
+    product: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['name', 'metaDescription', 'imageUrl', 'imageAlt'],
+      properties: {
+        name: { type: 'string', maxLength: 200 },
+        metaDescription: { anyOf: [{ type: 'string', maxLength: 500 }, { type: 'null' }] },
+        imageUrl: { anyOf: [{ type: 'string', maxLength: 2048 }, { type: 'null' }] },
+        imageAlt: { anyOf: [{ type: 'string', maxLength: 200 }, { type: 'null' }] }
+      }
+    },
     variant: {
       type: 'object',
       additionalProperties: false,

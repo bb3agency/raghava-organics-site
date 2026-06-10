@@ -17,6 +17,17 @@ describe.skipIf(!backendHealthy)("cart api integration", () => {
     expect(Array.isArray(cart.items)).toBe(true);
     expect(typeof cart.total).toBe("number");
     expect(typeof cart.meta.isGuest).toBe("boolean");
+    for (const item of cart.items) {
+      expect(item).toHaveProperty("product");
+      if (item.product) {
+        expect(typeof item.product.name).toBe("string");
+        expect(
+          item.product.metaDescription === null || typeof item.product.metaDescription === "string",
+        ).toBe(true);
+        expect(item.product.imageUrl === null || typeof item.product.imageUrl === "string").toBe(true);
+        expect(item.product.imageAlt === null || typeof item.product.imageAlt === "string").toBe(true);
+      }
+    }
   });
 
   it("returns serviceability payload", async () => {

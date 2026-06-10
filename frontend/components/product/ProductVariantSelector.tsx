@@ -72,9 +72,9 @@ export function ProductVariantSelector({
         </div>
       )}
 
-      {/* CTAs */}
+      {/* CTAs — id used by StickyAddToCartBar IntersectionObserver */}
       {product.inStock && selectedVariant ? (
-        <div className="flex flex-col gap-3 pt-2 sm:flex-row sm:gap-4">
+        <div id="pdp-atc-anchor" className="flex flex-col gap-3 pt-2 sm:flex-row sm:gap-4">
           <AddToCartButton
             variantId={selectedVariant.id}
             className="flex h-12 flex-1 items-center justify-center rounded-full bg-[#eff5ee] text-sm font-bold text-[#23403d] transition-colors hover:bg-[#c5dac2] sm:h-14"

@@ -10,7 +10,8 @@ import { OpsAlert, OpsCard, OpsField, OpsInput } from "@/components/ops/ui/ops-u
 import { TurnstileChallenge } from "@/components/auth/TurnstileChallenge";
 import { Button } from "@/components/ui/button";
 import { useAuthTurnstile } from "@/hooks/use-auth-turnstile";
-import { getApiErrorMessage } from "@/lib/error-messages";
+import { getApiErrorMessage, getOpsLoginErrorMessage } from "@/lib/error-messages";
+import { normalizeOtpCodeInput } from "@/lib/otp-code";
 import { requestOpsLoginOtp, verifyOpsLoginOtp } from "@/lib/ops-client-api";
 import { emailSchema, otpSchema } from "@/lib/validators";
 
@@ -53,7 +54,8 @@ export default function OpsLoginPage() {
   async function handleVerify(event: React.FormEvent) {
     event.preventDefault();
     const email = form.getValues("email");
-    const parsed = z.object({ email: emailSchema, otp: otpSchema }).safeParse({ email, otp });
+    const normalizedOtp = normalizeOtpCodeInput(otp);
+    const parsed = z.object({ email: emailSchema, otp: otpSchema }).safeParse({ email, otp: normalizedOtp });
     if (!parsed.success) {
       setError("Enter a valid 6-digit OTP.");
       return;
@@ -63,7 +65,7 @@ export default function OpsLoginPage() {
       await verifyOpsLoginOtp(parsed.data);
       router.replace("/ops");
     } catch (err) {
-      setError(getApiErrorMessage(err));
+      setError(getOpsLoginErrorMessage(err));
     }
   }
 
@@ -112,7 +114,7 @@ export default function OpsLoginPage() {
               <OpsInput
                 id="ops-login-otp"
                 value={otp}
-                onChange={(event) => setOtp(event.target.value)}
+                onChange={(event) => setOtp(normalizeOtpCodeInput(event.target.value))}
                 inputMode="numeric"
                 maxLength={6}
                 autoComplete="one-time-code"

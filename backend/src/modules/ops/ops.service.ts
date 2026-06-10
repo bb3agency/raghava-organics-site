@@ -28,6 +28,7 @@ import {
   OpsConfigDomain,
   resolveOpsConfigDomainForKey
 } from './ops-config-contract';
+import { normalizeOpsOtpCode } from './ops-otp-code.js';
 
 type LoadShedMode = LoadShedModeWithMaintenance;
 
@@ -850,7 +851,14 @@ export class OpsService {
       throw new AppError(ERROR_CODES.INVALID_CREDENTIALS, 'Invalid or expired OTP', 401);
     }
 
-    const incomingOtpHash = hashOpaqueToken(input.otp.trim());
+    const normalizedSetupOtp = normalizeOpsOtpCode(input.otp);
+    if (normalizedSetupOtp.length !== 6) {
+      throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'OTP must be exactly 6 digits', 400, {
+        kind: 'validation',
+        hintKey: 'ops_otp_invalid_format'
+      });
+    }
+    const incomingOtpHash = hashOpaqueToken(normalizedSetupOtp);
     if (incomingOtpHash !== storedOtpHash) {
       const attempts = await this.fastify.redis.incr(attemptKey);
       if (attempts === 1) {
@@ -859,7 +867,12 @@ export class OpsService {
       if (attempts >= OPS_INVITE_SETUP_OTP_MAX_ATTEMPTS) {
         await this.fastify.redis.del(otpKey, payloadKey, attemptKey);
       }
-      throw new AppError(ERROR_CODES.INVALID_CREDENTIALS, 'Invalid or expired OTP', 401);
+      throw new AppError(ERROR_CODES.INVALID_CREDENTIALS, 'Invalid or expired OTP', 401, {
+        kind: 'auth',
+        hintKey: 'ops_otp_invalid',
+        attemptsRemaining: Math.max(0, OPS_INVITE_SETUP_OTP_MAX_ATTEMPTS - attempts),
+        retryable: attempts < OPS_INVITE_SETUP_OTP_MAX_ATTEMPTS
+      });
     }
 
     const existingUserByEmail = await this.fastify.prisma.user.findUnique({ where: { email: invite.inviteEmail } });
@@ -1028,7 +1041,14 @@ export class OpsService {
     if (input.expectedAction && challenge.action !== input.expectedAction) {
       throw new AppError(ERROR_CODES.FORBIDDEN, 'OTP challenge action mismatch', 403);
     }
-    const incomingHash = hashOpaqueToken(input.code.trim());
+    const normalizedCode = normalizeOpsOtpCode(input.code);
+    if (normalizedCode.length !== 6) {
+      throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'OTP must be exactly 6 digits', 400, {
+        kind: 'validation',
+        hintKey: 'ops_otp_invalid_format'
+      });
+    }
+    const incomingHash = hashOpaqueToken(normalizedCode);
     // Idempotent retry path: if OTP was already VERIFIED by an earlier request
     // (for example, verification succeeded but a downstream step failed), allow
     // one-click retries with the same still-unexpired code instead of forcing a
@@ -1071,7 +1091,12 @@ export class OpsService {
         where: { id: challenge.id, status: 'PENDING' },
         data: { status: 'EXPIRED' }
       });
-      throw new AppError(ERROR_CODES.TOKEN_EXPIRED, 'OTP challenge expired', 401);
+      throw new AppError(ERROR_CODES.TOKEN_EXPIRED, 'OTP challenge expired', 401, {
+        kind: 'auth',
+        hintKey: 'ops_otp_expired',
+        retryable: false,
+        remediation: 'Click "Send OTP to email" to request a new code, then retry the action.'
+      });
     }
 
     if (incomingHash !== challenge.codeHash) {
@@ -1099,7 +1124,17 @@ export class OpsService {
         }
       });
 
-      throw new AppError(ERROR_CODES.UNAUTHORISED, 'Invalid OTP code', 401);
+      const attemptsRemaining = Math.max(0, OPS_OTP_MAX_ATTEMPTS - attempts);
+      throw new AppError(ERROR_CODES.INVALID_CREDENTIALS, 'Invalid OTP code', 401, {
+        kind: 'auth',
+        hintKey: 'ops_otp_invalid',
+        attemptsRemaining,
+        retryable: attemptsRemaining > 0,
+        remediation:
+          attemptsRemaining > 0
+            ? 'Check the latest email for the 6-digit code and try again.'
+            : 'Maximum attempts reached. Click "Send OTP to email" to request a new code.'
+      });
     }
 
     // Atomic CAS: only verify if still pending (prevents races with concurrent verification)
@@ -2462,17 +2497,30 @@ export class OpsService {
 
     const stored = await this.fastify.redis.get(otpKey);
     if (!stored) {
-      throw new AppError(ERROR_CODES.INVALID_CREDENTIALS, 'Invalid or expired login OTP', 401);
+      throw new AppError(ERROR_CODES.INVALID_CREDENTIALS, 'Invalid or expired login OTP', 401, {
+        kind: 'auth',
+        hintKey: 'ops_login_otp_invalid'
+      });
     }
 
     const separatorIndex = stored.indexOf('||');
     const opsUserId = separatorIndex > 0 ? stored.slice(0, separatorIndex) : undefined;
     const storedOtpHash = separatorIndex > 0 ? stored.slice(separatorIndex + 2) : undefined;
     if (!opsUserId || !storedOtpHash) {
-      throw new AppError(ERROR_CODES.INVALID_CREDENTIALS, 'Invalid or expired login OTP', 401);
+      throw new AppError(ERROR_CODES.INVALID_CREDENTIALS, 'Invalid or expired login OTP', 401, {
+        kind: 'auth',
+        hintKey: 'ops_login_otp_invalid'
+      });
     }
 
-    const incomingHash = hashOpaqueToken(input.otp.trim());
+    const normalizedOtp = normalizeOpsOtpCode(input.otp);
+    if (normalizedOtp.length !== 6) {
+      throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'OTP must be exactly 6 digits', 400, {
+        kind: 'validation',
+        hintKey: 'ops_otp_invalid_format'
+      });
+    }
+    const incomingHash = hashOpaqueToken(normalizedOtp);
     if (incomingHash !== storedOtpHash) {
       const attempts = await this.fastify.redis.incr(attemptKey);
       if (attempts === 1) {
@@ -2493,7 +2541,13 @@ export class OpsService {
         method: input.method,
         summary: { reason: 'invalid_otp', remainingAttempts: Math.max(0, OPS_LOGIN_OTP_MAX_ATTEMPTS - attempts) }
       });
-      throw new AppError(ERROR_CODES.INVALID_CREDENTIALS, 'Invalid or expired login OTP', 401);
+      const attemptsRemaining = Math.max(0, OPS_LOGIN_OTP_MAX_ATTEMPTS - attempts);
+      throw new AppError(ERROR_CODES.INVALID_CREDENTIALS, 'Invalid or expired login OTP', 401, {
+        kind: 'auth',
+        hintKey: 'ops_login_otp_invalid',
+        attemptsRemaining,
+        retryable: attemptsRemaining > 0
+      });
     }
 
     await this.fastify.redis.del(otpKey, attemptKey);

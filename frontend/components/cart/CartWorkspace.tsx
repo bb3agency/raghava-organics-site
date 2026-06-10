@@ -10,6 +10,8 @@ import { formatPrice } from "@/lib/format-price";
 import { ShoppingCart, Plus, Minus, X, Trash2, ArrowRight, AlertTriangle } from "lucide-react";
 import { clearCart, removeCartItem, updateCartItem, applyCartCoupon, removeCartCoupon } from "@/lib/cart-api";
 import { getApiErrorMessage, getApiErrorMessageWithHint } from "@/lib/error-messages";
+import { CartLineProductDetails } from "@/components/cart/CartLineProductDetails";
+import { getCartLineImageAlt, getCartLineImageUrl, getCartLineProductName } from "@/lib/cart-line-display";
 
 interface CartWorkspaceProps {
   /** Minimum cart subtotal in paise (from backend DB). 0 = no minimum enforced. */
@@ -160,8 +162,7 @@ export function CartWorkspace({
 
           <div className="flex flex-col divide-y divide-[#efe8e4]">
             {items.map((item) => {
-              const displayName =
-                item.variant.name === "Default" ? item.variant.sku : item.variant.name;
+              const productName = getCartLineProductName(item);
               const isLoading = loadingItemId === item.id;
               return (
                 <article
@@ -172,18 +173,15 @@ export function CartWorkspace({
                   <div className="flex items-center gap-4">
                     <div className="relative size-16 shrink-0 overflow-hidden rounded-[12px] bg-[#faf3ef] shadow-sm sm:size-20">
                       <Image
-                        src="/images/product-placeholder.svg"
-                        alt={displayName}
+                        src={getCartLineImageUrl(item)}
+                        alt={getCartLineImageAlt(item)}
                         fill
                         className="object-contain p-2"
                         sizes="80px"
                       />
                     </div>
                     <div className="flex min-w-0 flex-col">
-                      <span className="truncate text-sm font-bold text-[#23403d] sm:text-base">
-                        {displayName}
-                      </span>
-                      <p className="mt-0.5 text-xs text-[#767676]">SKU: {item.variant.sku}</p>
+                      <CartLineProductDetails item={item} />
                       {/* Mobile Only Price */}
                       <div className="mt-2 text-sm font-bold text-[#ec6e55] md:hidden">
                         {formatPrice(item.variant.price)} each
@@ -236,7 +234,7 @@ export function CartWorkspace({
                       className="flex size-8 items-center justify-center rounded-full bg-[#faf3ef] text-[#767676] transition-colors hover:bg-red-50 hover:text-red-500 disabled:opacity-40"
                       onClick={() => handleRemove(item.id)}
                       disabled={isLoading}
-                      aria-label={`Remove ${displayName}`}
+                      aria-label={`Remove ${productName}`}
                     >
                       <X className="size-4" />
                     </button>

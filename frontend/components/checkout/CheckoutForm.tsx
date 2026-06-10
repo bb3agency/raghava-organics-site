@@ -6,7 +6,7 @@ import { useForm, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useSafeRouter } from "@/lib/use-safe-router";
 import { MapPin, AlertTriangle, ShoppingBag, Truck, Tag } from "lucide-react";
 import { checkPincodeServiceability, getDeliveryRates } from "@/lib/cart-api";
 import { getApiErrorMessage, getApiErrorMessageWithHint } from "@/lib/error-messages";
@@ -17,6 +17,9 @@ import { useCartStore } from "@/stores/cart";
 import { createMyAddress, getMyAddresses, type UserAddress } from "@/lib/users-api";
 import { createOrder, initiatePayment, verifyPayment } from "@/lib/orders-api";
 import { formatPrice } from "@/lib/format-price";
+import { CartLineProductDetails } from "@/components/cart/CartLineProductDetails";
+import { useCartSync } from "@/hooks/use-cart-sync";
+import { getCartLineImageAlt, getCartLineImageUrl } from "@/lib/cart-line-display";
 
 declare global {
   interface Window {
@@ -69,7 +72,7 @@ export function CheckoutForm({
   minOrderValuePaise,
   configAvailable = true,
 }: CheckoutFormProps) {
-  const router = useRouter();
+  const router = useSafeRouter();
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [savedAddresses, setSavedAddresses] = useState<UserAddress[]>([]);
@@ -77,6 +80,7 @@ export function CheckoutForm({
   const [shippingQuote, setShippingQuote] = useState<{ shippingCharge: number; estimatedDays: number } | null>(null);
   const [shippingQuoteLoading, setShippingQuoteLoading] = useState(false);
   const [shippingQuoteError, setShippingQuoteError] = useState<string | null>(null);
+  useCartSync();
   const accessToken = useAuthStore((s) => s.accessToken);
   const user = useAuthStore((s) => s.user);
   const cart = useCartStore((s) => s.cart);
@@ -137,7 +141,14 @@ export function CheckoutForm({
       .catch((err) => {
         if (!cancelled) {
           setShippingQuote(null);
-          setShippingQuoteError(getApiErrorMessageWithHint(err));
+          const isProviderError =
+            err instanceof ApiError &&
+            (err.code === "CONFIG_NOT_READY" || err.code === "INTERNAL_ERROR");
+          setShippingQuoteError(
+            isProviderError
+              ? "Delivery estimate is temporarily unavailable. COD is still available, or contact us for assistance."
+              : getApiErrorMessageWithHint(err),
+          );
         }
       })
       .finally(() => {
@@ -342,6 +353,13 @@ export function CheckoutForm({
     } catch (err) {
       if (err instanceof ApiError && err.code === "VALIDATION_ERROR") {
         setError(getApiErrorMessageWithHint(err));
+      } else if (
+        err instanceof ApiError &&
+        (err.code === "CONFIG_NOT_READY" || err.code === "INTERNAL_ERROR")
+      ) {
+        setError(
+          "Our payment or delivery service is temporarily unavailable. Please try COD, or contact us to complete your order.",
+        );
       } else {
         setError(getApiErrorMessage(err));
       }
@@ -397,18 +415,13 @@ export function CheckoutForm({
           </div>
 
           <div className="divide-y divide-[#efe8e4]">
-            {cartItems.map((item) => {
-              const displayName =
-                item.variant?.name && item.variant.name !== "Default"
-                  ? item.variant.name
-                  : item.variant?.sku ?? "Item";
-              return (
+            {cartItems.map((item) => (
                 <div key={item.id} className="flex items-center gap-3 px-4 py-3">
                   {/* Thumbnail */}
                   <div className="relative size-12 shrink-0 overflow-hidden rounded-[8px] bg-white shadow-sm">
                     <Image
-                      src="/images/product-placeholder.svg"
-                      alt={displayName}
+                      src={getCartLineImageUrl(item)}
+                      alt={getCartLineImageAlt(item)}
                       fill
                       className="object-contain p-1.5"
                       sizes="48px"
@@ -419,12 +432,13 @@ export function CheckoutForm({
                     </span>
                   </div>
 
-                  {/* Name + SKU */}
+                  {/* Product name + short description */}
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-xs font-bold text-[#23403d] sm:text-sm">
-                      {displayName}
-                    </p>
-                    <p className="text-[10px] text-[#767676]">SKU: {item.variant?.sku}</p>
+                    <CartLineProductDetails
+                      item={item}
+                      nameClassName="truncate text-xs font-bold text-[#23403d] sm:text-sm"
+                      descriptionClassName="text-[10px] text-[#767676] line-clamp-2"
+                    />
                   </div>
 
                   {/* Line total */}
@@ -432,8 +446,7 @@ export function CheckoutForm({
                     {formatPrice(item.priceSnapshot * item.quantity)}
                   </span>
                 </div>
-              );
-            })}
+            ))}
           </div>
 
           {/* Mini totals */}

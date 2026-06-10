@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import { FastifyInstance } from 'fastify';
 import { Role } from '@prisma/client';
+import { normalizeOtpCode } from '@common/auth/otp-code.js';
 import { AppError } from '@common/errors/app-error';
 import { ERROR_CODES } from '@common/errors/error-codes';
 import { AdminPermission, MERCHANT_DEFAULT_PERMISSIONS } from '@common/auth/admin-permissions';
@@ -332,7 +333,14 @@ export class AdminInvitesService {
       throw new AppError(ERROR_CODES.INVALID_CREDENTIALS, 'Invalid or expired OTP', 401);
     }
 
-    const incomingOtpHash = hashOpaqueToken(input.otp.trim());
+    const normalizedOtp = normalizeOtpCode(input.otp);
+    if (normalizedOtp.length !== 6) {
+      throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'OTP must be exactly 6 digits', 400, {
+        kind: 'validation',
+        hintKey: 'otp_invalid_format'
+      });
+    }
+    const incomingOtpHash = hashOpaqueToken(normalizedOtp);
     if (incomingOtpHash !== storedOtpHash) {
       const attempts = await this.fastify.redis.incr(attemptKey);
       if (attempts === 1) {
@@ -341,7 +349,10 @@ export class AdminInvitesService {
       if (attempts >= ADMIN_SETUP_OTP_MAX_ATTEMPTS) {
         await this.fastify.redis.del(otpKey, payloadKey, attemptKey);
       }
-      throw new AppError(ERROR_CODES.INVALID_CREDENTIALS, 'Invalid or expired OTP', 401);
+      throw new AppError(ERROR_CODES.INVALID_CREDENTIALS, 'Invalid or expired OTP', 401, {
+        kind: 'auth',
+        hintKey: 'otp_invalid'
+      });
     }
 
     const existingUser = await this.fastify.prisma.user.findUnique({

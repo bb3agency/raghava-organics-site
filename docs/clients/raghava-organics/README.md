@@ -6,6 +6,7 @@ Client-specific deployment and evidence live here (not under `backend/docs/`).
 |----------|---------|
 | [VPS_DEPLOYMENT_PACK.md](./VPS_DEPLOYMENT_PACK.md) | Production env template, ports, CD, Nginx |
 | [CLOUDFLARE_R2_MEDIA.md](./CLOUDFLARE_R2_MEDIA.md) | Cloudflare DNS + R2 bucket + `cdn.raghavaorganics.com` |
+| [RAZORPAY_PAYMENTS_SETUP.md](./RAZORPAY_PAYMENTS_SETUP.md) | Razorpay API keys, webhook URL, events (secrets in `VPS_INPUTS.md`) |
 | [VPS_INPUTS.md](./VPS_INPUTS.md) | Private inputs + secrets (gitignored); template: [VPS_INPUTS.template.md](./VPS_INPUTS.template.md) |
 | [CLIENT_VPS_DEPLOYMENT_LOG.md](./CLIENT_VPS_DEPLOYMENT_LOG.md) | Phase 6–14 checklist |
 | [LOCAL_SETUP_EVIDENCE.md](./LOCAL_SETUP_EVIDENCE.md) | Local backend bootstrap evidence |

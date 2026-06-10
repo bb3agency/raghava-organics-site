@@ -1,4 +1,3 @@
-import { connection } from "next/server";
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import {
@@ -26,8 +25,6 @@ function withNoIndexHeader(request: NextRequest, response: NextResponse): NextRe
 
 /** Read OPS_UI_BASIC_AUTH_* at request time (not only from the production build bundle). */
 export async function proxy(request: NextRequest) {
-  await connection();
-
   const pathname = request.nextUrl.pathname;
 
   if (pathname.startsWith("/ops")) {

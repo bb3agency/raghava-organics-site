@@ -45,7 +45,12 @@ describe('CartService serializeCart coupon feature flag', () => {
               sku: 'SKU-1',
               price: 1000,
               productId: 'product_1',
-              product: { categoryId: 'category_1' }
+              product: {
+                categoryId: 'category_1',
+                name: 'Product 1',
+                metaDescription: 'Short description',
+                images: [{ url: '/api/v1/media/products/product_1/hero.webp', altText: 'Product 1' }]
+              }
             }
           }
         ]

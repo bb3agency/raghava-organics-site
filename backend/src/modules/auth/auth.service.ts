@@ -13,6 +13,7 @@ import { isTurnstileVerificationEnabled } from '@common/auth/auth-turnstile';
 import { AppError } from '@common/errors/app-error';
 import { ERROR_CODES } from '@common/errors/error-codes';
 import { recordAuthAbuseEscalation, recordAuthChallenge, recordAuthRiskSignal } from '@common/observability/metrics';
+import { normalizeOtpCode } from '@common/auth/otp-code.js';
 import { resolveAdminPermissions } from '@common/auth/admin-permissions';
 import { resolveNotificationRuntimeConfig } from '@common/notifications/notification-runtime-config';
 import {
@@ -139,6 +140,17 @@ function sanitizeUser(user: User): PublicUser {
     role: user.role,
     isVerified: user.isVerified
   };
+}
+
+function resolveOtpForHash(rawOtp: string): string {
+  const normalized = normalizeOtpCode(rawOtp);
+  if (normalized.length !== 6) {
+    throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'OTP must be exactly 6 digits', 400, {
+      kind: 'validation',
+      hintKey: 'otp_invalid_format'
+    });
+  }
+  return normalized;
 }
 
 function hashOtp(otp: string): string {
@@ -733,13 +745,16 @@ export class AuthService {
       throw new AppError(ERROR_CODES.INVALID_CREDENTIALS, 'Invalid or expired OTP', 401);
     }
 
-    const incomingHash = hashOtp(input.otp);
+    const incomingHash = hashOtp(resolveOtpForHash(input.otp));
     if (incomingHash !== storedHash) {
       const attemptCount = await this.fastify.redis.incr(attemptsKey);
       if (attemptCount === 1) {
         await this.fastify.redis.expire(attemptsKey, OTP_ATTEMPT_WINDOW_SECONDS);
       }
-      throw new AppError(ERROR_CODES.INVALID_CREDENTIALS, 'Invalid or expired OTP', 401);
+      throw new AppError(ERROR_CODES.INVALID_CREDENTIALS, 'Invalid or expired OTP', 401, {
+        kind: 'auth',
+        hintKey: 'otp_invalid'
+      });
     }
 
     await this.fastify.redis.del(otpKey, attemptsKey);
@@ -764,13 +779,16 @@ export class AuthService {
       throw new AppError(ERROR_CODES.INVALID_CREDENTIALS, 'Invalid or expired OTP', 401);
     }
 
-    const incomingHash = hashOtp(input.otp);
+    const incomingHash = hashOtp(resolveOtpForHash(input.otp));
     if (incomingHash !== storedHash) {
       const attemptCount = await this.fastify.redis.incr(attemptsKey);
       if (attemptCount === 1) {
         await this.fastify.redis.expire(attemptsKey, OTP_ATTEMPT_WINDOW_SECONDS);
       }
-      throw new AppError(ERROR_CODES.INVALID_CREDENTIALS, 'Invalid or expired OTP', 401);
+      throw new AppError(ERROR_CODES.INVALID_CREDENTIALS, 'Invalid or expired OTP', 401, {
+        kind: 'auth',
+        hintKey: 'otp_invalid'
+      });
     }
 
     const signupSettings = await this.fastify.prisma.storeSettings.findUnique({
@@ -1249,7 +1267,7 @@ export class AuthService {
     const otpKey = `auth:admin:login-otp:${stableHash(emailNorm)}`;
     const attemptKey = `auth:admin:login-otp-attempts:${stableHash(emailNorm)}`;
 
-    if (isAuthDevBypassEnabled() && input.otp.trim() === getAuthDevOtp()) {
+    if (isAuthDevBypassEnabled() && normalizeOtpCode(input.otp) === getAuthDevOtp()) {
       const user = await this.fastify.prisma.user.findUnique({ where: { email: emailNorm } });
       if (!user || user.role !== Role.ADMIN || user.isBanned) {
         throw new AppError(ERROR_CODES.INVALID_CREDENTIALS, 'Invalid or expired login OTP', 401);
@@ -1278,7 +1296,7 @@ export class AuthService {
       throw new AppError(ERROR_CODES.INVALID_CREDENTIALS, 'Invalid or expired login OTP', 401);
     }
 
-    const incomingHash = hashOtp(input.otp.trim());
+    const incomingHash = hashOtp(resolveOtpForHash(input.otp));
     if (incomingHash !== storedOtpHash) {
       const attempts = await this.fastify.redis.incr(attemptKey);
       if (attempts === 1) {
@@ -1287,7 +1305,10 @@ export class AuthService {
       if (attempts >= AuthService.ADMIN_LOGIN_OTP_MAX_ATTEMPTS) {
         await this.fastify.redis.del(otpKey, attemptKey);
       }
-      throw new AppError(ERROR_CODES.INVALID_CREDENTIALS, 'Invalid or expired login OTP', 401);
+      throw new AppError(ERROR_CODES.INVALID_CREDENTIALS, 'Invalid or expired login OTP', 401, {
+        kind: 'auth',
+        hintKey: 'admin_login_otp_invalid'
+      });
     }
 
     await this.fastify.redis.del(otpKey, attemptKey);

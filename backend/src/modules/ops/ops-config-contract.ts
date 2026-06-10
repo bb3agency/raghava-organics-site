@@ -113,6 +113,12 @@ export const OPS_CONFIG_OVERVIEW_GROUPS: Array<{
       { key: 'SHIPROCKET_EMAIL', mutableViaOps: true, requiresRestart: true },
       { key: 'SHIPROCKET_BASE_URL', mutableViaOps: true, requiresRestart: true },
       { key: 'SHIPROCKET_PICKUP_PINCODE', mutableViaOps: true, requiresRestart: true },
+      {
+        key: 'SHIPROCKET_PICKUP_LOCATION',
+        mutableViaOps: true,
+        requiresRestart: true,
+        note: 'Pickup address nickname in Shiprocket dashboard (defaults to Primary when unset)'
+      },
       { key: 'SHIPROCKET_PASSWORD', mutableViaOps: true, requiresRestart: true },
       { key: 'SHIPROCKET_WEBHOOK_TOKEN', mutableViaOps: true, requiresRestart: true, runtimeSource: 'db-overlay' },
       { key: 'SHIPROCKET_WEBHOOK_ALLOWLIST_CIDR', mutableViaOps: true, requiresRestart: true, runtimeSource: 'db-overlay' },

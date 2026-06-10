@@ -2,8 +2,9 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { ApiError } from "@/lib/api";
 import { consumeAdminInvite, sendAdminSetupOtp } from "@/lib/admin-setup-api";
+import { getApiErrorMessageWithHint } from "@/lib/error-messages";
+import { isCompleteOtpCode, normalizeOtpCodeInput } from "@/lib/otp-code";
 import { getAdminOtpChannelConfig } from "@/lib/admin-auth-api";
 import { Eye, EyeOff, Loader2, CheckCircle2, Lock, User, Phone } from "lucide-react";
 
@@ -93,11 +94,7 @@ export function AdminSetupForm({ token }: AdminSetupFormProps) {
       startOtpCountdown(response.expiresAt);
       startResendCooldown();
     } catch (err) {
-      if (err instanceof ApiError) {
-        setError(`${err.code}: ${err.message}`);
-      } else {
-        setError("Unable to send OTP.");
-      }
+      setError(getApiErrorMessageWithHint(err));
     } finally {
       setIsLoading(false);
     }
@@ -118,11 +115,7 @@ export function AdminSetupForm({ token }: AdminSetupFormProps) {
       startOtpCountdown(response.expiresAt);
       startResendCooldown();
     } catch (err) {
-      if (err instanceof ApiError) {
-        setError(`${err.code}: ${err.message}`);
-      } else {
-        setError("Unable to resend OTP.");
-      }
+      setError(getApiErrorMessageWithHint(err));
     } finally {
       setIsLoading(false);
     }
@@ -132,14 +125,10 @@ export function AdminSetupForm({ token }: AdminSetupFormProps) {
     setError(null);
     setIsLoading(true);
     try {
-      await consumeAdminInvite({ token, otp });
+      await consumeAdminInvite({ token, otp: normalizeOtpCodeInput(otp) });
       router.replace("/admin/login");
     } catch (err) {
-      if (err instanceof ApiError) {
-        setError(`${err.code}: ${err.message}`);
-      } else {
-        setError("Unable to complete admin setup.");
-      }
+      setError(getApiErrorMessageWithHint(err));
     } finally {
       setIsLoading(false);
     }
@@ -290,7 +279,7 @@ export function AdminSetupForm({ token }: AdminSetupFormProps) {
             OTP code
             <input
               value={otp}
-              onChange={(event) => setOtp(event.target.value)}
+              onChange={(event) => setOtp(normalizeOtpCodeInput(event.target.value))}
               inputMode="numeric"
               autoComplete="one-time-code"
               placeholder="000000"
@@ -324,7 +313,7 @@ export function AdminSetupForm({ token }: AdminSetupFormProps) {
           <button
             type="button"
             onClick={consumeInvite}
-            disabled={isLoading || otp.trim().length !== 6}
+            disabled={isLoading || !isCompleteOtpCode(otp)}
             className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-[#23403d] px-4 text-sm font-medium text-white transition-colors hover:bg-[#1a3330] disabled:cursor-not-allowed disabled:opacity-60"
           >
             {isLoading ? (

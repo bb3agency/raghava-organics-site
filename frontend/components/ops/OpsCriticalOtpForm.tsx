@@ -16,6 +16,7 @@ import {
   getOpsErrorDetail,
   isOpsOtpChallengeConsumed,
 } from "@/lib/error-messages";
+import { isCompleteOtpCode, normalizeOtpCodeInput } from "@/lib/otp-code";
 import {
   requestOpsOtpChallenge,
   type OpsOtpActionType,
@@ -84,7 +85,7 @@ export function OpsCriticalOtpForm({
   }
 
   async function executeAction() {
-    if (!challengeId || otpCode.trim().length !== 6) {
+    if (!challengeId || !isCompleteOtpCode(otpCode)) {
       setError("Request an OTP and enter the 6-digit code.");
       setErrorDetail(null);
       return;
@@ -100,7 +101,7 @@ export function OpsCriticalOtpForm({
     setMessage(null);
     setIsLoading(true);
     try {
-      await onExecute({ challengeId, otpCode: otpCode.trim() });
+      await onExecute({ challengeId, otpCode: normalizeOtpCodeInput(otpCode) });
       setMessage("Action completed successfully.");
       setOtpCode("");
       setChallengeId("");
@@ -112,6 +113,14 @@ export function OpsCriticalOtpForm({
         window.setTimeout(() => {
           void executeAction();
         }, 1500);
+        return;
+      }
+      if (err instanceof ApiError && err.code === "INVALID_CREDENTIALS" && isOpsOtpChallengeConsumed(err)) {
+        setError(getApiErrorMessageWithHint(err));
+        setErrorDetail(getOpsErrorDetail(err));
+        setChallengeId("");
+        setOtpCode("");
+        setExpiresAt(null);
         return;
       }
       if (err instanceof ApiError && err.status === 409 && err.code === "CONFLICT") {
@@ -179,7 +188,7 @@ export function OpsCriticalOtpForm({
           <OpsInput
             id="ops-otp-code"
             value={otpCode}
-            onChange={(event) => setOtpCode(event.target.value)}
+            onChange={(event) => setOtpCode(normalizeOtpCodeInput(event.target.value))}
             inputMode="numeric"
             autoComplete="one-time-code"
             maxLength={6}

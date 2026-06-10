@@ -1,4 +1,5 @@
 import { apiClient } from "@/lib/api";
+import { normalizeOtpCodeInput } from "@/lib/otp-code";
 
 export interface SendAdminSetupOtpInput {
   token: string;
@@ -34,6 +35,6 @@ export async function sendAdminSetupOtp(input: SendAdminSetupOtpInput) {
 export async function consumeAdminInvite(input: ConsumeAdminInviteInput) {
   return apiClient<ConsumeAdminInviteResponse>("/admin/invites/consume", {
     method: "POST",
-    body: JSON.stringify(input),
+    body: JSON.stringify({ ...input, otp: normalizeOtpCodeInput(input.otp) }),
   });
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useSafeRouter } from "@/lib/use-safe-router";
 import { Loader2, Search, X } from "lucide-react";
 import { StorefrontSearchDropdown } from "@/components/shared/StorefrontSearchDropdown";
 import { useStorefrontSearch } from "@/hooks/use-storefront-search";
@@ -20,7 +20,7 @@ interface SearchInputProps {
 export function SearchInput({ defaultValue = "", className }: SearchInputProps) {
   const [value, setValue] = useState(defaultValue);
   const [panelOpen, setPanelOpen] = useState(false);
-  const router = useRouter();
+  const router = useSafeRouter();
   const containerRef = useRef<HTMLDivElement>(null);
   const { results, loading, showPanel } = useStorefrontSearch(value, panelOpen);
 
@@ -41,6 +41,7 @@ export function SearchInput({ defaultValue = "", className }: SearchInputProps) 
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (!router.isReady) return;
     const normalized = normalizeStorefrontSearchQuery(value);
     if (normalized.length < STOREFRONT_SEARCH_MIN_CHARS) return;
     setPanelOpen(false);

@@ -94,6 +94,55 @@ describe('ShiprocketAdapter', () => {
     expect(result.labelUrl).toBe('https://label.example/123');
     const createBody = JSON.parse((fetchMock.mock.calls[1] as [string, RequestInit])[1].body as string);
     expect(createBody.payment_method).toBe('Prepaid');
+    expect(createBody.pickup_location).toBe('Primary');
+  });
+
+  it('uses configured pickup location nickname in create order payload', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ token: 'sr-token-123' })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ order_id: 101, shipment_id: 202, status: 'NEW' })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({
+          response: { data: { awb_assign_status: 1, awb_code: 'AWB999', courier_name: 'TestCourier' } }
+        })
+      });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new ShiprocketAdapter({
+      email: 'test@example.com',
+      password: 'secret',
+      pickupLocation: 'Raghava Warehouse'
+    });
+    await adapter.createShipment({
+      orderNumber: 'ORD-2026-00002',
+      amountRupees: 100,
+      destinationPincode: '560001',
+      originPincode: '110001',
+      totalWeightGrams: 500,
+      paymentMode: 'Prepaid',
+      sellerGstTin: '29ABCDE1234F1Z5',
+      hsnCode: '1001',
+      customer: {
+        fullName: 'Test User',
+        phone: '9999999999',
+        line1: 'Street 1',
+        city: 'Bengaluru',
+        state: 'Karnataka'
+      }
+    });
+
+    const createBody = JSON.parse((fetchMock.mock.calls[1] as [string, RequestInit])[1].body as string);
+    expect(createBody.pickup_location).toBe('Raghava Warehouse');
   });
 
   it('sends payment_method COD in Shiprocket payload for COD orders', async () => {

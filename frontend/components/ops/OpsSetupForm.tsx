@@ -13,9 +13,13 @@ import {
 import { Button } from "@/components/ui/button";
 import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { ApiError } from "@/lib/api";
 import { formatOpsDateTime } from "@/lib/ops-format";
-import { consumeOpsInvite, sendOpsSetupOtp } from "@/lib/ops-setup-api";
+import { isCompleteOtpCode, normalizeOtpCodeInput } from "@/lib/otp-code";
+import {
+  consumeOpsInvite,
+  getOpsSetupErrorMessage,
+  sendOpsSetupOtp,
+} from "@/lib/ops-setup-api";
 
 interface OpsSetupFormProps {
   token: string;
@@ -43,7 +47,7 @@ export function OpsSetupForm({ token }: OpsSetupFormProps) {
       setOtpSent(true);
       setExpiresAt(response.expiresAt);
     } catch (err) {
-      setError(err instanceof ApiError ? `${err.code}: ${err.message}` : "Unable to send OTP.");
+      setError(getOpsSetupErrorMessage(err));
     } finally {
       setIsSubmitting(false);
     }
@@ -53,10 +57,10 @@ export function OpsSetupForm({ token }: OpsSetupFormProps) {
     setError(null);
     setIsSubmitting(true);
     try {
-      await consumeOpsInvite({ token, otp });
+      await consumeOpsInvite({ token, otp: normalizeOtpCodeInput(otp) });
       setCompleted(true);
     } catch (err) {
-      setError(err instanceof ApiError ? `${err.code}: ${err.message}` : "Unable to complete setup.");
+      setError(getOpsSetupErrorMessage(err));
     } finally {
       setIsSubmitting(false);
     }
@@ -121,7 +125,7 @@ export function OpsSetupForm({ token }: OpsSetupFormProps) {
               <OpsInput
                 id="setup-otp"
                 value={otp}
-                onChange={(event) => setOtp(event.target.value)}
+                onChange={(event) => setOtp(normalizeOtpCodeInput(event.target.value))}
                 minLength={6}
                 maxLength={6}
                 inputMode="numeric"
@@ -133,7 +137,7 @@ export function OpsSetupForm({ token }: OpsSetupFormProps) {
               type="button"
               className="h-11 w-full"
               onClick={() => void onCompleteSetup()}
-              disabled={isSubmitting || otp.trim().length !== 6}
+              disabled={isSubmitting || !isCompleteOtpCode(otp)}
             >
               {isSubmitting ? "Activating…" : "Complete setup"}
             </Button>

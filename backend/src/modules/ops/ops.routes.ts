@@ -5,6 +5,7 @@ import { ERROR_CODES } from '@common/errors/error-codes';
 import { routeRateLimitProfiles } from '@common/rate-limit/rate-limit-policies';
 import { opsAuthGuard } from '@common/guards/ops-auth.guard';
 import { opsPermissionGuard } from '@common/guards/ops-permissions.guard';
+import { OPS_OTP_INPUT_JSON_SCHEMA, parseOpsOtpCodeInput } from './ops-otp-code.js';
 import { OpsService, OPS_BROWSER_SESSION_COOKIE_NAME } from './ops.service';
 
 export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void> {
@@ -258,7 +259,7 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
             domain: { type: 'string', enum: ['core', 'media', 'payments', 'shipping', 'notifications', 'opsSecurity'], maxLength: 24 },
             values: { type: 'object', additionalProperties: true, maxProperties: 50 },
             challengeId: { type: 'string', minLength: 1, maxLength: 80 },
-            otpCode: { type: 'string', minLength: 6, maxLength: 6, pattern: '^[0-9]{6}$' }
+            otpCode: OPS_OTP_INPUT_JSON_SCHEMA
           }
         },
         response: {
@@ -305,7 +306,7 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
         ...(body.domain ? { domain: body.domain } : {}),
         values: body.values,
         challengeId: body.challengeId,
-        otpCode: body.otpCode,
+        otpCode: parseOpsOtpCodeInput(body.otpCode, 'otpCode'),
         requestIp: request.ip,
         requestPath: request.url,
         method: request.method
@@ -384,7 +385,7 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
           required: ['challengeId', 'code'],
           properties: {
             challengeId: { type: 'string', minLength: 1, maxLength: 80 },
-            code: { type: 'string', minLength: 6, maxLength: 6, pattern: '^[0-9]{6}$' }
+            code: OPS_OTP_INPUT_JSON_SCHEMA
           }
         },
         response: {
@@ -409,7 +410,7 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
       return opsService.verifyEmailOtp({
         opsUserId: opsUser.id,
         challengeId: body.challengeId,
-        code: body.code,
+        code: parseOpsOtpCodeInput(body.code, 'code'),
         requestIp: request.ip,
         requestPath: request.url,
         method: request.method
@@ -568,7 +569,7 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
           required: ['challengeId', 'otpCode'],
           properties: {
             challengeId: { type: 'string', minLength: 1, maxLength: 80 },
-            otpCode: { type: 'string', minLength: 6, maxLength: 6, pattern: '^[0-9]{6}$' }
+            otpCode: OPS_OTP_INPUT_JSON_SCHEMA
           }
         },
         response: {
@@ -596,7 +597,7 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
         inviteId: params.inviteId,
         revokerOpsUserId: opsUser.id,
         challengeId: body.challengeId,
-        otpCode: body.otpCode,
+        otpCode: parseOpsOtpCodeInput(body.otpCode, 'otpCode'),
         requestIp: request.ip,
         requestPath: request.url,
         method: request.method
@@ -658,7 +659,7 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
           required: ['token', 'otp'],
           properties: {
             token: { type: 'string', minLength: 10, maxLength: 500 },
-            otp: { type: 'string', minLength: 6, maxLength: 6, pattern: '^[0-9]{6}$' }
+            otp: OPS_OTP_INPUT_JSON_SCHEMA
           }
         },
         response: {
@@ -681,7 +682,7 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
       const body = request.body as { token: string; otp: string };
       return opsService.consumeOpsInvite({
         inviteToken: body.token,
-        otp: body.otp,
+        otp: parseOpsOtpCodeInput(body.otp, 'otp'),
         requestIp: request.ip,
         requestPath: request.url,
         method: request.method
@@ -846,7 +847,7 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
           properties: {
             reason: { type: 'string', minLength: 5, maxLength: 500 },
             challengeId: { type: 'string', minLength: 1, maxLength: 80 },
-            otpCode: { type: 'string', minLength: 6, maxLength: 6, pattern: '^[0-9]{6}$' }
+            otpCode: OPS_OTP_INPUT_JSON_SCHEMA
           }
         },
         response: {
@@ -875,7 +876,7 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
         requestorOpsUserId: opsUser.id,
         reason: body.reason,
         challengeId: body.challengeId,
-        otpCode: body.otpCode,
+        otpCode: parseOpsOtpCodeInput(body.otpCode, 'otpCode'),
         requestIp: request.ip,
         requestPath: request.url,
         method: request.method
@@ -973,7 +974,7 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
           properties: {
             reason: { type: 'string', minLength: 10, maxLength: 500 },
             challengeId: { type: 'string', minLength: 1, maxLength: 80 },
-            otpCode: { type: 'string', minLength: 6, maxLength: 6, pattern: '^[0-9]{6}$' }
+            otpCode: OPS_OTP_INPUT_JSON_SCHEMA
           }
         },
         response: {
@@ -1002,7 +1003,7 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
         requestorOpsUserId: opsUser.id,
         reason: body.reason,
         challengeId: body.challengeId,
-        otpCode: body.otpCode,
+        otpCode: parseOpsOtpCodeInput(body.otpCode, 'otpCode'),
         requestIp: request.ip,
         requestPath: request.url,
         method: request.method
@@ -1140,7 +1141,7 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
             mode: { type: 'string', enum: ['normal', 'reduced', 'emergency', 'maintenance'], maxLength: 20 },
             reason: { type: 'string', minLength: 10, maxLength: 500 },
             challengeId: { type: 'string', minLength: 1, maxLength: 80 },
-            otpCode: { type: 'string', minLength: 6, maxLength: 6, pattern: '^[0-9]{6}$' }
+            otpCode: OPS_OTP_INPUT_JSON_SCHEMA
           }
         },
         response: {
@@ -1176,7 +1177,7 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
         mode: body.mode,
         reason: body.reason,
         challengeId: body.challengeId,
-        otpCode: body.otpCode,
+        otpCode: parseOpsOtpCodeInput(body.otpCode, 'otpCode'),
         requestIp: request.ip,
         requestPath: request.url,
         method: request.method
@@ -1264,7 +1265,7 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
           properties: {
             delayMinutes: { type: 'number', minimum: 0, maximum: 1440 },
             challengeId: { type: 'string', minLength: 1, maxLength: 80 },
-            otpCode: { type: 'string', minLength: 6, maxLength: 6, pattern: '^[0-9]{6}$' }
+            otpCode: OPS_OTP_INPUT_JSON_SCHEMA
           }
         },
         response: {
@@ -1291,7 +1292,7 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
         opsUserId: opsUser.id,
         delayMinutes: body.delayMinutes,
         challengeId: body.challengeId,
-        otpCode: body.otpCode,
+        otpCode: parseOpsOtpCodeInput(body.otpCode, 'otpCode'),
         requestIp: request.ip,
         requestPath: request.url,
         method: request.method
@@ -1353,7 +1354,7 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
           required: ['email', 'otp'],
           properties: {
             email: { type: 'string', format: 'email', maxLength: 254 },
-            otp: { type: 'string', minLength: 6, maxLength: 6, pattern: '^[0-9]{6}$' }
+            otp: OPS_OTP_INPUT_JSON_SCHEMA
           }
         },
         response: {
@@ -1377,7 +1378,7 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
       const { email, otp } = request.body as { email: string; otp: string };
       const result = await opsService.verifyLoginOtp({
         email,
-        otp,
+        otp: parseOpsOtpCodeInput(otp, 'otp'),
         requestIp: request.ip,
         requestPath: request.url,
         method: request.method

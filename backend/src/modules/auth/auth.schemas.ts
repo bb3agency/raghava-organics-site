@@ -1,3 +1,4 @@
+import { OTP_INPUT_JSON_SCHEMA } from '@common/auth/otp-code.js';
 import { standardErrorResponses } from '@common/errors/error-response.schema';
 
 const idSchema = { type: 'string', maxLength: 64 } as const;
@@ -87,7 +88,7 @@ export const sendOtpSchema = {
       required: ['message'],
       properties: {
         message: messageSchema,
-        devOtp: { type: 'string', minLength: 6, maxLength: 6, pattern: '^[0-9]{6}$' }
+        devOtp: OTP_INPUT_JSON_SCHEMA
       }
     },
     ...standardErrorResponses
@@ -145,7 +146,7 @@ export const verifyOtpSchema = {
     required: ['phone', 'otp'],
     properties: {
       phone: { type: 'string', maxLength: 20 },
-      otp: { type: 'string', minLength: 6, maxLength: 6, pattern: '^[0-9]{6}$' }
+      otp: OTP_INPUT_JSON_SCHEMA
     }
   },
   response: {
@@ -171,7 +172,7 @@ export const signupPhoneSchema = {
     required: ['phone', 'otp'],
     properties: {
       phone: { type: 'string', maxLength: 20 },
-      otp: { type: 'string', minLength: 6, maxLength: 6, pattern: '^[0-9]{6}$' },
+      otp: OTP_INPUT_JSON_SCHEMA,
       firstName: { type: 'string', maxLength: 100 },
       lastName: { type: 'string', maxLength: 100 },
       email: { type: 'string', format: 'email', maxLength: 255 }
@@ -355,7 +356,7 @@ export const adminLoginRequestOtpSchema = {
       properties: {
         message: messageSchema,
         expiresAt: { type: 'string', maxLength: 40 },
-        devOtp: { type: 'string', minLength: 6, maxLength: 6, pattern: '^[0-9]{6}$' }
+        devOtp: OTP_INPUT_JSON_SCHEMA
       }
     },
     ...standardErrorResponses
@@ -371,7 +372,7 @@ export const adminLoginVerifyOtpSchema = {
     required: ['email', 'otp'],
     properties: {
       email: { type: 'string', format: 'email', maxLength: 255 },
-      otp: { type: 'string', minLength: 6, maxLength: 6, pattern: '^[0-9]{6}$' }
+      otp: OTP_INPUT_JSON_SCHEMA
     }
   },
   response: {
@@ -515,7 +516,7 @@ export const adminInviteRevokeSchema = {
     required: ['challengeId', 'otpCode'],
     properties: {
       challengeId: { type: 'string', minLength: 1, maxLength: 80 },
-      otpCode: { type: 'string', minLength: 6, maxLength: 6, pattern: '^[0-9]{6}$' }
+      otpCode: OTP_INPUT_JSON_SCHEMA
     }
   },
   response: {
@@ -569,7 +570,7 @@ export const adminInviteConsumeSchema = {
     required: ['token', 'otp'],
     properties: {
       token: { type: 'string', minLength: 10, maxLength: 500 },
-      otp: { type: 'string', minLength: 6, maxLength: 6, pattern: '^[0-9]{6}$' }
+      otp: OTP_INPUT_JSON_SCHEMA
     }
   },
   response: {

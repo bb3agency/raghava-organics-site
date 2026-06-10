@@ -4,6 +4,13 @@ export interface CartLineItem {
   lineTotal: number;
   priceSnapshot: number;
   quantity: number;
+  /** Present on API responses; optional for legacy persisted cart snapshots. */
+  product?: {
+    name: string;
+    metaDescription: string | null;
+    imageUrl: string | null;
+    imageAlt: string | null;
+  };
   variant: {
     id: string;
     name: string;

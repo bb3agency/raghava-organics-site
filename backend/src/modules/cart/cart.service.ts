@@ -29,6 +29,27 @@ const HOT_SKU_USER_RESERVE_CAP = Number(process.env.HOT_SKU_USER_RESERVE_CAP ?? 
 const HOT_SKU_COOLDOWN_SECONDS = Number(process.env.HOT_SKU_COOLDOWN_SECONDS ?? 15);
 const HOT_SKU_SHARD_COUNT = Number(process.env.HOT_SKU_SHARD_COUNT ?? 8);
 
+const CART_ITEM_PRODUCT_SELECT = {
+  categoryId: true,
+  name: true,
+  metaDescription: true,
+  images: {
+    orderBy: { sortOrder: 'asc' as const },
+    take: 1,
+    select: { url: true, altText: true }
+  }
+} as const;
+
+const CART_ITEMS_INCLUDE = {
+  include: {
+    variant: {
+      include: {
+        product: { select: CART_ITEM_PRODUCT_SELECT }
+      }
+    }
+  }
+} as const;
+
 type CouponScope = {
   productIds?: string[];
   categoryIds?: string[];
@@ -108,7 +129,15 @@ export class CartService {
       items: Array<{
         priceSnapshot: number;
         quantity: number;
-        variant: { productId: string; product: { categoryId: string } };
+        variant: {
+          productId: string;
+          product: {
+            categoryId: string;
+            name: string;
+            metaDescription: string | null;
+            images: Array<{ url: string; altText: string }>;
+          };
+        };
       }>;
     }
   >(cart: T, tx?: Prisma.TransactionClient): Promise<T> {
@@ -151,7 +180,19 @@ export class CartService {
         variantId: string;
         quantity: number;
         priceSnapshot: number;
-        variant: { id: string; name: string; sku: string; price: number; productId: string; product: { categoryId: string } };
+        variant: {
+          id: string;
+          name: string;
+          sku: string;
+          price: number;
+          productId: string;
+          product: {
+            categoryId: string;
+            name: string;
+            metaDescription: string | null;
+            images: Array<{ url: string; altText: string }>;
+          };
+        };
       }>;
     }
   >(cart: T, isGuest: boolean, tx?: Prisma.TransactionClient) {
@@ -718,7 +759,7 @@ export class CartService {
         include: {
           coupon: true,
           reservations: true,
-          items: { include: { variant: { include: { product: { select: { categoryId: true } } } } } }
+          items: CART_ITEMS_INCLUDE
         }
       });
       if (extendReservation) {
@@ -733,7 +774,7 @@ export class CartService {
         include: {
           coupon: true,
           reservations: true,
-          items: { include: { variant: { include: { product: { select: { categoryId: true } } } } } }
+          items: CART_ITEMS_INCLUDE
         }
       });
       if (existing) {
@@ -752,7 +793,7 @@ export class CartService {
       include: {
         coupon: true,
         reservations: true,
-        items: { include: { variant: { include: { product: { select: { categoryId: true } } } } } }
+        items: CART_ITEMS_INCLUDE
       }
     });
     if (extendReservation) {
@@ -768,17 +809,7 @@ export class CartService {
       include: {
         coupon: true,
         reservations: true,
-        items: {
-          include: {
-            variant: {
-              include: {
-                product: {
-                  select: { categoryId: true }
-                }
-              }
-            }
-          }
-        }
+        items: CART_ITEMS_INCLUDE
       }
     });
   }
@@ -789,17 +820,7 @@ export class CartService {
         where: { userId },
         include: {
           coupon: true,
-          items: {
-            include: {
-              variant: {
-                include: {
-                  product: {
-                    select: { categoryId: true }
-                  }
-                }
-              }
-            }
-          }
+          items: CART_ITEMS_INCLUDE
         }
       });
     }
@@ -812,17 +833,7 @@ export class CartService {
       where: { sessionToken },
       include: {
         coupon: true,
-        items: {
-          include: {
-            variant: {
-              include: {
-                product: {
-                  select: { categoryId: true }
-                }
-              }
-            }
-          }
-        }
+        items: CART_ITEMS_INCLUDE
       }
     });
   }
@@ -842,7 +853,19 @@ export class CartService {
         variantId: string;
         quantity: number;
         priceSnapshot: number;
-        variant: { id: string; name: string; sku: string; price: number; productId: string; product: { categoryId: string } };
+        variant: {
+          id: string;
+          name: string;
+          sku: string;
+          price: number;
+          productId: string;
+          product: {
+            categoryId: string;
+            name: string;
+            metaDescription: string | null;
+            images: Array<{ url: string; altText: string }>;
+          };
+        };
       }>;
     },
     isGuest: boolean
@@ -862,6 +885,12 @@ export class CartService {
         quantity: item.quantity,
         priceSnapshot: item.priceSnapshot,
         lineTotal: item.priceSnapshot * item.quantity,
+        product: {
+          name: item.variant.product?.name ?? item.variant.name,
+          metaDescription: item.variant.product?.metaDescription ?? null,
+          imageUrl: item.variant.product?.images?.[0]?.url ?? null,
+          imageAlt: item.variant.product?.images?.[0]?.altText ?? null
+        },
         variant: {
           id: item.variant.id,
           name: item.variant.name,

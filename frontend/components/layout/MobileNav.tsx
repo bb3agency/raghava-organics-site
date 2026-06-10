@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
+import { useSafeRouter } from "@/lib/use-safe-router";
 import Image from "next/image";
 import {
   X,
@@ -50,7 +51,7 @@ export function MobileNav({ minOrderValuePaise = 0 }: MobileNavProps) {
   const isSignedIn = Boolean(accessToken);
   const isCheckingSession = sessionStatus === "checking" && !accessToken;
   const pathname = usePathname();
-  const router = useRouter();
+  const router = useSafeRouter();
   const authRedirect = ["/login", "/register"].includes(pathname) ? "" : `?redirect=${encodeURIComponent(pathname)}`;
 
   const [searchQuery, setSearchQuery] = useState("");
@@ -161,6 +162,7 @@ export function MobileNav({ minOrderValuePaise = 0 }: MobileNavProps) {
               onChange={(e) => setSearchQuery(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
+                  if (!router.isReady) return;
                   const normalized = normalizeStorefrontSearchQuery(searchQuery);
                   if (normalized.length < STOREFRONT_SEARCH_MIN_CHARS) return;
                   close();

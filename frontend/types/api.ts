@@ -6,6 +6,7 @@ export interface ApiErrorBody {
     hintKey?: string;
     retryable?: boolean;
     remediation?: string;
+    attemptsRemaining?: number;
     fields?: Array<{
       field: string;
       rule?: string;

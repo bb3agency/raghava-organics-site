@@ -14,6 +14,7 @@ import {
   getApiErrorMessageWithHint,
   isApiErrorWithCode,
 } from "@/lib/error-messages";
+import { isCompleteOtpCode, normalizeOtpCodeInput } from "@/lib/otp-code";
 import { emailSchema, otpSchema, passwordSchema } from "@/lib/validators";
 import { AuthErrorBanner } from "@/components/auth/AuthErrorBanner";
 import { TurnstileChallenge } from "@/components/auth/TurnstileChallenge";
@@ -385,7 +386,7 @@ export function AdminLoginForm({ onSuccess, enrollmentHint }: AdminLoginFormProp
             <input
               id="admin-otp"
               value={otp}
-              onChange={(event) => setOtp(event.target.value)}
+              onChange={(event) => setOtp(normalizeOtpCodeInput(event.target.value))}
               inputMode="numeric"
               autoComplete="one-time-code"
               maxLength={6}
@@ -423,7 +424,7 @@ export function AdminLoginForm({ onSuccess, enrollmentHint }: AdminLoginFormProp
           <button
             type="submit"
             className="inline-flex h-11 items-center justify-center gap-2 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground disabled:opacity-60"
-            disabled={otp.length !== 6}
+            disabled={!isCompleteOtpCode(otp)}
           >
             Verify and sign in
           </button>

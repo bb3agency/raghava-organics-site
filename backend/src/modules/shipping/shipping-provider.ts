@@ -226,9 +226,14 @@ export function resolveShippingProviderRuntime(runtimeConfig: NodeJS.ProcessEnv 
       };
     }
     const baseUrl = runtimeConfig.SHIPROCKET_BASE_URL?.trim();
-    const adapter = baseUrl
-      ? new ShiprocketAdapter({ email, password, baseUrl })
-      : new ShiprocketAdapter({ email, password });
+    const pickupLocation = runtimeConfig.SHIPROCKET_PICKUP_LOCATION?.trim();
+    const adapterOptions = {
+      email,
+      password,
+      ...(baseUrl ? { baseUrl } : {}),
+      ...(pickupLocation ? { pickupLocation } : {})
+    };
+    const adapter = new ShiprocketAdapter(adapterOptions);
     return {
       provider: 'shiprocket',
       failoverEnabled,

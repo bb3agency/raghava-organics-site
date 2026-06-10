@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState, Suspense } from "react";
-import { useSearchParams, useRouter } from "next/navigation";
+import { useSearchParams } from "next/navigation";
+import { useSafeRouter } from "@/lib/use-safe-router";
 import Script from "next/script";
 import { useAuthStore } from "@/stores/auth";
 import { useCartStore } from "@/stores/cart";
@@ -14,7 +15,7 @@ import { createIdempotencyKey } from "@/lib/idempotency";
 
 function PaymentContent() {
   const searchParams = useSearchParams();
-  const router = useRouter();
+  const { replace, push, isReady } = useSafeRouter();
   const orderId = searchParams ? searchParams.get("orderId") : null;
   const accessToken = useAuthStore((s) => s.accessToken);
   const user = useAuthStore((s) => s.user);
@@ -26,13 +27,11 @@ function PaymentContent() {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    if (!orderId) return;
-    if (!accessToken) {
-      router.replace(
-        `/login?redirect=${encodeURIComponent(`/checkout/payment?orderId=${orderId}`)}`,
-      );
-    }
-  }, [accessToken, orderId, router]);
+    if (!isReady || !orderId || accessToken) return;
+    replace(
+      `/login?redirect=${encodeURIComponent(`/checkout/payment?orderId=${orderId}`)}`,
+    );
+  }, [accessToken, isReady, orderId, replace]);
 
   useEffect(() => {
     let cancelled = false;
@@ -107,7 +106,7 @@ function PaymentContent() {
             );
             clearPendingMerge();
             clearCart();
-            router.push(`/checkout/success?orderId=${order.id}`);
+            push(`/checkout/success?orderId=${order.id}`);
           } catch (verifyError) {
             setError(getApiErrorMessage(verifyError));
           } finally {

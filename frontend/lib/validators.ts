@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { normalizeOtpCodeInput } from "@/lib/otp-code";
 
 export const emailSchema = z.string().email("Enter a valid email address");
 
@@ -9,8 +10,13 @@ export const phoneSchema = z
 
 export const otpSchema = z
   .string()
-  .length(6, "OTP must be 6 digits")
-  .regex(/^\d{6}$/, "OTP must be numeric");
+  .transform((value) => normalizeOtpCodeInput(value))
+  .pipe(
+    z
+      .string()
+      .length(6, "OTP must be 6 digits")
+      .regex(/^\d{6}$/, "OTP must be numeric"),
+  );
 
 export const passwordSchema = z
   .string()

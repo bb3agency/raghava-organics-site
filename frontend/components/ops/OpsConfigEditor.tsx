@@ -15,7 +15,12 @@ import {
 } from "@/components/ops/ui/ops-ui";
 import { Button } from "@/components/ui/button";
 import { ApiError } from "@/lib/api";
-import { getApiErrorMessageWithHint } from "@/lib/error-messages";
+import {
+  getApiErrorMessageWithHint,
+  getOpsErrorDetail,
+  isOpsOtpChallengeConsumed,
+} from "@/lib/error-messages";
+import { isCompleteOtpCode, normalizeOtpCodeInput } from "@/lib/otp-code";
 import {
   buildOpsConfigFieldDefinitions,
   groupOpsConfigFieldsByDomain,
@@ -198,6 +203,7 @@ export function OpsConfigEditor({ overview, stored, onConfigSaved }: OpsConfigEd
   const [otpCode, setOtpCode] = useState("");
   const [secondsLeft, setSecondsLeft] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [errorDetail, setErrorDetail] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
@@ -278,11 +284,13 @@ export function OpsConfigEditor({ overview, stored, onConfigSaved }: OpsConfigEd
     setChallengeId("");
     setExpiresAt(null);
     setError(null);
+    setErrorDetail(null);
     setMessage(null);
   }, [fields]);
 
   async function handleRequestOtp() {
     setError(null);
+    setErrorDetail(null);
     setMessage(null);
     setIsLoading(true);
     try {
@@ -292,6 +300,7 @@ export function OpsConfigEditor({ overview, stored, onConfigSaved }: OpsConfigEd
       setMessage("A 6-digit code was sent to your ops email.");
     } catch (err) {
       setError(getApiErrorMessageWithHint(err));
+      setErrorDetail(getOpsErrorDetail(err));
     } finally {
       setIsLoading(false);
     }
@@ -311,8 +320,9 @@ export function OpsConfigEditor({ overview, stored, onConfigSaved }: OpsConfigEd
       return;
     }
 
-    if (otpCode.trim().length !== 6) {
+    if (!isCompleteOtpCode(otpCode)) {
       setError("Enter the 6-digit OTP sent to your email.");
+      setErrorDetail(null);
       return;
     }
     if (secondsLeft <= 0) {
@@ -321,9 +331,11 @@ export function OpsConfigEditor({ overview, stored, onConfigSaved }: OpsConfigEd
     }
 
     setError(null);
+    setErrorDetail(null);
     setMessage(null);
     setIsLoading(true);
     try {
+      const normalizedOtp = normalizeOtpCodeInput(otpCode);
       const validation = await validateOpsConfigClient({ values: dirtyValues });
       if (!validation.valid) {
         setError(
@@ -336,7 +348,7 @@ export function OpsConfigEditor({ overview, stored, onConfigSaved }: OpsConfigEd
       const result = await saveOpsConfigClient({
         values: dirtyValues,
         challengeId,
-        otpCode: otpCode.trim(),
+        otpCode: normalizedOtp,
       });
       setDraft(buildInitialDraft(fields));
       setOtpCode("");
@@ -349,14 +361,29 @@ export function OpsConfigEditor({ overview, stored, onConfigSaved }: OpsConfigEd
       );
       onConfigSaved?.();
     } catch (err) {
+      if (err instanceof ApiError && err.code === "INVALID_CREDENTIALS" && isOpsOtpChallengeConsumed(err)) {
+        setError(getApiErrorMessageWithHint(err));
+        setErrorDetail(getOpsErrorDetail(err));
+        setChallengeId("");
+        setOtpCode("");
+        setExpiresAt(null);
+        return;
+      }
       if (err instanceof ApiError && err.code === "ops_audit_chain_lock_timeout") {
         setError(getApiErrorMessageWithHint(err));
+        setErrorDetail(getOpsErrorDetail(err));
         window.setTimeout(() => {
           void executeSave();
         }, 1500);
         return;
       }
       setError(getApiErrorMessageWithHint(err));
+      setErrorDetail(getOpsErrorDetail(err));
+      if (isOpsOtpChallengeConsumed(err)) {
+        setChallengeId("");
+        setOtpCode("");
+        setExpiresAt(null);
+      }
     } finally {
       setIsLoading(false);
     }
@@ -448,7 +475,7 @@ export function OpsConfigEditor({ overview, stored, onConfigSaved }: OpsConfigEd
             <OpsInput
               id="ops-config-otp"
               value={otpCode}
-              onChange={(event) => setOtpCode(event.target.value)}
+              onChange={(event) => setOtpCode(normalizeOtpCodeInput(event.target.value))}
               inputMode="numeric"
               autoComplete="one-time-code"
               maxLength={6}
@@ -466,7 +493,16 @@ export function OpsConfigEditor({ overview, stored, onConfigSaved }: OpsConfigEd
           </Button>
 
           {message ? <OpsAlert tone="success">{message}</OpsAlert> : null}
-          {error ? <OpsAlert tone="error">{error}</OpsAlert> : null}
+          {error ? (
+            <OpsAlert tone="error">
+              <div className="grid gap-1">
+                <span>{error}</span>
+                {errorDetail ? (
+                  <span className="font-mono text-xs text-destructive/80">{errorDetail}</span>
+                ) : null}
+              </div>
+            </OpsAlert>
+          ) : null}
 
           <OpsAlert tone="info" title="Restart is manual">
             Saved keys stay in the database until the running API and workers reload them. There is
