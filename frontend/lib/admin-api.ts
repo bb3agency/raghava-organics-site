@@ -369,7 +369,7 @@ export interface AdminProductVariant {
   sku: string;
   price: number;
   compareAtPrice: number | null;
-  weightGrams: number | null;
+  weight: number | null;
   isActive: boolean;
 }
 

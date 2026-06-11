@@ -161,6 +161,7 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
   const [editPrimaryPrice, setEditPrimaryPrice] = useState("");
   const [editPrimaryCompareAtPrice, setEditPrimaryCompareAtPrice] =
     useState("");
+  const [editPrimaryWeight, setEditPrimaryWeight] = useState("");
   const [status, setStatus] = useState("Draft");
   const [categoryId, setCategoryId] = useState("");
   const [tagsText, setTagsText] = useState("");
@@ -236,6 +237,11 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
         const pricing = primaryVariantPricingFromApi(primaryVariant);
         setEditPrimaryPrice(pricing.priceRupees);
         setEditPrimaryCompareAtPrice(pricing.compareAtPriceRupees);
+        setEditPrimaryWeight(
+          primaryVariant.weight !== null
+            ? String(primaryVariant.weight)
+            : ""
+        );
       }
     } catch (err) {
       setError(getApiErrorMessage(err));
@@ -356,7 +362,7 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
               name: variant.name.trim(),
               price,
               ...(compareAtPrice !== undefined ? { compareAtPrice } : {}),
-              ...(weightGrams !== undefined ? { weightGrams } : {}),
+              ...(weightGrams !== undefined ? { weight: weightGrams } : {}),
               quantity,
               isActive: variant.isActive,
               ...(Number.isFinite(threshold) && threshold >= 0
@@ -507,12 +513,18 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
       let normalizedUpdated = normalizeProductDetail(updated);
 
       if (primaryVariant && pricePatch?.ok) {
+        const wgStr = editPrimaryWeight.trim();
+        const weightGrams =
+          wgStr !== "" && Number.isFinite(Number(wgStr)) && Number(wgStr) > 0
+            ? Math.floor(Number(wgStr))
+            : null;
         await api(`/admin/products/${productId}/variants/${primaryVariant.id}`, {
           method: "PATCH",
           idempotencyKey: createIdempotencyKey(),
           body: JSON.stringify({
             price: pricePatch.price,
             compareAtPrice: pricePatch.compareAtPrice,
+            ...(weightGrams !== null ? { weightGrams } : {}),
           }),
         });
         normalizedUpdated = mergePrimaryVariantPrices(
@@ -1436,14 +1448,18 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
                     min="1"
                     placeholder="e.g. 500"
                     value={
-                      isCreate ? createVariants[0]?.weightGrams || "" : ""
+                      isCreate
+                        ? createVariants[0]?.weightGrams || ""
+                        : editPrimaryWeight
                     }
                     onChange={(event) => {
                       if (isCreate) {
                         updateFirstVariant("weightGrams", event.target.value);
+                      } else {
+                        setEditPrimaryWeight(event.target.value);
                       }
                     }}
-                    disabled={!isCreate || !canWrite}
+                    disabled={!canWrite}
                   />
                 </label>
                 <label className="grid gap-1.5 text-xs font-bold text-muted-foreground uppercase tracking-wider">
@@ -2006,7 +2022,7 @@ function VariantEditRow({
         ? String(variant.compareAtPrice / 100)
         : "",
     weightGrams:
-      variant.weightGrams !== null ? String(variant.weightGrams) : "",
+      variant.weight !== null ? String(variant.weight) : "",
     initialQuantity: "",
     isActive: variant.isActive,
   });
@@ -2021,7 +2037,7 @@ function VariantEditRow({
           ? String(variant.compareAtPrice / 100)
           : "",
       weightGrams:
-        variant.weightGrams !== null ? String(variant.weightGrams) : "",
+        variant.weight !== null ? String(variant.weight) : "",
       initialQuantity: "",
       isActive: variant.isActive,
     });
