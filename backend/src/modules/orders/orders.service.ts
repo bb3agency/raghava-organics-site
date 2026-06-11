@@ -647,9 +647,13 @@ export class OrdersService {
       include: {
         items: true,
         payment: true,
-        coupon: {
-          select: {
-            code: true
+        couponUsages: {
+          include: {
+            coupon: {
+              select: {
+                code: true
+              }
+            }
           }
         },
         invoice: {
@@ -3447,9 +3451,11 @@ export class OrdersService {
           occurredAt: Date;
         }>;
       } | null;
-      coupon?: {
-        code: string;
-      } | null;
+      couponUsages?: Array<{
+        coupon: {
+          code: string;
+        };
+      }>;
       user?: {
         firstName?: string | null;
         lastName?: string | null;
@@ -3486,7 +3492,9 @@ export class OrdersService {
       subtotal: order.subtotal,
       shippingCharge: order.shippingCharge,
       discountAmount: order.discountAmount,
-      ...(order.coupon ? { couponCode: order.coupon.code } : {}),
+      ...(order.couponUsages && order.couponUsages.length > 0 && order.couponUsages[0]?.coupon?.code
+        ? { couponCode: order.couponUsages[0].coupon!.code }
+        : {}),
       total: order.total,
       notes: order.notes,
       createdAt: order.createdAt.toISOString(),
