@@ -2630,13 +2630,17 @@ export class OrdersService {
     }
 
     try {
+      // No fixed jobId here — the shipping worker's own idempotency guard (skip if AWB
+      // already exists) handles deduplication safely. A fixed jobId caused BullMQ to
+      // silently drop every retry once the first job landed in the failed state (7-day
+      // retention), meaning the order could never be shipped again without manual Redis
+      // intervention.
       await this.enqueueOutboxMessage(
         'shipping',
         'create-shipment',
         {
           orderId: existing.id
-        },
-        `create-shipment:${existing.id}`
+        }
       );
     } catch {
       throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Unable to enqueue shipment booking', 502);

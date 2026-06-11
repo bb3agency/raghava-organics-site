@@ -161,6 +161,30 @@ export function AdminOrderFulfillmentPanel({
     };
   }, [api, selectedOrderId]);
 
+  const pollUntilShipped = useCallback(
+    async (orderId: string) => {
+      const maxAttempts = 12; // 12 × 5s = 60s
+      for (let i = 0; i < maxAttempts; i++) {
+        await new Promise<void>((res) => setTimeout(res, 5000));
+        try {
+          const data = await api<AdminOrderDetail>(`/admin/orders/${orderId}`);
+          setDetail(data);
+          if (data.status === "SHIPPED" || data.shipment?.awb) {
+            setSuccess("Shipment booked! AWB has been assigned.");
+            notifyAdminDataChanged(["orders", "shipments", "dashboard"]);
+            return;
+          }
+        } catch {
+          // ignore transient errors during polling
+        }
+      }
+      setSuccess(
+        "Shipment booking was queued but AWB is not yet assigned. Check the worker logs for errors, or refresh this page in a minute.",
+      );
+    },
+    [api],
+  );
+
   const runAction = async (
     actionKey: string,
     endpoint: string,
@@ -180,12 +204,22 @@ export function AdminOrderFulfillmentPanel({
         idempotencyKey: createIdempotencyKey(),
         body: JSON.stringify(options.body ?? {}),
       });
-      setSuccess("Action completed. Refreshing order state…");
-      await loadDetail(selectedOrderId);
-      if (!hideOrderPicker) {
-        await loadOrders();
+      if (actionKey === "ship") {
+        setSuccess("Shipment booking queued — polling for AWB (up to 60s)…");
+        await loadDetail(selectedOrderId);
+        if (!hideOrderPicker) {
+          await loadOrders();
+        }
+        void pollUntilShipped(selectedOrderId);
+        // pollUntilShipped handles notify + success message
+      } else {
+        setSuccess("Action completed. Refreshing order state…");
+        await loadDetail(selectedOrderId);
+        if (!hideOrderPicker) {
+          await loadOrders();
+        }
+        notifyAdminDataChanged(["orders", "shipments", "dashboard"]);
       }
-      notifyAdminDataChanged(["orders", "shipments", "dashboard"]);
     } catch (err) {
       setError(getApiErrorMessageWithHint(err));
     } finally {

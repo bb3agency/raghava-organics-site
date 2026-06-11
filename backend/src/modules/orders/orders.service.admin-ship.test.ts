@@ -89,9 +89,7 @@ describe('OrdersService admin ship enqueue', () => {
       expect.objectContaining({
         orderId: 'order_1'
       }),
-      expect.objectContaining({
-        jobId: 'create-shipment:order_1'
-      })
+      undefined
     );
     expect(notificationAdd).toHaveBeenCalledWith(
       'send-primary',
