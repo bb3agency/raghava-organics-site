@@ -22,6 +22,7 @@ describe('order state machine', () => {
     expect(canTransitionOrder('PENDING_PAYMENT', 'CONFIRMED')).toBe(true);
     expect(canTransitionOrder('PENDING_PAYMENT', 'PAYMENT_FAILED')).toBe(true);
     expect(canTransitionOrder('CONFIRMED', 'PROCESSING')).toBe(true);
+    expect(canTransitionOrder('CONFIRMED', 'SHIPPED')).toBe(true);
     expect(canTransitionOrder('PROCESSING', 'SHIPPED')).toBe(true);
     expect(canTransitionOrder('SHIPPED', 'OUT_FOR_DELIVERY')).toBe(true);
     expect(canTransitionOrder('OUT_FOR_DELIVERY', 'DELIVERED')).toBe(true);

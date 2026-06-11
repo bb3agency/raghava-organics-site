@@ -1398,7 +1398,9 @@ export class OrdersService {
           orderId: createdOrder.id,
           toStatus: OrderStatus.CONFIRMED,
           triggeredBy: 'PREPAID_CONFIRMED',
-          note: 'Payment confirmed'
+          note: 'Payment confirmed',
+          providerOrderId: input.razorpayOrderId,
+          providerPaymentId: input.razorpayPaymentId
         },
         `process-order-update:confirmed:${createdOrder.id}`
       );
