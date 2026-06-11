@@ -27,6 +27,7 @@ const sampleProduct = {
       name: "Default",
       price: 5000,
       compareAtPrice: 50000,
+      weightGrams: 500,
       isActive: true,
     },
   ],

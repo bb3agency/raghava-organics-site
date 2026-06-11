@@ -83,6 +83,7 @@ interface VariantDraft {
   name: string;
   pricePaise: string;
   compareAtPricePaise: string;
+  weightGrams: string;
   initialQuantity: string;
   isActive: boolean;
 }
@@ -110,6 +111,7 @@ function emptyVariant(): VariantDraft {
     name: "Default",
     pricePaise: "",
     compareAtPricePaise: "",
+    weightGrams: "",
     initialQuantity: "",
     isActive: true,
   };
@@ -344,11 +346,17 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
                 ? Math.floor(Number(qtyStr))
                 : 0;
             const threshold = Number(lowStockThreshold);
+            const wgStr = variant.weightGrams.trim();
+            const weightGrams =
+              wgStr !== "" && Number.isFinite(Number(wgStr)) && Number(wgStr) > 0
+                ? Math.floor(Number(wgStr))
+                : undefined;
             return {
               sku: variant.sku.trim(),
               name: variant.name.trim(),
               price,
               ...(compareAtPrice !== undefined ? { compareAtPrice } : {}),
+              ...(weightGrams !== undefined ? { weightGrams } : {}),
               quantity,
               isActive: variant.isActive,
               ...(Number.isFinite(threshold) && threshold >= 0
@@ -607,6 +615,11 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
     setSuccess(null);
     try {
       const compareAtPrice = parseRupeesToPaise(draft.compareAtPricePaise);
+      const wgStr = draft.weightGrams.trim();
+      const weightGrams =
+        wgStr !== "" && Number.isFinite(Number(wgStr)) && Number(wgStr) > 0
+          ? Math.floor(Number(wgStr))
+          : null;
       await api(`/admin/products/${productId}/variants/${variant.id}`, {
         method: "PATCH",
         idempotencyKey: createIdempotencyKey(),
@@ -615,6 +628,7 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
           name: draft.name.trim(),
           price,
           compareAtPrice: compareAtPrice ?? null,
+          weightGrams,
           isActive: draft.isActive,
         }),
       });
@@ -644,6 +658,11 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
     setSuccess(null);
     try {
       const compareAtPrice = parseRupeesToPaise(newVariant.compareAtPricePaise);
+      const wgStr = newVariant.weightGrams.trim();
+      const weightGrams =
+        wgStr !== "" && Number.isFinite(Number(wgStr)) && Number(wgStr) > 0
+          ? Math.floor(Number(wgStr))
+          : undefined;
       await api(`/admin/products/${productId}/variants`, {
         method: "POST",
         idempotencyKey: createIdempotencyKey(),
@@ -652,6 +671,7 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
           name: newVariant.name.trim(),
           price,
           ...(compareAtPrice !== undefined ? { compareAtPrice } : {}),
+          ...(weightGrams !== undefined ? { weightGrams } : {}),
           isActive: newVariant.isActive,
         }),
       });
@@ -1404,6 +1424,29 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
 
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-3 items-center">
                 <label className="grid gap-1.5 text-xs font-bold text-muted-foreground uppercase tracking-wider">
+                  <span className="flex items-center gap-1">
+                    Weight (g)
+                    <span title="Weight in grams — required for shipping rate calculation.">
+                      <HelpCircle className="h-3.5 w-3.5 text-muted-foreground/60 cursor-help" />
+                    </span>
+                  </span>
+                  <input
+                    className={`${inputClass} border-border/50 text-foreground`}
+                    type="number"
+                    min="1"
+                    placeholder="e.g. 500"
+                    value={
+                      isCreate ? createVariants[0]?.weightGrams || "" : ""
+                    }
+                    onChange={(event) => {
+                      if (isCreate) {
+                        updateFirstVariant("weightGrams", event.target.value);
+                      }
+                    }}
+                    disabled={!isCreate || !canWrite}
+                  />
+                </label>
+                <label className="grid gap-1.5 text-xs font-bold text-muted-foreground uppercase tracking-wider">
                   Stock Quantity <span className="text-rose-500">*</span>
                   <input
                     className={`${inputClass} border-border/50 text-foreground`}
@@ -1642,6 +1685,7 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
                         <th className="px-3 py-3">Name</th>
                         <th className="px-3 py-3">Price (₹)</th>
                         <th className="px-3 py-3">Cmp. At (₹)</th>
+                        <th className="px-3 py-3">Weight (g)</th>
                         <th className="px-3 py-3">Active</th>
                         <th className="px-3 py-3 text-right">Actions</th>
                       </tr>
@@ -1662,7 +1706,7 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
                   </table>
                 </AdminTableScroll>
                 {canWrite ? (
-                  <div className="mt-4 grid grid-cols-1 items-center gap-3 rounded-lg border border-dashed border-border/60 bg-muted/5 p-4 sm:grid-cols-2 md:grid-cols-5">
+                  <div className="mt-4 grid grid-cols-1 items-center gap-3 rounded-lg border border-dashed border-border/60 bg-muted/5 p-4 sm:grid-cols-2 md:grid-cols-6">
                     <input
                       className={`${inputClass} border-border/50 text-foreground font-mono`}
                       placeholder="New SKU"
@@ -1717,6 +1761,19 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
                         }
                       />
                     </div>
+                    <input
+                      className={`${inputClass} border-border/50 text-foreground`}
+                      type="number"
+                      min="1"
+                      placeholder="Weight (g)"
+                      value={newVariant.weightGrams}
+                      onChange={(event) =>
+                        setNewVariant({
+                          ...newVariant,
+                          weightGrams: event.target.value,
+                        })
+                      }
+                    />
                     <button
                       type="button"
                       disabled={saving}
@@ -1948,6 +2005,8 @@ function VariantEditRow({
       variant.compareAtPrice !== null
         ? String(variant.compareAtPrice / 100)
         : "",
+    weightGrams:
+      variant.weightGrams !== null ? String(variant.weightGrams) : "",
     initialQuantity: "",
     isActive: variant.isActive,
   });
@@ -1961,6 +2020,8 @@ function VariantEditRow({
         variant.compareAtPrice !== null
           ? String(variant.compareAtPrice / 100)
           : "",
+      weightGrams:
+        variant.weightGrams !== null ? String(variant.weightGrams) : "",
       initialQuantity: "",
       isActive: variant.isActive,
     });
@@ -2003,6 +2064,19 @@ function VariantEditRow({
           value={draft.compareAtPricePaise}
           onChange={(event) =>
             setDraft({ ...draft, compareAtPricePaise: event.target.value })
+          }
+          disabled={!canWrite}
+        />
+      </td>
+      <td className="px-3 py-2">
+        <input
+          className={inputClass}
+          type="number"
+          min="1"
+          placeholder="g"
+          value={draft.weightGrams}
+          onChange={(event) =>
+            setDraft({ ...draft, weightGrams: event.target.value })
           }
           disabled={!canWrite}
         />
