@@ -207,10 +207,19 @@ export default function AccountOrderDetailPage() {
             <span>Shipping</span>
             <span>{formatPrice(order.shippingCharge)}</span>
           </p>
-          <p className="flex justify-between text-sm">
-            <span>Discount</span>
-            <span>-{formatPrice(order.discountAmount)}</span>
-          </p>
+          {order.discountAmount > 0 && (
+            <>
+              <p className="flex justify-between text-sm">
+                <span>Discount</span>
+                <span className="text-[#00aa63]">-{formatPrice(order.discountAmount)}</span>
+              </p>
+              {order.couponCode && (
+                <p className="text-xs text-[#767676]">
+                  Coupon: <span className="font-mono font-medium">{order.couponCode}</span>
+                </p>
+              )}
+            </>
+          )}
           <p className="flex justify-between border-t border-border pt-2 font-medium">
             <span>Total</span>
             <span className="text-[#ec6e55]">{formatPrice(order.total)}</span>

@@ -481,6 +481,7 @@ const adminOrderDetailSchema = {
     subtotal: { type: 'integer', minimum: 0, maximum: 1000000000 },
     shippingCharge: { type: 'integer', minimum: 0, maximum: 1000000000 },
     discountAmount: { type: 'integer', minimum: 0, maximum: 1000000000 },
+    couponCode: { anyOf: [{ type: 'string', maxLength: 50 }, { type: 'null' }] },
     total: { type: 'integer', minimum: 0, maximum: 1000000000 },
     canShipNow: { type: 'boolean' },
     shipBlockReason: { anyOf: [{ type: 'string', maxLength: 240 }, { type: 'null' }] },

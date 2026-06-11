@@ -41,6 +41,7 @@ export interface OrderSummary {
   subtotal: number;
   shippingCharge: number;
   discountAmount: number;
+  couponCode?: string | null;
   total: number;
   items?: OrderLineItem[];
   invoice?: { hasPdf: boolean; invoiceNumber: string; issuedAt: string } | null;

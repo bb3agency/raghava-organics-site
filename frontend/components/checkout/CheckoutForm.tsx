@@ -8,7 +8,7 @@ import { z } from "zod";
 import Link from "next/link";
 import { useSafeRouter } from "@/lib/use-safe-router";
 import { MapPin, AlertTriangle, ShoppingBag, Truck, Tag } from "lucide-react";
-import { checkPincodeServiceability, getDeliveryRates } from "@/lib/cart-api";
+import { checkPincodeServiceability, getDeliveryRates, applyCartCoupon, removeCartCoupon } from "@/lib/cart-api";
 import { getApiErrorMessage, getApiErrorMessageWithHint } from "@/lib/error-messages";
 import { ApiError } from "@/lib/api";
 import { createIdempotencyKey } from "@/lib/idempotency";
@@ -80,6 +80,9 @@ export function CheckoutForm({
   const [shippingQuote, setShippingQuote] = useState<{ shippingCharge: number; estimatedDays: number } | null>(null);
   const [shippingQuoteLoading, setShippingQuoteLoading] = useState(false);
   const [shippingQuoteError, setShippingQuoteError] = useState<string | null>(null);
+  const [couponCode, setCouponCode] = useState("");
+  const [couponLoading, setCouponLoading] = useState(false);
+  const [couponError, setCouponError] = useState<string | null>(null);
   useCartSync();
   const accessToken = useAuthStore((s) => s.accessToken);
   const user = useAuthStore((s) => s.user);
@@ -174,6 +177,35 @@ export function CheckoutForm({
         clearSavedAddressOnManualEdit();
       },
     };
+  };
+
+  const handleApplyCoupon = async () => {
+    if (!couponCode.trim()) {
+      setCouponError("Please enter a coupon code.");
+      return;
+    }
+    setCouponLoading(true);
+    setCouponError(null);
+    try {
+      await applyCartCoupon(couponCode, accessToken);
+      setCouponCode("");
+    } catch (err) {
+      setCouponError(getApiErrorMessageWithHint(err));
+    } finally {
+      setCouponLoading(false);
+    }
+  };
+
+  const handleRemoveCoupon = async () => {
+    setCouponLoading(true);
+    setCouponError(null);
+    try {
+      await removeCartCoupon(accessToken);
+    } catch (err) {
+      setCouponError(getApiErrorMessage(err));
+    } finally {
+      setCouponLoading(false);
+    }
   };
 
   if (!accessToken) {
@@ -611,6 +643,52 @@ export function CheckoutForm({
           placeholder="Special delivery instructions, etc."
           {...form.register("notes")}
         />
+      </div>
+
+      {/* ── Coupon Section ────────────────────────────────────────────── */}
+      <div className="grid gap-2.5 rounded-[16px] border border-[#e8ddd5] bg-white p-4">
+        <div className="flex items-center gap-2">
+          <Tag className="size-4 text-[#23403d]" aria-hidden />
+          <h3 className="text-sm font-bold text-[#23403d]">Coupon Code</h3>
+        </div>
+        {cartDiscount > 0 ? (
+          <div className="flex items-center justify-between rounded-[8px] bg-[#eff5ee] px-3 py-2">
+            <span className="text-sm font-medium text-[#00aa63]">Coupon applied</span>
+            <button
+              type="button"
+              onClick={() => void handleRemoveCoupon()}
+              disabled={couponLoading}
+              className="text-xs font-semibold text-[#ec6e55] hover:text-[#d95a41] disabled:opacity-60"
+            >
+              Remove
+            </button>
+          </div>
+        ) : (
+          <div className="flex gap-2">
+            <input
+              type="text"
+              placeholder="Enter coupon code"
+              value={couponCode}
+              onChange={(e) => {
+                setCouponCode(e.target.value);
+                setCouponError(null);
+              }}
+              disabled={couponLoading}
+              className="flex-1 rounded-[8px] border border-[#e8ddd5] bg-white px-3 py-2 text-sm font-medium placeholder-[#999] focus:border-[#23403d] focus:outline-none disabled:opacity-60"
+            />
+            <button
+              type="button"
+              onClick={() => void handleApplyCoupon()}
+              disabled={couponLoading || !couponCode.trim()}
+              className="rounded-[8px] bg-[#23403d] px-4 py-2 text-sm font-bold text-white hover:bg-[#ec6e55] disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              {couponLoading ? "Applying…" : "Apply"}
+            </button>
+          </div>
+        )}
+        {couponError && (
+          <p className="text-xs font-medium text-[#ec6e55]">{couponError}</p>
+        )}
       </div>
 
       {/* ── Order Summary (pre-submit) ─────────────────────────────────── */}
