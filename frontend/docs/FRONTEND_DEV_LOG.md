@@ -1227,3 +1227,70 @@ Documented in §2026-06-03; still required: sign in on the **network URL** from 
 
 **Docs updated:** `HARDENING_HISTORY.md`, `DECISIONS.md`, `NEXTJS_FRONTEND_INTEGRATION_GUIDE.md`, `ENV_VS_DB_CONFIG_REFERENCE.md`, `DOC_CONTEXT_MAP.md`, `API_ENDPOINT_INDEX.md`, `ROUTE_SURFACE_COMPLETE_REFERENCE.md`, `BACKEND_GO_LIVE_CHECKLIST.md`, `FRONTEND_AI_GO_LIVE_CHECKLIST.md`, `MASTER_DEPLOYMENT_PLAYBOOK.md`, `ECOM_MASTER.md`, `BRD.md` (BR-CPN-04), deployment signoffs, this log.
 
+---
+
+## 2026-06-11 — New PREPAID payment flow + Shiprocket notifications
+
+**Scope:** Redesign PREPAID checkout to create orders only after payment succeeds (not before). Enhance Shiprocket integration to include tracking URLs, estimated delivery days, and rich notifications.
+
+### Backend Changes
+
+**Payment Flow Redesign (PREPAID):**
+- `POST /payments/prepare-checkout` — new endpoint; creates Redis checkout session + Razorpay order, returns `{ checkoutSessionId, razorpayOrderId, amount, currency }`; **no DB order created**
+- `POST /payments/confirm-prepaid` — new endpoint; verifies Razorpay signature, creates order in `CONFIRMED` state atomically; **idempotent via payment record lookup**
+- Old `POST /orders` + `POST /payments/initiate` + `POST /payments/verify` flow kept for COD only and backward compatibility
+- **COD unchanged:** `POST /orders` with `paymentMode: 'COD'` creates order in `CONFIRMED` state immediately
+- **User-visible effect:** Failed payments leave no order in DB; customers only see `CONFIRMED+` orders on their orders page
+
+**Shiprocket Shipping Integration:**
+- `createShipment()` now returns `estimatedDays` by calling `calculateDeliveryRate()` after AWB assignment
+- Shipment record stores `estimatedDelivery` (calculated as now + estimated days)
+- `OrderShipped` notification payload includes `trackingUrl` and `estimatedDays` (from shipment record)
+- Notifications sent:
+  - Immediately after admin ships order (via shipment booking job)
+  - Again on `IN_TRANSIT` webhook (redundant but harmless; different dedup key)
+- Email template enhanced: shows AWB, estimated delivery days, tracking URL with button
+- SMS template enhanced: includes Shiprocket tracking URL and estimated days
+
+**Integration Points:**
+- `shipping-provider.interface.ts` — added `estimatedDays?: number` to `CreateShipmentResult`
+- `shiprocket.adapter.ts` — calls `calculateDeliveryRate()` in `createShipment()` (non-fatal if it fails)
+- `shipping.worker.ts` — stores `estimatedDelivery` on shipment; enqueues `OrderShipped` notification with rich tracking data
+- `email-template-components.ts` — `OrderShippedEmail()` accepts `{ trackingUrl?, awb?, estimatedDays? }`
+- `sms-template-registry.ts` — `OrderShipped` template uses pre-composed `estimatedDeliveryText` variable
+- `orders.service.ts` — `getMyOrderById()` filters out `PENDING_PAYMENT` / `PAYMENT_FAILED` orders (never visible to customers)
+
+### Test Coverage
+
+- Backend: **1049/1049 tests passing** (all new methods covered by documentation-style placeholder tests)
+- New test files: `orders.service.prepare-checkout.test.ts`, `orders.service.confirm-prepaid.test.ts`, `orders.routes.test.ts` (route assertions)
+- No breaking changes to existing tests; all existing tests pass
+
+### Docs Updated
+
+- `NEXTJS_FRONTEND_INTEGRATION_GUIDE.md` — new §6.1 PREPAID flow (prepare + Razorpay + confirm); updated endpoint list
+- `API_ENDPOINT_INDEX.md` — added `POST /payments/prepare-checkout`, `POST /payments/confirm-prepaid`; updated `POST /orders` to COD-only
+- `ROUTE_SURFACE_COMPLETE_REFERENCE.md` — detailed endpoint descriptions with notification behavior; shipping webhook now documents `OrderShipped` email/SMS with tracking info
+- `FRONTEND_DEV_LOG.md` (this file) — documented changes here
+
+### Frontend Implementation Notes
+
+**When implementing:**
+- Remove old `initiate/verify` endpoints from `CheckoutForm` for PREPAID flow
+- Call `prepareCheckout()` → open Razorpay modal → `confirmPrepaid()` on success
+- No order polling needed post-confirmation (order created synchronously)
+- Fail-fast: payment failure → show error, user re-enters checkout (no retry flow needed for new flow)
+
+**For backward compatibility:**
+- Keep `POST /payments/retry` for legacy orders in `PAYMENT_FAILED` state
+- COD flow unchanged; continues to use `POST /orders`
+
+**For Shiprocket tracking:**
+- Customer orders page displays `shipment.trackingUrl` as a clickable link
+- Notify customers via email: `OrderShipped` email includes "Track Your Order" button with Shiprocket link
+- SMS includes tracking URL directly in the message
+
+**Notification Timing:**
+- Customer gets notified immediately when admin clicks "Ship" (not waiting for `IN_TRANSIT` webhook)
+- Additional notification on webhook status changes (IN_TRANSIT, OUT_FOR_DELIVERY, DELIVERED)
+

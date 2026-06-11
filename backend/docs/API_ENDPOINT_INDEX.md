@@ -76,13 +76,13 @@ Identity boundary contract (critical):
 | DELETE | `/api/v1/cart/coupon` | Remove coupon | Cart mutation |
 | POST | `/api/v1/cart/check-pincode` | Check delivery serviceability | Shipping estimate flow |
 | GET | `/api/v1/cart/delivery-rates` | Estimate delivery rates | Query: `pincode`, optional `paymentMode=PREPAID\|COD` (default PREPAID) |
-| POST | `/api/v1/orders` | Create order | Customer auth + idempotency |
-| GET | `/api/v1/orders/:id` | Customer order detail | Owner-only |
+| POST | `/api/v1/orders` | Create COD order only | Customer auth + idempotency |
+| POST | `/api/v1/payments/prepare-checkout` | Prepare PREPAID checkout (new flow) | Customer auth + idempotency; returns `{ checkoutSessionId, razorpayOrderId, amount, currency }` |
+| POST | `/api/v1/payments/confirm-prepaid` | Confirm PREPAID payment (new flow) | Customer auth + idempotency; creates order in CONFIRMED state |
+| GET | `/api/v1/orders/:id` | Customer order detail | Owner-only; filters out PENDING_PAYMENT/PAYMENT_FAILED on customer pages |
 | GET | `/api/v1/orders/:id/invoice.pdf` | Customer invoice PDF | Owner-only PDF |
-| POST | `/api/v1/orders/:id/cancel` | Customer order cancel | Idempotency guarded |
-| POST | `/api/v1/payments/initiate` | Start prepaid payment | Customer auth + idempotency |
-| POST | `/api/v1/payments/verify` | Verify Razorpay payment callback | Customer auth + idempotency |
-| POST | `/api/v1/payments/retry` | Retry failed payment | Customer flow |
+| POST | `/api/v1/orders/:id/cancel` | Customer order cancel | Idempotency guarded; CONFIRMED+ only |
+| POST | `/api/v1/payments/retry` | Retry failed payment (old flow) | Customer flow; for PAYMENT_FAILED orders only |
 | GET | `/api/v1/shipping/track/:awb` | Track shipment | Customer auth |
 | POST | `/api/v1/orders/:id/return-requests` | Create return request | Customer flow |
 | GET | `/api/v1/users/me` | Current customer profile | Customer auth |

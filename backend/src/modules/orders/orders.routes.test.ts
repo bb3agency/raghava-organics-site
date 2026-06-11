@@ -47,6 +47,16 @@ describe('orders routes', () => {
     expect(paymentWebhook).toBeDefined();
     expect((paymentWebhook?.schema as { body?: unknown }).body).toBeDefined();
 
+    const prepareCheckout = routes.find((route) => route.url === '/api/v1/payments/prepare-checkout' && route.method === 'POST');
+    expect(prepareCheckout).toBeDefined();
+    expect(prepareCheckout?.preHandler).toBeDefined();
+    expect((prepareCheckout?.schema as { body?: unknown }).body).toBeDefined();
+
+    const confirmPrepaid = routes.find((route) => route.url === '/api/v1/payments/confirm-prepaid' && route.method === 'POST');
+    expect(confirmPrepaid).toBeDefined();
+    expect(confirmPrepaid?.preHandler).toBeDefined();
+    expect((confirmPrepaid?.schema as { body?: unknown }).body).toBeDefined();
+
     const adminList = routes.find((route) => route.url === '/api/v1/admin/orders' && route.method === 'GET');
     expect(adminList).toBeDefined();
     expect(adminList?.preHandler).toBeDefined();

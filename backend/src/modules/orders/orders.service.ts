@@ -1,4 +1,4 @@
-import { createHash, timingSafeEqual } from 'crypto';
+import { createHash, timingSafeEqual, randomUUID } from 'crypto';
 import {
   AnalyticsEventType,
   Coupon,
@@ -44,7 +44,9 @@ import {
   InitiatePaymentInput,
   ReturnRequestStatus,
   UpdateOrderStatusInput,
-  VerifyPaymentInput
+  VerifyPaymentInput,
+  PrepareCheckoutInput,
+  ConfirmPrepaidInput
 } from './orders.types';
 
 type CouponScope = {
@@ -682,6 +684,10 @@ export class OrdersService {
       throw new AppError(ERROR_CODES.NOT_FOUND, 'Order not found', 404);
     }
 
+    if (order.status === OrderStatus.PENDING_PAYMENT || order.status === OrderStatus.PAYMENT_FAILED) {
+      throw new AppError(ERROR_CODES.NOT_FOUND, 'Order not found', 404);
+    }
+
     return this.serializeOrder(order, {
       exposeProviderReferences: false,
       exposeInternalReferences: false
@@ -1075,6 +1081,336 @@ export class OrdersService {
 
     recordCheckoutPath('/api/v1/payments/verify', 'accepted');
     return { message: 'Payment verification accepted; confirmation is processing' };
+  }
+
+  // ── New payment flow: no DB order until payment succeeds ──────────────────
+
+  async prepareCheckout(userId: string, input: PrepareCheckoutInput, opts?: { clientIp?: string }) {
+    if (!userId) {
+      throw new AppError(ERROR_CODES.UNAUTHORISED, 'Authentication required before checkout', 401);
+    }
+
+    const address = input.addressId
+      ? await this.fastify.prisma.address.findFirst({ where: { id: input.addressId, userId } })
+      : null;
+    if (input.addressId && !address) {
+      throw new AppError(ERROR_CODES.NOT_FOUND, 'Address not found', 404);
+    }
+
+    const shippingAddress = address
+      ? { fullName: address.fullName, phone: address.phone, line1: address.line1, line2: address.line2 ?? undefined, city: address.city, state: address.state, pincode: address.pincode }
+      : input.shippingAddress;
+    if (!shippingAddress) {
+      throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Shipping address is required', 400);
+    }
+
+    const cartService = new CartService(this.fastify);
+    const serviceability = await cartService.checkPincodeServiceability(shippingAddress.pincode);
+    if (!serviceability.serviceable) {
+      throw new AppError(ERROR_CODES.PINCODE_NOT_SERVICEABLE, 'Delivery is unavailable for this pincode', 422);
+    }
+
+    const cart = await this.fastify.prisma.cart.findFirst({
+      where: { userId },
+      include: {
+        coupon: true,
+        reservations: true,
+        items: {
+          include: {
+            variant: {
+              include: {
+                inventory: true,
+                product: { select: { categoryId: true, name: true } }
+              }
+            }
+          }
+        }
+      }
+    });
+
+    if (!cart || cart.items.length === 0) {
+      throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Cart is empty', 400);
+    }
+
+    const storeSettings = await this.fastify.prisma.storeSettings.findUnique({
+      where: { singletonKey: 'default' },
+      select: { minOrderValuePaise: true }
+    });
+
+    for (const item of cart.items) {
+      const available = Math.max((item.variant.inventory?.quantity ?? 0), 0);
+      if (available < item.quantity) {
+        throw new AppError(ERROR_CODES.INSUFFICIENT_STOCK, `Insufficient stock for variant ${item.variantId}`, 422);
+      }
+    }
+
+    const subtotal = cart.items.reduce((sum, item) => sum + item.priceSnapshot * item.quantity, 0);
+    const minimumOrderValue = storeSettings?.minOrderValuePaise ?? 0;
+    if (subtotal < minimumOrderValue) {
+      throw new AppError(ERROR_CODES.VALIDATION_ERROR, `Cart subtotal is below the minimum order value`, 400);
+    }
+
+    const couponsEnabled = await isStorefrontCouponsEnabled(this.fastify.prisma);
+    const effectiveCoupon = couponsEnabled ? cart.coupon : null;
+    if (effectiveCoupon) {
+      await this.validateOrderCoupon(effectiveCoupon, subtotal, userId, cart.items, this.fastify.prisma);
+    }
+    const discountAmount = this.calculateOrderDiscount(subtotal, effectiveCoupon, cart.items);
+
+    const usingNoop = cartService.usesNoopShipping();
+    const pickupPincode = await resolvePickupPincode(this.fastify.prisma, { noopFallback: usingNoop ? '500001' : null });
+    if (!pickupPincode) {
+      throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Shipping provider is not configured', 503);
+    }
+
+    const shippingQuote = await cartService.computeShippingChargeForCart({
+      cart,
+      destinationPincode: shippingAddress.pincode,
+      originPincode: pickupPincode,
+      usingNoop,
+      paymentMode: 'PREPAID'
+    });
+    const shippingCharge = shippingQuote.shippingChargePaise;
+    const total = Math.max(subtotal + shippingCharge - discountAmount, 0);
+
+    await this.checkoutRisk.assertInitiatePaymentAllowed({
+      userId,
+      orderId: `prepare-${userId}`,
+      orderTotalPaise: total,
+      ...(opts?.clientIp !== undefined ? { clientIp: opts.clientIp } : {})
+    });
+
+    let razorpayOrder: { providerOrderId: string; amount: number; currency: string };
+    try {
+      razorpayOrder = await this.razorpayAdapter.createOrder({
+        amount: total,
+        currency: 'INR',
+        receipt: `pre-${Date.now()}`,
+        notes: { userId }
+      });
+    } catch (error) {
+      this.fastify.log?.error({ err: error, userId }, 'Razorpay createOrder failed during prepare-checkout');
+      throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Unable to initiate payment order', 502);
+    }
+
+    const sessionId = `checkout:session:${randomUUID()}`;
+    const sessionData = {
+      userId,
+      cartId: cart.id,
+      addressId: input.addressId ?? null,
+      shippingAddress,
+      notes: input.notes ?? null,
+      subtotal,
+      shippingCharge,
+      discountAmount,
+      total,
+      couponId: effectiveCoupon?.id ?? null,
+      razorpayOrderId: razorpayOrder.providerOrderId,
+      items: cart.items.map((item) => ({
+        variantId: item.variantId,
+        productName: item.variant.product.name,
+        variantName: item.variant.name,
+        sku: item.variant.sku,
+        quantity: item.quantity,
+        unitPrice: item.priceSnapshot,
+        totalPrice: item.priceSnapshot * item.quantity
+      }))
+    };
+
+    await this.fastify.redis.set(sessionId, JSON.stringify(sessionData), 'EX', 1800);
+
+    await this.enqueueAnalyticsEvent(AnalyticsEventType.CHECKOUT_STARTED, `prepare:${userId}`, userId, { amount: total });
+
+    recordCheckoutPath('/api/v1/payments/prepare-checkout', 'success');
+    return {
+      checkoutSessionId: sessionId,
+      razorpayOrderId: razorpayOrder.providerOrderId,
+      amount: razorpayOrder.amount,
+      currency: razorpayOrder.currency
+    };
+  }
+
+  async confirmPrepaid(userId: string, input: ConfirmPrepaidInput) {
+    const sessionRaw = await this.fastify.redis.get(input.checkoutSessionId);
+    if (!sessionRaw) {
+      throw new AppError(ERROR_CODES.NOT_FOUND, 'Checkout session expired or not found. Please restart checkout.', 404);
+    }
+
+    const session = JSON.parse(sessionRaw) as {
+      userId: string;
+      cartId: string;
+      addressId: string | null;
+      shippingAddress: { fullName: string; phone: string; line1: string; line2?: string; city: string; state: string; pincode: string };
+      notes: string | null;
+      subtotal: number;
+      shippingCharge: number;
+      discountAmount: number;
+      total: number;
+      couponId: string | null;
+      razorpayOrderId: string;
+      items: Array<{ variantId: string; productName: string; variantName: string; sku: string; quantity: number; unitPrice: number; totalPrice: number }>;
+    };
+
+    if (session.userId !== userId) {
+      throw new AppError(ERROR_CODES.FORBIDDEN, 'Checkout session does not belong to this user', 403);
+    }
+    if (session.razorpayOrderId !== input.razorpayOrderId) {
+      throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Razorpay order ID mismatch', 400);
+    }
+
+    const signatureValid = this.razorpayAdapter.verifyPaymentSignature({
+      providerOrderId: input.razorpayOrderId,
+      providerPaymentId: input.razorpayPaymentId,
+      signature: input.razorpaySignature
+    });
+    if (!signatureValid) {
+      throw new AppError(ERROR_CODES.PAYMENT_VERIFICATION_FAILED, 'Invalid payment signature', 401);
+    }
+
+    // Idempotency: if order already confirmed for this Razorpay order, return it
+    const existing = await this.fastify.prisma.payment.findFirst({
+      where: { providerOrderId: input.razorpayOrderId },
+      include: { order: { include: { items: true, payment: true, invoice: { select: { invoiceNumber: true, pdfUrl: true, issuedAt: true } }, shipment: { include: { events: { orderBy: { occurredAt: 'desc' } } } }, statusHistory: { orderBy: { createdAt: 'desc' } }, couponUsages: { include: { coupon: { select: { code: true } } } } } } }
+    });
+    if (existing?.order && existing.order.status === OrderStatus.CONFIRMED) {
+      return this.serializeOrder(existing.order, { exposeProviderReferences: false, exposeInternalReferences: false });
+    }
+
+    const captureKey = this.buildScopedKey('rzp:capture', input.razorpayPaymentId);
+    const captureLock = await this.fastify.redis.set(captureKey, '1', 'EX', 86400, 'NX');
+    if (captureLock !== 'OK') {
+      throw new AppError(ERROR_CODES.CONFLICT, 'Payment confirmation already in progress', 409);
+    }
+
+    try {
+      const createdOrder = await this.fastify.prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`CREATE SEQUENCE IF NOT EXISTS order_number_seq START 1`;
+        const sequenceResult = await tx.$queryRaw<Array<{ nextval: bigint }>>`SELECT nextval('order_number_seq')`;
+        const sequenceNumber = Number(sequenceResult[0]?.nextval ?? 1n);
+        const year = new Date().getFullYear();
+        const orderNumber = `ORD-${year}-${String(sequenceNumber).padStart(5, '0')}`;
+
+        const effectiveCoupon = session.couponId
+          ? await tx.coupon.findUnique({ where: { id: session.couponId } })
+          : null;
+
+        const order = await tx.order.create({
+          data: {
+            orderNumber,
+            userId,
+            status: OrderStatus.CONFIRMED,
+            paymentMode: 'PREPAID',
+            shippingAddress: {
+              fullName: session.shippingAddress.fullName,
+              phone: session.shippingAddress.phone,
+              line1: session.shippingAddress.line1,
+              ...(session.shippingAddress.line2 ? { line2: session.shippingAddress.line2 } : {}),
+              city: session.shippingAddress.city,
+              state: session.shippingAddress.state,
+              pincode: session.shippingAddress.pincode
+            },
+            subtotal: session.subtotal,
+            shippingCharge: session.shippingCharge,
+            discountAmount: session.discountAmount,
+            total: session.total,
+            ...(session.notes ? { notes: session.notes } : {}),
+            ...(effectiveCoupon ? { coupons: { connect: { id: effectiveCoupon.id } } } : {})
+          }
+        });
+
+        await tx.payment.create({
+          data: {
+            orderId: order.id,
+            provider: PaymentProvider.RAZORPAY,
+            providerOrderId: input.razorpayOrderId,
+            providerPaymentId: input.razorpayPaymentId,
+            amount: session.total,
+            currency: 'INR',
+            status: PaymentStatus.CAPTURED,
+            capturedAt: new Date()
+          }
+        });
+
+        for (const item of session.items) {
+          await tx.orderItem.create({
+            data: {
+              orderId: order.id,
+              variantId: item.variantId,
+              productName: item.productName,
+              variantName: item.variantName,
+              sku: item.sku,
+              quantity: item.quantity,
+              unitPrice: item.unitPrice,
+              totalPrice: item.totalPrice
+            }
+          });
+        }
+
+        await tx.orderStatusHistory.create({
+          data: {
+            orderId: order.id,
+            fromStatus: null,
+            toStatus: OrderStatus.CONFIRMED,
+            triggeredBy: 'SYSTEM',
+            note: 'Order confirmed after successful payment'
+          }
+        });
+
+        // Clear cart
+        await tx.cartItem.deleteMany({ where: { cartId: session.cartId } });
+        await tx.cart.update({ where: { id: session.cartId }, data: { couponId: null } });
+
+        // Finalize coupon
+        if (effectiveCoupon) {
+          await finalizeCouponUsageForOrder(tx, {
+            orderId: order.id,
+            userId,
+            discountAmount: session.discountAmount,
+            coupons: [{ id: effectiveCoupon.id, usesCount: effectiveCoupon.usesCount }]
+          });
+        }
+
+        return tx.order.findUniqueOrThrow({
+          where: { id: order.id },
+          include: {
+            items: true,
+            payment: true,
+            invoice: { select: { invoiceNumber: true, pdfUrl: true, issuedAt: true } },
+            shipment: { include: { events: { orderBy: { occurredAt: 'desc' } } } },
+            statusHistory: { orderBy: { createdAt: 'desc' } },
+            couponUsages: { include: { coupon: { select: { code: true } } } }
+          }
+        });
+      });
+
+      // Delete checkout session from Redis
+      await this.fastify.redis.del(input.checkoutSessionId);
+
+      // Queue side effects (inventory deduction, email, invoice)
+      await this.enqueueOutboxMessage(
+        'orderProcessing',
+        'process-order-update',
+        {
+          orderId: createdOrder.id,
+          toStatus: OrderStatus.CONFIRMED,
+          triggeredBy: 'PREPAID_CONFIRMED',
+          note: 'Payment confirmed'
+        },
+        `process-order-update:confirmed:${createdOrder.id}`
+      );
+
+      await this.enqueueAnalyticsEvent(AnalyticsEventType.PAYMENT_INITIATED, `order:${createdOrder.id}`, userId, {
+        orderId: createdOrder.id,
+        provider: PaymentProvider.RAZORPAY,
+        amount: session.total
+      });
+
+      recordCheckoutPath('/api/v1/payments/confirm-prepaid', 'success');
+      return this.serializeOrder(createdOrder, { exposeProviderReferences: false, exposeInternalReferences: false });
+    } catch (err) {
+      await this.fastify.redis.del(captureKey);
+      throw err;
+    }
   }
 
   async processPaymentWebhook(

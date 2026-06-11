@@ -15,7 +15,7 @@ import { createIdempotencyKey } from "@/lib/idempotency";
 import { useAuthStore } from "@/stores/auth";
 import { useCartStore } from "@/stores/cart";
 import { createMyAddress, getMyAddresses, type UserAddress } from "@/lib/users-api";
-import { createOrder, initiatePayment, verifyPayment } from "@/lib/orders-api";
+import { createOrder, prepareCheckout, confirmPrepaid } from "@/lib/orders-api";
 import { formatPrice } from "@/lib/format-price";
 import { CartLineProductDetails } from "@/components/cart/CartLineProductDetails";
 import { useCartSync } from "@/hooks/use-cart-sync";
@@ -295,40 +295,35 @@ export function CheckoutForm() {
         setSavedAddresses((prev) => [...prev, created]);
       }
 
-      const orderIdempotencyKey = createIdempotencyKey();
-      const order = await createOrder(
-        addressId
-          ? {
-              addressId,
-              paymentMode: values.paymentMode,
-              notes: values.notes,
-            }
-          : {
-              paymentMode: values.paymentMode,
-              shippingAddress: {
-                fullName: values.fullName,
-                phone: values.phone,
-                line1: values.line1,
-                ...(values.line2?.trim() ? { line2: values.line2.trim() } : {}),
-                city: values.city,
-                state: values.state,
-                pincode: values.pincode,
-              },
-              notes: values.notes,
-            },
-        accessToken,
-        orderIdempotencyKey,
-      );
-
+      // COD: create order directly (order confirmed immediately)
       if (values.paymentMode === "COD") {
+        const orderIdempotencyKey = createIdempotencyKey();
+        const order = await createOrder(
+          addressId
+            ? { addressId, paymentMode: "COD", notes: values.notes }
+            : {
+                paymentMode: "COD",
+                shippingAddress: {
+                  fullName: values.fullName,
+                  phone: values.phone,
+                  line1: values.line1,
+                  ...(values.line2?.trim() ? { line2: values.line2.trim() } : {}),
+                  city: values.city,
+                  state: values.state,
+                  pincode: values.pincode,
+                },
+                notes: values.notes,
+              },
+          accessToken,
+          orderIdempotencyKey,
+        );
         clearPendingMerge();
         clearCart();
         router.push(`/checkout/success?orderId=${order.id}`);
         return;
       }
 
-      const paymentInitKey = createIdempotencyKey();
-      const payment = await initiatePayment(order.id, accessToken, paymentInitKey);
+      // PREPAID: prepare checkout session (no DB order yet)
       const razorpayKey = process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID;
       if (!razorpayKey) {
         setError("Payment gateway is not configured. Contact support.");
@@ -341,14 +336,34 @@ export function CheckoutForm() {
         return;
       }
 
-      const verifyKey = createIdempotencyKey();
+      const prepareKey = createIdempotencyKey();
+      const checkout = await prepareCheckout(
+        addressId
+          ? { addressId, notes: values.notes }
+          : {
+              shippingAddress: {
+                fullName: values.fullName,
+                phone: values.phone,
+                line1: values.line1,
+                ...(values.line2?.trim() ? { line2: values.line2.trim() } : {}),
+                city: values.city,
+                state: values.state,
+                pincode: values.pincode,
+              },
+              notes: values.notes,
+            },
+        accessToken,
+        prepareKey,
+      );
+
+      const confirmKey = createIdempotencyKey();
       const razorpay = new window.Razorpay({
         key: razorpayKey,
-        amount: payment.amount,
-        currency: payment.currency,
-        order_id: payment.providerOrderId,
+        amount: checkout.amount,
+        currency: checkout.currency,
+        order_id: checkout.razorpayOrderId,
         name: process.env.NEXT_PUBLIC_STORE_NAME ?? "Raghava Organics",
-        description: `Order ${order.orderNumber}`,
+        description: "Complete your order",
         prefill: {
           name: values.fullName,
           contact: values.phone,
@@ -356,23 +371,25 @@ export function CheckoutForm() {
         },
         handler: async (response: {
           razorpay_payment_id: string;
+          razorpay_order_id: string;
           razorpay_signature: string;
         }) => {
           try {
-            await verifyPayment(
+            const confirmedOrder = await confirmPrepaid(
               {
-                orderId: order.id,
+                checkoutSessionId: checkout.checkoutSessionId,
+                razorpayOrderId: response.razorpay_order_id,
                 razorpayPaymentId: response.razorpay_payment_id,
                 razorpaySignature: response.razorpay_signature,
               },
               accessToken,
-              verifyKey,
+              confirmKey,
             );
             clearPendingMerge();
             clearCart();
-            router.push(`/checkout/success?orderId=${order.id}`);
-          } catch (verifyError) {
-            setError(getApiErrorMessage(verifyError));
+            router.push(`/checkout/success?orderId=${confirmedOrder.id}`);
+          } catch (confirmError) {
+            setError(getApiErrorMessage(confirmError));
             setSubmitting(false);
           }
         },
@@ -385,13 +402,14 @@ export function CheckoutForm() {
 
       razorpay.on("payment.failed", (response: Record<string, unknown>) => {
         const err = response.error as Record<string, unknown> | undefined;
-        const reason = (err?.reason as string | undefined) ?? "";
-        const isCancelled = reason === "cancelled" || (err?.source as string) === "customer";
+        const isCancelled =
+          (err?.reason as string | undefined) === "cancelled" ||
+          (err?.source as string) === "customer";
         setSubmitting(false);
         setError(
           isCancelled
-            ? `Payment was cancelled. Your order ${order.orderNumber} is saved — you can retry payment from your order history.`
-            : `Payment failed: ${(err?.description as string | undefined) ?? "Please try again or use a different payment method."}. Your order ${order.orderNumber} is saved.`,
+            ? "Payment was cancelled. Please try again when ready."
+            : `Payment failed: ${(err?.description as string | undefined) ?? "Please try again or use a different payment method."}`,
         );
       });
 

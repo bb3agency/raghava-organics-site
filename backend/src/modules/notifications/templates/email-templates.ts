@@ -71,11 +71,16 @@ export async function renderNotificationEmail(template: string, data: Record<str
         subject: `Payment failed — action required for ${orderId}`,
         html: await render(PaymentFailedEmail(orderId))
       };
-    case 'OrderShipped':
+    case 'OrderShipped': {
+      const shippedOptions: { trackingUrl?: string; awb?: string; estimatedDays?: number } = {};
+      if (typeof data.trackingUrl === 'string') shippedOptions.trackingUrl = data.trackingUrl;
+      if (typeof data.awb === 'string') shippedOptions.awb = data.awb;
+      if (typeof data.estimatedDays === 'number') shippedOptions.estimatedDays = data.estimatedDays;
       return {
         subject: `Your order ${orderId} has been shipped`,
-        html: await render(OrderShippedEmail(orderId))
+        html: await render(OrderShippedEmail(orderId, shippedOptions))
       };
+    }
     case 'OutForDelivery':
       return {
         subject: `Your order ${orderId} is out for delivery today`,

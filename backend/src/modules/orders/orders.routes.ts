@@ -41,7 +41,9 @@ import {
   paymentWebhookSchema,
   shippingTrackSchema,
   shippingWebhookSchema,
-  verifyPaymentSchema
+  verifyPaymentSchema,
+  prepareCheckoutSchema,
+  confirmPrepaidSchema
 } from './orders.schemas';
 import { CheckoutRiskService } from './checkout-risk.service';
 import { OrdersService } from './orders.service';
@@ -233,6 +235,36 @@ export async function registerOrdersRoutes(fastify: FastifyInstance): Promise<vo
     async (request) => {
       const user = getCurrentUser(request);
       return ordersService.verifyPayment(user.sub, request.body as never);
+    }
+  );
+
+  fastify.post(
+    '/api/v1/payments/prepare-checkout',
+    {
+      schema: prepareCheckoutSchema,
+      preHandler: [...customerGuard, idempotencyPreHandler],
+      config: {
+        rateLimit: routeRateLimitProfiles.checkoutMutation
+      }
+    },
+    async (request) => {
+      const user = getCurrentUser(request);
+      return ordersService.prepareCheckout(user.sub, request.body as never, { clientIp: request.ip });
+    }
+  );
+
+  fastify.post(
+    '/api/v1/payments/confirm-prepaid',
+    {
+      schema: confirmPrepaidSchema,
+      preHandler: [...customerGuard, idempotencyPreHandler],
+      config: {
+        rateLimit: routeRateLimitProfiles.checkoutMutation
+      }
+    },
+    async (request) => {
+      const user = getCurrentUser(request);
+      return ordersService.confirmPrepaid(user.sub, request.body as never);
     }
   );
 

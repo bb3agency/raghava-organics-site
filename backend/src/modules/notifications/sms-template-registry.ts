@@ -24,7 +24,7 @@ export class SmsTemplateRegistry {
       OrderConfirmed:
         '{{storeName}}: Your order {{orderId}} is confirmed! We are preparing it for dispatch. You will be notified when it ships.',
       OrderShipped:
-        '{{storeName}}: Great news! Order {{orderId}} has been shipped and is in transit. Track your shipment in the app.',
+        '{{storeName}}: Order {{orderId}} has been shipped! {{estimatedDeliveryText}}Track your shipment: {{trackingUrl}}',
       OutForDelivery:
         '{{storeName}}: Your order {{orderId}} is out for delivery today! Please keep your phone reachable. Our courier will attempt delivery at your registered address.',
       OrderDelivered:

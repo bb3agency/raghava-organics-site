@@ -274,28 +274,28 @@ Public runtime storefront configuration. No auth. Returns `isCodEnabled`, `minOr
 All require **customer JWT**. Rate-limited by `checkoutMutation`. All write routes are idempotency-guarded.
 
 ### `POST /api/v1/orders`
-Create an order from the current cart. Body includes shipping address, payment method (`prepaid` or `cod`), coupon if applied. Returns the created order with Razorpay order ID if prepaid.
+**COD only** — create a COD order from the current cart. Body includes shipping address, `paymentMode: 'COD'`, coupon if applied. Returns the created order immediately in `CONFIRMED` state. **Do not call this for PREPAID orders** — use `POST /payments/prepare-checkout` instead.
+
+### `POST /api/v1/payments/prepare-checkout`
+**PREPAID only (new flow)** — prepare a checkout session without creating a DB order yet. Body: `{ addressId?, shippingAddress?, notes? }` (same address shape as `/orders`). Returns `{ checkoutSessionId, razorpayOrderId, amount, currency }`. Stores a Redis-backed checkout session with 30-minute TTL. **No order created** — this is stateless until payment is confirmed. Idempotent via `idempotency-key` header.
+
+### `POST /api/v1/payments/confirm-prepaid`
+**PREPAID only (new flow)** — confirm a payment and create the order atomically. Body: `{ checkoutSessionId, razorpayOrderId, razorpayPaymentId, razorpaySignature }`. Verifies Razorpay signature, validates session is not expired, and creates order in `CONFIRMED` state. Returns the created order. **Idempotent** — if payment with this `razorpayOrderId` already exists as `CAPTURED`, returns the existing order without re-executing. Atomically deducts inventory, finalizes coupon, clears cart, and enqueues side effects (notifications, invoice, etc.).
 
 ### `GET /api/v1/orders/:id`
-Customer view of a specific order. Owner-only (cannot view another customer's order).
+Customer view of a specific order. Owner-only (cannot view another customer's order). **Filters out `PENDING_PAYMENT` and `PAYMENT_FAILED` orders** — these are not visible on customer orders page (they never progressed to a real order). Returns order with `paymentMode` field and `invoice.hasPdf` for download eligibility.
 
 ### `GET /api/v1/orders/:id/invoice.pdf`
-Download invoice PDF for a specific order. Owner-only. Returns PDF binary with `Content-Type: application/pdf`.
+Download invoice PDF for a specific order. Owner-only. Returns PDF binary with `Content-Type: application/pdf`. Only available when `invoice.hasPdf === true` on the order detail.
 
 ### `POST /api/v1/orders/:id/cancel`
 Customer self-service cancel. **Allowed only from `CONFIRMED` or `PROCESSING`** (not `PENDING_PAYMENT` or `PAYMENT_FAILED`). Enforces `cancellationWindowHours` from store settings. Body: `{ reason? }`. Enqueues `cancel-shipment` when a shipment AWB exists. Restores inventory (with COD guard — see `restore-inventory-on-cancel.ts`) and releases coupon reservations.
 
-### `POST /api/v1/payments/initiate`
-Start prepaid payment for an order. Returns Razorpay order ID, amount, currency for the frontend payment modal.
-
-### `POST /api/v1/payments/verify`
-Called after Razorpay payment modal completes. Body includes Razorpay payment ID, order ID, signature. Verifies HMAC signature and marks order as paid.
-
 ### `POST /api/v1/payments/retry`
-Retry payment for an order stuck in `PENDING_PAYMENT` or `PAYMENT_FAILED` state. Restores checkout cart reservations server-side before returning fresh Razorpay order params. Returns `400`/`409` for COD orders.
+**PREPAID only (old flow)** — retry payment for an order stuck in `PAYMENT_FAILED` state. This is for legacy orders created before the new `confirm-prepaid` flow. Restores checkout cart reservations server-side before returning fresh Razorpay order params. Returns `400 VALIDATION_ERROR` for COD orders. **Do not use for new `confirm-prepaid` flow** — new flow creates no order on payment failure, so retry is not needed.
 
 ### `GET /api/v1/shipping/track/:awb`
-Track a shipment by AWB number. Returns courier status and timeline events.
+Track a shipment by AWB number. Public, no auth required. Returns courier status, tracking URL, estimated delivery date, and timeline events. Shows data from the linked order's shipment record.
 
 ### `POST /api/v1/orders/:id/return-requests`
 Create a return request for a delivered order. Body: `{ items: [{ orderItemId, quantity, reason? }], reason }`. Returns request with status `REQUESTED`.
@@ -310,7 +310,10 @@ Create a return request for a delivered order. Body: `{ items: [{ orderItemId, q
 Razorpay payment event webhook. Verifies `x-razorpay-signature` HMAC header. Processes `payment.captured`, `payment.failed`, and refund events. Writes to the inbox with idempotency key.
 
 ### `POST /api/v1/shipping/webhook`
-Shipping provider (Delhivery/Shiprocket) webhook. Verifies auth token and processes tracking update events. Updates order shipping status via queue.
+Shipping provider (Delhivery/Shiprocket) webhook. Verifies auth token and processes tracking update events. Updates order shipping status via queue. Triggers customer notifications on major status transitions:
+- **IN_TRANSIT** → Sends `OrderShipped` email/SMS with tracking URL and estimated delivery days (from Shiprocket API)
+- **OUT_FOR_DELIVERY** → Sends `OutForDelivery` email/SMS
+- **DELIVERED** → Sends `OrderDelivered` email/SMS; for COD orders, marks payment as `CAPTURED`
 
 **Auth header resolution (provider-specific):**
 - **Delhivery:** `Authorization: Token <DELHIVERY_WEBHOOK_TOKEN>`
@@ -320,6 +323,11 @@ Shipping provider (Delhivery/Shiprocket) webhook. Verifies auth token and proces
   3. `Authorization: Bearer <SHIPROCKET_WEBHOOK_TOKEN>` — backward compat
 
 **Security:** IP allowlist via `SHIPPING_WEBHOOK_ALLOWLIST_CIDR`. Timestamp skew check (configurable via `DELHIVERY_WEBHOOK_MAX_SKEW_SECONDS` / `SHIPROCKET_WEBHOOK_MAX_SKEW_SECONDS`). Idempotent — duplicate AWB+status events are discarded via `WebhookInboxEvent`.
+
+**Notification context:**
+- `OrderShipped` email includes: order ID, AWB tracking number, tracking URL (linked), estimated delivery days, and a prominent "Track Your Order" button.
+- `OrderShipped` SMS includes: order ID, estimated delivery days (when available), and Shiprocket tracking URL.
+- Both email and SMS are sent via the `send-primary` notification worker using customer's preferred contact method (email priority, SMS fallback).
 
 ### `GET /api/v1/notifications/webhook/meta-whatsapp`
 Meta WhatsApp webhook verification challenge. Responds to Meta's `hub.challenge` verification request. Called once during webhook registration.
@@ -425,7 +433,7 @@ Manual stock adjustment for a variant. Body: `{ quantity, note? }`. Creates an a
 | Route | What it does |
 |---|---|
 | `PATCH /api/v1/admin/orders/:id/status` | Update order status. Body: `{ status, note? }`. Note is tagged with admin ID. Setting status to `REFUNDED` additionally requires `orders:refund` permission. |
-| `POST /api/v1/admin/orders/:id/ship` | Manually trigger shipment booking with the courier provider. Creates shipment, gets AWB, updates order. Idempotent. |
+| `POST /api/v1/admin/orders/:id/ship` | Manually trigger shipment booking with the courier provider. Creates shipment, fetches AWB and estimated delivery days from Shiprocket, updates order status to SHIPPED, and **immediately sends `OrderShipped` notification to customer** (email + SMS) with tracking URL and estimated delivery days. Idempotent — if AWB already exists, skips external call and re-sends notification. |
 | `POST /api/v1/admin/orders/:id/schedule-pickup` | Schedule a courier pickup for a booked shipment. Idempotent. |
 | `POST /api/v1/admin/orders/:id/notifications/retrigger` | Re-enqueue notification for this order. Body: `{ template }`. Requires `orders:notify` permission. Idempotent. |
 

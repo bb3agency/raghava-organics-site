@@ -321,20 +321,31 @@ export function PaymentFailedEmail(orderId: string): ReactElement {
   );
 }
 
-export function OrderShippedEmail(orderId: string): ReactElement {
+export function OrderShippedEmail(
+  orderId: string,
+  options?: { trackingUrl?: string; awb?: string; estimatedDays?: number }
+): ReactElement {
+  const deliveryNote = options?.estimatedDays != null
+    ? `Estimated delivery in ${options.estimatedDays} day${options.estimatedDays === 1 ? '' : 's'}.`
+    : '';
   return Wrapper(
     StatusBadge('Shipped', B.infoBlue, B.infoBlueBg),
     Heading('Your order is on its way!'),
-    Body(`Your order ${orderId} has been handed over to our delivery partner and is now in transit. You can track your shipment using the details below.`),
+    Body(`Your order ${orderId} has been handed over to our delivery partner and is now in transit.${deliveryNote ? ` ${deliveryNote}` : ''}`),
     InfoBox(
       el('table', { width: '100%', cellPadding: 0, cellSpacing: 0 },
         el('tbody', null,
           InfoRow('Order ID', orderId),
           InfoRow('Status', 'Shipped — in transit'),
-          InfoRow('Tracking', 'Available in your account under Order Details')
+          ...(options?.awb ? [InfoRow('AWB / Tracking No.', options.awb)] : []),
+          ...(options?.estimatedDays != null ? [InfoRow('Estimated Delivery', `${options.estimatedDays} day${options.estimatedDays === 1 ? '' : 's'}`)] : []),
+          InfoRow('Tracking', options?.trackingUrl ? options.trackingUrl : 'Available in your account under Order Details')
         )
       )
     ),
+    ...(options?.trackingUrl
+      ? [PrimaryButton('Track Your Order', options.trackingUrl)]
+      : []),
     el('p', {
       style: { fontSize: '13px', color: B.textMuted, margin: '24px 0 0', lineHeight: '1.6' }
     }, 'Please ensure someone is available to receive the package at the delivery address. For any delivery concerns, contact our support team.')

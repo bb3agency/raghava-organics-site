@@ -74,6 +74,26 @@ export interface VerifyPaymentInput {
   razorpaySignature: string;
 }
 
+export interface PrepareCheckoutInput {
+  addressId?: string;
+  shippingAddress?: CheckoutShippingAddressInput;
+  notes?: string;
+}
+
+export interface PrepareCheckoutResponse {
+  checkoutSessionId: string;
+  razorpayOrderId: string;
+  amount: number;
+  currency: string;
+}
+
+export interface ConfirmPrepaidInput {
+  checkoutSessionId: string;
+  razorpayOrderId: string;
+  razorpayPaymentId: string;
+  razorpaySignature: string;
+}
+
 export async function createOrder(
   input: CreateOrderInput,
   accessToken: string,
@@ -106,6 +126,32 @@ export async function verifyPayment(
   idempotencyKey = createIdempotencyKey(),
 ): Promise<{ message: string }> {
   return apiClient<{ message: string }>("/payments/verify", {
+    method: "POST",
+    accessToken,
+    idempotencyKey,
+    body: JSON.stringify(input),
+  });
+}
+
+export async function prepareCheckout(
+  input: PrepareCheckoutInput,
+  accessToken: string,
+  idempotencyKey = createIdempotencyKey(),
+): Promise<PrepareCheckoutResponse> {
+  return apiClient<PrepareCheckoutResponse>("/payments/prepare-checkout", {
+    method: "POST",
+    accessToken,
+    idempotencyKey,
+    body: JSON.stringify(input),
+  });
+}
+
+export async function confirmPrepaid(
+  input: ConfirmPrepaidInput,
+  accessToken: string,
+  idempotencyKey = createIdempotencyKey(),
+): Promise<OrderSummary> {
+  return apiClient<OrderSummary>("/payments/confirm-prepaid", {
     method: "POST",
     accessToken,
     idempotencyKey,

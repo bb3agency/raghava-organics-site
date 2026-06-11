@@ -220,7 +220,13 @@ export function createShippingWorker(
           include: {
             payment: true,
             shipment: true,
-            items: true
+            items: true,
+            user: {
+              select: {
+                email: true,
+                phone: true
+              }
+            }
           }
         });
         const order = orderRaw as (typeof orderRaw & { courierCompanyId?: number | null }) | null;
@@ -394,6 +400,11 @@ export function createShippingWorker(
             return;
           }
 
+          const estimatedDelivery =
+            shipment.estimatedDays != null
+              ? new Date(Date.now() + shipment.estimatedDays * 24 * 60 * 60 * 1000)
+              : null;
+
           await upsertShipmentCompat(tx, {
             orderId: order.id,
             existingShipmentId: freshOrder.shipment?.id ?? order.shipment?.id,
@@ -402,6 +413,7 @@ export function createShippingWorker(
               status: ShipmentStatus.BOOKED,
               awbNumber: shipment.awbNumber,
               ...(shipment.trackingUrl ? { trackingUrl: shipment.trackingUrl } : {}),
+              ...(estimatedDelivery ? { estimatedDelivery } : {}),
               webhookPayload: sanitizeProviderPayload(shipment.providerPayload),
               ...shiprocketFields
             }
@@ -427,6 +439,28 @@ export function createShippingWorker(
                 note: `Shipment booked by admin via ${providerLabel}`
               }
             });
+
+            // Notify customer immediately on shipment booking
+            const userEmail = order.user?.email;
+            const userPhone = order.user?.phone;
+            if (userEmail || userPhone) {
+              const estimatedDeliveryText =
+                shipment.estimatedDays != null
+                  ? `Estimated delivery in ${shipment.estimatedDays} day${shipment.estimatedDays === 1 ? '' : 's'}. `
+                  : '';
+              await enqueueNotificationOutboxOrQueue(tx, notificationsQueue, 'send-primary', {
+                email: userEmail,
+                phone: userPhone,
+                template: 'OrderShipped',
+                data: {
+                  orderId: order.id,
+                  awb: shipment.awbNumber,
+                  trackingUrl: shipment.trackingUrl ?? '',
+                  estimatedDeliveryText,
+                  ...(shipment.estimatedDays != null ? { estimatedDays: shipment.estimatedDays } : {})
+                }
+              }, `shipping:primary:${order.id}:shipped`);
+            }
           } else {
             awbToCancel = shipment.awbNumber;
           }
@@ -566,14 +600,25 @@ export function createShippingWorker(
         const email = shipment.order.user?.email;
         const phone = shipment.order.user?.phone;
         if (nextShipmentStatus === 'IN_TRANSIT' && (phone || email)) {
+          const estimatedDaysFromDelivery = shipment.estimatedDelivery
+            ? Math.max(1, Math.round((shipment.estimatedDelivery.getTime() - Date.now()) / (24 * 60 * 60 * 1000)))
+            : undefined;
+          const estimatedDeliveryText =
+            estimatedDaysFromDelivery != null
+              ? `Estimated delivery in ${estimatedDaysFromDelivery} day${estimatedDaysFromDelivery === 1 ? '' : 's'}. `
+              : '';
           await enqueueNotificationOutboxOrQueue(tx, notificationsQueue, 'send-primary', {
             email,
             phone,
             template: 'OrderShipped',
             data: {
               orderId: shipment.order.id,
-              awb: data.awb
+              awb: data.awb,
+              trackingUrl: shipment.trackingUrl ?? '',
+              estimatedDeliveryText,
+              ...(estimatedDaysFromDelivery != null ? { estimatedDays: estimatedDaysFromDelivery } : {})
             }
+          // Deduplication key differs from :shipped so this can fire even if booking notification ran.
           }, `shipping:primary:${shipment.order.id}:in-transit`);
         }
 

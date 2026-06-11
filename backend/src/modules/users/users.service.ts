@@ -225,9 +225,10 @@ export class UsersService {
     const limit = Math.min(query.limit ?? 20, 100);
     const skip = (page - 1) * limit;
 
+    const customerOrderWhere = { userId, status: { notIn: ['PENDING_PAYMENT' as const, 'PAYMENT_FAILED' as const] } };
     const [orders, total] = await this.fastify.prisma.$transaction([
       this.fastify.prisma.order.findMany({
-        where: { userId },
+        where: customerOrderWhere,
         orderBy: { createdAt: 'desc' },
         skip,
         take: limit,
@@ -265,7 +266,7 @@ export class UsersService {
           }
         }
       }),
-      this.fastify.prisma.order.count({ where: { userId } })
+      this.fastify.prisma.order.count({ where: customerOrderWhere })
     ]);
 
     return {

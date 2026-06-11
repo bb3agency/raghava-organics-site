@@ -34,6 +34,7 @@ export type CreateShipmentInput = {
 export type CreateShipmentResult = {
   awbNumber: string;
   trackingUrl?: string;
+  estimatedDays?: number;
   providerPayload: Record<string, unknown>;
   shiprocketOrderId?: string;
   shiprocketShipmentId?: string;

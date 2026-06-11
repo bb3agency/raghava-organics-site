@@ -363,9 +363,25 @@ export default class ShiprocketAdapter implements ShippingProviderAdapter {
       throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Shiprocket AWB code missing from assign response', 502);
     }
 
+    // Fetch estimated delivery days by checking serviceability for the assigned route.
+    // This is a lightweight read-only call and the result is stored on the Shipment record.
+    let estimatedDays: number | undefined;
+    try {
+      const rateResult = await this.calculateDeliveryRate({
+        originPincode: input.originPincode,
+        destinationPincode: input.destinationPincode,
+        totalWeightGrams: input.totalWeightGrams,
+        paymentMode: input.paymentMode === 'COD' ? 'COD' : 'PREPAID'
+      });
+      estimatedDays = rateResult.estimatedDays;
+    } catch {
+      // Non-critical — proceed without estimated days
+    }
+
     return {
       awbNumber,
       trackingUrl: `https://shiprocket.co/tracking/${awbNumber}`,
+      ...(estimatedDays != null ? { estimatedDays } : {}),
       ...(shiprocketOrderId != null ? { shiprocketOrderId } : {}),
       shiprocketShipmentId,
       ...(awbResponse.courier_name != null ? { courierName: awbResponse.courier_name } : {}),

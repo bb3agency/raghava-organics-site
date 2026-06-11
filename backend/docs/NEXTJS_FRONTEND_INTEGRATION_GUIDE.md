@@ -158,7 +158,7 @@ Use this order unless there is a strong project-specific reason to change it:
 6. **Storefront customer journey slices (build after ops + admin tiers are solid)**
    - Catalogue: product list, category pages, search, product detail (`/products`, `/products/:slug`, `/products/categories`).
    - Cart: guest session, item CRUD, coupon apply/remove, pincode check, merge-on-login (`POST /cart/merge`).
-   - Checkout: full PREPAID Razorpay sequence (`POST /orders` → `POST /payments/initiate` → Razorpay modal → `POST /payments/verify`) and COD path (`POST /orders` with `paymentMode: 'COD'`).
+   - Checkout: full PREPAID Razorpay sequence (`POST /payments/prepare-checkout` → Razorpay modal → `POST /payments/confirm-prepaid`) and COD path (`POST /orders` with `paymentMode: 'COD'`).
    - Order history, order detail, return request creation, shipment tracking (`GET /shipping/track/:awb`).
    - Customer auth: OTP flow, email login, forgot-password, refresh loop, logout.
    - User profile + addresses CRUD.
@@ -519,13 +519,13 @@ When `FEATURE_REVIEWS_ENABLED=false`, `/reviews/recent` and `/reviews/product/:s
 
 ### 5.5 Orders & payments (`§7.8`)
 
-- `POST /orders` — single DB transaction; body accepts optional `paymentMode: 'PREPAID' | 'COD'` (default `PREPAID`); re-validates shipping inside transaction (TOCTOU guard vs cart preview)
-- `GET /orders/:id` — **own orders only**; response includes `paymentMode` field
+- `POST /orders` — COD only; single DB transaction; body must include `paymentMode: 'COD'`; re-validates shipping inside transaction; returns order in `CONFIRMED` state immediately
+- `POST /payments/prepare-checkout` — PREPAID only; `{ addressId?, shippingAddress?, notes? }` → creates Redis checkout session + Razorpay order; returns `{ checkoutSessionId, razorpayOrderId, amount, currency }` (**no DB order created yet**)
+- `POST /payments/confirm-prepaid` — PREPAID only; `{ checkoutSessionId, razorpayOrderId, razorpayPaymentId, razorpaySignature }` → verifies signature + creates order in `CONFIRMED` state atomically; returns order; **idempotent via payment record lookup**
+- `POST /payments/retry` — PREPAID only; retry for `PAYMENT_FAILED` orders (order must exist from old flow); returns `400 VALIDATION_ERROR` for COD orders
+- `GET /orders/:id` — **own orders only**; response includes `paymentMode` field; **filters out `PENDING_PAYMENT` and `PAYMENT_FAILED` orders on customer pages** (only CONFIRMED+ visible)
 - `GET /orders/:id/invoice.pdf` — authenticated customer invoice PDF download (attachment response)
-- `POST /orders/:id/cancel` — **customer:** only from `CONFIRMED` or `PROCESSING` (not `PENDING_PAYMENT` / `PAYMENT_FAILED`); enforces `cancellationWindowHours` from store settings; enqueues shipment cancel when AWB exists
-- `POST /payments/initiate` — `{ orderId }` → Razorpay order id (**PREPAID only**)
-- `POST /payments/verify` — `{ orderId, razorpayPaymentId, razorpaySignature }` after checkout
-- `POST /payments/retry` — retry for `PAYMENT_FAILED` / `PENDING_PAYMENT` orders; restores checkout reservations server-side; returns `409`/`400` for COD orders
+- `POST /orders/:id/cancel` — **customer:** only from `CONFIRMED` or `PROCESSING`; enforces `cancellationWindowHours` from store settings; enqueues shipment cancel when AWB exists
 - `POST /orders/:id/return-requests` — create return request for `DELIVERED` orders; body: `{ items: [{ orderItemId, quantity, reason? }], reason }`
 - `GET /shipping/track/:awb` — tracking for **customer-owned** orders only
 
@@ -556,40 +556,43 @@ Invoice response contract notes:
 
 UI should treat these as authenticated customer-only resources and apply the same refresh-retry policy as other protected routes.
 
-**You cannot call webhooks from the browser** — Razorpay / shipping provider POST to the backend. Storefront must treat **`/payments/verify`** + polling order status as **best-effort**; **final truth** is webhook-driven confirmation (`TRD.md` §10.3, `BRD.md` AC-04–AC-06).
+**You cannot call webhooks from the browser** — Razorpay / shipping provider POST to the backend. Storefront `POST /payments/confirm-prepaid` is **synchronous and final** — if it returns 200, the order is created and payment is captured. **Final truth** for order state is backend DB, but UI callback + confirm response is sufficient for UX (`TRD.md` §10.3, `BRD.md` AC-04–AC-06).
 
 ---
 
 ## 6. Checkout sequences
 
-### 6.1 Razorpay (PREPAID) sequence
+### 6.1 Razorpay (PREPAID) sequence — New flow (no DB order until payment succeeds)
 
-1. **`POST /orders`** with `paymentMode: 'PREPAID'` (or omitted) and `addressId` or `shippingAddress` → order in **`PENDING_PAYMENT`**.
-2. **`POST /payments/initiate`** → receive Razorpay **`order_id`** (provider id).
-3. Load **`https://checkout.razorpay.com/v1/checkout.js`** from Razorpay CDN (**not** bundled npm — `TRD.md` §12.1 PCI note).
-4. Open Razorpay Checkout with **`key` = `NEXT_PUBLIC_RAZORPAY_KEY_ID`** and **`order_id`** from step 2.
-5. On client success callback → **`POST /payments/verify`** with signature fields.
-6. Show **pending / confirmed** UI from **`GET /orders/:id`**; if still pending, poll briefly until workers process webhook (`BRD.md` AC-04).
+1. **`POST /payments/prepare-checkout`** with `addressId` or `shippingAddress` + optional `notes` → returns `{ checkoutSessionId, razorpayOrderId, amount, currency }`. **No order created yet — only Redis checkout session + Razorpay order.**
+2. Load **`https://checkout.razorpay.com/v1/checkout.js`** from Razorpay CDN (**not** bundled npm — `TRD.md` §12.1 PCI note).
+3. Open Razorpay Checkout modal with **`key` = `NEXT_PUBLIC_RAZORPAY_KEY_ID`** and **`order_id`** from step 1.
+4. **On payment success** (Razorpay callback) → **`POST /payments/confirm-prepaid`** with `{ checkoutSessionId, razorpayOrderId, razorpayPaymentId, razorpaySignature }`.
+5. Backend verifies Razorpay signature + creates order in `CONFIRMED` state atomically (inventory deducted, payment marked `CAPTURED`, cart cleared, notifications enqueued).
+6. Redirect to **`/checkout/success?orderId={orderId}`** — order is now visible on customer's orders page.
+7. **On payment failure** (Razorpay callback or user exit) → show error; **no order in DB**. User can retry by re-entering checkout flow (step 1 again).
 
-For steps 1, 2, and 5, send an `idempotency-key` header from frontend to prevent duplicate side effects on retries/network replays.
+Send **`idempotency-key`** header on step 1 and step 4 to prevent duplicate checkout sessions or payment records on network retries.
 
-**Never treat UI callback alone as proof of payment** (`BRD.md` AC-06).
+**Payment is final proof** — backend webhook confirms it, but UI callback + `POST /payments/confirm-prepaid` success is sufficient to show confirmation page (`BRD.md` AC-06).
 
-Optional **`RISK_VELOCITY_ENABLED`** may throttle initiate per user/hour (`TRD.md` §7.13) — handle **429** / business errors gracefully.
+Optional **`RISK_VELOCITY_ENABLED`** may throttle prepare per user/hour (`TRD.md` §7.13) — handle **429** gracefully.
 
-### 6.2 COD (Cash on Delivery) sequence
+**Backwards compatibility:** Old `POST /payments/retry` flow still works for orders that entered `PAYMENT_FAILED` state before this flow change. Do not mix old/new endpoints.
+
+### 6.2 COD (Cash on Delivery) sequence — Direct order creation
 
 1. Fetch **`GET /api/v1/store/config`** (or `useStoreConfig()` after layout load) — show COD only when `isCodEnabled === true`.
-2. Pass selected **`paymentMode`** to **`GET /cart/delivery-rates`** so shipping quote matches COD tariff.
-3. **`POST /orders`** with `paymentMode: 'COD'` and `addressId` or `shippingAddress` → order immediately returns in **`CONFIRMED`** status — **no Razorpay steps needed**.
-4. Redirect to storefront **`/checkout/success?orderId=`** (confirmation page); worker runs **`process-order-update`** with `triggeredBy: COD_ORDER_CREATED` (inventory, coupon finalize, notifications, invoice).
-5. COD payment record semantics: backend creates COD payment as `CREATED`; it transitions to `CAPTURED` when collection is confirmed in backend flows.
-6. Shipment booking remains manual-only for COD and PREPAID: admin must trigger `POST /api/v1/admin/orders/:id/ship`.
+2. Pass **`paymentMode: 'COD'`** to **`GET /cart/delivery-rates`** so shipping quote matches COD tariff.
+3. **`POST /orders`** with `paymentMode: 'COD'` and `addressId` or `shippingAddress` → order immediately returns in **`CONFIRMED`** status — **no payment modal needed**.
+4. Redirect to storefront **`/checkout/success?orderId={orderId}`** (confirmation page); worker runs **`process-order-update`** (inventory, coupon finalize, notifications, invoice).
+5. COD payment record semantics: backend creates COD payment as `CREATED` at order creation time; it transitions to `CAPTURED` when delivery is confirmed (via Shiprocket webhook on DELIVERED event).
+6. Shipment booking remains manual-only for COD and PREPAID: admin must trigger **`POST /api/v1/admin/orders/:id/ship`**.
 7. On error **`VALIDATION_ERROR`** with message mentioning COD disabled → hide COD option and prompt for prepaid.
 
-**Payment retry for COD:** not applicable — `POST /payments/retry` returns `400 VALIDATION_ERROR` for COD orders. Do not render the retry UI affordance for orders where `paymentMode === 'COD'`.
+**Payment retry for COD:** not applicable. Do not render the retry UI affordance for orders where `paymentMode === 'COD'`.
 
-**Payment retry for PREPAID:** Order detail page navigates to `/checkout/payment?orderId=`; payment page calls **`POST /payments/retry` once** (guards: status `PENDING_PAYMENT` or `PAYMENT_FAILED`, not COD). Do not call retry from both pages.
+**Payment retry for PREPAID (old flow):** For orders that entered `PAYMENT_FAILED` status before the `confirm-prepaid` flow: order detail page navigates to `/checkout/payment?orderId=`; payment page calls **`POST /payments/retry`** (guards: status `PAYMENT_FAILED` only). Do not call retry from both pages. New `confirm-prepaid` flow does not create orders on payment failure, so retry is not needed.
 
 ---
 

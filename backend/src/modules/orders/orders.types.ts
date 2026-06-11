@@ -70,6 +70,27 @@ export type VerifyPaymentInput = {
   razorpaySignature: string;
 };
 
+export type PrepareCheckoutInput = {
+  addressId?: string;
+  shippingAddress?: {
+    fullName: string;
+    phone: string;
+    line1: string;
+    line2?: string;
+    city: string;
+    state: string;
+    pincode: string;
+  };
+  notes?: string;
+};
+
+export type ConfirmPrepaidInput = {
+  checkoutSessionId: string;
+  razorpayOrderId: string;
+  razorpayPaymentId: string;
+  razorpaySignature: string;
+};
+
 export type CancelOrderInput = {
   reason?: string;
   refundAmountPaise?: number;

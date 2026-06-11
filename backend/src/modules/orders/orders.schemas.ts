@@ -922,6 +922,68 @@ export const verifyPaymentSchema = {
   }
 } as const;
 
+export const prepareCheckoutSchema = {
+  params: emptyParamsSchema,
+  querystring: emptyQuerystringSchema,
+  body: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      addressId: { type: 'string', maxLength: 64 },
+      shippingAddress: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['fullName', 'phone', 'line1', 'city', 'state', 'pincode'],
+        properties: {
+          fullName: { type: 'string', maxLength: 100 },
+          phone: { type: 'string', maxLength: 20 },
+          line1: { type: 'string', maxLength: 200 },
+          line2: { type: 'string', maxLength: 200 },
+          city: { type: 'string', maxLength: 100 },
+          state: { type: 'string', maxLength: 100 },
+          pincode: { type: 'string', minLength: 6, maxLength: 6, pattern: '^[0-9]{6}$' }
+        }
+      },
+      notes: { type: 'string', maxLength: 2000 }
+    },
+    anyOf: [{ required: ['addressId'] }, { required: ['shippingAddress'] }]
+  },
+  response: {
+    200: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['checkoutSessionId', 'razorpayOrderId', 'amount', 'currency'],
+      properties: {
+        checkoutSessionId: { type: 'string', maxLength: 120 },
+        razorpayOrderId: { type: 'string', maxLength: 100 },
+        amount: { type: 'integer', minimum: 0, maximum: 1000000000 },
+        currency: { type: 'string', maxLength: 10 }
+      }
+    },
+    ...standardErrorResponses
+  }
+} as const;
+
+export const confirmPrepaidSchema = {
+  params: emptyParamsSchema,
+  querystring: emptyQuerystringSchema,
+  body: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['checkoutSessionId', 'razorpayOrderId', 'razorpayPaymentId', 'razorpaySignature'],
+    properties: {
+      checkoutSessionId: { type: 'string', maxLength: 120 },
+      razorpayOrderId: { type: 'string', maxLength: 100 },
+      razorpayPaymentId: { type: 'string', maxLength: 100 },
+      razorpaySignature: { type: 'string', maxLength: 256 }
+    }
+  },
+  response: {
+    200: customerOrderDetailSchema,
+    ...standardErrorResponses
+  }
+} as const;
+
 export const paymentWebhookSchema = {
   params: {
     type: 'object',
