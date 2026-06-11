@@ -1,23 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { OrderStatus } from '@prisma/client';
-import { featureFlags } from '@config/feature-flags';
+import { invalidateStorefrontCouponsCache } from '@common/coupons/coupons-feature';
 import { OrdersService } from './orders.service';
 import { CartService } from '@modules/cart/cart.service';
 
-describe('OrdersService createOrder coupon feature flag', () => {
-  const originalCouponsFlag = featureFlags.coupons;
-
+describe('OrdersService createOrder coupon merchant toggle', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    featureFlags.coupons = false;
+    invalidateStorefrontCouponsCache();
   });
 
   afterEach(() => {
-    featureFlags.coupons = originalCouponsFlag;
+    invalidateStorefrontCouponsCache();
   });
 
-  it('ignores stale cart coupon when coupons are disabled', async () => {
+  it('ignores stale cart coupon when storefront coupons are disabled', async () => {
     vi.spyOn(CartService.prototype, 'checkPincodeServiceability').mockResolvedValue({
       pincode: '500001',
       serviceable: true
@@ -118,7 +116,12 @@ describe('OrdersService createOrder coupon feature flag', () => {
       orderStatusHistory: { create: vi.fn().mockResolvedValue(undefined) },
       cartItem: { deleteMany: vi.fn().mockResolvedValue(undefined) },
       storeSettings: {
-        findUnique: vi.fn().mockResolvedValue({ minOrderValuePaise: 0 })
+        findUnique: vi.fn().mockImplementation(({ select }: { select?: Record<string, boolean> }) => {
+          if (select?.couponsEnabled) {
+            return Promise.resolve({ couponsEnabled: false });
+          }
+          return Promise.resolve({ minOrderValuePaise: 0 });
+        })
       }
     };
 

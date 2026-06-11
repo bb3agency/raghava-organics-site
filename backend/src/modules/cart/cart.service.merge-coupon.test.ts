@@ -1,21 +1,33 @@
 import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { featureFlags } from '@config/feature-flags';
+import { invalidateStorefrontCouponsCache } from '@common/coupons/coupons-feature';
 import { CartService } from './cart.service';
 
-describe('CartService mergeGuestCart coupon preservation', () => {
-  const originalCouponsFlag = featureFlags.coupons;
+function mockStoreSettings(couponsEnabled: boolean) {
+  return {
+    findUnique: vi.fn().mockImplementation(({ select }: { select?: Record<string, boolean> }) => {
+      if (select?.couponsEnabled) {
+        return Promise.resolve({ couponsEnabled });
+      }
+      if (select?.minOrderValuePaise) {
+        return Promise.resolve({ minOrderValuePaise: 0 });
+      }
+      return Promise.resolve(null);
+    })
+  };
+}
 
+describe('CartService mergeGuestCart coupon preservation', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    featureFlags.coupons = true;
+    invalidateStorefrontCouponsCache();
   });
 
   afterEach(() => {
-    featureFlags.coupons = originalCouponsFlag;
+    invalidateStorefrontCouponsCache();
   });
 
-  function buildHarness() {
+  function buildHarness(couponsEnabled = true) {
     const coupon = {
       id: 'coupon_1',
       code: 'WELCOME10',
@@ -86,7 +98,8 @@ describe('CartService mergeGuestCart coupon preservation', () => {
       },
       order: {
         count: vi.fn().mockResolvedValue(0)
-      }
+      },
+      storeSettings: mockStoreSettings(couponsEnabled)
     };
 
     const fastify = {
@@ -96,9 +109,7 @@ describe('CartService mergeGuestCart coupon preservation', () => {
         del: vi.fn().mockResolvedValue(1)
       },
       prisma: {
-        storeSettings: {
-          findUnique: vi.fn().mockResolvedValue({ minOrderValuePaise: 0 })
-        },
+        storeSettings: mockStoreSettings(couponsEnabled),
         order: {
           count: vi.fn().mockResolvedValue(0)
         },
@@ -119,9 +130,8 @@ describe('CartService mergeGuestCart coupon preservation', () => {
     });
   });
 
-  it('does not attach guest coupon when coupons feature flag is disabled', async () => {
-    featureFlags.coupons = false;
-    const { service, tx } = buildHarness();
+  it('does not attach guest coupon when storefront coupons are disabled', async () => {
+    const { service, tx } = buildHarness(false);
     await service.mergeGuestCart('user_1', 'session_1');
 
     expect(tx.cart.update).not.toHaveBeenCalledWith(

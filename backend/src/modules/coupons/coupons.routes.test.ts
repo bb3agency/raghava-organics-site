@@ -108,6 +108,16 @@ const couponsServiceState = vi.hoisted(() => ({
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   })),
+  getAdminStorefrontCouponsStatus: vi.fn(async () => ({
+    merchantEnabled: true,
+    storefrontEnabled: true,
+    redeemableCouponCount: 1
+  })),
+  updateStorefrontCouponsEnabled: vi.fn(async () => ({
+    merchantEnabled: true,
+    storefrontEnabled: true,
+    redeemableCouponCount: 1
+  })),
   adminCloneCoupon: vi.fn(async () => ({
     id: 'coupon_2',
     code: 'WELCOME10-CLONE',
@@ -138,6 +148,8 @@ vi.mock('./coupons.service', () => {
     adminRestoreCoupon = couponsServiceState.adminRestoreCoupon;
     getCouponAuditLogs = couponsServiceState.getCouponAuditLogs;
     adminGetCouponById = couponsServiceState.adminGetCouponById;
+    getAdminStorefrontCouponsStatus = couponsServiceState.getAdminStorefrontCouponsStatus;
+    updateStorefrontCouponsEnabled = couponsServiceState.updateStorefrontCouponsEnabled;
     adminCloneCoupon = couponsServiceState.adminCloneCoupon;
     constructor(_fastify: unknown) {}
 
@@ -203,6 +215,18 @@ describe('coupons routes', () => {
     });
 
     await registerCouponsRoutes(app);
+
+    const storefrontStatusGet = routes.find(
+      (route) => route.url === '/api/v1/admin/coupons/storefront-status' && route.method === 'GET'
+    );
+    expect(storefrontStatusGet).toBeDefined();
+    expect(storefrontStatusGet?.preHandler).toBeDefined();
+
+    const storefrontStatusPatch = routes.find(
+      (route) => route.url === '/api/v1/admin/coupons/storefront-status' && route.method === 'PATCH'
+    );
+    expect(storefrontStatusPatch).toBeDefined();
+    expect(storefrontStatusPatch?.preHandler).toBeDefined();
 
     const analytics = routes.find((route) => route.url === '/api/v1/admin/coupons/analytics' && route.method === 'GET');
     expect(analytics).toBeDefined();

@@ -4,7 +4,9 @@ import { CartService } from './cart.service';
 describe('CartService secure response contracts', () => {
   it('does not expose cart session token in customer response metadata', () => {
     const service = new CartService({} as never);
-    const result = (service as unknown as { serializeCart: (cart: unknown, isGuest: boolean) => Record<string, unknown> })
+    const result = (service as unknown as {
+      serializeCart: (cart: unknown, isGuest: boolean, couponsEnabled: boolean) => Record<string, unknown>;
+    })
       .serializeCart(
         {
           id: 'cart_1',
@@ -13,6 +15,7 @@ describe('CartService secure response contracts', () => {
           reservations: [],
           items: []
         },
+        true,
         true
       );
 
@@ -28,7 +31,9 @@ describe('CartService secure response contracts', () => {
 
   it('includes product name, short description, and primary image on cart items', () => {
     const service = new CartService({} as never);
-    const result = (service as unknown as { serializeCart: (cart: unknown, isGuest: boolean) => Record<string, unknown> })
+    const result = (service as unknown as {
+      serializeCart: (cart: unknown, isGuest: boolean, couponsEnabled: boolean) => Record<string, unknown>;
+    })
       .serializeCart(
         {
           id: 'cart_1',
@@ -57,6 +62,7 @@ describe('CartService secure response contracts', () => {
             }
           ]
         },
+        true,
         true
       );
 

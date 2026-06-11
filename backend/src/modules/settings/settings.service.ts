@@ -1,4 +1,5 @@
 import { FastifyInstance } from 'fastify';
+import { isStorefrontCouponsEnabled } from '@common/coupons/coupons-feature';
 import { featureFlags } from '@config/feature-flags';
 import { resolveNotificationRuntimeConfig } from '@common/notifications/notification-runtime-config';
 import { resolvePickupPincode } from '@common/shipping/resolve-pickup-pincode';
@@ -440,15 +441,22 @@ export class SettingsService {
     wishlistEnabled: boolean;
     gstInvoicingEnabled: boolean;
   }> {
-    const settings = await this.fastify.prisma.storeSettings.findUnique({
-      where: { singletonKey: SettingsService.singletonKey },
-      select: { isCodEnabled: true, minOrderValuePaise: true, mobileOtpSignupEnabled: true }
-    }) as { isCodEnabled: boolean; minOrderValuePaise: number; mobileOtpSignupEnabled: boolean } | null;
+    const [settings, couponsEnabled] = await Promise.all([
+      this.fastify.prisma.storeSettings.findUnique({
+        where: { singletonKey: SettingsService.singletonKey },
+        select: {
+          isCodEnabled: true,
+          minOrderValuePaise: true,
+          mobileOtpSignupEnabled: true
+        }
+      }),
+      isStorefrontCouponsEnabled(this.fastify.prisma)
+    ]);
     return {
       isCodEnabled: settings?.isCodEnabled ?? false,
       minOrderValuePaise: settings?.minOrderValuePaise ?? 0,
       mobileOtpSignupEnabled: settings?.mobileOtpSignupEnabled ?? false,
-      couponsEnabled: featureFlags.coupons,
+      couponsEnabled,
       reviewsEnabled: featureFlags.reviews,
       wishlistEnabled: featureFlags.wishlist,
       gstInvoicingEnabled: featureFlags.gstInvoicing

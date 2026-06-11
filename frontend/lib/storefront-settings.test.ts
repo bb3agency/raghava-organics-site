@@ -128,6 +128,7 @@ describe("storefront-settings", () => {
     });
     expect(global.fetch).toHaveBeenCalledWith(
       "http://localhost:3101/api/v1/store/config",
+      { cache: "no-store" },
     );
   });
 });

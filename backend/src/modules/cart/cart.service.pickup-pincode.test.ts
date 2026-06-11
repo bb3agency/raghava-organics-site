@@ -1,19 +1,13 @@
-import { afterEach, describe, expect, it } from 'vitest';
-import { featureFlags } from '@config/feature-flags';
+import { describe, expect, it } from 'vitest';
 import { CartService } from './cart.service';
 
-describe('CartService serializeCart coupon feature flag', () => {
-  const originalCouponsFlag = featureFlags.coupons;
-
-  afterEach(() => {
-    featureFlags.coupons = originalCouponsFlag;
-  });
-
-  it('hides coupon and discount when coupons feature flag is disabled', () => {
-    featureFlags.coupons = false;
+describe('CartService serializeCart couponsEnabled', () => {
+  it('hides coupon and discount when storefront coupons are disabled', () => {
     const service = new CartService({} as never);
     const result = (
-      service as unknown as { serializeCart: (cart: unknown, isGuest: boolean) => Record<string, unknown> }
+      service as unknown as {
+        serializeCart: (cart: unknown, isGuest: boolean, couponsEnabled: boolean) => Record<string, unknown>;
+      }
     ).serializeCart(
       {
         id: 'cart_1',
@@ -55,6 +49,7 @@ describe('CartService serializeCart coupon feature flag', () => {
           }
         ]
       },
+      false,
       false
     );
 

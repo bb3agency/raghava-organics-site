@@ -1,17 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
-import { featureFlags } from '@config/feature-flags';
+import { invalidateStorefrontCouponsCache } from '@common/coupons/coupons-feature';
 import { CartService } from './cart.service';
 
 describe('CartService removeCoupon', () => {
-  const originalCouponsFlag = featureFlags.coupons;
-
   afterEach(() => {
-    featureFlags.coupons = originalCouponsFlag;
+    invalidateStorefrontCouponsCache();
   });
 
-  it('clears coupon even when coupons feature flag is disabled', async () => {
-    featureFlags.coupons = false;
+  it('clears coupon even when storefront coupons are disabled', async () => {
     const update = vi.fn().mockResolvedValue(undefined);
     const cartRecord = {
       id: 'cart_1',
@@ -43,7 +40,15 @@ describe('CartService removeCoupon', () => {
     const fastify = {
       prisma: {
         storeSettings: {
-          findUnique: vi.fn().mockResolvedValue({ minOrderValuePaise: 0 })
+          findUnique: vi.fn().mockImplementation(({ select }: { select?: Record<string, boolean> }) => {
+            if (select?.couponsEnabled) {
+              return Promise.resolve({ couponsEnabled: false });
+            }
+            if (select?.minOrderValuePaise) {
+              return Promise.resolve({ minOrderValuePaise: 0 });
+            }
+            return Promise.resolve(null);
+          })
         },
         cart: {
           upsert: vi.fn().mockResolvedValue({ id: 'cart_1' }),

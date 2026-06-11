@@ -1,7 +1,7 @@
 import { OrderStatus, PaymentProvider, PaymentStatus } from '@prisma/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
-import { featureFlags } from '@config/feature-flags';
+import { invalidateStorefrontCouponsCache } from '@common/coupons/coupons-feature';
 import { OrdersService } from './orders.service';
 import { CartService } from '@modules/cart/cart.service';
 
@@ -27,9 +27,22 @@ function baseLog() {
 // createOrder — COD path
 // ---------------------------------------------------------------------------
 
+function mockStoreSettingsFindUnique(
+  base: Record<string, unknown> = { minOrderValuePaise: 0 },
+  couponsEnabled = false
+) {
+  return vi.fn().mockImplementation(({ select }: { select?: Record<string, boolean> }) => {
+    if (select?.couponsEnabled) {
+      return Promise.resolve({ couponsEnabled });
+    }
+    return Promise.resolve(base);
+  });
+}
+
 describe('OrdersService createOrder — COD', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    invalidateStorefrontCouponsCache();
     vi.spyOn(CartService.prototype, 'checkPincodeServiceability').mockResolvedValue({
       pincode: '500001',
       serviceable: true
@@ -122,9 +135,6 @@ describe('OrdersService createOrder — COD', () => {
   });
 
   it('finalizes coupon usage in transaction for COD orders with coupon', async () => {
-    const originalCoupons = featureFlags.coupons;
-    featureFlags.coupons = true;
-    try {
       const coupon = {
         id: 'coupon_1',
         code: 'SAVE10',
@@ -140,6 +150,10 @@ describe('OrdersService createOrder — COD', () => {
         applicableTo: null
       };
       const tx: ReturnType<typeof buildTx> & Record<string, unknown> = buildTx(true);
+      tx.storeSettings.findUnique = mockStoreSettingsFindUnique(
+        { isCodEnabled: true, cancellationWindowHours: 24 },
+        true
+      );
       tx.cart.findFirst.mockResolvedValue({
         id: 'cart_1',
         coupon,
@@ -172,7 +186,7 @@ describe('OrdersService createOrder — COD', () => {
       const fastify = {
         prisma: {
           order: { count: vi.fn().mockResolvedValue(0) },
-          storeSettings: { findUnique: vi.fn().mockResolvedValue({ minOrderValuePaise: 0 }) },
+          storeSettings: { findUnique: mockStoreSettingsFindUnique({ minOrderValuePaise: 0 }, true) },
           address: {
             findFirst: vi.fn().mockResolvedValue({
               id: 'addr_1',
@@ -205,9 +219,6 @@ describe('OrdersService createOrder — COD', () => {
           })
         })
       );
-    } finally {
-      featureFlags.coupons = originalCoupons;
-    }
   });
 
   it('creates PREPAID order with PENDING_PAYMENT status and no COD payment record', async () => {

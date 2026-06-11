@@ -20,10 +20,15 @@ import { formatPrice } from "@/lib/format-price";
 import { CartLineProductDetails } from "@/components/cart/CartLineProductDetails";
 import { useCartSync } from "@/hooks/use-cart-sync";
 import { getCartLineImageAlt, getCartLineImageUrl } from "@/lib/cart-line-display";
+import { useStoreConfig } from "@/components/providers/StoreConfigProvider";
+import { formatAppliedCouponLabel, isFreeShippingCoupon } from "@/lib/coupon-display";
 
 declare global {
   interface Window {
-    Razorpay?: new (options: Record<string, unknown>) => { open: () => void };
+    Razorpay?: new (options: Record<string, unknown>) => {
+      open: () => void;
+      on: (event: string, handler: (response: Record<string, unknown>) => void) => void;
+    };
   }
 }
 
@@ -47,13 +52,6 @@ type AddressFieldName = Extract<
   "fullName" | "phone" | "line1" | "line2" | "city" | "state" | "pincode"
 >;
 
-interface CheckoutFormProps {
-  isCodEnabled: boolean;
-  /** Minimum cart subtotal in paise (from backend DB). 0 = no minimum. */
-  minOrderValuePaise: number;
-  /** False when store config could not be loaded — checkout must stay blocked. */
-  configAvailable?: boolean;
-}
 
 function addressToFormValues(addr: UserAddress): Partial<CheckoutValues> {
   return {
@@ -67,11 +65,7 @@ function addressToFormValues(addr: UserAddress): Partial<CheckoutValues> {
   };
 }
 
-export function CheckoutForm({
-  isCodEnabled,
-  minOrderValuePaise,
-  configAvailable = true,
-}: CheckoutFormProps) {
+export function CheckoutForm() {
   const router = useSafeRouter();
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -83,10 +77,12 @@ export function CheckoutForm({
   const [couponCode, setCouponCode] = useState("");
   const [couponLoading, setCouponLoading] = useState(false);
   const [couponError, setCouponError] = useState<string | null>(null);
-  useCartSync();
+  const { couponsEnabled, isCodEnabled, minOrderValuePaise, configAvailable } = useStoreConfig();
+  useCartSync({ resyncKey: couponsEnabled });
   const accessToken = useAuthStore((s) => s.accessToken);
   const user = useAuthStore((s) => s.user);
   const cart = useCartStore((s) => s.cart);
+  const setCart = useCartStore((s) => s.setCart);
   const clearCart = useCartStore((s) => s.clearCart);
   const clearPendingMerge = useCartStore((s) => s.clearPendingMerge);
 
@@ -162,7 +158,7 @@ export function CheckoutForm({
     return () => {
       cancelled = true;
     };
-  }, [accessToken, pincode, paymentMode]);
+  }, [accessToken, pincode, paymentMode, cart?.coupon?.id]);
 
   const clearSavedAddressOnManualEdit = () => {
     if (selectedAddressId) setSelectedAddressId(null);
@@ -180,6 +176,10 @@ export function CheckoutForm({
   };
 
   const handleApplyCoupon = async () => {
+    if (!couponsEnabled) {
+      setCouponError("Coupons are not available right now.");
+      return;
+    }
     if (!couponCode.trim()) {
       setCouponError("Please enter a coupon code.");
       return;
@@ -187,7 +187,8 @@ export function CheckoutForm({
     setCouponLoading(true);
     setCouponError(null);
     try {
-      await applyCartCoupon(couponCode, accessToken);
+      const next = await applyCartCoupon(couponCode, accessToken);
+      setCart(next);
       setCouponCode("");
     } catch (err) {
       setCouponError(getApiErrorMessageWithHint(err));
@@ -200,7 +201,8 @@ export function CheckoutForm({
     setCouponLoading(true);
     setCouponError(null);
     try {
-      await removeCartCoupon(accessToken);
+      const next = await removeCartCoupon(accessToken);
+      setCart(next);
     } catch (err) {
       setCouponError(getApiErrorMessage(err));
     } finally {
@@ -236,7 +238,10 @@ export function CheckoutForm({
 
   const cartItems = cart?.items ?? [];
   const cartSubtotal = cart?.subtotal ?? cartItems.reduce((s, i) => s + i.priceSnapshot * i.quantity, 0);
-  const cartDiscount = cart?.discountAmount ?? 0;
+  const cartDiscount = couponsEnabled ? (cart?.discountAmount ?? 0) : 0;
+  const hasAppliedCoupon = couponsEnabled && Boolean(cart?.coupon);
+  const appliedCouponLabel = formatAppliedCouponLabel(couponsEnabled ? cart?.coupon : null);
+  const freeShippingCouponApplied = couponsEnabled && isFreeShippingCoupon(cart?.coupon);
   const cartPayableTotal = cart?.total ?? cartSubtotal;
   const effectiveMinOrderPaise = cart?.minOrderValuePaise ?? minOrderValuePaise;
   const meetsMinimumOrder =
@@ -374,11 +379,20 @@ export function CheckoutForm({
         modal: {
           ondismiss: () => {
             setSubmitting(false);
-            setError(
-              `Payment was not completed. Your order ${order.orderNumber} is saved — you can complete payment from your order history.`,
-            );
           },
         },
+      });
+
+      razorpay.on("payment.failed", (response: Record<string, unknown>) => {
+        const err = response.error as Record<string, unknown> | undefined;
+        const reason = (err?.reason as string | undefined) ?? "";
+        const isCancelled = reason === "cancelled" || (err?.source as string) === "customer";
+        setSubmitting(false);
+        setError(
+          isCancelled
+            ? `Payment was cancelled. Your order ${order.orderNumber} is saved — you can retry payment from your order history.`
+            : `Payment failed: ${(err?.description as string | undefined) ?? "Please try again or use a different payment method."}. Your order ${order.orderNumber} is saved.`,
+        );
       });
 
       razorpay.open();
@@ -493,6 +507,14 @@ export function CheckoutForm({
                   <Tag className="size-3" aria-hidden /> Discount
                 </span>
                 <span className="font-bold">−{formatPrice(cartDiscount)}</span>
+              </div>
+            )}
+            {freeShippingCouponApplied && cartDiscount === 0 && (
+              <div className="flex items-center justify-between text-xs text-[#00aa63]">
+                <span className="flex items-center gap-1">
+                  <Tag className="size-3" aria-hidden /> Coupon
+                </span>
+                <span className="font-bold">Free shipping</span>
               </div>
             )}
             <div className="flex justify-between border-t border-[#efe8e4] pt-1.5 text-sm font-bold text-[#23403d]">
@@ -646,50 +668,54 @@ export function CheckoutForm({
       </div>
 
       {/* ── Coupon Section ────────────────────────────────────────────── */}
-      <div className="grid gap-2.5 rounded-[16px] border border-[#e8ddd5] bg-white p-4">
-        <div className="flex items-center gap-2">
-          <Tag className="size-4 text-[#23403d]" aria-hidden />
-          <h3 className="text-sm font-bold text-[#23403d]">Coupon Code</h3>
+      {couponsEnabled ? (
+        <div className="grid gap-2.5 rounded-[16px] border border-[#e8ddd5] bg-white p-4">
+          <div className="flex items-center gap-2">
+            <Tag className="size-4 text-[#23403d]" aria-hidden />
+            <h3 className="text-sm font-bold text-[#23403d]">Coupon Code</h3>
+          </div>
+          {hasAppliedCoupon ? (
+            <div className="flex items-center justify-between rounded-[8px] bg-[#eff5ee] px-3 py-2">
+              <span className="text-sm font-medium text-[#00aa63]">
+                {appliedCouponLabel ?? "Coupon applied"}
+              </span>
+              <button
+                type="button"
+                onClick={() => void handleRemoveCoupon()}
+                disabled={couponLoading}
+                className="text-xs font-semibold text-[#ec6e55] hover:text-[#d95a41] disabled:opacity-60"
+              >
+                Remove
+              </button>
+            </div>
+          ) : (
+            <div className="flex gap-2">
+              <input
+                type="text"
+                placeholder="Enter coupon code"
+                value={couponCode}
+                onChange={(e) => {
+                  setCouponCode(e.target.value.toUpperCase());
+                  setCouponError(null);
+                }}
+                disabled={couponLoading}
+                className="flex-1 rounded-[8px] border border-[#e8ddd5] bg-white px-3 py-2 text-sm font-medium uppercase placeholder-[#999] focus:border-[#23403d] focus:outline-none disabled:opacity-60"
+              />
+              <button
+                type="button"
+                onClick={() => void handleApplyCoupon()}
+                disabled={couponLoading || !couponCode.trim()}
+                className="rounded-[8px] bg-[#23403d] px-4 py-2 text-sm font-bold text-white hover:bg-[#ec6e55] disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                {couponLoading ? "Applying…" : "Apply"}
+              </button>
+            </div>
+          )}
+          {couponError && (
+            <p className="text-xs font-medium text-[#ec6e55]">{couponError}</p>
+          )}
         </div>
-        {cartDiscount > 0 ? (
-          <div className="flex items-center justify-between rounded-[8px] bg-[#eff5ee] px-3 py-2">
-            <span className="text-sm font-medium text-[#00aa63]">Coupon applied</span>
-            <button
-              type="button"
-              onClick={() => void handleRemoveCoupon()}
-              disabled={couponLoading}
-              className="text-xs font-semibold text-[#ec6e55] hover:text-[#d95a41] disabled:opacity-60"
-            >
-              Remove
-            </button>
-          </div>
-        ) : (
-          <div className="flex gap-2">
-            <input
-              type="text"
-              placeholder="Enter coupon code"
-              value={couponCode}
-              onChange={(e) => {
-                setCouponCode(e.target.value);
-                setCouponError(null);
-              }}
-              disabled={couponLoading}
-              className="flex-1 rounded-[8px] border border-[#e8ddd5] bg-white px-3 py-2 text-sm font-medium placeholder-[#999] focus:border-[#23403d] focus:outline-none disabled:opacity-60"
-            />
-            <button
-              type="button"
-              onClick={() => void handleApplyCoupon()}
-              disabled={couponLoading || !couponCode.trim()}
-              className="rounded-[8px] bg-[#23403d] px-4 py-2 text-sm font-bold text-white hover:bg-[#ec6e55] disabled:opacity-60 disabled:cursor-not-allowed"
-            >
-              {couponLoading ? "Applying…" : "Apply"}
-            </button>
-          </div>
-        )}
-        {couponError && (
-          <p className="text-xs font-medium text-[#ec6e55]">{couponError}</p>
-        )}
-      </div>
+      ) : null}
 
       {/* ── Order Summary (pre-submit) ─────────────────────────────────── */}
       <div className="grid gap-2.5 rounded-[16px] border border-[#efe8e4] bg-[#faf3ef] p-4">
@@ -705,6 +731,12 @@ export function CheckoutForm({
           <div className="flex justify-between text-sm text-[#00aa63]">
             <span>Discount</span>
             <span className="font-bold">−{formatPrice(cartDiscount)}</span>
+          </div>
+        )}
+        {freeShippingCouponApplied && cartDiscount === 0 && (
+          <div className="flex justify-between text-sm text-[#00aa63]">
+            <span>Coupon</span>
+            <span className="font-bold">Free shipping</span>
           </div>
         )}
         <div className="flex justify-between text-sm text-[#767676]">

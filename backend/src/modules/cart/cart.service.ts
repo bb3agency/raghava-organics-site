@@ -9,8 +9,11 @@ import { ShippingProviderAdapter } from '@common/interfaces/shipping-provider.in
 import type { DeliveryRateResult } from '@common/interfaces/shipping-provider.interface';
 import { resolvePickupPincode } from '@common/shipping/resolve-pickup-pincode';
 import { assertCouponWithinUsageLimits } from '@common/coupons/coupon-usage';
+import {
+  buildRedeemableStorefrontCouponWhere,
+  isStorefrontCouponsEnabled
+} from '@common/coupons/coupons-feature';
 import { NoopShippingAdapter } from '@modules/shipping/adapters/noop-shipping.adapter';
-import { featureFlags } from '@config/feature-flags';
 import { createShippingProvider } from '@modules/shipping/shipping-provider';
 import { sendTechnicalFailureAlert } from '@modules/notifications/notification-failure-alert';
 import { AddCartItemInput, ApplyCouponInput, UpdateCartItemInput } from './cart.types';
@@ -104,11 +107,13 @@ export class CartService {
     return this.serializeCartForClient(cart, !userId);
   }
 
-  /** Drop orphaned couponId when feature flag is off — matches serializeCart/createOrder. */
+  /** Drop orphaned couponId when storefront coupons are off — matches serializeCart/createOrder. */
   private async stripDisabledCouponFromCart<
     T extends { id: string; coupon: Coupon | null }
-  >(cart: T, tx?: Prisma.TransactionClient): Promise<T> {
-    if (featureFlags.coupons || !cart.coupon) {
+  >(cart: T, tx?: Prisma.TransactionClient, couponsEnabled?: boolean): Promise<T> {
+    const enabled =
+      couponsEnabled ?? (await isStorefrontCouponsEnabled(tx ?? this.fastify.prisma));
+    if (enabled || !cart.coupon) {
       return cart;
     }
     const cartDelegate = tx?.cart ?? this.fastify.prisma.cart;
@@ -140,8 +145,10 @@ export class CartService {
         };
       }>;
     }
-  >(cart: T, tx?: Prisma.TransactionClient): Promise<T> {
-    if (!featureFlags.coupons || !cart.coupon || cart.items.length === 0) {
+  >(cart: T, tx?: Prisma.TransactionClient, couponsEnabled?: boolean): Promise<T> {
+    const enabled =
+      couponsEnabled ?? (await isStorefrontCouponsEnabled(tx ?? this.fastify.prisma));
+    if (!enabled || !cart.coupon || cart.items.length === 0) {
       return cart;
     }
 
@@ -196,9 +203,10 @@ export class CartService {
       }>;
     }
   >(cart: T, isGuest: boolean, tx?: Prisma.TransactionClient) {
-    const withoutDisabledCoupon = await this.stripDisabledCouponFromCart(cart, tx);
-    const normalized = await this.stripInvalidCouponFromCart(withoutDisabledCoupon, tx);
-    const serialized = this.serializeCart(normalized, isGuest);
+    const couponsEnabled = await isStorefrontCouponsEnabled(tx ?? this.fastify.prisma);
+    const withoutDisabledCoupon = await this.stripDisabledCouponFromCart(cart, tx, couponsEnabled);
+    const normalized = await this.stripInvalidCouponFromCart(withoutDisabledCoupon, tx, couponsEnabled);
+    const serialized = this.serializeCart(normalized, isGuest, couponsEnabled);
     const settingsClient = tx?.storeSettings ?? this.fastify.prisma.storeSettings;
     const settings = await settingsClient.findUnique({
       where: { singletonKey: 'default' },
@@ -440,7 +448,8 @@ export class CartService {
         }
       }
 
-      if (!userCart.couponId && guestCart.coupon && featureFlags.coupons) {
+      const couponsEnabled = await isStorefrontCouponsEnabled(tx);
+      if (!userCart.couponId && guestCart.coupon && couponsEnabled) {
         const mergedPreview = await this.getCartWithItems(userCart.id, tx);
         const subtotal = mergedPreview.items.reduce((sum, item) => sum + item.priceSnapshot * item.quantity, 0);
         try {
@@ -474,13 +483,16 @@ export class CartService {
   }
 
   async applyCoupon(userId: string | undefined, sessionToken: string | undefined, input: ApplyCouponInput) {
-    if (!featureFlags.coupons) {
+    if (!(await isStorefrontCouponsEnabled(this.fastify.prisma))) {
       throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Coupons are disabled', 400);
     }
 
     const cart = await this.resolveOrCreateCart(userId, sessionToken);
     const coupon = await this.fastify.prisma.coupon.findFirst({
-      where: { code: input.code.trim().toUpperCase(), isActive: true }
+      where: {
+        code: input.code.trim().toUpperCase(),
+        ...buildRedeemableStorefrontCouponWhere()
+      }
     });
     if (!coupon) {
       throw new AppError(ERROR_CODES.NOT_FOUND, 'Coupon not found', 404);
@@ -645,7 +657,8 @@ export class CartService {
       paymentMode: input.paymentMode ?? 'PREPAID'
     });
 
-    const effectiveCoupon = featureFlags.coupons ? input.cart.coupon : null;
+    const couponsEnabled = await isStorefrontCouponsEnabled(this.fastify.prisma);
+    const effectiveCoupon = couponsEnabled ? input.cart.coupon : null;
     const shippingChargePaise =
       effectiveCoupon?.type === CouponType.FREE_SHIPPING ? 0 : rate.shippingChargePaise;
 
@@ -663,7 +676,7 @@ export class CartService {
     sessionToken: string | null,
     items: Array<{ priceSnapshot: number; quantity: number; variant: { productId: string; product: { categoryId: string } } }>
   ) {
-    if (!coupon.isActive) {
+    if (!coupon.isActive || coupon.deletedAt) {
       throw new AppError(ERROR_CODES.NOT_FOUND, 'Coupon not found', 404);
     }
 
@@ -868,10 +881,11 @@ export class CartService {
         };
       }>;
     },
-    isGuest: boolean
+    isGuest: boolean,
+    couponsEnabled: boolean
   ) {
     const subtotal = cart.items.reduce((sum, item) => sum + item.priceSnapshot * item.quantity, 0);
-    const discountAmount = featureFlags.coupons
+    const discountAmount = couponsEnabled
       ? this.calculateDiscount(subtotal, cart.coupon, cart.items)
       : 0;
     const total = Math.max(subtotal - discountAmount, 0);
@@ -901,7 +915,7 @@ export class CartService {
       subtotal,
       discountAmount,
       total,
-      coupon: featureFlags.coupons && cart.coupon
+      coupon: couponsEnabled && cart.coupon
         ? {
             id: cart.coupon.id,
             code: cart.coupon.code,

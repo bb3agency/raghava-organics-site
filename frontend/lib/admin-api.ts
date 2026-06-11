@@ -562,6 +562,12 @@ export interface AdminCouponListItem {
   updatedAt: string;
 }
 
+export interface AdminStorefrontCouponsStatus {
+  merchantEnabled: boolean;
+  storefrontEnabled: boolean;
+  redeemableCouponCount: number;
+}
+
 export interface AdminCreateCouponInput {
   code: string;
   type: "PERCENTAGE_OFF" | "FLAT_AMOUNT_OFF" | "FREE_SHIPPING";

@@ -1,17 +1,48 @@
 "use client";
 
-import { createContext, useContext, type ReactNode } from "react";
-import type { PublicStoreConfig } from "@/lib/storefront-settings";
+import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import {
+  fetchPublicStoreConfigClient,
+  type PublicStoreConfig,
+} from "@/lib/storefront-settings";
 
 const StoreConfigContext = createContext<PublicStoreConfig | null>(null);
 
 export function StoreConfigProvider({
-  config,
+  config: initialConfig,
   children,
 }: {
   config: PublicStoreConfig;
   children: ReactNode;
 }) {
+  const [config, setConfig] = useState(initialConfig);
+
+  useEffect(() => {
+    setConfig(initialConfig);
+  }, [initialConfig]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function refreshStoreConfig() {
+      const next = await fetchPublicStoreConfigClient();
+      if (!cancelled && next.configAvailable) {
+        setConfig(next);
+      }
+    }
+
+    void refreshStoreConfig();
+
+    const onFocus = () => {
+      void refreshStoreConfig();
+    };
+    window.addEventListener("focus", onFocus);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("focus", onFocus);
+    };
+  }, []);
+
   return (
     <StoreConfigContext.Provider value={config}>{children}</StoreConfigContext.Provider>
   );

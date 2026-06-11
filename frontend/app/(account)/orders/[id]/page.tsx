@@ -198,6 +198,14 @@ export default function AccountOrderDetailPage() {
 
         {error && <p className="text-sm text-destructive">{error}</p>}
 
+        {canRetry && (
+          <div className="rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-sm text-amber-800">
+            {order.status === "PAYMENT_FAILED"
+              ? "Payment failed for this order. Please retry to complete your purchase."
+              : "Payment is pending for this order. Click \"Retry Payment\" to complete your purchase."}
+          </div>
+        )}
+
         <div className="mt-4 grid gap-2 border-t border-border pt-4">
           <p className="flex justify-between text-sm">
             <span>Subtotal</span>

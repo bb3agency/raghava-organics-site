@@ -1,15 +1,12 @@
 import Link from "next/link";
 import { ChevronRight } from "lucide-react";
 import { CartWorkspace } from "@/components/cart/CartWorkspace";
-import { getPublicStoreConfig } from "@/lib/storefront-settings";
 
 export const metadata = {
   title: "Your Cart",
 };
 
-export default async function CartPage() {
-  const storeConfig = await getPublicStoreConfig();
-
+export default function CartPage() {
   return (
     <div className="flex flex-col bg-[#eff5ee] min-h-screen pb-16">
       {/* ── Page Header Banner ──────────────────────────────────────────── */}
@@ -33,11 +30,7 @@ export default async function CartPage() {
 
       {/* ── Cart Workspace ────────────────────────────────────────────── */}
       <section className="mx-auto w-full max-w-[1440px] px-4 pt-6 sm:pt-12 lg:px-8">
-        <CartWorkspace
-          minOrderValuePaise={storeConfig.minOrderValuePaise}
-          couponsEnabled={storeConfig.couponsEnabled}
-          configAvailable={storeConfig.configAvailable}
-        />
+        <CartWorkspace />
       </section>
     </div>
   );

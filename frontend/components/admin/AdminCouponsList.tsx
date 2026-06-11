@@ -3,6 +3,7 @@
 import { Fragment, useCallback, useEffect, useState } from "react";
 
 import { AdminCouponAnalyticsPanel } from "@/components/admin/AdminCouponAnalyticsPanel";
+import { AdminCouponsStorefrontBanner } from "@/components/admin/AdminCouponsStorefrontBanner";
 
 import { AdminCouponForm } from "@/components/admin/AdminCouponForm";
 
@@ -49,6 +50,7 @@ export function AdminCouponsPageContent({
 }) {
   return (
     <div className="grid gap-6 min-w-0">
+      <AdminCouponsStorefrontBanner />
       <AdminCouponsList from={from} to={to} />
 
       <AdminCouponAnalyticsPanel from={from} to={to} />

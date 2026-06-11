@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
+import { invalidateStorefrontCouponsCache } from '@common/coupons/coupons-feature';
 import { CartService } from './cart.service';
 
 const DELHIVERY_TEST_BASE_URL = 'https://delhivery.test/api';
@@ -16,7 +17,12 @@ function createFastifyStub(overrides: Record<string, unknown> = {}): FastifyInst
 }
 
 describe('CartService delivery utility methods', () => {
+  beforeEach(() => {
+    invalidateStorefrontCouponsCache();
+  });
+
   afterEach(() => {
+    invalidateStorefrontCouponsCache();
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
   });
@@ -197,15 +203,17 @@ describe('CartService delivery utility methods', () => {
       });
     vi.stubGlobal('fetch', fetchMock);
 
-    const { featureFlags } = await import('@config/feature-flags');
-    const originalCoupons = featureFlags.coupons;
-    featureFlags.coupons = true;
-
     const fastify = {
       prisma: {
         storeSettings: {
-          findUnique: vi.fn().mockResolvedValue({
-            pickupPincode: '110001'
+          findUnique: vi.fn().mockImplementation(({ select }: { select?: Record<string, boolean> }) => {
+            if (select?.couponsEnabled) {
+              return Promise.resolve({ couponsEnabled: true });
+            }
+            if (select?.pickupPincode) {
+              return Promise.resolve({ pickupPincode: '110001' });
+            }
+            return Promise.resolve(null);
           })
         },
         cart: {
@@ -230,16 +238,12 @@ describe('CartService delivery utility methods', () => {
       }
     } as unknown as FastifyInstance;
 
-    try {
-      const service = new CartService(fastify);
-      await expect(service.getDeliveryRates('user_1', undefined, '500001')).resolves.toEqual({
-        pincode: '500001',
-        shippingCharge: 0,
-        estimatedDays: 3
-      });
-    } finally {
-      featureFlags.coupons = originalCoupons;
-    }
+    const service = new CartService(fastify);
+    await expect(service.getDeliveryRates('user_1', undefined, '500001')).resolves.toEqual({
+      pincode: '500001',
+      shippingCharge: 0,
+      estimatedDays: 3
+    });
   });
 
   it('rejects delivery-rate request for unserviceable pincode', async () => {

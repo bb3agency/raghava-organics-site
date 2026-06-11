@@ -1,7 +1,7 @@
 import { OrderStatus, PaymentStatus } from '@prisma/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
-import { featureFlags } from '@config/feature-flags';
+import { invalidateStorefrontCouponsCache } from '@common/coupons/coupons-feature';
 import { OrdersService } from './orders.service';
 import { CartService } from '@modules/cart/cart.service';
 
@@ -135,7 +135,12 @@ function buildFastifyForCreateOrder(couponType: 'PERCENTAGE_OFF' | 'FREE_SHIPPIN
       update: vi.fn().mockResolvedValue(undefined)
     },
     storeSettings: {
-      findUnique: vi.fn().mockResolvedValue({ minOrderValuePaise: 0 })
+      findUnique: vi.fn().mockImplementation(({ select }: { select?: Record<string, boolean> }) => {
+        if (select?.couponsEnabled) {
+          return Promise.resolve({ couponsEnabled: true });
+        }
+        return Promise.resolve({ minOrderValuePaise: 0 });
+      })
     },
     couponUsage: {
       count: vi.fn().mockResolvedValue(0),
@@ -150,8 +155,11 @@ function buildFastifyForCreateOrder(couponType: 'PERCENTAGE_OFF' | 'FREE_SHIPPIN
           count: vi.fn().mockResolvedValue(0)
         },
       storeSettings: {
-        findUnique: vi.fn().mockResolvedValue({
-          minOrderValuePaise: 0
+        findUnique: vi.fn().mockImplementation(({ select }: { select?: Record<string, boolean> }) => {
+          if (select?.couponsEnabled) {
+            return Promise.resolve({ couponsEnabled: true });
+          }
+          return Promise.resolve({ minOrderValuePaise: 0 });
         })
       },
       address: {
@@ -179,11 +187,9 @@ function buildFastifyForCreateOrder(couponType: 'PERCENTAGE_OFF' | 'FREE_SHIPPIN
 }
 
 describe('OrdersService createOrder pricing composition', () => {
-  const originalCouponsFlag = featureFlags.coupons;
-
   beforeEach(() => {
     vi.clearAllMocks();
-    featureFlags.coupons = true;
+    invalidateStorefrontCouponsCache();
     vi.spyOn(CartService.prototype, 'checkPincodeServiceability').mockResolvedValue({
       pincode: '500001',
       serviceable: true
@@ -191,7 +197,7 @@ describe('OrdersService createOrder pricing composition', () => {
   });
 
   afterEach(() => {
-    featureFlags.coupons = originalCouponsFlag;
+    invalidateStorefrontCouponsCache();
   });
 
   it('applies Delhivery-derived shipping charge to order total', async () => {

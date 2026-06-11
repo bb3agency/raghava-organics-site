@@ -47,11 +47,7 @@ export default async function CheckoutPage() {
       <CheckoutStartedTracker />
       <section className="mx-auto w-full max-w-[1440px] px-4 pt-6 sm:pt-12 lg:px-8">
         <div className="grid gap-6 sm:gap-8 lg:grid-cols-[60%_40%] lg:items-start">
-          <CheckoutForm
-            isCodEnabled={storeConfig.isCodEnabled}
-            minOrderValuePaise={storeConfig.minOrderValuePaise}
-            configAvailable={storeConfig.configAvailable}
-          />
+          <CheckoutForm />
 
           {/* ── Info Sidebar ─────────────────────────────────────────────── */}
           <aside className="flex flex-col gap-4 rounded-[20px] bg-white p-4 shadow-sm sm:p-6 lg:p-8">

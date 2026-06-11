@@ -19,6 +19,8 @@ import {
   adminListCouponAuditSchema,
   adminListCouponsSchema,
   adminRestoreCouponSchema,
+  adminStorefrontCouponsStatusSchema,
+  adminUpdateStorefrontCouponsStatusSchema,
   adminUpdateCouponSchema,
   adminUpdateCouponStatusSchema
 } from './coupons.schemas';
@@ -78,6 +80,39 @@ export async function registerCouponsRoutes(fastify: FastifyInstance): Promise<v
       }
     },
     async (request) => service.adminCouponAnalytics(request.query as never)
+  );
+
+  fastify.get(
+    '/api/v1/admin/coupons/storefront-status',
+    {
+      schema: adminStorefrontCouponsStatusSchema,
+      preHandler: [...adminGuard, adminPermissionGuard('coupons:read')],
+      config: {
+        rateLimit: routeRateLimitProfiles.adminRead
+      }
+    },
+    async () => service.getAdminStorefrontCouponsStatus()
+  );
+
+  fastify.patch(
+    '/api/v1/admin/coupons/storefront-status',
+    {
+      schema: adminUpdateStorefrontCouponsStatusSchema,
+      preHandler: [
+        ...adminGuard,
+        adminPermissionGuard('coupons:write'),
+        loadShedGuard,
+        idempotencyPreHandler,
+        async (request) => enforceAdminCouponRateLimit(request, 'status')
+      ],
+      config: {
+        rateLimit: routeRateLimitProfiles.adminWrite
+      }
+    },
+    async (request) => {
+      const body = request.body as { couponsEnabled: boolean };
+      return service.updateStorefrontCouponsEnabled(body.couponsEnabled);
+    }
   );
 
   fastify.get(

@@ -5,9 +5,10 @@ import { getCart } from "@/lib/cart-api";
 import { useAuthStore } from "@/stores/auth";
 import { useCartStore } from "@/stores/cart";
 
-export function useCartSync() {
+export function useCartSync(options?: { resyncKey?: unknown }) {
   const accessToken = useAuthStore((s) => s.accessToken);
   const setCart = useCartStore((s) => s.setCart);
+  const resyncKey = options?.resyncKey;
 
   useEffect(() => {
     let cancelled = false;
@@ -28,5 +29,5 @@ export function useCartSync() {
     return () => {
       cancelled = true;
     };
-  }, [accessToken, setCart]);
+  }, [accessToken, setCart, resyncKey]);
 }

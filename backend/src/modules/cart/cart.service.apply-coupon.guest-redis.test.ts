@@ -1,21 +1,33 @@
 import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { featureFlags } from '@config/feature-flags';
+import { invalidateStorefrontCouponsCache } from '@common/coupons/coupons-feature';
 import { CartService } from './cart.service';
+
+function mockStoreSettings(couponsEnabled: boolean) {
+  return {
+    findUnique: vi.fn().mockImplementation(({ select }: { select?: Record<string, boolean> }) => {
+      if (select?.couponsEnabled) {
+        return Promise.resolve({ couponsEnabled });
+      }
+      if (select?.minOrderValuePaise) {
+        return Promise.resolve({ minOrderValuePaise: 0 });
+      }
+      return Promise.resolve(null);
+    })
+  };
+}
 
 vi.mock('@modules/notifications/notification-failure-alert', () => ({
   sendTechnicalFailureAlert: vi.fn().mockResolvedValue(undefined)
 }));
 
 describe('CartService applyCoupon guest redis failure', () => {
-  const originalCouponsFlag = featureFlags.coupons;
-
   beforeEach(() => {
-    featureFlags.coupons = true;
+    invalidateStorefrontCouponsCache();
   });
 
   afterEach(() => {
-    featureFlags.coupons = originalCouponsFlag;
+    invalidateStorefrontCouponsCache();
   });
 
   it('fails closed when guest coupon redis increment fails', async () => {
@@ -76,9 +88,7 @@ describe('CartService applyCoupon guest redis failure', () => {
         order: {
           count: vi.fn().mockResolvedValue(0)
         },
-        storeSettings: {
-          findUnique: vi.fn().mockResolvedValue({ minOrderValuePaise: 0 })
-        }
+        storeSettings: mockStoreSettings(true)
       },
       redis: {
         get: vi.fn().mockResolvedValue('0'),

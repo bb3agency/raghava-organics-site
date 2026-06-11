@@ -1,22 +1,39 @@
 import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { featureFlags } from '@config/feature-flags';
+import { invalidateStorefrontCouponsCache } from '@common/coupons/coupons-feature';
 import { CartService } from './cart.service';
 
-describe('CartService applyCoupon feature flag', () => {
-  const originalCouponsFlag = featureFlags.coupons;
+function mockStoreSettings(couponsEnabled: boolean) {
+  return {
+    findUnique: vi.fn().mockImplementation(({ select }: { select?: Record<string, boolean> }) => {
+      if (select?.couponsEnabled) {
+        return Promise.resolve({ couponsEnabled });
+      }
+      if (select?.minOrderValuePaise) {
+        return Promise.resolve({ minOrderValuePaise: 0 });
+      }
+      return Promise.resolve(null);
+    })
+  };
+}
 
+describe('CartService applyCoupon merchant toggle', () => {
   beforeEach(() => {
-    featureFlags.coupons = false;
+    invalidateStorefrontCouponsCache();
   });
 
   afterEach(() => {
-    featureFlags.coupons = originalCouponsFlag;
+    invalidateStorefrontCouponsCache();
   });
 
-  it('rejects applyCoupon when coupons feature flag is disabled', async () => {
+  it('rejects applyCoupon when merchant has disabled storefront coupons', async () => {
     const fastify = {
       prisma: {
+        storeSettings: mockStoreSettings(false),
+        coupon: {
+          count: vi.fn(),
+          findFirst: vi.fn()
+        },
         cart: {
           findFirst: vi.fn(),
           create: vi.fn(),

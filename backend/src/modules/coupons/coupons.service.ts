@@ -5,6 +5,11 @@ import { Coupon, CouponType, Prisma } from '@prisma/client';
 import { AppError } from '@common/errors/app-error';
 import { ERROR_CODES } from '@common/errors/error-codes';
 import {
+  getAdminStorefrontCouponsStatus,
+  invalidateStorefrontCouponsCache,
+  setMerchantCouponsEnabled
+} from '@common/coupons/coupons-feature';
+import {
   AdminListCouponsQuery,
   AuditMetadata,
   CouponAnalyticsQuery,
@@ -281,6 +286,7 @@ export class CouponsService {
       userAgent: metadata?.userAgent
     });
 
+    invalidateStorefrontCouponsCache();
     return this.serializeCouponWithAudit(created);
   }
 
@@ -370,6 +376,7 @@ export class CouponsService {
       });
 
       this.clearCouponCache(id);
+      invalidateStorefrontCouponsCache();
 
       return newState;
     } catch (error) {
@@ -435,6 +442,7 @@ export class CouponsService {
 
     // Clear cache
     this.clearCouponCache(id);
+    invalidateStorefrontCouponsCache();
 
     return newState;
   }
@@ -489,6 +497,7 @@ export class CouponsService {
 
     // Clear cache
     this.clearCouponCache(id);
+    invalidateStorefrontCouponsCache();
 
     return { message: 'Coupon deleted successfully' };
   }
@@ -546,6 +555,7 @@ export class CouponsService {
 
     // Clear cache
     this.clearCouponCache(id);
+    invalidateStorefrontCouponsCache();
 
     return newState;
   }
@@ -987,7 +997,17 @@ export class CouponsService {
       userAgent: metadata?.userAgent
     });
 
+    invalidateStorefrontCouponsCache();
     return this.serializeCouponWithAudit(cloned);
+  }
+
+  async getAdminStorefrontCouponsStatus() {
+    return getAdminStorefrontCouponsStatus(this.fastify.prisma);
+  }
+
+  async updateStorefrontCouponsEnabled(couponsEnabled: boolean) {
+    await setMerchantCouponsEnabled(this.fastify.prisma, couponsEnabled);
+    return getAdminStorefrontCouponsStatus(this.fastify.prisma);
   }
 
   /**

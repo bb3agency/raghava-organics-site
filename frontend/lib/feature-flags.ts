@@ -11,6 +11,7 @@ export const WISHLIST_ENABLED = readOptInFlag(
   process.env.NEXT_PUBLIC_FEATURE_WISHLIST_ENABLED,
 );
 
+/** @deprecated Use `useStoreConfig().couponsEnabled` — merchant toggles in Admin → Coupons. */
 export const COUPONS_ENABLED = readOptInFlag(
   process.env.NEXT_PUBLIC_FEATURE_COUPONS_ENABLED,
 );

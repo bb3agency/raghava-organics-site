@@ -30,6 +30,7 @@ import { CheckoutRiskService } from './checkout-risk.service';
 import { SettingsService } from '@modules/settings/settings.service';
 import { featureFlags } from '@config/feature-flags';
 import { recordCheckoutPath, recordWebhookEvent } from '@common/observability/metrics';
+import { isStorefrontCouponsEnabled } from '@common/coupons/coupons-feature';
 import { assertCouponWithinUsageLimits, finalizeCouponUsageForOrder, releaseCouponUsageForOrder, type CouponLimitClient } from '@common/coupons/coupon-usage';
 import { restoreOrderInventoryOnCancel } from '@common/orders/restore-inventory-on-cancel';
 import {
@@ -461,7 +462,8 @@ export class OrdersService {
           400
         );
       }
-      const effectiveCoupon = featureFlags.coupons ? cart.coupon : null;
+      const couponsEnabled = await isStorefrontCouponsEnabled(tx);
+      const effectiveCoupon = couponsEnabled ? cart.coupon : null;
       if (effectiveCoupon) {
         await this.validateOrderCoupon(effectiveCoupon, subtotal, userId, cart.items, tx);
       }

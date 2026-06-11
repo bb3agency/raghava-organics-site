@@ -1007,6 +1007,7 @@ model StoreSettings {
   pickupPincode             String
   minOrderValuePaise        Int      @default(0)
   isCodEnabled              Boolean  @default(false)
+  couponsEnabled            Boolean  @default(false)
   mobileOtpSignupEnabled    Boolean  @default(false)
   cancellationWindowHours   Int      @default(24)
   notifyEmailEnabled        Boolean  @default(true)

@@ -12,22 +12,12 @@ import { clearCart, removeCartItem, updateCartItem, applyCartCoupon, removeCartC
 import { getApiErrorMessage, getApiErrorMessageWithHint } from "@/lib/error-messages";
 import { CartLineProductDetails } from "@/components/cart/CartLineProductDetails";
 import { getCartLineImageAlt, getCartLineImageUrl, getCartLineProductName } from "@/lib/cart-line-display";
+import { useStoreConfig } from "@/components/providers/StoreConfigProvider";
+import { formatAppliedCouponLabel } from "@/lib/coupon-display";
 
-interface CartWorkspaceProps {
-  /** Minimum cart subtotal in paise (from backend DB). 0 = no minimum enforced. */
-  minOrderValuePaise?: number;
-  /** From GET /store/config — matches backend FEATURE_COUPONS_ENABLED. */
-  couponsEnabled?: boolean;
-  /** False when GET /store/config failed — block checkout until settings load. */
-  configAvailable?: boolean;
-}
-
-export function CartWorkspace({
-  minOrderValuePaise = 0,
-  couponsEnabled = false,
-  configAvailable = true,
-}: CartWorkspaceProps) {
-  useCartSync();
+export function CartWorkspace() {
+  const { couponsEnabled, minOrderValuePaise, configAvailable } = useStoreConfig();
+  useCartSync({ resyncKey: couponsEnabled });
   const cart = useCartStore((s) => s.cart);
   const items = useCartStore((s) => s.items);
   const setCart = useCartStore((s) => s.setCart);
@@ -45,12 +35,14 @@ export function CartWorkspace({
         total: 0,
       };
     }
+    const subtotal = cart.subtotal;
+    const discountAmount = couponsEnabled ? cart.discountAmount : 0;
     return {
-      subtotal: cart.subtotal,
-      discountAmount: cart.discountAmount,
-      total: cart.total,
+      subtotal,
+      discountAmount,
+      total: couponsEnabled ? cart.total : Math.max(subtotal - discountAmount, 0),
     };
-  }, [cart]);
+  }, [cart, couponsEnabled]);
 
   const effectiveMinOrderPaise = cart?.minOrderValuePaise ?? minOrderValuePaise;
   const meetsMinimumOrder =
@@ -117,6 +109,10 @@ export function CartWorkspace({
   };
 
   const handleApplyCoupon = async () => {
+    if (!couponsEnabled) {
+      setError("Coupons are not available right now.");
+      return;
+    }
     const trimmed = couponCode.trim();
     if (!trimmed) return;
     try {
@@ -280,8 +276,9 @@ export function CartWorkspace({
                 {cart?.coupon ? (
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-xs text-[#767676]">
-                      Coupon{" "}
-                      <span className="font-bold text-[#23403d]">{cart.coupon.code}</span> applied
+                      <span className="font-bold text-[#23403d]">
+                        {formatAppliedCouponLabel(cart.coupon) ?? "Coupon applied"}
+                      </span>
                     </span>
                     <button
                       type="button"
@@ -323,7 +320,7 @@ export function CartWorkspace({
             <div className="flex items-center justify-between border-b border-[#efe8e4] pb-4">
               <span className="text-[#767676]">Discount</span>
               <span className="text-[#00aa63]">
-                {couponsEnabled || summary.discountAmount > 0
+                {summary.discountAmount > 0
                   ? `-${formatPrice(summary.discountAmount)}`
                   : formatPrice(0)}
               </span>

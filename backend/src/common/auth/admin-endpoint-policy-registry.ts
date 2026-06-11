@@ -26,6 +26,8 @@ export const ADMIN_ENDPOINT_POLICY_REGISTRY: readonly EndpointPolicy[] = [
   { method: 'GET', path: '/api/v1/admin/analytics/reconciliation-issues', permission: 'analytics:read', layer: 'A' },
   { method: 'GET', path: '/api/v1/admin/analytics/category-breakdown', permission: 'analytics:read', layer: 'A' },
   { method: 'GET', path: '/api/v1/admin/coupons/analytics', permission: 'coupons:read', layer: 'A' },
+  { method: 'GET', path: '/api/v1/admin/coupons/storefront-status', permission: 'coupons:read', layer: 'A' },
+  { method: 'PATCH', path: '/api/v1/admin/coupons/storefront-status', permission: 'coupons:write', layer: 'A' },
   { method: 'GET', path: '/api/v1/admin/coupons/:id', permission: 'coupons:read', layer: 'A' },
   { method: 'GET', path: '/api/v1/admin/coupons', permission: 'coupons:read', layer: 'A' },
   { method: 'POST', path: '/api/v1/admin/coupons', permission: 'coupons:write', layer: 'A' },

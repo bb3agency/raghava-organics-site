@@ -346,6 +346,47 @@ export const adminListCouponAuditSchema = {
   }
 } as const;
 
+const adminStorefrontCouponsStatusShape = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['merchantEnabled', 'storefrontEnabled', 'redeemableCouponCount'],
+  properties: {
+    merchantEnabled: { type: 'boolean' },
+    storefrontEnabled: { type: 'boolean' },
+    redeemableCouponCount: { type: 'integer', minimum: 0 }
+  }
+} as const;
+
+export const adminStorefrontCouponsStatusSchema = {
+  tags: ['admin', 'coupons'],
+  summary: 'Storefront coupon module status for admin Coupons page',
+  params: emptyParamsSchema,
+  querystring: emptyQuerystringSchema,
+  response: {
+    200: adminStorefrontCouponsStatusShape,
+    ...standardAdminErrorResponses
+  }
+} as const;
+
+export const adminUpdateStorefrontCouponsStatusSchema = {
+  tags: ['admin', 'coupons'],
+  summary: 'Enable or disable coupon codes on the customer storefront',
+  params: emptyParamsSchema,
+  querystring: emptyQuerystringSchema,
+  body: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['couponsEnabled'],
+    properties: {
+      couponsEnabled: { type: 'boolean' }
+    }
+  },
+  response: {
+    200: adminStorefrontCouponsStatusShape,
+    ...standardAdminErrorResponses
+  }
+} as const;
+
 export const adminCloneCouponSchema = {
   tags: ['admin', 'coupons'],
   summary: 'Clone an existing coupon with a new code',

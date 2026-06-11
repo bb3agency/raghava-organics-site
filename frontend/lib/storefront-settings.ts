@@ -23,7 +23,7 @@ export interface PublicStoreConfig {
    * Toggled by the merchant from Admin → Settings → Store.
    */
   mobileOtpSignupEnabled: boolean;
-  /** Runtime feature flags mirrored from backend FEATURE_* env vars. */
+  /** Merchant toggle from Admin → Coupons (StoreSettings.couponsEnabled). */
   couponsEnabled: boolean;
   reviewsEnabled: boolean;
   wishlistEnabled: boolean;
@@ -115,7 +115,7 @@ export async function fetchPublicStoreConfigClient(): Promise<PublicStoreConfig>
   const { getBrowserApiBaseUrl } = await import("@/lib/api-base");
   try {
     const apiBase = getBrowserApiBaseUrl();
-    const res = await fetch(`${apiBase}/store/config`);
+    const res = await fetch(`${apiBase}/store/config`, { cache: "no-store" });
     if (!res.ok) return FAIL_CLOSED_CONFIG;
     const body: unknown = await res.json();
     return parsePublicStoreConfig(body);

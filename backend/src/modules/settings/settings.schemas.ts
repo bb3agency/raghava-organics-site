@@ -296,7 +296,10 @@ export const getPublicStoreConfigSchema = {
         isCodEnabled: { type: 'boolean' },
         minOrderValuePaise: { type: 'integer', minimum: 0 },
         mobileOtpSignupEnabled: { type: 'boolean' },
-        couponsEnabled: { type: 'boolean' },
+        couponsEnabled: {
+          type: 'boolean',
+          description: 'Mirrors StoreSettings.couponsEnabled — toggled in Admin → Coupons.'
+        },
         reviewsEnabled: { type: 'boolean' },
         wishlistEnabled: { type: 'boolean' },
         gstInvoicingEnabled: { type: 'boolean' }
