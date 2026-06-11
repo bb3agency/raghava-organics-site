@@ -73,6 +73,40 @@ describe('DelhiveryAdapter', () => {
     expect(result.trackingUrl).toContain('AWB123');
   });
 
+  it('uses default numeric HSN when order payload omits product HSN', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ packages: [{ waybill: 'AWB999' }] })
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new DelhiveryAdapter({ apiKey: 'delhivery_key', baseUrl: 'https://track.delhivery.com/api' });
+    await adapter.createShipment({
+      orderNumber: 'ORD-2026-00003',
+      amountRupees: 100,
+      destinationPincode: '560001',
+      originPincode: '110001',
+      totalWeightGrams: 500,
+      paymentMode: 'Prepaid',
+      sellerGstTin: '29ABCDE1234F1Z5',
+      hsnCode: 'NA',
+      customer: {
+        fullName: 'Test User',
+        phone: '9999999999',
+        line1: 'Street 1',
+        city: 'Bengaluru',
+        state: 'Karnataka'
+      }
+    });
+
+    const formBody = (fetchMock.mock.calls[0] as [string, RequestInit])[1].body as FormData;
+    const parsedData = JSON.parse(String(formBody.get('data'))) as {
+      shipments: Array<{ hsn_code: string }>;
+    };
+    expect(parsedData.shipments[0]?.hsn_code).toBe('2106');
+  });
+
   it('checks serviceability using Delhivery pincode endpoint', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,

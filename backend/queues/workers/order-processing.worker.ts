@@ -11,6 +11,11 @@ import { renderCreditNotePdfBuffer, renderInvoicePdfBuffer, type InvoiceLineItem
 import { featureFlags } from '@config/feature-flags';
 import { finalizeCouponUsageForOrder, releaseCouponUsageForOrder } from '@common/coupons/coupon-usage';
 import { releaseReservationsForOrder } from '@common/orders/release-reservations';
+import {
+  resolveInvoiceHsnCode,
+  resolveLineItemGstRatePercent
+} from '@common/shipping/product-tax-fields';
+import { resolveExplicitShippingHsn } from '@common/shipping/resolve-shipping-hsn';
 
 type OrderStatus =
   | 'PENDING_PAYMENT'
@@ -108,11 +113,14 @@ type ShippingAddress = {
 };
 
 type InvoiceOrderItem = {
+  id: string;
   productName: string;
   quantity: number;
   unitPrice: number;
   totalPrice: number;
   variant: {
+    hsnCode: string | null;
+    gstRatePercent: number;
     product: {
       attributes: Prisma.JsonValue;
     } | null;
@@ -991,7 +999,9 @@ async function generateInvoiceForOrder(prisma: RealPrismaClient, orderId: string
         items: {
           include: {
             variant: {
-              include: {
+              select: {
+                hsnCode: true,
+                gstRatePercent: true,
                 product: {
                   select: {
                     attributes: true
@@ -1007,6 +1017,16 @@ async function generateInvoiceForOrder(prisma: RealPrismaClient, orderId: string
       return;
     }
 
+    for (const item of order.items) {
+      const explicitHsn = resolveExplicitShippingHsn({
+        variantHsnCode: item.variant?.hsnCode,
+        productAttributes: item.variant?.product?.attributes
+      });
+      if (!explicitHsn) {
+        throw new Error(`Missing product HSN code for GST invoice line item ${item.id}`);
+      }
+    }
+
     await tx.$executeRaw`CREATE SEQUENCE IF NOT EXISTS invoice_number_seq START 1`;
     const sequenceResult = await tx.$queryRaw<Array<{ nextval: bigint }>>`SELECT nextval('invoice_number_seq')`;
     const sequenceNumber = Number(sequenceResult[0]?.nextval ?? 1n);
@@ -1018,14 +1038,17 @@ async function generateInvoiceForOrder(prisma: RealPrismaClient, orderId: string
     const isInterState = sellerState.toLowerCase() !== buyerState.toLowerCase();
     const lineItems: InvoiceLineItem[] = order.items.map((item: InvoiceOrderItem): InvoiceLineItem => {
       const attributes = item.variant?.product?.attributes ?? null;
-      const taxRatePercent = resolveTaxRatePercent(attributes);
+      const taxRatePercent = resolveLineItemGstRatePercent(item.variant?.gstRatePercent, attributes);
       const lineTax = Math.round((item.totalPrice * taxRatePercent) / 100);
       const cgst = isInterState ? 0 : Math.round(lineTax / 2);
       const sgst = isInterState ? 0 : lineTax - cgst;
       const igst = isInterState ? lineTax : 0;
       return {
         name: item.productName,
-        hsnCode: resolveHsnCode(attributes),
+        hsnCode: resolveInvoiceHsnCode({
+          variantHsnCode: item.variant?.hsnCode,
+          productAttributes: attributes
+        }),
         quantity: item.quantity,
         unitPricePaise: item.unitPrice,
         lineTotalPaise: item.totalPrice,
@@ -1221,40 +1244,6 @@ async function resolveSellerProfileOrThrow(prisma: RealPrismaClient): Promise<Se
     gstin: gstin || 'GSTIN_NOT_CONFIGURED',
     fssai: fssai || (requiresFssai ? 'FSSAI_REQUIRED' : 'FSSAI_NOT_CONFIGURED')
   };
-}
-
-function resolveTaxRatePercent(attributes: Prisma.JsonValue): number {
-  const attrs = asRecord(attributes);
-  if (!attrs) {
-    return 12;
-  }
-  const rawRate = attrs.gstRate;
-  if (typeof rawRate !== 'number') {
-    return 12;
-  }
-  if (rawRate > 0 && rawRate < 1) {
-    return Math.round(rawRate * 100);
-  }
-  if (rawRate <= 0) {
-    return 0;
-  }
-  return Math.round(rawRate);
-}
-
-function resolveHsnCode(attributes: Prisma.JsonValue): string {
-  const attrs = asRecord(attributes);
-  if (!attrs) {
-    return 'N/A';
-  }
-  const rawHsnCode = attrs.hsnCode;
-  return typeof rawHsnCode === 'string' && rawHsnCode.trim() ? rawHsnCode.trim() : 'N/A';
-}
-
-function asRecord(value: Prisma.JsonValue): Record<string, unknown> | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    return null;
-  }
-  return value as Record<string, unknown>;
 }
 
 const oneToNineteen = [

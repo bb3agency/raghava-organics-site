@@ -11,6 +11,11 @@ import {
 } from '@common/interfaces/shipping-provider.interface';
 import { AppError } from '@common/errors/app-error';
 import { ERROR_CODES } from '@common/errors/error-codes';
+import {
+  normalizeShippingHsn,
+  resolveDefaultShippingHsn,
+  resolveShippingHsnCode
+} from '@common/shipping/resolve-shipping-hsn';
 
 const SHIPROCKET_BASE_URL = 'https://apiv2.shiprocket.in/v1/external';
 const DEFAULT_PICKUP_LOCATION = 'Primary';
@@ -265,6 +270,14 @@ export default class ShiprocketAdapter implements ShippingProviderAdapter {
 
   async createShipment(input: CreateShipmentInput): Promise<CreateShipmentResult> {
     const orderDate = new Date().toISOString().split('T')[0] ?? new Date().toISOString().substring(0, 10);
+    const defaultHsn = resolveDefaultShippingHsn();
+    const resolvePayloadHsn = (raw?: string) => {
+      const normalized = normalizeShippingHsn(raw ?? '');
+      if (normalized) {
+        return normalized;
+      }
+      return resolveShippingHsnCode({ defaultHsn });
+    };
 
     const orderItems = (input.items ?? []).map((item) => ({
       name: item.name,
@@ -273,7 +286,7 @@ export default class ShiprocketAdapter implements ShippingProviderAdapter {
       selling_price: item.unitPriceRupees.toFixed(2),
       discount: '',
       tax: '',
-      hsn: item.hsnCode ?? ''
+      hsn: resolvePayloadHsn(item.hsnCode)
     }));
 
     if (orderItems.length === 0) {
@@ -284,7 +297,7 @@ export default class ShiprocketAdapter implements ShippingProviderAdapter {
         selling_price: input.amountRupees.toFixed(2),
         discount: '',
         tax: '',
-        hsn: input.hsnCode
+        hsn: resolvePayloadHsn(input.hsnCode)
       });
     }
 

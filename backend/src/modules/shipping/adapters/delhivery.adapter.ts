@@ -9,6 +9,7 @@ import {
 } from '@common/interfaces/shipping-provider.interface';
 import { AppError } from '@common/errors/app-error';
 import { ERROR_CODES } from '@common/errors/error-codes';
+import { resolveShippingHsnCode } from '@common/shipping/resolve-shipping-hsn';
 
 type DelhiveryAdapterOptions = {
   apiKey: string;
@@ -47,7 +48,7 @@ export default class DelhiveryAdapter implements ShippingProviderAdapter {
             weight: input.totalWeightGrams,
             origin_pin: input.originPincode,
             seller_gst_tin: input.sellerGstTin,
-            hsn_code: input.hsnCode
+            hsn_code: resolveShippingHsnCode({ variantHsnCode: input.hsnCode })
           }
         ]
       })

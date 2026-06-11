@@ -68,6 +68,7 @@ function mockCreateShippingProvider() {
 }
 
 import { createShippingWorker } from './shipping.worker';
+import { DEFAULT_SHIPPING_HSN_FALLBACK } from '@common/shipping/resolve-shipping-hsn';
 
 describe('shipping worker error and retry behavior', () => {
   const mockConnection = {} as Parameters<typeof createShippingWorker>[0];
@@ -129,7 +130,7 @@ describe('shipping worker error and retry behavior', () => {
       },
       payment: { status: 'CAPTURED' },
       shipment: null,
-      items: [{ variantId: 'variant_1', quantity: 2 }]
+      items: [{ variantId: 'variant_1', quantity: 2, productName: 'Test Product', sku: 'SKU-1', unitPrice: 500 }]
     });
     state.tx.productVariant.findMany.mockResolvedValue([
       { id: 'variant_1', weight: 300, product: { attributes: { hsnCode: '1001' } } }
@@ -153,7 +154,14 @@ describe('shipping worker error and retry behavior', () => {
         orderNumber: 'ORD-2026-00001',
         paymentMode: 'Prepaid',
         sellerGstTin: '29ABCDE1234F1Z5',
-        hsnCode: '1001'
+        hsnCode: '1001',
+        items: [
+          expect.objectContaining({
+            name: 'Test Product',
+            sku: 'SKU-1',
+            hsnCode: '1001'
+          })
+        ]
       })
     );
     expect(state.tx.shipment.create).toHaveBeenCalledTimes(1);
@@ -161,6 +169,104 @@ describe('shipping worker error and retry behavior', () => {
       where: { id: 'order_1' },
       data: { status: 'SHIPPED' }
     });
+  });
+
+  it('uses default shipping HSN when product attributes omit hsnCode', async () => {
+    boot();
+    state.tx.order.findUnique.mockResolvedValue({
+      id: 'order_no_hsn',
+      orderNumber: 'ORD-2026-00003',
+      total: 1000,
+      status: 'PROCESSING',
+      shippingAddress: {
+        fullName: 'Test Customer',
+        phone: '9999999999',
+        line1: 'Street 1',
+        city: 'Hyderabad',
+        state: 'Telangana',
+        pincode: '500001'
+      },
+      payment: { status: 'CAPTURED' },
+      shipment: null,
+      items: [{ variantId: 'variant_1', quantity: 1, productName: 'test-product', sku: 'TEST-SKU', unitPrice: 1000 }]
+    });
+    state.tx.productVariant.findMany.mockResolvedValue([
+      { id: 'variant_1', weight: 300, hsnCode: null, product: { attributes: {} } }
+    ]);
+    state.createShipment.mockResolvedValue({
+      awbNumber: 'AWB456',
+      trackingUrl: 'https://track.example/AWB456',
+      providerPayload: { ok: true }
+    });
+    state.tx.shipment.create.mockResolvedValue(undefined);
+    state.tx.order.update.mockResolvedValue(undefined);
+    state.tx.orderStatusHistory.create.mockResolvedValue(undefined);
+
+    await state.processor?.({
+      name: 'create-shipment',
+      data: { orderId: 'order_no_hsn' }
+    });
+
+    expect(state.createShipment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        hsnCode: DEFAULT_SHIPPING_HSN_FALLBACK,
+        items: [
+          expect.objectContaining({
+            name: 'test-product',
+            hsnCode: DEFAULT_SHIPPING_HSN_FALLBACK
+          })
+        ]
+      })
+    );
+  });
+
+  it('prefers variant hsnCode over product attributes when building shipment items', async () => {
+    boot();
+    state.tx.order.findUnique.mockResolvedValue({
+      id: 'order_variant_hsn',
+      orderNumber: 'ORD-2026-00004',
+      total: 1000,
+      status: 'PROCESSING',
+      shippingAddress: {
+        fullName: 'Test Customer',
+        phone: '9999999999',
+        line1: 'Street 1',
+        city: 'Hyderabad',
+        state: 'Telangana',
+        pincode: '500001'
+      },
+      payment: { status: 'CAPTURED' },
+      shipment: null,
+      items: [{ variantId: 'variant_1', quantity: 1, productName: 'Spice Mix', sku: 'SPICE-1', unitPrice: 1000 }]
+    });
+    state.tx.productVariant.findMany.mockResolvedValue([
+      {
+        id: 'variant_1',
+        weight: 300,
+        hsnCode: '3304',
+        product: { attributes: { hsnCode: '1001' } }
+      }
+    ]);
+    state.createShipment.mockResolvedValue({
+      awbNumber: 'AWB3304',
+      trackingUrl: 'https://track.example/AWB3304',
+      providerPayload: { ok: true }
+    });
+    state.tx.shipment.create.mockResolvedValue(undefined);
+    state.tx.order.update.mockResolvedValue(undefined);
+    state.tx.orderStatusHistory.create.mockResolvedValue(undefined);
+
+    await state.processor?.({
+      name: 'create-shipment',
+      data: { orderId: 'order_variant_hsn' }
+    });
+
+    expect(state.createShipment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        hsnCode: '3304',
+        items: [expect.objectContaining({ hsnCode: '3304' })]
+      })
+    );
   });
 
   it('throws when creating shipment before payment capture', async () => {
@@ -180,7 +286,7 @@ describe('shipping worker error and retry behavior', () => {
       },
       payment: { status: 'CREATED' },
       shipment: null,
-      items: [{ variantId: 'variant_1', quantity: 1 }]
+      items: [{ variantId: 'variant_1', quantity: 1, productName: 'Test Product', sku: 'SKU-1', unitPrice: 500 }]
     });
     state.tx.productVariant.findMany.mockResolvedValue([
       { id: 'variant_1', weight: 300, product: { attributes: { hsnCode: '1001' } } }
@@ -213,7 +319,7 @@ describe('shipping worker error and retry behavior', () => {
       },
       payment: { status: 'CREATED' },
       shipment: null,
-      items: [{ variantId: 'variant_1', quantity: 1 }]
+      items: [{ variantId: 'variant_1', quantity: 1, productName: 'Test Product', sku: 'SKU-1', unitPrice: 500 }]
     });
     state.tx.productVariant.findMany.mockResolvedValue([
       { id: 'variant_1', weight: 400, product: { attributes: { hsnCode: '6109' } } }

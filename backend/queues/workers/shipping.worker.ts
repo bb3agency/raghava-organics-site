@@ -5,6 +5,11 @@ import { mapShipmentStatusToOrderStatus, mapShipmentWebhookStatus } from '@commo
 import { createShippingProvider } from '@modules/shipping/shipping-provider';
 import { featureFlags } from '@config/feature-flags';
 import { resolvePickupPincode } from '@common/shipping/resolve-pickup-pincode';
+import {
+  resolveDefaultShippingHsn,
+  resolveExplicitShippingHsn,
+  resolveShippingHsnCode
+} from '@common/shipping/resolve-shipping-hsn';
 import { sendTechnicalFailureAlert } from '../../src/modules/notifications/notification-failure-alert';
 
 type NotificationsQueue = Pick<Queue, 'add'>;
@@ -287,6 +292,7 @@ export function createShippingWorker(
           select: {
             id: true,
             weight: true,
+            hsnCode: true,
             product: {
               select: {
                 attributes: true
@@ -294,16 +300,17 @@ export function createShippingWorker(
             }
           }
         });
+        const variantById = new Map(variants.map((variant) => [variant.id, variant]));
         const variantWeights = new Map(variants.map((variant) => [variant.id, variant.weight ?? 0]));
-        const hsnCodes = new Set<string>();
+        const defaultShippingHsn = resolveDefaultShippingHsn();
+        const explicitHsnCodes = new Set<string>();
         for (const variant of variants) {
-          const attributes =
-            variant.product.attributes && typeof variant.product.attributes === 'object' && !Array.isArray(variant.product.attributes)
-              ? (variant.product.attributes as Record<string, unknown>)
-              : null;
-          const hsnCode = typeof attributes?.hsnCode === 'string' ? attributes.hsnCode.trim() : '';
-          if (hsnCode.length > 0) {
-            hsnCodes.add(hsnCode);
+          const explicitHsn = resolveExplicitShippingHsn({
+            variantHsnCode: variant.hsnCode,
+            productAttributes: variant.product.attributes
+          });
+          if (explicitHsn) {
+            explicitHsnCodes.add(explicitHsn);
           }
         }
         const sellerGstTin = (settings?.gstin ?? '').trim();
@@ -311,7 +318,7 @@ export function createShippingWorker(
           if (!sellerGstTin) {
             throw new Error('Missing seller GSTIN for shipment booking');
           }
-          if (hsnCodes.size === 0) {
+          if (explicitHsnCodes.size === 0) {
             throw new Error('Missing product HSN code(s) for shipment booking');
           }
         }
@@ -337,6 +344,22 @@ export function createShippingWorker(
         }
         const paymentMode: 'Prepaid' | 'COD' = isCodOrder ? 'COD' : 'Prepaid';
 
+        const shipmentItems = order.items.map((item) => {
+          const variant = variantById.get(item.variantId);
+          return {
+            name: item.productName,
+            sku: item.sku,
+            quantity: item.quantity,
+            unitPriceRupees: item.unitPrice / 100,
+            hsnCode: resolveShippingHsnCode({
+              variantHsnCode: variant?.hsnCode,
+              productAttributes: variant?.product.attributes,
+              defaultHsn: defaultShippingHsn
+            })
+          };
+        });
+        const primaryHsnCode = shipmentItems[0]?.hsnCode ?? defaultShippingHsn;
+
         const shipmentInput = {
           orderNumber: order.orderNumber,
           amountRupees: order.total / 100,
@@ -345,7 +368,8 @@ export function createShippingWorker(
           totalWeightGrams,
           paymentMode,
           sellerGstTin: sellerGstTin || 'NA',
-          hsnCode: hsnCodes.size > 0 ? [...hsnCodes].join(',') : 'NA',
+          hsnCode: primaryHsnCode,
+          items: shipmentItems,
           customer: {
             fullName: shippingAddress.fullName,
             phone: shippingAddress.phone,

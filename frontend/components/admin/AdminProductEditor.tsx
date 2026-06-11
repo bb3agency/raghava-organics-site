@@ -35,6 +35,9 @@ import {
   type AdminProductDetail,
   type AdminProductImage,
   type AdminProductVariant,
+  buildProductTaxAttributes,
+  isValidProductHsnCode,
+  resolveAdminProductHsnCode,
   type PaginatedResponse,
 } from "@/lib/admin-api";
 import { formatPaise } from "@/lib/admin-format";
@@ -229,7 +232,7 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
       setTagsText(normalized.tags.join(", "));
       setIsFeatured(normalized.isFeatured);
       setGstRate(String(normalized.attributes?.gstRate ?? 12));
-      setHsnCode(normalized.attributes?.hsnCode ?? "");
+      setHsnCode(resolveAdminProductHsnCode(normalized));
       // Map isActive → Status dropdown: true = "Active", false = "Draft"
       setStatus(normalized.isActive ? "Active" : "Draft");
       const primaryVariant = normalized.variants[0];
@@ -324,6 +327,16 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
       return;
     }
 
+    if (hsnCode.trim() && !isValidProductHsnCode(hsnCode)) {
+      const hsnError = {
+        hsnCode: "HSN must be numeric (1–15 digits).",
+      };
+      applyFieldErrors(hsnError);
+      setError(formatAdminValidationSummary(hsnError));
+      setSaving(false);
+      return;
+    }
+
     const tags = tagsText
       .split(",")
       .map((tag) => tag.trim())
@@ -388,22 +401,6 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
         }
 
         const productIsActive = status === "Active";
-        const gstAttributes =
-          gstInvoicingEnabled && (gstRate.trim() || hsnCode.trim())
-            ? {
-                attributes: {
-                  ...(gstRate.trim()
-                    ? {
-                        gstRate: Math.min(
-                          100,
-                          Math.max(0, Math.round(Number(gstRate))),
-                        ),
-                      }
-                    : {}),
-                  ...(hsnCode.trim() ? { hsnCode: hsnCode.trim() } : {}),
-                },
-              }
-            : {};
         const payload: AdminCreateProductInput = {
           name: name.trim(),
           slug: slug.trim(),
@@ -413,7 +410,11 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
           isFeatured,
           isActive: productIsActive,
           ...(shortDesc.trim() ? { metaDescription: shortDesc.trim() } : {}),
-          ...gstAttributes,
+          ...buildProductTaxAttributes({
+            gstInvoicingEnabled,
+            gstRate,
+            hsnCode,
+          }),
           variants,
           // Images are uploaded separately after creation — never send blob: URLs here.
         };
@@ -492,21 +493,12 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
             isFeatured,
             isActive: productIsActive,
             metaDescription: shortDesc.trim() || null,
-            ...(gstInvoicingEnabled
-              ? {
-                  attributes: {
-                    ...(gstRate.trim()
-                      ? {
-                          gstRate: Math.min(
-                            100,
-                            Math.max(0, Math.round(Number(gstRate))),
-                          ),
-                        }
-                      : {}),
-                    ...(hsnCode.trim() ? { hsnCode: hsnCode.trim() } : {}),
-                  },
-                }
-              : {}),
+            ...buildProductTaxAttributes({
+              gstInvoicingEnabled,
+              gstRate,
+              hsnCode,
+              existingAttributes: product?.attributes ?? null,
+            }),
           }),
         },
       );
@@ -1199,20 +1191,31 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
                       disabled={!canWrite}
                     />
                   </label>
-                  <label className="grid gap-1.5 text-xs font-bold text-muted-foreground uppercase tracking-wider">
-                    HSN Code
-                    <input
-                      type="text"
-                      maxLength={20}
-                      placeholder="e.g. 0801"
-                      className={inputClass}
-                      value={hsnCode}
-                      onChange={(event) => setHsnCode(event.target.value.toUpperCase())}
-                      disabled={!canWrite}
-                    />
-                  </label>
                 </div>
               ) : null}
+
+              <label
+                data-admin-field-label="hsnCode"
+                className={cn(
+                  "grid gap-1.5 text-xs font-bold text-muted-foreground uppercase tracking-wider",
+                  getFieldError("hsnCode") && "rounded-md ring-2 ring-destructive/20",
+                )}
+              >
+                HSN Code
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  maxLength={15}
+                  placeholder="e.g. 0910 (required for Shiprocket)"
+                  className={inputClass}
+                  value={hsnCode}
+                  onChange={(event) =>
+                    setHsnCode(event.target.value.replace(/\D/g, ""))
+                  }
+                  disabled={!canWrite}
+                />
+              </label>
 
               <label
                 data-admin-field-label="description"

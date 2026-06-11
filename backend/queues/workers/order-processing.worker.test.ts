@@ -686,6 +686,55 @@ describe('order-processing worker error and retry behavior', () => {
     );
   });
 
+  it('throws when generate-invoice job runs for order items missing explicit HSN', async () => {
+    const invoiceStorageAdapter = {
+      uploadInvoicePdf: vi.fn(),
+      readInvoicePdf: vi.fn()
+    };
+    boot(invoiceStorageAdapter);
+    state.tx.invoice.findUnique.mockResolvedValue(null);
+    state.tx.order.findUnique.mockResolvedValue({
+      id: 'order_missing_hsn',
+      orderNumber: 'ORD-2026-00009',
+      shippingAddress: {
+        fullName: 'Test Customer',
+        line1: 'Street 1',
+        city: 'Hyderabad',
+        state: 'Telangana',
+        pincode: '500001'
+      },
+      subtotal: 1000,
+      shippingCharge: 0,
+      discountAmount: 0,
+      total: 1000,
+      user: { email: 'customer@example.com' },
+      items: [
+        {
+          id: 'item_missing_hsn',
+          productName: 'No HSN Product',
+          quantity: 1,
+          unitPrice: 1000,
+          totalPrice: 1000,
+          variant: {
+            hsnCode: null,
+            gstRatePercent: 0,
+            product: {
+              attributes: {}
+            }
+          }
+        }
+      ]
+    });
+
+    await expect(
+      state.processor?.({
+        name: 'generate-invoice',
+        data: { orderId: 'order_missing_hsn' }
+      })
+    ).rejects.toThrow('Missing product HSN code for GST invoice line item item_missing_hsn');
+    expect(invoiceStorageAdapter.uploadInvoicePdf).not.toHaveBeenCalled();
+  });
+
   it('does not regenerate invoice after worker restart when invoice already exists', async () => {
     const invoiceStorageAdapter = {
       uploadInvoicePdf: vi.fn().mockResolvedValue({

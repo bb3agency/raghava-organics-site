@@ -22,6 +22,10 @@ import { resolveCategoryImageStorageUrl } from '@modules/media/ingest-external-c
 import { resolveProductImageStorageUrl } from '@modules/media/ingest-external-product-image';
 import { assertProductImageUpload } from '@modules/media/product-media.validation';
 import {
+  assertValidProductHsnAttribute,
+  resolveVariantTaxFieldsFromProductAttributes
+} from '@common/shipping/product-tax-fields';
+import {
   AdminCategoryListQuery,
   CreateProductImageInput,
   CreateProductVariantInput,
@@ -274,6 +278,10 @@ export class ProductsService {
     }
     variantsInput.forEach((variant) => this.assertValidCompareAtPrice(variant.price, variant.compareAtPrice));
     await this.assertCategoryExists(input.categoryId);
+    if (input.attributes !== undefined) {
+      assertValidProductHsnAttribute(input.attributes);
+    }
+    const variantTaxFields = resolveVariantTaxFieldsFromProductAttributes(input.attributes);
 
     const existing = await this.fastify.prisma.product.findUnique({
       where: { slug: input.slug },
@@ -313,6 +321,12 @@ export class ProductsService {
       if (input.metaDescription !== undefined && input.metaDescription !== existing.metaDescription) {
         updatePayload.metaDescription = input.metaDescription;
       }
+      if (
+        input.attributes !== undefined &&
+        JSON.stringify(input.attributes ?? {}) !== JSON.stringify(existing.attributes ?? {})
+      ) {
+        updatePayload.attributes = input.attributes;
+      }
 
       if (Object.keys(updatePayload).length > 0) {
         return this.adminUpdateProduct(existing.id, updatePayload);
@@ -345,6 +359,8 @@ export class ProductsService {
                   ...(variant.compareAtPrice !== undefined ? { compareAtPrice: Math.floor(variant.compareAtPrice) } : {}),
                   ...(variant.weight !== undefined ? { weight: Math.floor(variant.weight) } : {}),
                   ...(variant.attributes !== undefined ? { attributes: variant.attributes as Prisma.InputJsonValue } : {}),
+                  ...(variantTaxFields.hsnCode ? { hsnCode: variantTaxFields.hsnCode } : {}),
+                  gstRatePercent: variantTaxFields.gstRatePercent,
                   isActive: variant.isActive ?? true,
                   inventory: {
                     create: {
@@ -439,6 +455,8 @@ export class ProductsService {
       const weightRaw = cols[columnIndex.get('weight') ?? -1];
       const quantityRaw = cols[columnIndex.get('quantity') ?? -1];
       const lowStockThresholdRaw = cols[columnIndex.get('lowstockthreshold') ?? -1];
+      const hsnCodeRaw = cols[columnIndex.get('hsncode') ?? -1];
+      const gstRateRaw = cols[columnIndex.get('gstrate') ?? -1];
 
       if (!name || !slug || !description || !categorySlug) {
         errors.push({ line: lineNumber, message: 'Missing required values (name, slug, description, categorySlug)' });
@@ -468,8 +486,22 @@ export class ProductsService {
             .split('|')
             .map((tag) => tag.trim())
             .filter((tag) => tag.length > 0),
-          isFeatured: isFeaturedRaw.toLowerCase() === 'true'
+          isFeatured: isFeaturedRaw.toLowerCase() === 'true',
+          ...(hsnCodeRaw || gstRateRaw
+            ? {
+                attributes: {
+                  ...(hsnCodeRaw && hsnCodeRaw.trim().length > 0 ? { hsnCode: hsnCodeRaw.trim() } : {}),
+                  ...(gstRateRaw && gstRateRaw.trim().length > 0 && Number.isFinite(Number(gstRateRaw))
+                    ? { gstRate: Math.min(100, Math.max(0, Math.round(Number(gstRateRaw)))) }
+                    : {})
+                }
+              }
+            : {})
         };
+        if (baseData.attributes) {
+          assertValidProductHsnAttribute(baseData.attributes);
+        }
+        const variantTaxFields = resolveVariantTaxFieldsFromProductAttributes(baseData.attributes);
 
         let productId = existingProduct?.id;
         if (!productId) {
@@ -485,6 +517,10 @@ export class ProductsService {
             data: baseData
           });
           updatedCount += 1;
+        }
+
+        if (hsnCodeRaw || gstRateRaw) {
+          await this.syncVariantTaxFieldsFromProduct(productId, baseData.attributes);
         }
 
         if (sku && sku.trim().length > 0) {
@@ -519,6 +555,8 @@ export class ProductsService {
                 price: Math.floor(parsedPrice),
                 ...(parsedCompareAtPrice !== undefined ? { compareAtPrice: Math.floor(parsedCompareAtPrice) } : {}),
                 ...(parsedWeight !== undefined ? { weight: Math.floor(parsedWeight) } : {}),
+                ...(variantTaxFields.hsnCode ? { hsnCode: variantTaxFields.hsnCode } : {}),
+                gstRatePercent: variantTaxFields.gstRatePercent,
                 isActive: true
               }
             });
@@ -544,6 +582,8 @@ export class ProductsService {
                 price: Math.floor(parsedPrice),
                 ...(parsedCompareAtPrice !== undefined ? { compareAtPrice: Math.floor(parsedCompareAtPrice) } : {}),
                 ...(parsedWeight !== undefined ? { weight: Math.floor(parsedWeight) } : {}),
+                ...(variantTaxFields.hsnCode ? { hsnCode: variantTaxFields.hsnCode } : {}),
+                gstRatePercent: variantTaxFields.gstRatePercent,
                 isActive: true
               },
               select: { id: true }
@@ -580,13 +620,14 @@ export class ProductsService {
   async adminCreateProductVariant(productId: string, input: CreateProductVariantInput) {
     const product = await this.fastify.prisma.product.findUnique({
       where: { id: productId },
-      select: { id: true }
+      select: { id: true, attributes: true }
     });
     if (!product) {
       throw new AppError(ERROR_CODES.NOT_FOUND, 'Product not found', 404);
     }
     this.assertValidCompareAtPrice(input.price, input.compareAtPrice);
     const defaultLowStockThreshold = await this.settingsService.resolveDefaultLowStockThreshold();
+    const variantTaxFields = resolveVariantTaxFieldsFromProductAttributes(product.attributes);
 
     let created: Awaited<ReturnType<typeof this.fastify.prisma.productVariant.create>>;
     try {
@@ -599,6 +640,8 @@ export class ProductsService {
           ...(input.compareAtPrice !== undefined ? { compareAtPrice: Math.floor(input.compareAtPrice) } : {}),
           ...(input.weight !== undefined ? { weight: Math.floor(input.weight) } : {}),
           ...(input.attributes !== undefined ? { attributes: input.attributes as Prisma.InputJsonValue } : {}),
+          ...(variantTaxFields.hsnCode ? { hsnCode: variantTaxFields.hsnCode } : {}),
+          gstRatePercent: variantTaxFields.gstRatePercent,
           isActive: input.isActive ?? true,
           inventory: {
             create: {
@@ -704,6 +747,9 @@ export class ProductsService {
     if (!existing) {
       throw new AppError(ERROR_CODES.NOT_FOUND, 'Product not found', 404);
     }
+    if (input.attributes !== undefined) {
+      assertValidProductHsnAttribute(input.attributes);
+    }
 
     const updateData: Prisma.ProductUpdateInput = {};
     const updateManyData: Prisma.ProductUncheckedUpdateManyInput = {};
@@ -785,6 +831,19 @@ export class ProductsService {
         variants: { where: { isActive: true }, orderBy: { price: 'asc' } }
       }
     });
+    if (input.attributes !== undefined) {
+      await this.syncVariantTaxFieldsFromProduct(id, input.attributes);
+      const syncedProduct = await this.fastify.prisma.product.findUniqueOrThrow({
+        where: { id },
+        include: {
+          category: true,
+          images: { orderBy: { sortOrder: 'asc' } },
+          variants: { where: { isActive: true }, orderBy: { price: 'asc' } }
+        }
+      });
+      await this.invalidateProductListCacheSafe();
+      return syncedProduct;
+    }
     await this.invalidateProductListCacheSafe();
     return updatedProduct;
   }
@@ -1873,6 +1932,17 @@ export class ProductsService {
       inStock,
       variants: product.variants.map(({ inventory: _inventory, ...variant }) => variant)
     };
+  }
+
+  private async syncVariantTaxFieldsFromProduct(productId: string, attributes: unknown): Promise<void> {
+    const taxFields = resolveVariantTaxFieldsFromProductAttributes(attributes);
+    await this.fastify.prisma.productVariant.updateMany({
+      where: { productId },
+      data: {
+        hsnCode: taxFields.hsnCode,
+        gstRatePercent: taxFields.gstRatePercent
+      }
+    });
   }
 
   private async applyReservationAwareAvailability<T extends { variants: Array<{ id: string; inventory?: { quantity: number } | null }> }>(

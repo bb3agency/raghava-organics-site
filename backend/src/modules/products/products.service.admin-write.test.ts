@@ -11,7 +11,9 @@ function makeBaseFastify(overrides: Record<string, unknown> = {}): FastifyInstan
         create: vi.fn().mockResolvedValue(null),
         update: vi.fn().mockResolvedValue(null)
       },
-      productVariant: {},
+      productVariant: {
+        updateMany: vi.fn()
+      },
       category: {
         findUnique: vi.fn().mockResolvedValue({ id: 'cat_1' })
       },
@@ -162,6 +164,69 @@ describe('ProductsService adminCreateProduct', () => {
     expect((fastify.prisma.product as unknown as { create: ReturnType<typeof vi.fn> }).create).not.toHaveBeenCalled();
   });
 
+  it('updates existing product attributes on idempotent create when slug matches', async () => {
+    const existingProduct = {
+      id: 'prod_1',
+      slug: 'tshirt',
+      name: 'T-Shirt',
+      description: 'desc',
+      categoryId: 'cat_1',
+      tags: [],
+      attributes: {},
+      isFeatured: false,
+      isActive: true,
+      metaTitle: null,
+      metaDescription: null,
+      category: { id: 'cat_1' },
+      images: [],
+      variants: []
+    };
+    const updated = {
+      ...existingProduct,
+      attributes: { hsnCode: '0910', gstRate: 5 },
+      category: { id: 'cat_1', name: 'Apparel', slug: 'apparel' },
+      images: [],
+      variants: []
+    };
+    const fastify = makeBaseFastify();
+    const updateFn = vi.fn().mockResolvedValue(updated);
+    const variantUpdateManyFn = vi.fn().mockResolvedValue({ count: 1 });
+    const findUnique = vi.fn().mockImplementation(({ where }: { where: { id?: string; slug?: string } }) => {
+      if ('slug' in where) return Promise.resolve(existingProduct);
+      if (where.id === 'prod_1') return Promise.resolve(existingProduct);
+      return Promise.resolve(null);
+    });
+    (fastify.prisma.product as unknown as { findUnique: ReturnType<typeof vi.fn> }).findUnique = findUnique;
+    (fastify.prisma.product as unknown as { update: ReturnType<typeof vi.fn> }).update = updateFn;
+    (fastify.prisma.product as unknown as { findUniqueOrThrow: ReturnType<typeof vi.fn> }).findUniqueOrThrow = vi
+      .fn()
+      .mockResolvedValue(updated);
+    (fastify.prisma.productVariant as unknown as { updateMany: ReturnType<typeof vi.fn> }).updateMany = variantUpdateManyFn;
+    (fastify.prisma.category as unknown as { findUnique: ReturnType<typeof vi.fn> }).findUnique = vi.fn().mockResolvedValue({ id: 'cat_1' });
+
+    const service = new ProductsService(fastify);
+    await service.adminCreateProduct({
+      name: 'T-Shirt',
+      slug: 'tshirt',
+      description: 'desc',
+      categoryId: 'cat_1',
+      attributes: { hsnCode: '0910', gstRate: 5 }
+    });
+
+    expect(updateFn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'prod_1' },
+        data: expect.objectContaining({
+          attributes: { hsnCode: '0910', gstRate: 5 }
+        })
+      })
+    );
+    expect(variantUpdateManyFn).toHaveBeenCalledWith({
+      where: { productId: 'prod_1' },
+      data: { hsnCode: '0910', gstRatePercent: 5 }
+    });
+  });
+
   it('creates a new product and invalidates cache', async () => {
     const created = { id: 'prod_new', slug: 'new-product', name: 'New', category: {}, images: [], variants: [] };
     const fastify = makeBaseFastify();
@@ -258,6 +323,45 @@ describe('ProductsService adminUpdateProduct', () => {
       })
     );
     expect(updateManyFn.mock.calls[0]?.[0]?.data).not.toHaveProperty('category');
+  });
+
+  it('syncs variant hsnCode and gstRatePercent when product attributes change', async () => {
+    const existing = { id: 'prod_1', updatedAt: new Date('2026-01-01T00:00:00.000Z') };
+    const updated = { id: 'prod_1', category: {}, images: [], variants: [] };
+    const fastify = makeBaseFastify();
+    const updateManyFn = vi.fn().mockResolvedValue({ count: 1 });
+    const variantUpdateManyFn = vi.fn().mockResolvedValue({ count: 1 });
+    (fastify.prisma.product as unknown as { findUnique: ReturnType<typeof vi.fn> }).findUnique = vi
+      .fn()
+      .mockResolvedValue(existing);
+    (fastify.prisma.product as unknown as { updateMany: ReturnType<typeof vi.fn> }).updateMany = updateManyFn;
+    (fastify.prisma.product as unknown as { findUniqueOrThrow: ReturnType<typeof vi.fn> }).findUniqueOrThrow = vi
+      .fn()
+      .mockResolvedValue(updated);
+    (fastify.prisma.productVariant as unknown as { updateMany: ReturnType<typeof vi.fn> }).updateMany = variantUpdateManyFn;
+
+    const service = new ProductsService(fastify);
+    await service.adminUpdateProduct('prod_1', {
+      attributes: { hsnCode: '0910', gstRate: 5 }
+    });
+
+    expect(variantUpdateManyFn).toHaveBeenCalledWith({
+      where: { productId: 'prod_1' },
+      data: { hsnCode: '0910', gstRatePercent: 5 }
+    });
+  });
+
+  it('throws 400 when product attributes contain invalid HSN', async () => {
+    const existing = { id: 'prod_1', updatedAt: new Date() };
+    const fastify = makeBaseFastify();
+    (fastify.prisma.product as unknown as { findUnique: ReturnType<typeof vi.fn> }).findUnique = vi.fn().mockResolvedValue(existing);
+
+    const service = new ProductsService(fastify);
+    await expect(
+      service.adminUpdateProduct('prod_1', {
+        attributes: { hsnCode: 'NA' }
+      })
+    ).rejects.toMatchObject({ statusCode: 400 });
   });
 });
 

@@ -370,6 +370,8 @@ export interface AdminProductVariant {
   price: number;
   compareAtPrice: number | null;
   weight: number | null;
+  hsnCode?: string | null;
+  gstRatePercent?: number;
   isActive: boolean;
 }
 
@@ -429,6 +431,64 @@ export interface AdminUpdateProductInput {
   isActive?: boolean;
   metaDescription?: string;
   attributes?: { gstRate?: number; hsnCode?: string } | null;
+}
+
+const PRODUCT_HSN_PATTERN = /^[0-9]{1,15}$/;
+
+export function isValidProductHsnCode(value: string): boolean {
+  return PRODUCT_HSN_PATTERN.test(value.trim());
+}
+
+export function buildProductTaxAttributes(input: {
+  gstInvoicingEnabled: boolean;
+  gstRate: string;
+  hsnCode: string;
+  existingAttributes?: Record<string, unknown> | null;
+}): Pick<AdminCreateProductInput, "attributes"> {
+  const trimmedHsn = input.hsnCode.trim();
+  const hasGstRate =
+    input.gstInvoicingEnabled && input.gstRate.trim().length > 0;
+
+  if (!trimmedHsn && !hasGstRate) {
+    return {};
+  }
+
+  const attributes: Record<string, unknown> = {
+    ...(input.existingAttributes ?? {}),
+  };
+
+  if (trimmedHsn) {
+    attributes.hsnCode = trimmedHsn;
+  } else {
+    delete attributes.hsnCode;
+  }
+
+  if (hasGstRate) {
+    attributes.gstRate = Math.min(
+      100,
+      Math.max(0, Math.round(Number(input.gstRate))),
+    );
+  }
+
+  return { attributes: attributes as AdminCreateProductInput["attributes"] };
+}
+
+/** Prefer product.attributes.hsnCode, then first variant's synced hsnCode. */
+export function resolveAdminProductHsnCode(product: {
+  attributes?: { hsnCode?: string } | null;
+  variants?: Array<{ hsnCode?: string | null }>;
+}): string {
+  const fromAttributes = product.attributes?.hsnCode?.trim();
+  if (fromAttributes && isValidProductHsnCode(fromAttributes)) {
+    return fromAttributes;
+  }
+  for (const variant of product.variants ?? []) {
+    const fromVariant = variant.hsnCode?.trim();
+    if (fromVariant && isValidProductHsnCode(fromVariant)) {
+      return fromVariant;
+    }
+  }
+  return "";
 }
 
 export interface AdminCreateCategoryInput {

@@ -81,6 +81,13 @@ const productListItemSchema = {
           compareAtPrice: {
             anyOf: [{ type: 'integer', minimum: 0, maximum: 1000000000 }, { type: 'null' }]
           },
+          weight: {
+            anyOf: [{ type: 'integer', minimum: 0, maximum: 10000000 }, { type: 'null' }]
+          },
+          hsnCode: {
+            anyOf: [{ type: 'string', pattern: '^[0-9]{1,15}$' }, { type: 'null' }]
+          },
+          gstRatePercent: { type: 'integer', minimum: 0, maximum: 100 },
           isActive: { type: 'boolean' }
         }
       }
@@ -269,7 +276,7 @@ const adminProductInputProperties = {
     additionalProperties: false,
     properties: {
       gstRate: { type: 'integer', minimum: 0, maximum: 100 },
-      hsnCode: { type: 'string', maxLength: 20 },
+      hsnCode: { type: 'string', pattern: '^[0-9]{1,15}$' },
       nutritionalInfo: { type: 'string', maxLength: 1000 },
       allergens: { type: 'array', items: { type: 'string', maxLength: 100 }, maxItems: 25 },
       shelfLifeDays: { type: 'integer', minimum: 0, maximum: 5000 },
