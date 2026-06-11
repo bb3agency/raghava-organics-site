@@ -16,6 +16,10 @@ import {
   resolveDefaultShippingHsn,
   resolveShippingHsnCode
 } from '@common/shipping/resolve-shipping-hsn';
+import {
+  normalizeIndianShippingPhone,
+  resolveShiprocketCustomerEmail
+} from '@common/shipping/shiprocket-payload';
 
 const SHIPROCKET_BASE_URL = 'https://apiv2.shiprocket.in/v1/external';
 const DEFAULT_PICKUP_LOCATION = 'Primary';
@@ -269,6 +273,15 @@ export default class ShiprocketAdapter implements ShippingProviderAdapter {
   }
 
   async createShipment(input: CreateShipmentInput): Promise<CreateShipmentResult> {
+    const billingPhone = normalizeIndianShippingPhone(input.customer.phone);
+    if (!billingPhone) {
+      throw new AppError(
+        ERROR_CODES.VALIDATION_ERROR,
+        'Shiprocket requires a valid 10-digit Indian billing phone number',
+        422
+      );
+    }
+
     const orderDate = new Date().toISOString().split('T')[0] ?? new Date().toISOString().substring(0, 10);
     const defaultHsn = resolveDefaultShippingHsn();
     const resolvePayloadHsn = (raw?: string) => {
@@ -303,8 +316,18 @@ export default class ShiprocketAdapter implements ShippingProviderAdapter {
 
     const weightKg = Math.max(0.001, input.totalWeightGrams / 1000);
     const dimensions = input.dimensions ?? { lengthCm: 15, breadthCm: 15, heightCm: 10 };
+    const subTotalRupees = input.subtotalRupees ?? input.amountRupees;
+    const shippingChargeRupees = input.shippingChargeRupees ?? 0;
+    const discountRupees = input.discountRupees ?? 0;
+    const isCod = input.paymentMode === 'COD';
+    const lineSubtotalRupees = orderItems.reduce(
+      (sum, item) => sum + Number.parseFloat(item.selling_price) * item.units,
+      0
+    );
+    const resolvedSubTotalRupees =
+      Number.isFinite(lineSubtotalRupees) && lineSubtotalRupees > 0 ? lineSubtotalRupees : subTotalRupees;
 
-    const createPayload = {
+    const createPayload: Record<string, unknown> = {
       order_id: input.orderNumber,
       order_date: orderDate,
       pickup_location: this.pickupLocation,
@@ -316,21 +339,24 @@ export default class ShiprocketAdapter implements ShippingProviderAdapter {
       billing_pincode: input.destinationPincode,
       billing_state: input.customer.state,
       billing_country: 'India',
-      billing_email: input.customer.email ?? '',
-      billing_phone: input.customer.phone,
+      billing_email: resolveShiprocketCustomerEmail(input.customer.email, input.storeContactEmail),
+      billing_phone: billingPhone,
       shipping_is_billing: true,
       order_items: orderItems,
       payment_method: input.paymentMode,
-      shipping_charges: 0,
+      shipping_charges: shippingChargeRupees.toFixed(2),
       giftwrap_charges: 0,
       transaction_charges: 0,
-      total_discount: 0,
-      sub_total: input.amountRupees.toFixed(2),
+      total_discount: discountRupees.toFixed(2),
+      sub_total: resolvedSubTotalRupees.toFixed(2),
       length: dimensions.lengthCm,
       breadth: dimensions.breadthCm,
       height: dimensions.heightCm,
       weight: weightKg
     };
+    if (isCod) {
+      createPayload.cod_amount = input.amountRupees.toFixed(2);
+    }
 
     const createData = await this.request<ShiprocketCreateOrderResponse>(
       '/orders/create/adhoc',
@@ -356,7 +382,7 @@ export default class ShiprocketAdapter implements ShippingProviderAdapter {
       {
         method: 'POST',
         body: JSON.stringify({
-          shipment_id: [shiprocketShipmentId],
+          shipment_id: [this.resolveShipmentIdPayload(shiprocketShipmentId)],
           ...(input.courierCompanyId != null ? { courier_id: input.courierCompanyId } : {})
         })
       }
@@ -450,11 +476,12 @@ export default class ShiprocketAdapter implements ShippingProviderAdapter {
   }
 
   async schedulePickup(shiprocketShipmentId: string): Promise<SchedulePickupResult> {
+    const shipmentId = this.resolveShipmentIdPayload(shiprocketShipmentId);
     const payload = await this.request<ShiprocketPickupResponse>(
       '/courier/generate/pickup',
       {
         method: 'POST',
-        body: JSON.stringify({ shipment_id: [shiprocketShipmentId] })
+        body: JSON.stringify({ shipment_id: [shipmentId] })
       }
     );
 
@@ -467,11 +494,12 @@ export default class ShiprocketAdapter implements ShippingProviderAdapter {
   }
 
   async generateLabel(shiprocketShipmentId: string): Promise<GenerateLabelResult> {
+    const shipmentId = this.resolveShipmentIdPayload(shiprocketShipmentId);
     const payload = await this.request<ShiprocketLabelResponse>(
       '/courier/generate/label',
       {
         method: 'POST',
-        body: JSON.stringify({ shipment_id: [shiprocketShipmentId] })
+        body: JSON.stringify({ shipment_id: [shipmentId] })
       }
     );
 
@@ -491,5 +519,10 @@ export default class ShiprocketAdapter implements ShippingProviderAdapter {
     if (days < 1) return 1;
     if (days > 30) return 30;
     return days;
+  }
+
+  private resolveShipmentIdPayload(shiprocketShipmentId: string): number | string {
+    const parsed = Number.parseInt(shiprocketShipmentId, 10);
+    return Number.isFinite(parsed) ? parsed : shiprocketShipmentId;
   }
 }

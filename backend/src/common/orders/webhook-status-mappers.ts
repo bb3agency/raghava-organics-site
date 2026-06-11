@@ -81,7 +81,10 @@ export function mapPaymentEventToStatuses(event: string): {
 export function mapShipmentWebhookStatus(status: string): ShipmentStatus | null {
   const normalized = status.trim().toUpperCase().replace(/\s+/g, '_');
   // Delhivery + Shiprocket shared mappings
-  if (normalized === 'BOOKED' || normalized === 'MANIFESTED') return SHIPMENT_STATUS.BOOKED;
+  if (normalized === 'BOOKED' || normalized === 'MANIFESTED' || normalized === 'MANIFEST_GENERATED') {
+    return SHIPMENT_STATUS.BOOKED;
+  }
+  if (normalized === 'SHIPPED' || normalized === 'DISPATCHED') return SHIPMENT_STATUS.IN_TRANSIT;
   if (normalized === 'PICKED_UP' || normalized === 'PICKUP_SCHEDULED') return SHIPMENT_STATUS.PICKED_UP;
   if (normalized === 'IN_TRANSIT') return SHIPMENT_STATUS.IN_TRANSIT;
   if (normalized === 'OUT_FOR_DELIVERY') return SHIPMENT_STATUS.OUT_FOR_DELIVERY;

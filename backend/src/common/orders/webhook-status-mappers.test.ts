@@ -35,6 +35,8 @@ describe('webhook status mappers', () => {
     expect(mapShipmentWebhookStatus('OUT_FOR_DELIVERY')).toBe('OUT_FOR_DELIVERY');
     expect(mapShipmentWebhookStatus('Out For Delivery')).toBe('OUT_FOR_DELIVERY');
     expect(mapShipmentWebhookStatus('Manifested')).toBe('BOOKED');
+    expect(mapShipmentWebhookStatus('MANIFEST GENERATED')).toBe('BOOKED');
+    expect(mapShipmentWebhookStatus('SHIPPED')).toBe('IN_TRANSIT');
     expect(mapShipmentWebhookStatus('unknown_vendor_state')).toBeNull();
   });
 

@@ -14,6 +14,7 @@ import { AppError } from '@common/errors/app-error';
 import { ERROR_CODES } from '@common/errors/error-codes';
 import { decryptOpsConfigValue } from '@common/security/ops-config-crypto';
 import { resolvePickupPincode } from '@common/shipping/resolve-pickup-pincode';
+import { normalizeShippingWebhookPayload } from '@common/shipping/normalize-shipping-webhook-payload';
 import type { CheckoutRiskAssessmentPort } from '@common/interfaces/checkout-risk.interface';
 import { PaymentProviderAdapter } from '@common/interfaces/payment-provider.interface';
 import { canTransitionOrder } from '@common/orders/order-state-machine';
@@ -301,8 +302,14 @@ export class OrdersService {
     occurredAt: string | undefined,
     startedAt: number,
     eventLabel: string,
-    runtimeConfig: NodeJS.ProcessEnv
+    runtimeConfig: NodeJS.ProcessEnv,
+    activeProvider: 'shiprocket' | 'delhivery' | 'noop'
   ): void {
+    // Shiprocket payloads often carry historical scan timestamps; rely on idempotency/inbox dedupe instead.
+    if (activeProvider === 'shiprocket') {
+      return;
+    }
+
     const raw = occurredAt?.trim();
     if (!raw) {
       return;
@@ -321,11 +328,8 @@ export class OrdersService {
         400
       );
     }
-    const maxSkewEnvKey =
-      (runtimeConfig.SHIPPING_PROVIDER ?? 'delhivery').trim().toLowerCase() === 'shiprocket'
-        ? 'SHIPROCKET_WEBHOOK_MAX_SKEW_SECONDS'
-        : 'DELHIVERY_WEBHOOK_MAX_SKEW_SECONDS';
-    const maxSkewRaw = runtimeConfig[maxSkewEnvKey];
+    const maxSkewRaw =
+      runtimeConfig.DELHIVERY_WEBHOOK_MAX_SKEW_SECONDS ?? process.env.DELHIVERY_WEBHOOK_MAX_SKEW_SECONDS;
     const maxSkewSeconds = Number(maxSkewRaw ?? 300);
     const limitMs =
       (Number.isFinite(maxSkewSeconds) && maxSkewSeconds > 0 ? maxSkewSeconds : 300) * 1000;
@@ -1824,44 +1828,37 @@ export class OrdersService {
     }
 
     const webhookRawBytes = typeof payload === 'string' ? Buffer.from(payload) : payload;
-    let parsed: {
-      awb?: string;
-      status?: string;
-      description?: string;
-      location?: string;
-      occurredAt?: string;
-    };
+    let parsedRaw: unknown;
     try {
-      parsed = JSON.parse(webhookRawBytes.toString('utf8')) as {
-        awb?: string;
-        status?: string;
-        description?: string;
-        location?: string;
-        occurredAt?: string;
-      };
+      parsedRaw = JSON.parse(webhookRawBytes.toString('utf8'));
     } catch {
       throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Invalid shipping webhook payload', 400);
     }
 
-    if (!parsed.awb || !parsed.status || !parsed.description) {
+    const normalized = normalizeShippingWebhookPayload(parsedRaw);
+    if (!normalized) {
       recordWebhookEvent({
         provider: 'shipping',
-        event: parsed.status ?? 'unknown',
+        event: 'unknown',
         result: 'accepted',
         durationMs: Date.now() - startedAt
       });
       return { received: true };
     }
 
+    const parsed = normalized;
+
     this.assertShippingWebhookOccurrenceSkew(
       parsed.occurredAt,
       startedAt,
       parsed.status,
-      runtimeConfig
+      runtimeConfig,
+      isShiprocket ? 'shiprocket' : isNoopShipping ? 'noop' : 'delhivery'
     );
 
     const shippingProviderKey = isShiprocket ? 'shiprocket' : 'delhivery';
-    const idempotencyRef = `${parsed.awb}:${parsed.status}:${parsed.occurredAt ?? 'na'}`;
+    const webhookIdentity = parsed.awb || parsed.shiprocketShipmentId || 'unknown';
+    const idempotencyRef = `${webhookIdentity}:${parsed.status}:${parsed.occurredAt ?? 'na'}`;
     const idempotencyKey = this.buildScopedKey(`${shippingProviderKey}:webhook`, idempotencyRef);
     const lock = await this.fastify.redis.set(idempotencyKey, '1', 'EX', 86400, 'NX');
     if (lock !== 'OK') {
@@ -1874,7 +1871,7 @@ export class OrdersService {
       return { received: true };
     }
 
-    const inboxEventKey = `${parsed.awb}:${parsed.status}:${parsed.occurredAt ?? 'na'}`;
+    const inboxEventKey = `${webhookIdentity}:${parsed.status}:${parsed.occurredAt ?? 'na'}`;
     const payloadHash = createHash('sha256').update(webhookRawBytes).digest('hex');
     const inboxProviderKey: 'razorpay' | 'delhivery' | 'shiprocket' = isShiprocket
       ? 'shiprocket'
@@ -1905,6 +1902,7 @@ export class OrdersService {
           description: parsed.description,
           location: parsed.location ?? null,
           occurredAt: parsed.occurredAt ?? new Date().toISOString(),
+          ...(parsed.shiprocketShipmentId ? { shiprocketShipmentId: parsed.shiprocketShipmentId } : {}),
           payloadMetadata: {
             source: `${shippingProviderKey}-webhook`,
             payloadHash,
@@ -1912,7 +1910,7 @@ export class OrdersService {
             traceId: traceContext?.traceId ?? null
           }
         },
-        `update-shipment-status:${parsed.awb}:${parsed.status}:${parsed.occurredAt ?? 'na'}`
+        `update-shipment-status:${webhookIdentity}:${parsed.status}:${parsed.occurredAt ?? 'na'}`
       );
     } catch (enqueueError) {
       await this.fastify.redis.del(idempotencyKey);

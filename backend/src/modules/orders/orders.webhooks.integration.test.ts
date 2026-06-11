@@ -276,6 +276,42 @@ describe('OrdersService webhook idempotency integration', () => {
     expect(shippingAdd).not.toHaveBeenCalled();
   });
 
+  it('accepts native Shiprocket webhook payload shape (current_status + scans)', async () => {
+    process.env.SHIPPING_PROVIDER = 'shiprocket';
+    process.env.SHIPROCKET_WEBHOOK_TOKEN = 'shiprocket-webhook-secret';
+    const { service, shippingJobs, shippingAdd } = createServiceHarness();
+    const payload = Buffer.from(
+      JSON.stringify({
+        awb: '19041424751540',
+        current_status: 'IN TRANSIT',
+        shipment_status: 'IN TRANSIT',
+        current_timestamp: '23 05 2023 11:43:52',
+        scans: [
+          {
+            date: '2023-05-20 10:27:56',
+            activity: 'In Transit - Bag Added To Trip',
+            location: 'Jaipur Hub',
+            'sr-status-label': 'IN TRANSIT'
+          }
+        ]
+      })
+    );
+
+    await service.processShippingWebhook('Bearer shiprocket-webhook-secret', payload);
+
+    expect(shippingAdd).toHaveBeenCalledTimes(1);
+    expect(shippingJobs).toHaveLength(1);
+    expect(shippingJobs[0]).toMatchObject({
+      name: 'update-shipment-status',
+      payload: {
+        awb: '19041424751540',
+        status: 'IN TRANSIT',
+        description: 'In Transit - Bag Added To Trip',
+        location: 'Jaipur Hub'
+      }
+    });
+  });
+
   it('accepts Shiprocket Bearer token format when SHIPPING_PROVIDER=shiprocket', async () => {
     process.env.SHIPPING_PROVIDER = 'shiprocket';
     process.env.SHIPROCKET_WEBHOOK_TOKEN = 'shiprocket-webhook-secret';

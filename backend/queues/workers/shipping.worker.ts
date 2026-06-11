@@ -10,6 +10,10 @@ import {
   resolveExplicitShippingHsn,
   resolveShippingHsnCode
 } from '@common/shipping/resolve-shipping-hsn';
+import {
+  normalizeIndianShippingPhone,
+  resolveShiprocketCustomerEmail
+} from '@common/shipping/shiprocket-payload';
 import { sendTechnicalFailureAlert } from '../../src/modules/notifications/notification-failure-alert';
 
 type NotificationsQueue = Pick<Queue, 'add'>;
@@ -27,9 +31,15 @@ type ShippingWebhookJobData = {
   description: string;
   location: string | null;
   occurredAt: string;
+  shiprocketShipmentId?: string;
   payload?: string;
   payloadMetadata?: Record<string, unknown>;
 };
+
+function parseWebhookOccurredAt(raw: string): Date {
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+}
 
 type CreateShipmentJobData = {
   orderId: string;
@@ -263,7 +273,7 @@ export function createShippingWorker(
 
         const settings = await prisma.storeSettings.findUnique({
           where: { singletonKey: 'default' },
-          select: { gstin: true }
+          select: { gstin: true, contactEmail: true }
         });
 
         const shippingAddress = (order.shippingAddress ?? {}) as {
@@ -284,6 +294,10 @@ export function createShippingWorker(
           !shippingAddress.pincode
         ) {
           throw new Error('Invalid shipping address for shipment booking');
+        }
+        const normalizedPhone = normalizeIndianShippingPhone(shippingAddress.phone);
+        if (!normalizedPhone) {
+          throw new Error('Invalid shipping phone for shipment booking');
         }
 
         const variantIds = order.items.map((item) => item.variantId);
@@ -344,13 +358,18 @@ export function createShippingWorker(
         }
         const paymentMode: 'Prepaid' | 'COD' = isCodOrder ? 'COD' : 'Prepaid';
 
+        const orderSubtotalPaise = order.subtotal ?? order.items.reduce((sum, item) => sum + (item.totalPrice ?? item.unitPrice * item.quantity), 0);
+        const orderShippingChargePaise = order.shippingCharge ?? 0;
+        const orderDiscountPaise = order.discountAmount ?? 0;
+
         const shipmentItems = order.items.map((item) => {
           const variant = variantById.get(item.variantId);
+          const lineTotalPaise = item.totalPrice ?? item.unitPrice * item.quantity;
           return {
             name: item.productName,
             sku: item.sku,
             quantity: item.quantity,
-            unitPriceRupees: item.unitPrice / 100,
+            unitPriceRupees: lineTotalPaise / item.quantity / 100,
             hsnCode: resolveShippingHsnCode({
               variantHsnCode: variant?.hsnCode,
               productAttributes: variant?.product.attributes,
@@ -363,6 +382,9 @@ export function createShippingWorker(
         const shipmentInput = {
           orderNumber: order.orderNumber,
           amountRupees: order.total / 100,
+          subtotalRupees: orderSubtotalPaise / 100,
+          shippingChargeRupees: orderShippingChargePaise / 100,
+          discountRupees: orderDiscountPaise / 100,
           destinationPincode: shippingAddress.pincode,
           originPincode: pickupPincode,
           totalWeightGrams,
@@ -370,9 +392,11 @@ export function createShippingWorker(
           sellerGstTin: sellerGstTin || 'NA',
           hsnCode: primaryHsnCode,
           items: shipmentItems,
+          ...(settings?.contactEmail ? { storeContactEmail: settings.contactEmail } : {}),
           customer: {
             fullName: shippingAddress.fullName,
-            phone: shippingAddress.phone,
+            phone: normalizedPhone,
+            email: resolveShiprocketCustomerEmail(order.user?.email, settings?.contactEmail),
             line1: shippingAddress.line1,
             ...(shippingAddress.line2 ? { line2: shippingAddress.line2 } : {}),
             city: shippingAddress.city,
@@ -547,9 +571,21 @@ export function createShippingWorker(
 
       const data = job.data as ShippingWebhookJobData;
       const nextShipmentStatus = mapShipmentWebhookStatus(data.status);
+      const shipmentLookupRef = data.awb.trim() || data.shiprocketShipmentId?.trim() || '';
+      if (!shipmentLookupRef) {
+        return;
+      }
+
       await prisma.$transaction(async (tx) => {
         const shipment = await tx.shipment.findFirst({
-          where: { awbNumber: data.awb },
+          where: {
+            OR: [
+              ...(data.awb.trim() ? [{ awbNumber: data.awb.trim() }] : []),
+              ...(data.shiprocketShipmentId?.trim()
+                ? [{ shiprocketShipmentId: data.shiprocketShipmentId.trim() }]
+                : [])
+            ]
+          },
           include: {
             order: {
               include: {
@@ -572,6 +608,8 @@ export function createShippingWorker(
         if (!shipment) {
           return;
         }
+
+        const resolvedAwb = data.awb.trim() || shipment.awbNumber;
 
         if (nextShipmentStatus) {
           await tx.shipment.update({
@@ -596,7 +634,7 @@ export function createShippingWorker(
             status: data.status,
             location: data.location ?? null,
             description: data.description,
-            occurredAt: new Date(data.occurredAt)
+            occurredAt: parseWebhookOccurredAt(data.occurredAt)
           }
         });
 
@@ -637,7 +675,7 @@ export function createShippingWorker(
             template: 'OrderShipped',
             data: {
               orderId: shipment.order.id,
-              awb: data.awb,
+              awb: resolvedAwb,
               trackingUrl: shipment.trackingUrl ?? '',
               estimatedDeliveryText,
               ...(estimatedDaysFromDelivery != null ? { estimatedDays: estimatedDaysFromDelivery } : {})
@@ -653,7 +691,7 @@ export function createShippingWorker(
             template: 'OutForDelivery',
             data: {
               orderId: shipment.order.id,
-              awb: data.awb
+              awb: resolvedAwb
             }
           }, `shipping:primary:${shipment.order.id}:out-for-delivery`);
         }
@@ -711,7 +749,7 @@ export function createShippingWorker(
               template: 'OrderDelivered',
               data: {
                 orderId: shipment.order.id,
-                awb: data.awb
+                awb: resolvedAwb
               }
             }, `shipping:primary:${shipment.order.id}:delivered`);
           }
@@ -724,7 +762,7 @@ export function createShippingWorker(
             template: 'FailedDelivery',
             data: {
               orderId: shipment.order.id,
-              awb: data.awb
+              awb: resolvedAwb
             }
           }, `shipping:primary:${shipment.order.id}:failed-delivery`);
         }
@@ -741,7 +779,7 @@ export function createShippingWorker(
               template: 'OrderCancelled',
               data: {
                 orderId: shipment.order.id,
-                awb: data.awb
+                awb: resolvedAwb
               }
             }, `shipping:primary:${shipment.order.id}:rto-initiated`);
           }

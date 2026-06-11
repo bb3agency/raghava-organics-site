@@ -245,6 +245,125 @@ describe('ShiprocketAdapter', () => {
 
     const createBody = JSON.parse((fetchMock.mock.calls[1] as [string, RequestInit])[1].body as string);
     expect(createBody.payment_method).toBe('COD');
+    expect(createBody.cod_amount).toBe('799.00');
+    expect(createBody.sub_total).toBe('799.00');
+  });
+
+  it('sends order breakdown fields and normalizes phone/email in create payload', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ token: 'sr-token-123' })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ order_id: 301, shipment_id: 401, status: 'NEW' })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({
+          response: { data: { awb_assign_status: 1, awb_code: 'AWB-BREAKDOWN', courier_name: 'TestCourier' } }
+        })
+      });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new ShiprocketAdapter({ email: 'test@example.com', password: 'secret' });
+    await adapter.createShipment({
+      orderNumber: 'ORD-2026-00004',
+      amountRupees: 550,
+      subtotalRupees: 500,
+      shippingChargeRupees: 50,
+      discountRupees: 0,
+      destinationPincode: '560001',
+      originPincode: '110001',
+      totalWeightGrams: 500,
+      paymentMode: 'Prepaid',
+      sellerGstTin: '29ABCDE1234F1Z5',
+      hsnCode: '1001',
+      items: [
+        {
+          name: 'Product',
+          sku: 'SKU-1',
+          quantity: 1,
+          unitPriceRupees: 500
+        }
+      ],
+      customer: {
+        fullName: 'Test User',
+        phone: '+91 9876543210',
+        email: 'buyer@example.com',
+        line1: 'Street 1',
+        city: 'Bengaluru',
+        state: 'Karnataka'
+      }
+    });
+
+    const createBody = JSON.parse((fetchMock.mock.calls[1] as [string, RequestInit])[1].body as string);
+    expect(createBody.sub_total).toBe('500.00');
+    expect(createBody.shipping_charges).toBe('50.00');
+    expect(createBody.billing_phone).toBe('9876543210');
+    expect(createBody.billing_email).toBe('buyer@example.com');
+    expect(createBody.cod_amount).toBeUndefined();
+  });
+
+  it('aligns sub_total with discounted line totals', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ token: 'sr-token-123' })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ order_id: 401, shipment_id: 501, status: 'NEW' })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({
+          response: { data: { awb_assign_status: 1, awb_code: 'AWB-DISC', courier_name: 'TestCourier' } }
+        })
+      });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new ShiprocketAdapter({ email: 'test@example.com', password: 'secret' });
+    await adapter.createShipment({
+      orderNumber: 'ORD-2026-00005',
+      amountRupees: 450,
+      subtotalRupees: 999,
+      shippingChargeRupees: 50,
+      discountRupees: 100,
+      destinationPincode: '560001',
+      originPincode: '110001',
+      totalWeightGrams: 500,
+      paymentMode: 'Prepaid',
+      sellerGstTin: '29ABCDE1234F1Z5',
+      hsnCode: '1001',
+      items: [
+        {
+          name: 'Discounted item',
+          sku: 'SKU-DISC',
+          quantity: 2,
+          unitPriceRupees: 200
+        }
+      ],
+      customer: {
+        fullName: 'Test User',
+        phone: '9876543210',
+        email: 'buyer@example.com',
+        line1: 'Street 1',
+        city: 'Bengaluru',
+        state: 'Karnataka'
+      }
+    });
+
+    const createBody = JSON.parse((fetchMock.mock.calls[1] as [string, RequestInit])[1].body as string);
+    expect(createBody.sub_total).toBe('400.00');
+    expect(createBody.order_items[0].selling_price).toBe('200.00');
   });
 
   it('tracks shipment and maps activities', async () => {

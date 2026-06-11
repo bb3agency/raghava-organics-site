@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 let failedHandler: ((job: unknown, error: Error) => void) | undefined;
 
@@ -69,8 +69,10 @@ function mockCreateShippingProvider() {
 
 import { createShippingWorker } from './shipping.worker';
 import { DEFAULT_SHIPPING_HSN_FALLBACK } from '@common/shipping/resolve-shipping-hsn';
+import { featureFlags } from '../../src/config/feature-flags';
 
 describe('shipping worker error and retry behavior', () => {
+  let originalGstInvoicingFlag: boolean;
   const mockConnection = {} as Parameters<typeof createShippingWorker>[0];
   type NotificationsQueueArg = Parameters<typeof createShippingWorker>[1];
   type ShippingDeps = NonNullable<Parameters<typeof createShippingWorker>[2]>;
@@ -89,6 +91,8 @@ describe('shipping worker error and retry behavior', () => {
     createShippingWorker(mockConnection, mockNotificationsQueue, shippingDeps);
 
   beforeEach(() => {
+    originalGstInvoicingFlag = featureFlags.gstInvoicing;
+    featureFlags.gstInvoicing = true;
     failedHandler = undefined;
     sendTechnicalFailureAlert.mockReset();
     process.env.DELHIVERY_PICKUP_PINCODE = '500001';
@@ -111,6 +115,10 @@ describe('shipping worker error and retry behavior', () => {
       contactEmail: 'admin@example.com',
       gstin: '29ABCDE1234F1Z5'
     });
+  });
+
+  afterEach(() => {
+    featureFlags.gstInvoicing = originalGstInvoicingFlag;
   });
 
   it('creates shipment and marks order shipped for create-shipment job', async () => {
@@ -171,7 +179,8 @@ describe('shipping worker error and retry behavior', () => {
     });
   });
 
-  it('uses default shipping HSN when product attributes omit hsnCode', async () => {
+  it('uses default shipping HSN when product attributes omit hsnCode and GST invoicing is disabled', async () => {
+    featureFlags.gstInvoicing = false;
     boot();
     state.tx.order.findUnique.mockResolvedValue({
       id: 'order_no_hsn',
@@ -218,6 +227,70 @@ describe('shipping worker error and retry behavior', () => {
         ]
       })
     );
+  });
+
+  it('throws when shipping phone is not a valid 10-digit Indian number', async () => {
+    boot();
+    state.tx.order.findUnique.mockResolvedValue({
+      id: 'order_bad_phone',
+      orderNumber: 'ORD-2026-00006',
+      total: 1000,
+      status: 'PROCESSING',
+      shippingAddress: {
+        fullName: 'Test Customer',
+        phone: '12345',
+        line1: 'Street 1',
+        city: 'Hyderabad',
+        state: 'Telangana',
+        pincode: '500001'
+      },
+      payment: { status: 'CAPTURED' },
+      shipment: null,
+      items: [{ variantId: 'variant_1', quantity: 1, productName: 'test-product', sku: 'TEST-SKU', unitPrice: 1000, totalPrice: 1000 }]
+    });
+    state.tx.productVariant.findMany.mockResolvedValue([
+      { id: 'variant_1', weight: 300, hsnCode: '1001', product: { attributes: {} } }
+    ]);
+
+    await expect(
+      state.processor?.({
+        name: 'create-shipment',
+        data: { orderId: 'order_bad_phone' }
+      })
+    ).rejects.toThrow('Invalid shipping phone for shipment booking');
+    expect(state.createShipment).not.toHaveBeenCalled();
+  });
+
+  it('throws when GST invoicing is enabled and products omit explicit HSN codes', async () => {
+    boot();
+    state.tx.order.findUnique.mockResolvedValue({
+      id: 'order_no_hsn_gst',
+      orderNumber: 'ORD-2026-00005',
+      total: 1000,
+      status: 'PROCESSING',
+      shippingAddress: {
+        fullName: 'Test Customer',
+        phone: '9999999999',
+        line1: 'Street 1',
+        city: 'Hyderabad',
+        state: 'Telangana',
+        pincode: '500001'
+      },
+      payment: { status: 'CAPTURED' },
+      shipment: null,
+      items: [{ variantId: 'variant_1', quantity: 1, productName: 'test-product', sku: 'TEST-SKU', unitPrice: 1000 }]
+    });
+    state.tx.productVariant.findMany.mockResolvedValue([
+      { id: 'variant_1', weight: 300, hsnCode: null, product: { attributes: {} } }
+    ]);
+
+    await expect(
+      state.processor?.({
+        name: 'create-shipment',
+        data: { orderId: 'order_no_hsn_gst' }
+      })
+    ).rejects.toThrow('Missing product HSN code(s) for shipment booking');
+    expect(state.createShipment).not.toHaveBeenCalled();
   });
 
   it('prefers variant hsnCode over product attributes when building shipment items', async () => {
@@ -378,6 +451,47 @@ describe('shipping worker error and retry behavior', () => {
 
     expect(state.tx.shipment.update).not.toHaveBeenCalled();
     expect(state.tx.shipmentEvent.create).not.toHaveBeenCalled();
+  });
+
+  it('resolves shipment by shiprocketShipmentId when awb is absent', async () => {
+    boot();
+    state.tx.shipment.findFirst.mockResolvedValue({
+      id: 'shipment_sr',
+      awbNumber: 'AWB-SR-001',
+      trackingUrl: 'https://track.example/AWB-SR-001',
+      order: {
+        id: 'order_sr',
+        status: 'SHIPPED',
+        user: {
+          email: 'customer@example.com',
+          phone: '9999999999'
+        }
+      }
+    });
+    state.tx.shipment.update.mockResolvedValue(undefined);
+    state.tx.shipmentEvent.create.mockResolvedValue(undefined);
+
+    await state.processor?.({
+      name: 'update-shipment-status',
+      data: {
+        awb: '',
+        shiprocketShipmentId: '67890',
+        status: 'IN TRANSIT',
+        description: 'Moving',
+        location: 'Hub',
+        occurredAt: new Date().toISOString(),
+        payload: '{}'
+      }
+    });
+
+    expect(state.tx.shipment.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          OR: [{ shiprocketShipmentId: '67890' }]
+        }
+      })
+    );
+    expect(state.tx.shipmentEvent.create).toHaveBeenCalled();
   });
 
   it('throws when shipment update fails so BullMQ can retry', async () => {

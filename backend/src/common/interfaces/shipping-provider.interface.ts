@@ -1,6 +1,10 @@
 export type CreateShipmentInput = {
   orderNumber: string;
   amountRupees: number;
+  /** Product subtotal before shipping/discount (rupees). Falls back to amountRupees when omitted. */
+  subtotalRupees?: number;
+  shippingChargeRupees?: number;
+  discountRupees?: number;
   destinationPincode: string;
   originPincode: string;
   totalWeightGrams: number;
@@ -16,10 +20,13 @@ export type CreateShipmentInput = {
     city: string;
     state: string;
   };
+  /** Store contact email used when customer email is absent (Shiprocket requires billing_email). */
+  storeContactEmail?: string;
   items?: Array<{
     name: string;
     sku: string;
     quantity: number;
+    /** Per-unit selling price in rupees (after line-level discounts). */
     unitPriceRupees: number;
     hsnCode?: string;
   }>;
