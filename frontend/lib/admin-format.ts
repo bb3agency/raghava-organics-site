@@ -44,12 +44,14 @@ export function orderStatusTone(status: string): AdminStatusTone {
 }
 
 const PAYMENT_STATUS_TONE: Record<string, AdminStatusTone> = {
+  CREATED: "warning",
   CAPTURED: "success",
   PAID: "success",
   AUTHORIZED: "warning",
   PENDING: "warning",
   FAILED: "destructive",
-  REFUNDED: "destructive",
+  REFUNDED: "default",
+  PARTIALLY_REFUNDED: "warning",
 };
 
 export function paymentStatusTone(status: string): AdminStatusTone {

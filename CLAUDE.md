@@ -1,3 +1,5 @@
+# E-Commerce Frontend — Antigravity Development Rules
+
 > **Activation:** Always On
 > **Scope:** All files in this workspace
 > **Usage:** Assuming sibling folders (`root/backend` and `root/frontend`), copy this file from the backend into `.agents/rules/dev-rules.md` of the frontend project.
@@ -43,12 +45,12 @@ If `diff` output is non-empty, re-sync and commit the updated `.agents/rules/dev
    - If `db` shows `disconnected` → `DATABASE_URL` wrong or migrations not applied — re-run `npm run dev:e2e`
    - If `redis` shows `disconnected` → `REDIS_URL`/`REDIS_PASSWORD` mismatch — fix `.env` then `docker compose down -v && docker compose up -d postgres redis`
    - **Database is migrated:** `npx prisma migrate status --schema prisma/schema.prisma` shows "Database schema is up to date"
-   - **Feature flags are set** in backend `.env` (ask which are enabled: `FEATURE_COUPONS_ENABLED`, `FEATURE_REVIEWS_ENABLED`, `FEATURE_WISHLIST_ENABLED`, `FEATURE_GST_INVOICING_ENABLED`, `FEATURE_RESPONSE_ENVELOPE_ENABLED`)
+   - **Feature flags are set** in backend `.env` (ask which are enabled: `FEATURE_COUPONS_ENABLED`, `FEATURE_REVIEWS_ENABLED`, `FEATURE_WISHLIST_ENABLED`, `FEATURE_GST_INVOICING_ENABLED`, `FEATURE_RESPONSE_ENVELOPE_ENABLED`). **Storefront reads flags at runtime** via `GET /store/config` (`useStoreConfig()`) — not build-time `NEXT_PUBLIC_FEATURE_*`.
    - If backend is not fully healthy, STOP and guide the user through backend setup first per `README.md` §Local Development Quickstart
    - **Alerting awareness:** The backend emits structured technical failure alerts via email to all active Ops + Admin users on every `catch`/`log.error` path. If the backend is misconfigured (missing Resend keys, no active Ops/Admin users), alert delivery will silently fail. Verify `RESEND_API_KEY` + `RESEND_FROM` are configured and at least one active Ops or Admin user exists in the DB.
 5. **Do not ask questions already answered in the project docs/checklists** (e.g. API URL, feature flags, or agreed delivery sequence).
 
-6. **Admin console patterns (2026-06-03):** Per-page `AdminDateRangePicker`; product editor → `isActive` / `metaDescription` / `isFeatured`; no mock labels in admin tables. See `frontend/docs/FRONTEND_DEV_LOG.md`.
+6. **Admin console patterns (2026-06-03):** Date filters are **per-page** via `AdminDateRangePicker` (not shell-global). Product editor maps Status → `isActive`, short description → `metaDescription`, Featured → `isFeatured`. Do not reintroduce mock customer/product labels in admin tables — use API fields (`customerName`, `productName`, etc.). See `docs/FRONTEND_DEV_LOG.md`.
 
 > This protocol is non-negotiable.
 
@@ -496,6 +498,8 @@ useAuthStore.getState().setAdmin(admin);  // Includes permissions array
 const canEditProducts = admin.permissions.includes('products:write');
 {canEditProducts && <Button>Edit Product</Button>}
 ```
+
+**Admin form validation (2026-06-06):** Merchant write forms use `useAdminFormValidation()` from `frontend/hooks/use-admin-form-validation.ts`. Inputs carry `data-admin-field="<key>"`; error state uses `!border-destructive` via `fieldClassName()`. On `VALIDATION_ERROR`, parse `error.details.fields`, highlight inputs, scroll/focus first error, and append field summaries in the banner (`formatAdminValidationSummary`). Product create requires **Category** + **URL Slug** (`AdminProductEditor`). Canonical spec: `docs/NEXTJS_FRONTEND_INTEGRATION_GUIDE.md` §2.1.1; dev log: `frontend/docs/FRONTEND_DEV_LOG.md` §2026-06-06.
 
 **Pattern: Ops Auth (Browser session cookie)**
 ```typescript
@@ -1042,7 +1046,7 @@ Required delivery sequence (6 tiers, strict order):
 3. **Admin read surfaces** — dashboard KPIs/charts, orders list/detail + return request queue + return request detail (`GET /admin/return-requests/:id`), global shipments (`GET /admin/shipments`, `shipments:read`) + global payments (`GET /admin/payments`, `payments:read`), inventory list + adjustment history per variant (`GET /admin/inventory/history/:variantId`), product list + categories, customer index + CRM view (customer detail includes ban fields `isBanned`/`bannedAt`/`bannedReason`; paginated order tab via `GET /admin/users/:id/orders`; admin notes list `GET /admin/users/:id/notes`), review moderation queue. Build before mutations so you have real data to validate against.
 4. **Admin mutation surfaces** — ship action (run shipping provider dry-run simultaneously), Razorpay PREPAID checkout (run Razorpay test payment dry-run simultaneously), COD checkout, cancel/refund (async — UI must show pending-refund state until worker finalises), COD collection, return request approve/reject (`PATCH /admin/return-requests/:id`), stock adjustment + bulk stock update (`POST /admin/inventory/bulk-update`, max 100 variants, full rollback on any failure), product deactivate (`DELETE /admin/products/:id` — UI label **Deactivate**) + permanent delete (`DELETE /admin/products/:id/permanent` via `AdminRowActionsMenu`; **409** if orders/reviews), product variant delete (`DELETE /admin/products/:id/variants/:variantId` — disabled in UI if last variant; backend returns 400), review hard-delete (`DELETE /admin/reviews/:id`, destructive confirmation required), customer ban (`PATCH /admin/users/:id/ban`, `users:write`, mandatory reason) + unban (`DELETE /admin/users/:id/ban`), admin notes create/delete (`POST`/`DELETE /admin/users/:id/notes`, `users:write`), settings (shipping/store/inventory/cod — notifications provider config is ops-only via `/ops/config`; admin notifications UI removed 2026-06-07), coupon lifecycle (create → edit → pause/resume → soft-delete → restore; clone via `POST .../coupons/:id/clone`; audit log per coupon via `GET .../coupons/:id/audit`; handle `RATE_LIMIT_EXCEEDED` 429 gracefully on write actions; `BUY_X_GET_Y` type hidden in forms until v2.2; deleted coupons remain visible in list with restore action — hard delete does not exist).
 5. **Reliability surfaces** — reconciliation issues, outbox dead-letter list + replay-preview + replay, inbox failures + replay-preview + replay, analytics (revenue, funnel, category breakdown, inventory alerts, notification delivery), Bull Board queue visibility.
-6. **Storefront customer journey surfaces** — catalogue (product list/detail/categories/search), cart (guest session + merge-on-login + coupon + pincode check), PREPAID checkout (full Razorpay sequence), COD checkout, order history/detail/tracking, customer auth (OTP + email + forgot-password + refresh loop + logout), user profile + addresses. Run Resend email dry-run during checkout slice. Feature-flagged surfaces (wishlist, reviews, coupons) only if `FEATURE_*_ENABLED` is active.
+6. **Storefront customer journey surfaces** — catalogue (product list/detail/categories/search), cart (guest session + merge-on-login + coupon + pincode check + **`paymentMode` on delivery rates**), PREPAID checkout (full Razorpay sequence), COD checkout (gate on **`GET /store/config`.isCodEnabled**), order history/detail/tracking (cancel only **CONFIRMED/PROCESSING**; invoice CTA on **`invoice.hasPdf`**; retry payment single-call on payment page), customer auth (OTP + email + forgot-password + refresh loop + logout), user profile + addresses. Module flags via **`useStoreConfig()`** — not `NEXT_PUBLIC_FEATURE_*`. Run Resend email dry-run during checkout slice.
 
 Non-negotiable boundaries:
 - Merchant operations stay on `/api/v1/admin/*`. Platform controls stay on `/api/v1/ops/*`.

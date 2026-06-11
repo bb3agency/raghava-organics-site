@@ -485,11 +485,23 @@ export function AdminOrdersList({ from, to }: AdminOrdersListProps = {}) {
                     <td className="px-3 py-4 hidden md:table-cell">
                       {order.paymentMode === "COD" ? (
                         <span className="inline-flex rounded-full bg-blue-50 px-2.5 py-0.5 text-[11px] font-medium text-blue-600">
-                          Cash on Delivery
+                          {order.paymentStatus === "CAPTURED" ? "COD Collected" : "COD"}
                         </span>
-                      ) : (
+                      ) : order.paymentStatus === "CAPTURED" ? (
                         <span className="inline-flex rounded-full bg-emerald-50 px-2.5 py-0.5 text-[11px] font-medium text-emerald-700 border border-emerald-100">
                           Paid
+                        </span>
+                      ) : order.paymentStatus === "FAILED" ? (
+                        <span className="inline-flex rounded-full bg-rose-50 px-2.5 py-0.5 text-[11px] font-medium text-rose-700 border border-rose-100">
+                          Failed
+                        </span>
+                      ) : order.paymentStatus === "REFUNDED" || order.paymentStatus === "PARTIALLY_REFUNDED" ? (
+                        <span className="inline-flex rounded-full bg-gray-100 px-2.5 py-0.5 text-[11px] font-medium text-gray-600">
+                          {order.paymentStatus === "PARTIALLY_REFUNDED" ? "Part. Refunded" : "Refunded"}
+                        </span>
+                      ) : (
+                        <span className="inline-flex rounded-full bg-amber-50 px-2.5 py-0.5 text-[11px] font-medium text-amber-700 border border-amber-100">
+                          Pending
                         </span>
                       )}
                     </td>
