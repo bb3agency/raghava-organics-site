@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeShippingWebhookPayload } from './normalize-shipping-webhook-payload';
+import { normalizeShippingWebhookPayload, readStrictDelhiveryOccurredAt } from './normalize-shipping-webhook-payload';
 
 describe('normalize-shipping-webhook-payload', () => {
   it('passes through Delhivery-style payloads', () => {
@@ -110,5 +110,12 @@ describe('normalize-shipping-webhook-payload', () => {
       description: 'In Transit - latest event',
       location: 'Hub B'
     });
+  });
+
+  it('readStrictDelhiveryOccurredAt reads only Delhivery occurredAt fields', () => {
+    expect(readStrictDelhiveryOccurredAt({ occurredAt: '2026-05-01T10:00:00.000Z' })).toBe(
+      '2026-05-01T10:00:00.000Z'
+    );
+    expect(readStrictDelhiveryOccurredAt({ current_timestamp: '23 05 2023 11:43:52' })).toBeNull();
   });
 });

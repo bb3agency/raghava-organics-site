@@ -14,7 +14,7 @@ import { AppError } from '@common/errors/app-error';
 import { ERROR_CODES } from '@common/errors/error-codes';
 import { decryptOpsConfigValue } from '@common/security/ops-config-crypto';
 import { resolvePickupPincode } from '@common/shipping/resolve-pickup-pincode';
-import { normalizeShippingWebhookPayload } from '@common/shipping/normalize-shipping-webhook-payload';
+import { normalizeShippingWebhookPayload, readStrictDelhiveryOccurredAt } from '@common/shipping/normalize-shipping-webhook-payload';
 import type { CheckoutRiskAssessmentPort } from '@common/interfaces/checkout-risk.interface';
 import { PaymentProviderAdapter } from '@common/interfaces/payment-provider.interface';
 import { canTransitionOrder } from '@common/orders/order-state-machine';
@@ -1847,6 +1847,23 @@ export class OrdersService {
     }
 
     const parsed = normalized;
+
+    if (!isShiprocket && !isNoopShipping) {
+      const strictOccurredAt = readStrictDelhiveryOccurredAt(parsedRaw);
+      if (strictOccurredAt && !parsed.occurredAt) {
+        recordWebhookEvent({
+          provider: 'shipping',
+          event: parsed.status,
+          result: 'rejected',
+          durationMs: Date.now() - startedAt
+        });
+        throw new AppError(
+          ERROR_CODES.VALIDATION_ERROR,
+          'Invalid occurredAt timestamp in shipping webhook payload',
+          400
+        );
+      }
+    }
 
     this.assertShippingWebhookOccurrenceSkew(
       parsed.occurredAt,

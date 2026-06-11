@@ -114,6 +114,15 @@ function unwrapWebhookBody(raw: unknown): Record<string, unknown> | null {
   return body;
 }
 
+/** Delhivery contract fields — when present, must parse to a valid ISO timestamp. */
+export function readStrictDelhiveryOccurredAt(raw: unknown): string | null {
+  const body = unwrapWebhookBody(raw);
+  if (!body) {
+    return null;
+  }
+  return readFirstString(body, ['occurredAt', 'occurred_at']);
+}
+
 /** Maps Delhivery-style and native Shiprocket webhook bodies to the internal worker contract. */
 export function normalizeShippingWebhookPayload(raw: unknown): NormalizedShippingWebhookPayload | null {
   const body = unwrapWebhookBody(raw);
