@@ -600,12 +600,20 @@ async function handleProcessOrderUpdate(
         data.triggeredBy === 'COD_ORDER_CREATED' &&
         order.status === ORDER_STATUS.CONFIRMED;
 
-      // Prepaid path: order must still be awaiting payment or recovering from a failed attempt.
+      // New PREPAID flow (confirmPrepaid): order is already CONFIRMED with coupon finalized.
+      // Skip DB transitions — only run inventory deduction, emails, and invoice.
+      const isPrepaidConfirmedSideEffectsJob =
+        data.triggeredBy === 'PREPAID_CONFIRMED' &&
+        order.status === ORDER_STATUS.CONFIRMED;
+
+      // Old PREPAID flow (webhook-driven): order is awaiting payment or recovering.
       const isPrepaidConfirmationTarget =
         !isCodSideEffectsJob &&
+        !isPrepaidConfirmedSideEffectsJob &&
         (order.status === ORDER_STATUS.PENDING_PAYMENT ||
           order.status === ORDER_STATUS.PAYMENT_FAILED);
-      if (!isCodSideEffectsJob && !isPrepaidConfirmationTarget) {
+
+      if (!isCodSideEffectsJob && !isPrepaidConfirmedSideEffectsJob && !isPrepaidConfirmationTarget) {
         return;
       }
 
@@ -620,8 +628,20 @@ async function handleProcessOrderUpdate(
         if (alreadyProcessed) {
           return;
         }
+      } else if (isPrepaidConfirmedSideEffectsJob) {
+        // Idempotency: only run side effects once — check if inventory has already been deducted.
+        const alreadyProcessed = await tx.orderStatusHistory.findFirst({
+          where: {
+            orderId: order.id,
+            triggeredBy: 'PREPAID_CONFIRMED'
+          },
+          select: { id: true }
+        });
+        if (alreadyProcessed) {
+          return;
+        }
       } else {
-        // CAS gate — only one concurrent prepaid job wins.
+        // CAS gate — only one concurrent prepaid job (old webhook flow) wins.
         const claimed = await tx.order.updateMany({
           where: {
             id: order.id,
@@ -665,8 +685,8 @@ async function handleProcessOrderUpdate(
 
       await releaseReservationsForOrder(tx, order.id);
 
-      // Persist payment capture if provider data is present and not yet recorded (prepaid only).
-      if (!isCodSideEffectsJob && order.payment && data.providerPaymentId) {
+      // Persist payment capture if provider data is present and not yet recorded (old prepaid flow only).
+      if (!isCodSideEffectsJob && !isPrepaidConfirmedSideEffectsJob && order.payment && data.providerPaymentId) {
         if (order.payment.status !== PAYMENT_STATUS.CAPTURED) {
           await tx.payment.update({
             where: { id: order.payment.id },
@@ -683,19 +703,25 @@ async function handleProcessOrderUpdate(
       await tx.orderStatusHistory.create({
         data: {
           orderId: order.id,
-          fromStatus: isCodSideEffectsJob ? ORDER_STATUS.CONFIRMED : order.status,
+          fromStatus: (isCodSideEffectsJob || isPrepaidConfirmedSideEffectsJob)
+            ? ORDER_STATUS.CONFIRMED
+            : order.status,
           toStatus: ORDER_STATUS.CONFIRMED,
           triggeredBy: data.triggeredBy,
           note: data.note ?? 'process-order-update'
         }
       });
 
-      await finalizeCouponUsageForOrder(tx, {
-        orderId: order.id,
-        userId: order.userId,
-        discountAmount: order.discountAmount ?? 0,
-        coupons: order.coupons
-      });
+      // Coupon finalization: already done inside confirmPrepaid for new PREPAID flow.
+      // For COD and old PREPAID (webhook) flows, finalize here.
+      if (!isPrepaidConfirmedSideEffectsJob) {
+        await finalizeCouponUsageForOrder(tx, {
+          orderId: order.id,
+          userId: order.userId,
+          discountAmount: order.discountAmount ?? 0,
+          coupons: order.coupons
+        });
+      }
 
       orderForSideEffects = {
         id: order.id,

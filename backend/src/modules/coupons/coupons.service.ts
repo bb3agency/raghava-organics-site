@@ -575,17 +575,20 @@ export class CouponsService {
         take: limit,
         select: {
           id: true,
-          code: true,
-          usesCount: true
+          code: true
         }
       }),
       this.fastify.prisma.coupon.count({ where: couponWhere })
     ]);
 
-    const orderDateFilter =
+    // Date filter applies to CouponUsage.usedAt so both usesCount and totalDiscountPaise
+    // are consistently scoped to the same period. Using CouponUsage instead of
+    // Order.discountAmount gives the exact per-coupon discount (accurate even if multiple
+    // coupons could theoretically apply to one order).
+    const usageDateFilter =
       query.from || query.to
         ? {
-            createdAt: {
+            usedAt: {
               ...(query.from ? { gte: new Date(query.from) } : {}),
               ...(query.to ? { lte: new Date(query.to) } : {})
             }
@@ -594,23 +597,20 @@ export class CouponsService {
 
     const items = await Promise.all(
       coupons.map(async (coupon) => {
-        const aggregate = await this.fastify.prisma.order.aggregate({
+        const usageAggregate = await this.fastify.prisma.couponUsage.aggregate({
           where: {
-            ...orderDateFilter,
-            coupons: {
-              some: { id: coupon.id }
-            }
+            couponId: coupon.id,
+            ...usageDateFilter
           },
-          _sum: {
-            discountAmount: true
-          }
+          _count: { id: true },
+          _sum: { discountAmount: true }
         });
 
         return {
           couponId: coupon.id,
           code: coupon.code,
-          usesCount: coupon.usesCount,
-          totalDiscountPaise: aggregate._sum.discountAmount ?? 0
+          usesCount: usageAggregate._count.id,
+          totalDiscountPaise: usageAggregate._sum.discountAmount ?? 0
         };
       })
     );

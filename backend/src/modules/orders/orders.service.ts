@@ -1276,10 +1276,14 @@ export class OrdersService {
       return this.serializeOrder(existing.order, { exposeProviderReferences: false, exposeInternalReferences: false });
     }
 
-    const captureKey = this.buildScopedKey('rzp:capture', input.razorpayPaymentId);
+    // Use a session-scoped lock rather than the payment-ID capture lock that the webhook
+    // handler uses. This prevents a race condition where the Razorpay webhook fires
+    // payment.captured and sets rzp:capture:<paymentId> BEFORE the frontend can call
+    // confirmPrepaid — which used to cause a false CONFLICT 409.
+    const captureKey = this.buildScopedKey('rzp:confirm-prepaid', input.checkoutSessionId);
     const captureLock = await this.fastify.redis.set(captureKey, '1', 'EX', 86400, 'NX');
     if (captureLock !== 'OK') {
-      throw new AppError(ERROR_CODES.CONFLICT, 'Payment confirmation already in progress', 409);
+      throw new AppError(ERROR_CODES.CONFLICT, 'Payment confirmation already in progress for this session', 409);
     }
 
     try {
