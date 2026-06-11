@@ -182,7 +182,12 @@ const OPS_CONFIG_REQUIRED_BY_PROVIDER: Record<string, Record<string, string[]>> 
   },
   SHIPPING_PROVIDER: {
     delhivery: ['DELHIVERY_API_KEY'],
-    shiprocket: ['SHIPROCKET_EMAIL', 'SHIPROCKET_PASSWORD'],
+    shiprocket: [
+      'SHIPROCKET_EMAIL',
+      'SHIPROCKET_PASSWORD',
+      'SHIPROCKET_PICKUP_PINCODE',
+      'SHIPROCKET_PICKUP_LOCATION'
+    ],
     noop: []
   },
   SMS_PROVIDER: {

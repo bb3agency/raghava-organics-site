@@ -128,6 +128,22 @@ describe('ops config contract', () => {
     expect(required).toContain('SMS_PROVIDER');
   });
 
+  it('requires Shiprocket pickup pincode and location when shipping provider is shiprocket', () => {
+    const required = computeRequiredOpsConfigKeys(
+      {
+        PAYMENT_PROVIDER: 'cod',
+        SHIPPING_PROVIDER: 'shiprocket',
+        SMS_PROVIDER: 'noop'
+      },
+      false
+    );
+
+    expect(required).toContain('SHIPROCKET_EMAIL');
+    expect(required).toContain('SHIPROCKET_PASSWORD');
+    expect(required).toContain('SHIPROCKET_PICKUP_PINCODE');
+    expect(required).toContain('SHIPROCKET_PICKUP_LOCATION');
+  });
+
   it('requires Razorpay webhook allowlist in strict profile when payment provider is razorpay', () => {
     const required = computeRequiredOpsConfigKeys(
       {

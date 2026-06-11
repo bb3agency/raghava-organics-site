@@ -80,13 +80,14 @@
 
 ## Razorpay — Payments
 
-**Status:** `[~]` webhook secret generated; dashboard + Ops save pending
+**Status:** `[~]` live keys in vault; dashboard webhook + Ops save + frontend env pending
 
 - [x] `RAZORPAY_WEBHOOK_SECRET` generated → [VPS_INPUTS.md](./VPS_INPUTS.md) (gitignored vault)
+- [x] Razorpay **live** `RAZORPAY_KEY_ID` + `RAZORPAY_KEY_SECRET` recorded in [VPS_INPUTS.md](./VPS_INPUTS.md) (2026-05-23)
 - [x] Public runbook [RAZORPAY_PAYMENTS_SETUP.md](./RAZORPAY_PAYMENTS_SETUP.md)
 - [ ] Razorpay Dashboard → webhook URL + secret + 3 events (`payment.captured`, `payment.failed`, `refund.processed`)
 - [ ] Ops UI → Payments → `PAYMENT_PROVIDER`, keys, webhook secret → restart API/workers
-- [ ] `NEXT_PUBLIC_RAZORPAY_KEY_ID` in `frontend/.env.production.local` + frontend deploy
+- [ ] `NEXT_PUBLIC_RAZORPAY_KEY_ID=rzp_live_Szr9LAUchr3Sk3` in `frontend/.env.production.local` on VPS + frontend deploy
 
 ## Cloudflare R2 — Product media
 

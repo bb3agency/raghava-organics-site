@@ -10,8 +10,10 @@
 
 ## Razorpay Dashboard — API keys
 
-1. Razorpay Dashboard → **API Keys** → generate **Live** (or Test for staging).
-2. Copy **Key ID** and **Key Secret**.
+Live keys for this client are recorded in gitignored [VPS_INPUTS.md](./VPS_INPUTS.md) (Key ID `rzp_live_Szr9LAUchr3Sk3`, 2026-05-23). **Never** commit the Key Secret to tracked docs.
+
+1. Razorpay Dashboard → **API Keys** → **Live** mode (already generated for this client).
+2. Copy **Key ID** and **Key Secret** from [VPS_INPUTS.md](./VPS_INPUTS.md) vault (or Razorpay dashboard if rotating).
 3. Save in Ops UI:
    - `PAYMENT_PROVIDER` = `razorpay`
    - `RAZORPAY_KEY_ID`
@@ -36,6 +38,8 @@
 | `refund.processed` | Yes | Admin refund finalization → `REFUNDED` |
 
 Do **not** enable disputes, subscriptions, invoices, `order.paid`, payment links, or other events — the backend ignores them.
+
+**Audit note (2026-06-11):** If `payment.authorized` or `refund.failed` were enabled during initial setup, disable them in the webhook edit view. Only the three events above should remain active.
 
 ### Ops UI (must match dashboard secret)
 
