@@ -182,8 +182,10 @@ export function AdminOrderFulfillmentPanel({
       });
       setSuccess("Action completed. Refreshing order state…");
       await loadDetail(selectedOrderId);
-      await loadOrders();
-      notifyAdminDataChanged(["orders", "shipments", "dashboard", "payments"]);
+      if (!hideOrderPicker) {
+        await loadOrders();
+      }
+      notifyAdminDataChanged(["orders", "shipments", "dashboard"]);
     } catch (err) {
       setError(getApiErrorMessageWithHint(err));
     } finally {

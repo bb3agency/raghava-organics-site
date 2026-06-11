@@ -196,7 +196,7 @@ function AdminOrdersKpis({ from, to, trendLabel }: AdminOrdersKpisProps) {
     void load();
   }, [load]);
 
-  useAdminDataRefreshEffect(load, ["orders", "dashboard", "payments", "shipments"]);
+  useAdminDataRefreshEffect(load, ["orders", "dashboard"]);
 
   const fmt = (n: number | undefined) =>
     n !== undefined ? n.toLocaleString("en-IN") : "—";
