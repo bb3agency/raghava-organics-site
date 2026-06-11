@@ -1,3 +1,5 @@
+import { getBrowserApiBaseUrl } from "@/lib/api-base";
+
 const SESSION_KEY = "ro_analytics_sid";
 
 function getSessionId(): string {
@@ -23,8 +25,8 @@ export function trackEvent(
   payload?: Record<string, unknown>,
   userId?: string,
 ): void {
-  const base = process.env.NEXT_PUBLIC_API_BASE_URL;
-  if (!base || typeof window === "undefined") return;
+  if (typeof window === "undefined") return;
+  const base = getBrowserApiBaseUrl();
 
   const body: Record<string, unknown> = {
     eventType,
