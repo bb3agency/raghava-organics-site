@@ -244,6 +244,21 @@ export function AdminShipmentsList({
 
   const items = readPaginatedItems(data);
 
+  // Poll every 60 s while there are active shipments that could change status.
+  // Shiprocket webhook → worker → DB update has no push mechanism to the frontend,
+  // so polling is the only way to reflect pickup / in-transit / delivered changes.
+  useEffect(() => {
+    const hasActiveShipments = items.some(
+      (s) =>
+        !["DELIVERED", "CANCELLED", "RTO_DELIVERED"].includes(s.status),
+    );
+    if (!hasActiveShipments) return;
+    const id = setInterval(() => {
+      void load();
+    }, 60_000);
+    return () => clearInterval(id);
+  }, [items, load]);
+
   const deliveredCount = shipmentKpis?.delivered ?? 0;
   const inTransitCount =
     (shipmentKpis?.inTransit ?? 0) + (shipmentKpis?.outForDelivery ?? 0);
