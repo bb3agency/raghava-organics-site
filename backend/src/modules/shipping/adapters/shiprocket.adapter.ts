@@ -390,7 +390,7 @@ export default class ShiprocketAdapter implements ShippingProviderAdapter {
 
     const awbResponse = awbData.response?.data;
     if (!awbResponse || awbResponse.awb_assign_status !== 1) {
-      const reason = awbResponse?.awb_assign_error ?? awbResponse?.response ?? JSON.stringify(awbData);
+      const reason = JSON.stringify(awbData);
       throw new AppError(
         ERROR_CODES.INTERNAL_ERROR,
         `Shiprocket AWB assignment failed: ${reason}`,
