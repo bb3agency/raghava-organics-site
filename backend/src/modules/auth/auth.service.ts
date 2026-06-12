@@ -256,6 +256,9 @@ export class AuthService {
     payload: Record<string, unknown>,
     jobId?: string
   ): Promise<void> {
+    // BullMQ does not allow colons in jobIds. Sanitize by replacing with hyphens.
+    const sanitizedJobId = jobId ? jobId.replace(/:/g, '-') : undefined;
+
     const outboxDelegate = (this.fastify as { prisma?: PrismaClient }).prisma?.outboxMessage;
     if (outboxDelegate) {
       await outboxDelegate.create({
@@ -263,13 +266,13 @@ export class AuthService {
           queueName,
           jobName,
           payload: payload as Prisma.InputJsonValue,
-          ...(jobId ? { jobId } : {})
+          ...(sanitizedJobId ? { jobId: sanitizedJobId } : {})
         }
       });
       return;
     }
 
-    await this.fastify.queues[queueName].add(jobName, payload, jobId ? { jobId } : undefined);
+    await this.fastify.queues[queueName].add(jobName, payload, sanitizedJobId ? { jobId: sanitizedJobId } : undefined);
   }
 
   private async validateAuthChallenge(args: {
