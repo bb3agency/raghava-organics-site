@@ -638,6 +638,9 @@ export function createShippingWorker(
           }
         });
 
+        const email = shipment.order.user?.email;
+        const phone = shipment.order.user?.phone;
+
         const nextOrderStatus = nextShipmentStatus ? mapShipmentStatusToOrderStatus(nextShipmentStatus) : null;
         if (nextOrderStatus && shipment.order.status !== nextOrderStatus && canTransitionOrder(shipment.order.status, nextOrderStatus)) {
           const updated = await updateOrderStatusWithCasCompat(tx, {
@@ -656,11 +659,17 @@ export function createShippingWorker(
                 note: `Shipment status changed to ${data.status}`
               }
             });
+
+            if (nextOrderStatus === 'CANCELLED' && (email || phone)) {
+              await enqueueNotificationOutboxOrQueue(tx, notificationsQueue, 'send-primary', {
+                email,
+                phone,
+                template: 'OrderCancelled',
+                data: { orderId: shipment.order.id, awb: resolvedAwb }
+              }, `shipping:primary:${shipment.order.id}:cancelled-webhook`);
+            }
           }
         }
-
-        const email = shipment.order.user?.email;
-        const phone = shipment.order.user?.phone;
         if (nextShipmentStatus === 'IN_TRANSIT' && (phone || email)) {
           const estimatedDaysFromDelivery = shipment.estimatedDelivery
             ? Math.max(1, Math.round((shipment.estimatedDelivery.getTime() - Date.now()) / (24 * 60 * 60 * 1000)))

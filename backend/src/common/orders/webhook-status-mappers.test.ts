@@ -40,9 +40,20 @@ describe('webhook status mappers', () => {
     expect(mapShipmentWebhookStatus('unknown_vendor_state')).toBeNull();
   });
 
+  it('maps Shiprocket cancellation status variants to CANCELLED', () => {
+    expect(mapShipmentWebhookStatus('CANCELLED')).toBe('CANCELLED');
+    expect(mapShipmentWebhookStatus('Cancelled')).toBe('CANCELLED');
+    expect(mapShipmentWebhookStatus('CANCELED')).toBe('CANCELLED');
+    expect(mapShipmentWebhookStatus('Cancellation Requested')).toBe('CANCELLED');
+    expect(mapShipmentWebhookStatus('AWB Cancellation Requested')).toBe('CANCELLED');
+    expect(mapShipmentWebhookStatus('Pickup Cancelled')).toBe('CANCELLED');
+    expect(mapShipmentWebhookStatus('Pickup Error')).toBe('CANCELLED');
+  });
+
   it('maps shipment status to order status only for meaningful milestones', () => {
     expect(mapShipmentStatusToOrderStatus('OUT_FOR_DELIVERY')).toBe('OUT_FOR_DELIVERY');
     expect(mapShipmentStatusToOrderStatus('DELIVERED')).toBe('DELIVERED');
+    expect(mapShipmentStatusToOrderStatus('CANCELLED')).toBe('CANCELLED');
     expect(mapShipmentStatusToOrderStatus('RTO_INITIATED')).toBeNull();
     expect(mapShipmentStatusToOrderStatus('BOOKED')).toBeNull();
   });

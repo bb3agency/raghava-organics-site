@@ -25,6 +25,8 @@ describe('order state machine', () => {
     expect(canTransitionOrder('CONFIRMED', 'SHIPPED')).toBe(true);
     expect(canTransitionOrder('PROCESSING', 'SHIPPED')).toBe(true);
     expect(canTransitionOrder('SHIPPED', 'OUT_FOR_DELIVERY')).toBe(true);
+    // Shiprocket may cancel a booked shipment before physical pickup
+    expect(canTransitionOrder('SHIPPED', 'CANCELLED')).toBe(true);
     expect(canTransitionOrder('OUT_FOR_DELIVERY', 'DELIVERED')).toBe(true);
     expect(canTransitionOrder('DELIVERED', 'REFUNDED')).toBe(true);
   });
@@ -34,7 +36,6 @@ describe('order state machine', () => {
     expect(canTransitionOrder('PENDING_PAYMENT', 'DELIVERED')).toBe(false);
     expect(canTransitionOrder('CANCELLED', 'CONFIRMED')).toBe(false);
     expect(canTransitionOrder('REFUNDED', 'PROCESSING')).toBe(false);
-    expect(canTransitionOrder('SHIPPED', 'CANCELLED')).toBe(false);
     expect(canTransitionOrder('SHIPPED', 'DELIVERED')).toBe(false);
     expect(canTransitionOrder('OUT_FOR_DELIVERY', 'CANCELLED')).toBe(false);
     expect(canTransitionOrder('OUT_FOR_DELIVERY', 'PROCESSING')).toBe(false);

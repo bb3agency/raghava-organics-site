@@ -92,13 +92,24 @@ export function mapShipmentWebhookStatus(status: string): ShipmentStatus | null 
   if (normalized === 'FAILED_DELIVERY' || normalized === 'UNDELIVERED') return SHIPMENT_STATUS.FAILED_DELIVERY;
   if (normalized === 'RTO_INITIATED' || normalized === 'RTO-INITIATED') return SHIPMENT_STATUS.RTO_INITIATED;
   if (normalized === 'RTO_DELIVERED' || normalized === 'RTO-DELIVERED') return SHIPMENT_STATUS.RTO_DELIVERED;
-  if (normalized === 'CANCELLED') return SHIPMENT_STATUS.CANCELLED;
+  if (
+    normalized === 'CANCELLED' ||
+    normalized === 'CANCELED' ||
+    normalized === 'CANCELLATION_REQUESTED' ||
+    normalized === 'AWB_CANCELLATION_REQUESTED' ||
+    normalized === 'PICKUP_CANCELLED' ||
+    normalized === 'PICKUP_CANCELED' ||
+    normalized === 'PICKUP_ERROR'
+  ) {
+    return SHIPMENT_STATUS.CANCELLED;
+  }
   return null;
 }
 
 export function mapShipmentStatusToOrderStatus(shipmentStatus: ShipmentStatus): OrderStatus | null {
   if (shipmentStatus === SHIPMENT_STATUS.OUT_FOR_DELIVERY) return ORDER_STATUS.OUT_FOR_DELIVERY;
   if (shipmentStatus === SHIPMENT_STATUS.DELIVERED) return ORDER_STATUS.DELIVERED;
+  if (shipmentStatus === SHIPMENT_STATUS.CANCELLED) return 'CANCELLED';
   return null;
 }
 
