@@ -57,11 +57,15 @@ interface ShipmentKpis {
   inTransit: number;
   outForDelivery: number;
   failed: number;
+  cancelled: number;
+  rtoDelivered: number;
   totalPrev: number;
   deliveredPrev: number;
   inTransitPrev: number;
   outForDeliveryPrev: number;
   failedPrev: number;
+  cancelledPrev: number;
+  rtoDeliveredPrev: number;
 }
 
 export function AdminShipmentsList({
@@ -166,11 +170,15 @@ export function AdminShipmentsList({
         inTransitRes,
         outRes,
         failedRes,
+        cancelledRes,
+        rtoRes,
         totalPrevRes,
         deliveredPrevRes,
         inTransitPrevRes,
         outPrevRes,
         failedPrevRes,
+        cancelledPrevRes,
+        rtoPrevRes,
       ] = await Promise.all([
         api<PaginatedResponse<AdminShipmentListItem>>(cur({})),
         api<PaginatedResponse<AdminShipmentListItem>>(
@@ -185,6 +193,12 @@ export function AdminShipmentsList({
         api<PaginatedResponse<AdminShipmentListItem>>(
           cur({ status: "FAILED_DELIVERY" }),
         ),
+        api<PaginatedResponse<AdminShipmentListItem>>(
+          cur({ status: "CANCELLED" }),
+        ),
+        api<PaginatedResponse<AdminShipmentListItem>>(
+          cur({ status: "RTO_DELIVERED" }),
+        ),
         api<PaginatedResponse<AdminShipmentListItem>>(prv({})),
         api<PaginatedResponse<AdminShipmentListItem>>(
           prv({ status: "DELIVERED" }),
@@ -198,6 +212,12 @@ export function AdminShipmentsList({
         api<PaginatedResponse<AdminShipmentListItem>>(
           prv({ status: "FAILED_DELIVERY" }),
         ),
+        api<PaginatedResponse<AdminShipmentListItem>>(
+          prv({ status: "CANCELLED" }),
+        ),
+        api<PaginatedResponse<AdminShipmentListItem>>(
+          prv({ status: "RTO_DELIVERED" }),
+        ),
       ]);
       const g = (r: PaginatedResponse<AdminShipmentListItem>) =>
         coercePaginatedResponse(r).meta.total;
@@ -207,11 +227,15 @@ export function AdminShipmentsList({
         inTransit: g(inTransitRes),
         outForDelivery: g(outRes),
         failed: g(failedRes),
+        cancelled: g(cancelledRes),
+        rtoDelivered: g(rtoRes),
         totalPrev: g(totalPrevRes),
         deliveredPrev: g(deliveredPrevRes),
         inTransitPrev: g(inTransitPrevRes),
         outForDeliveryPrev: g(outPrevRes),
         failedPrev: g(failedPrevRes),
+        cancelledPrev: g(cancelledPrevRes),
+        rtoDeliveredPrev: g(rtoPrevRes),
       });
     } catch {
       // keep null
@@ -263,9 +287,10 @@ export function AdminShipmentsList({
   const inTransitCount =
     (shipmentKpis?.inTransit ?? 0) + (shipmentKpis?.outForDelivery ?? 0);
   const failedCount = shipmentKpis?.failed ?? 0;
+  const cancelledCount = (shipmentKpis?.cancelled ?? 0) + (shipmentKpis?.rtoDelivered ?? 0);
   const pendingCount = Math.max(
     0,
-    (shipmentKpis?.total ?? 0) - deliveredCount - inTransitCount - failedCount,
+    (shipmentKpis?.total ?? 0) - deliveredCount - inTransitCount - failedCount - cancelledCount,
   );
   const pieData = [
     { name: "Delivered", value: deliveredCount },
