@@ -2179,6 +2179,12 @@ function VariantEditRow({
         : "",
     weightGrams:
       variant.weight !== null ? String(variant.weight) : "",
+    packageLengthCm:
+      variant.packageLengthCm !== null ? String(variant.packageLengthCm) : "",
+    packageWidthCm:
+      variant.packageWidthCm !== null ? String(variant.packageWidthCm) : "",
+    packageHeightCm:
+      variant.packageHeightCm !== null ? String(variant.packageHeightCm) : "",
     initialQuantity: "",
     isActive: variant.isActive,
   });
