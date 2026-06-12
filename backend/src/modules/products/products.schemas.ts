@@ -84,15 +84,6 @@ const productListItemSchema = {
           weight: {
             anyOf: [{ type: 'integer', minimum: 0, maximum: 10000000 }, { type: 'null' }]
           },
-          packageLengthCm: {
-            anyOf: [{ type: 'integer', minimum: 1, maximum: 10000 }, { type: 'null' }]
-          },
-          packageWidthCm: {
-            anyOf: [{ type: 'integer', minimum: 1, maximum: 10000 }, { type: 'null' }]
-          },
-          packageHeightCm: {
-            anyOf: [{ type: 'integer', minimum: 1, maximum: 10000 }, { type: 'null' }]
-          },
           hsnCode: {
             anyOf: [{ type: 'string', pattern: '^[0-9]{1,15}$' }, { type: 'null' }]
           },
@@ -163,6 +154,35 @@ const publicReviewSchema = {
         firstName: { type: 'string', maxLength: 100 },
         lastName: { type: 'string', maxLength: 100 }
       }
+    }
+  }
+} as const;
+
+// Admin-only variant item: extends the public schema with packaging dimensions.
+// These fields must never appear in storefront/customer-facing responses.
+const adminVariantItemSchema = {
+  ...productListItemSchema.properties.variants.items,
+  properties: {
+    ...productListItemSchema.properties.variants.items.properties,
+    packageLengthCm: {
+      anyOf: [{ type: 'integer', minimum: 1, maximum: 10000 }, { type: 'null' }]
+    },
+    packageWidthCm: {
+      anyOf: [{ type: 'integer', minimum: 1, maximum: 10000 }, { type: 'null' }]
+    },
+    packageHeightCm: {
+      anyOf: [{ type: 'integer', minimum: 1, maximum: 10000 }, { type: 'null' }]
+    }
+  }
+} as const;
+
+const adminProductListItemSchema = {
+  ...productListItemSchema,
+  properties: {
+    ...productListItemSchema.properties,
+    variants: {
+      ...productListItemSchema.properties.variants,
+      items: adminVariantItemSchema
     }
   }
 } as const;
@@ -450,7 +470,7 @@ export const adminCreateProductSchema = {
     properties: adminProductInputProperties
   },
   response: {
-    200: productListItemSchema,
+    200: adminProductListItemSchema,
     ...standardAdminErrorResponses
   }
 } as const;
@@ -511,7 +531,7 @@ export const adminCreateProductVariantSchema = {
     properties: adminProductInputProperties.variants.items.properties
   },
   response: {
-    200: productListItemSchema.properties.variants.items,
+    200: adminVariantItemSchema,
     ...standardAdminErrorResponses
   }
 } as const;
@@ -534,7 +554,7 @@ export const adminUpdateProductVariantSchema = {
     properties: adminProductInputProperties.variants.items.properties
   },
   response: {
-    200: productListItemSchema.properties.variants.items,
+    200: adminVariantItemSchema,
     ...standardAdminErrorResponses
   }
 } as const;
@@ -551,7 +571,15 @@ export const adminListProductsSchema = {
     }
   },
   response: {
-    ...listProductsSchema.response,
+    200: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['items', 'meta'],
+      properties: {
+        items: { type: 'array', items: adminProductListItemSchema },
+        meta: listProductsSchema.response[200].properties.meta
+      }
+    },
     ...standardAdminErrorResponses
   }
 } as const;
@@ -567,7 +595,7 @@ export const adminGetProductByIdSchema = {
   },
   querystring: emptyQuerystringSchema,
   response: {
-    200: productListItemSchema,
+    200: adminProductListItemSchema,
     ...standardAdminErrorResponses
   }
 } as const;
@@ -587,7 +615,7 @@ export const adminUpdateProductSchema = {
     properties: adminProductInputProperties
   },
   response: {
-    200: productListItemSchema,
+    200: adminProductListItemSchema,
     ...standardAdminErrorResponses
   }
 } as const;
