@@ -65,6 +65,7 @@ export function AdminOrderFulfillmentPanel({
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
+  const [pickupWasScheduled, setPickupWasScheduled] = useState(false);
   const pollCancelRef = useRef<(() => void) | null>(null);
 
   const loadOrders = useCallback(async () => {
@@ -129,6 +130,11 @@ export function AdminOrderFulfillmentPanel({
     }
   }, [initialOrderId]);
 
+  // Reset pickup local state when order changes
+  useEffect(() => {
+    setPickupWasScheduled(false);
+  }, [selectedOrderId]);
+
   useEffect(() => {
     if (!selectedOrderId) {
       return;
@@ -181,6 +187,15 @@ export function AdminOrderFulfillmentPanel({
             if (data.status === "SHIPPED" || data.shipment?.awb) {
               setSuccess("Shipment booked! AWB has been assigned.");
               notifyAdminDataChanged(["orders", "shipments", "dashboard"]);
+              // Worker may still be transitioning status — do a final refresh after 3s
+              await new Promise<void>((res) => setTimeout(res, 3000));
+              if (cancelled) return;
+              try {
+                const final = await api<AdminOrderDetail>(`/admin/orders/${orderId}`);
+                if (!cancelled) setDetail(final);
+              } catch {
+                // ignore
+              }
               return;
             }
           } catch {
@@ -284,6 +299,7 @@ export function AdminOrderFulfillmentPanel({
           body: JSON.stringify({}),
         },
       );
+      setPickupWasScheduled(true);
       setSuccess(
         result.pickupScheduledDate
           ? `Pickup scheduled for ${result.pickupScheduledDate}.`
@@ -349,7 +365,7 @@ export function AdminOrderFulfillmentPanel({
   const labelUrl = shipment?.shipmentLabelUrl ?? shipment?.labelUrl ?? null;
 
   const canSchedulePickup =
-    hasShiprocketId && !pickupScheduled && detail?.status !== "DELIVERED";
+    hasShiprocketId && !pickupScheduled && !pickupWasScheduled && detail?.status !== "DELIVERED";
   const canPrintLabel = hasShipment;
   const canShip = detail?.canShipNow === true;
 
@@ -431,7 +447,10 @@ export function AdminOrderFulfillmentPanel({
           <DetailRowItem label="Shipment status" value={shipment?.status ?? "—"} />
           <DetailRowItem
             label="Pickup scheduled"
-            value={shipment?.pickupScheduledDate ?? "Not yet"}
+            value={
+              shipment?.pickupScheduledDate ??
+              (pickupWasScheduled ? "Scheduled (date not returned by courier)" : "Not yet")
+            }
           />
           {labelUrl ? (
             <div>
