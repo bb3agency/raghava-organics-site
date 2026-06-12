@@ -507,36 +507,51 @@ export function createNotificationsWorker(
 
         if (primaryChannel === 'EMAIL') {
           const recipient = data.email?.trim() ?? '';
-          const errorMessage =
-            !recipient
-              ? 'Primary EMAIL channel selected but recipient email is missing'
-              : !flags.emailEnabled || !runtimeConfig.RESEND_API_KEY?.trim() || !runtimeConfig.RESEND_FROM?.trim()
-                ? 'Email notifications disabled or Resend credentials missing'
-                : null;
 
-          if (errorMessage) {
+          // Customer registered via phone-only OTP — no email address on record.
+          // Log as failed (no-op) and return without throwing or firing an alert.
+          if (!recipient) {
             await prisma.notificationLog.create({
               data: {
                 channel: NotificationChannel.EMAIL,
-                recipient: recipient || 'missing-email',
+                recipient: 'missing-email',
                 template: data.template,
                 status: NotificationStatus.FAILED,
                 provider: 'resend',
-                errorMessage
+                errorMessage: 'No email address for customer — notification skipped'
+              }
+            });
+            return;
+          }
+
+          const configErrorMessage =
+            !flags.emailEnabled || !runtimeConfig.RESEND_API_KEY?.trim() || !runtimeConfig.RESEND_FROM?.trim()
+              ? 'Email notifications disabled or Resend credentials missing'
+              : null;
+
+          if (configErrorMessage) {
+            await prisma.notificationLog.create({
+              data: {
+                channel: NotificationChannel.EMAIL,
+                recipient,
+                template: data.template,
+                status: NotificationStatus.FAILED,
+                provider: 'resend',
+                errorMessage: configErrorMessage
               }
             });
             await sendNotificationFailureAlert({
               prisma,
               template: data.template,
               channel: 'EMAIL',
-              recipient: recipient || 'missing-email',
-              errorMessage,
+              recipient,
+              errorMessage: configErrorMessage,
               failureStage: 'WORKER_DELIVERY',
               queueName: 'notifications',
               jobName: job.name,
               jobId: String(job.id ?? 'unknown')
             });
-            throw new UnrecoverableError(errorMessage);
+            throw new UnrecoverableError(configErrorMessage);
           }
 
           try {
@@ -592,36 +607,49 @@ export function createNotificationsWorker(
         if (primaryChannel === 'SMS') {
           const recipient = data.phone?.trim() ?? '';
           const smsProvider = resolveSmsProviderName(runtimeConfig);
-          const errorMessage =
-            !recipient
-              ? 'Primary SMS channel selected but recipient phone is missing'
-              : !flags.smsEnabled || !hasSmsProviderCredentials(runtimeConfig)
-                ? 'SMS notifications disabled or provider credentials missing'
-                : null;
 
-          if (errorMessage) {
+          if (!recipient) {
             await prisma.notificationLog.create({
               data: {
                 channel: NotificationChannel.SMS,
-                recipient: recipient || 'missing-phone',
+                recipient: 'missing-phone',
                 template: data.template,
                 status: NotificationStatus.FAILED,
                 provider: smsProvider,
-                errorMessage
+                errorMessage: 'No phone number for customer — notification skipped'
+              }
+            });
+            return;
+          }
+
+          const smsConfigError =
+            !flags.smsEnabled || !hasSmsProviderCredentials(runtimeConfig)
+              ? 'SMS notifications disabled or provider credentials missing'
+              : null;
+
+          if (smsConfigError) {
+            await prisma.notificationLog.create({
+              data: {
+                channel: NotificationChannel.SMS,
+                recipient,
+                template: data.template,
+                status: NotificationStatus.FAILED,
+                provider: smsProvider,
+                errorMessage: smsConfigError
               }
             });
             await sendNotificationFailureAlert({
               prisma,
               template: data.template,
               channel: 'SMS',
-              recipient: recipient || 'missing-phone',
-              errorMessage,
+              recipient,
+              errorMessage: smsConfigError,
               failureStage: 'WORKER_DELIVERY',
               queueName: 'notifications',
               jobName: job.name,
               jobId: String(job.id ?? 'unknown')
             });
-            throw new UnrecoverableError(errorMessage);
+            throw new UnrecoverableError(smsConfigError);
           }
 
           try {
@@ -672,36 +700,49 @@ export function createNotificationsWorker(
         }
 
         const recipient = data.phone?.trim() ?? '';
-        const errorMessage =
-          !recipient
-            ? 'Primary WHATSAPP channel selected but recipient phone is missing'
-            : !flags.whatsappEnabled || !runtimeConfig.META_WHATSAPP_ACCESS_TOKEN || !runtimeConfig.META_WHATSAPP_PHONE_NUMBER_ID
-              ? 'WhatsApp notifications disabled or Meta WhatsApp credentials missing'
-              : null;
 
-        if (errorMessage) {
+        if (!recipient) {
           await prisma.notificationLog.create({
             data: {
               channel: NotificationChannel.WHATSAPP,
-              recipient: recipient || 'missing-phone',
+              recipient: 'missing-phone',
               template: data.template,
               status: NotificationStatus.FAILED,
               provider: 'meta-whatsapp',
-              errorMessage
+              errorMessage: 'No phone number for customer — notification skipped'
+            }
+          });
+          return;
+        }
+
+        const waConfigError =
+          !flags.whatsappEnabled || !runtimeConfig.META_WHATSAPP_ACCESS_TOKEN || !runtimeConfig.META_WHATSAPP_PHONE_NUMBER_ID
+            ? 'WhatsApp notifications disabled or Meta WhatsApp credentials missing'
+            : null;
+
+        if (waConfigError) {
+          await prisma.notificationLog.create({
+            data: {
+              channel: NotificationChannel.WHATSAPP,
+              recipient,
+              template: data.template,
+              status: NotificationStatus.FAILED,
+              provider: 'meta-whatsapp',
+              errorMessage: waConfigError
             }
           });
           await sendNotificationFailureAlert({
             prisma,
             template: data.template,
             channel: 'WHATSAPP',
-            recipient: recipient || 'missing-phone',
-            errorMessage,
+            recipient,
+            errorMessage: waConfigError,
             failureStage: 'WORKER_DELIVERY',
             queueName: 'notifications',
             jobName: job.name,
             jobId: String(job.id ?? 'unknown')
           });
-          throw new UnrecoverableError(errorMessage);
+          throw new UnrecoverableError(waConfigError);
         }
 
         try {

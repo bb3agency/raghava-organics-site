@@ -59,17 +59,19 @@ export async function renderNotificationEmail(template: string, data: Record<str
   }
 
   const orderId = data.orderId ? escapeHtml(data.orderId) : 'N/A';
+  // Use human-readable orderNumber when available, fall back to orderId UUID
+  const orderRef = data.orderNumber ? escapeHtml(data.orderNumber) : orderId;
 
   switch (template as EmailTemplateName) {
     case 'OrderConfirmed':
       return {
-        subject: `Order confirmed — ${orderId}`,
-        html: await render(OrderConfirmedEmail(orderId))
+        subject: `Order confirmed — ${orderRef}`,
+        html: await render(OrderConfirmedEmail(orderRef))
       };
     case 'PaymentFailed':
       return {
-        subject: `Payment failed — action required for ${orderId}`,
-        html: await render(PaymentFailedEmail(orderId))
+        subject: `Payment failed — action required for ${orderRef}`,
+        html: await render(PaymentFailedEmail(orderRef))
       };
     case 'OrderShipped': {
       const shippedOptions: { trackingUrl?: string; awb?: string; estimatedDays?: number } = {};
@@ -77,24 +79,24 @@ export async function renderNotificationEmail(template: string, data: Record<str
       if (typeof data.awb === 'string') shippedOptions.awb = data.awb;
       if (typeof data.estimatedDays === 'number') shippedOptions.estimatedDays = data.estimatedDays;
       return {
-        subject: `Your order ${orderId} has been shipped`,
-        html: await render(OrderShippedEmail(orderId, shippedOptions))
+        subject: `Your order ${orderRef} has been shipped`,
+        html: await render(OrderShippedEmail(orderRef, shippedOptions))
       };
     }
     case 'OutForDelivery':
       return {
-        subject: `Your order ${orderId} is out for delivery today`,
-        html: await render(OutForDeliveryEmail(orderId))
+        subject: `Your order ${orderRef} is out for delivery today`,
+        html: await render(OutForDeliveryEmail(orderRef))
       };
     case 'OrderDelivered':
       return {
-        subject: `Your order ${orderId} has been delivered`,
-        html: await render(OrderDeliveredEmail(orderId))
+        subject: `Your order ${orderRef} has been delivered`,
+        html: await render(OrderDeliveredEmail(orderRef))
       };
     case 'OrderCancelled':
       return {
-        subject: `Your order ${orderId} has been cancelled`,
-        html: await render(OrderCancelledEmail(orderId))
+        subject: `Your order ${orderRef} has been cancelled`,
+        html: await render(OrderCancelledEmail(orderRef))
       };
     case 'LowStockAlert':
       {

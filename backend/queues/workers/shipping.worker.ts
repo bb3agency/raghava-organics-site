@@ -502,6 +502,7 @@ export function createShippingWorker(
                 template: 'OrderShipped',
                 data: {
                   orderId: order.id,
+                  orderNumber: (order as typeof order & { orderNumber?: string }).orderNumber ?? order.id,
                   awb: shipment.awbNumber,
                   trackingUrl: shipment.trackingUrl ?? '',
                   estimatedDeliveryText,

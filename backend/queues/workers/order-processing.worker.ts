@@ -563,6 +563,7 @@ async function handleProcessOrderUpdate(
   let orderForSideEffects:
     | {
         id: string;
+        orderNumber: string;
         userId: string;
         user: { email: string | null; phone: string | null };
       }
@@ -574,6 +575,7 @@ async function handleProcessOrderUpdate(
         where: { id: data.orderId },
         select: {
           id: true,
+          orderNumber: true,
           userId: true,
           status: true,
           discountAmount: true,
@@ -733,6 +735,7 @@ async function handleProcessOrderUpdate(
 
       orderForSideEffects = {
         id: order.id,
+        orderNumber: order.orderNumber,
         userId: order.userId,
         user: {
           email: order.user.email,
@@ -782,6 +785,7 @@ async function handleProcessOrderUpdate(
       template: 'OrderConfirmed',
       data: {
         orderId: sideEffectsTarget.id,
+        orderNumber: sideEffectsTarget.orderNumber,
         providerOrderId: data.providerOrderId ?? ''
       }
     }, notificationsQueue, `notifications:primary:${sideEffectsTarget.id}:OrderConfirmed`);
