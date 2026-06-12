@@ -216,7 +216,7 @@ export function createReconciliationWorker(
                   triggeredBy: 'RECONCILIATION',
                   note: 'Auto-heal: payment captured but order not confirmed'
                 },
-                { jobId: `reconcile-process-order-update:${order.id}` }
+                { jobId: `reconcile-process-order-update-${order.id}` }
               );
             } finally {
               await orderProcessingQueue.close();

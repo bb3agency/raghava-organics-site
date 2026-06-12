@@ -908,7 +908,7 @@ export class AuthService {
         return genericResponse;
       }
       const resetUrl = `${storefrontUrl}/reset-password?token=${encodeURIComponent(resetToken)}`;
-      const jobId = `password-reset:${user.id}:${Date.now()}`;
+      const jobId = `password-reset-${user.id}-${Date.now()}`;
       try {
         await this.enqueueOutboxMessage('notifications', 'send-email', {
           to: user.email,
@@ -1200,7 +1200,7 @@ export class AuthService {
       await this.fastify.redis.set(ciKey, otp, 'EX', AuthService.ADMIN_LOGIN_OTP_TTL_SECONDS);
     }
 
-    const jobId = `admin-login-otp:${user.id}:${Date.now()}`;
+    const jobId = `admin-login-otp-${user.id}-${Date.now()}`;
     try {
       if (otpConfig.channel === 'email') {
         await this.fastify.queues.notifications.add(

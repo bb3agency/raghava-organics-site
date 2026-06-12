@@ -417,7 +417,7 @@ export function createOrderProcessingWorker(
                   reason: `Refund processed (${processedRefundAmount} paise)`,
                   refundAmountPaise: processedRefundAmount
                 } as Prisma.InputJsonValue,
-                jobId: `generate-credit-note:${order.id}:${processedRefundAmount}`
+                jobId: `generate-credit-note-${order.id}-${processedRefundAmount}`
               }
             });
           } else {
@@ -428,7 +428,7 @@ export function createOrderProcessingWorker(
                 reason: `Refund processed (${processedRefundAmount} paise)`,
                 refundAmountPaise: processedRefundAmount
               },
-              { jobId: `generate-credit-note:${order.id}:${processedRefundAmount}` }
+              { jobId: `generate-credit-note-${order.id}-${processedRefundAmount}` }
             );
           }
           return;
@@ -481,7 +481,7 @@ export function createOrderProcessingWorker(
                       providerOrderId: data.providerOrderId
                     }
                   } as Prisma.InputJsonValue,
-                  jobId: `notifications:primary:${order.id}:PaymentFailed`
+                  jobId: `notifications-primary-${order.id}-PaymentFailed`
                 }
               });
             } else {
@@ -788,25 +788,25 @@ async function handleProcessOrderUpdate(
         orderNumber: sideEffectsTarget.orderNumber,
         providerOrderId: data.providerOrderId ?? ''
       }
-    }, notificationsQueue, `notifications:primary:${sideEffectsTarget.id}:OrderConfirmed`);
+    }, notificationsQueue, `notifications-primary-${sideEffectsTarget.id}-OrderConfirmed`);
   }
 
   if (featureFlags.gstInvoicing) {
     await enqueueOutboxOrQueue(prisma, 'orderProcessing', 'generate-invoice', {
       orderId: sideEffectsTarget.id
-    }, orderProcessingQueue, `generate-invoice:${sideEffectsTarget.id}`);
+    }, orderProcessingQueue, `generate-invoice-${sideEffectsTarget.id}`);
   }
 
   await enqueueOutboxOrQueue(prisma, 'analytics', 'record-event', {
     eventType: ANALYTICS_EVENT_TYPE.PURCHASE,
-    sessionId: `order:${sideEffectsTarget.id}`,
+    sessionId: `order-${sideEffectsTarget.id}`,
     ...(sideEffectsTarget.userId ? { userId: sideEffectsTarget.userId } : {}),
     payload: {
       orderId: sideEffectsTarget.id,
       providerOrderId: data.providerOrderId ?? ''
     },
     occurredAt: new Date().toISOString()
-  }, analyticsQueue, `analytics:${ANALYTICS_EVENT_TYPE.PURCHASE}:order:${sideEffectsTarget.id}`);
+  }, analyticsQueue, `analytics-${ANALYTICS_EVENT_TYPE.PURCHASE}-order-${sideEffectsTarget.id}`);
 }
 
 async function handleCodSideEffectsFailure(

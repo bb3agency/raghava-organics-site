@@ -646,7 +646,7 @@ export class AnalyticsService {
       requestedBy: input.requestedBy,
       reason: replayReason
     }, {
-      jobId: `replay-dead-letter:${outbox.id}:${Date.now()}`
+      jobId: `replay-dead-letter-${outbox.id}-${Date.now()}`
     });
     this.appendReplayAudit({
       targetType: 'outbox',

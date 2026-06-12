@@ -2431,7 +2431,7 @@ export class OpsService {
     await this.fastify.redis.set(otpKey, `${opsUser.id}||${otpHash}`, 'EX', ttl);
     await this.fastify.redis.del(attemptKey);
 
-    const jobId = `ops-login-otp:${opsUser.id}:${Date.now()}`;
+    const jobId = `ops-login-otp-${opsUser.id}-${Date.now()}`;
     try {
       await this.fastify.queues.notifications.add('send-email', {
         to: opsUser.email,
