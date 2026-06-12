@@ -6,6 +6,8 @@ import { resolvePickupPincode } from '@common/shipping/resolve-pickup-pincode';
 import { SmsTemplateRegistry } from '@modules/notifications/sms-template-registry';
 import { supportedEmailTemplates } from '@modules/notifications/templates/email-templates';
 import {
+  BoxPreset,
+  BoxPresetsResponse,
   InventorySettingsResponse,
   NotificationFlags,
   NotificationSettingsResponse,
@@ -18,6 +20,7 @@ import {
   UpdateShippingSettingsInput,
   UpdateStoreProfileInput
 } from './settings.types';
+import { parseBoxPresets } from '@common/shipping/select-box-preset';
 
 export class SettingsService {
   private static readonly singletonKey = 'default';
@@ -417,6 +420,30 @@ export class SettingsService {
       select: { isCodEnabled: true, mobileOtpSignupEnabled: true, cancellationWindowHours: true, sellerState: true }
     }) as { isCodEnabled: boolean; mobileOtpSignupEnabled: boolean; cancellationWindowHours: number; sellerState: string | null };
     return updated;
+  }
+
+  async getBoxPresets(): Promise<BoxPresetsResponse> {
+    const settings = await this.fastify.prisma.storeSettings.findUnique({
+      where: { singletonKey: SettingsService.singletonKey },
+      select: { boxPresets: true }
+    });
+    return { presets: parseBoxPresets(settings?.boxPresets) };
+  }
+
+  async updateBoxPresets(input: { presets: BoxPreset[] }): Promise<BoxPresetsResponse> {
+    const defaultPickupPincode = await this.resolveDefaultPickupPincodeForCreate();
+    const updated = await this.fastify.prisma.storeSettings.upsert({
+      where: { singletonKey: SettingsService.singletonKey },
+      update: { boxPresets: input.presets },
+      create: {
+        singletonKey: SettingsService.singletonKey,
+        pickupPincode: defaultPickupPincode,
+        defaultLowStockThreshold: 5,
+        boxPresets: input.presets
+      },
+      select: { boxPresets: true }
+    });
+    return { presets: parseBoxPresets(updated.boxPresets) };
   }
 
   async resolveDefaultLowStockThreshold(): Promise<number> {

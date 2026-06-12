@@ -2313,6 +2313,21 @@ export class OrdersService {
         },
         items: true,
         payment: true,
+        couponUsages: {
+          include: {
+            coupon: {
+              select: {
+                id: true,
+                code: true,
+                type: true,
+                value: true,
+                minOrderPaise: true,
+                maxUsesTotal: true,
+                usesCount: true
+              }
+            }
+          }
+        },
         invoice: {
           select: {
             invoiceNumber: true,
@@ -3837,7 +3852,13 @@ export class OrdersService {
       } | null;
       couponUsages?: Array<{
         coupon: {
+          id?: string;
           code: string;
+          type?: string;
+          value?: number;
+          minOrderPaise?: number;
+          maxUsesTotal?: number | null;
+          usesCount?: number;
         };
       }>;
       user?: {
@@ -3876,9 +3897,9 @@ export class OrdersService {
       subtotal: order.subtotal,
       shippingCharge: order.shippingCharge,
       discountAmount: order.discountAmount,
-      ...(order.couponUsages && order.couponUsages.length > 0 && order.couponUsages[0]?.coupon?.code
-        ? { couponCode: order.couponUsages[0].coupon!.code }
-        : {}),
+      ...(order.couponUsages && order.couponUsages.length > 0 && order.couponUsages[0]?.coupon
+        ? { coupon: order.couponUsages[0].coupon }
+        : { coupon: null }),
       total: order.total,
       notes: order.notes,
       createdAt: order.createdAt.toISOString(),

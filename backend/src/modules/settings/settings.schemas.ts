@@ -268,6 +268,61 @@ export const updateCodSettingsSchema = {
   }
 } as const;
 
+const boxPresetItemSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['name', 'lengthCm', 'widthCm', 'heightCm'],
+  properties: {
+    name: { type: 'string', minLength: 1, maxLength: 80 },
+    lengthCm: { type: 'integer', minimum: 1, maximum: 10000 },
+    widthCm: { type: 'integer', minimum: 1, maximum: 10000 },
+    heightCm: { type: 'integer', minimum: 1, maximum: 10000 }
+  }
+} as const;
+
+const boxPresetsResponseSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['presets'],
+  properties: {
+    presets: {
+      type: 'array',
+      items: boxPresetItemSchema,
+      maxItems: 20
+    }
+  }
+} as const;
+
+export const getBoxPresetsSchema = {
+  params: emptyParamsSchema,
+  querystring: emptyQuerystringSchema,
+  response: {
+    200: boxPresetsResponseSchema,
+    ...standardAdminErrorResponses
+  }
+} as const;
+
+export const updateBoxPresetsSchema = {
+  params: emptyParamsSchema,
+  querystring: emptyQuerystringSchema,
+  body: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['presets'],
+    properties: {
+      presets: {
+        type: 'array',
+        items: boxPresetItemSchema,
+        maxItems: 20
+      }
+    }
+  },
+  response: {
+    200: boxPresetsResponseSchema,
+    ...standardAdminErrorResponses
+  }
+} as const;
+
 /**
  * Public storefront config — no auth required.
  * Exposes only the storefront-relevant subset of StoreSettings that customer

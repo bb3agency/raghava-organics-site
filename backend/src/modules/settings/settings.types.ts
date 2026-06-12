@@ -81,3 +81,14 @@ export type InventorySettingsResponse = {
 export type UpdateInventorySettingsInput = {
   defaultLowStockThreshold: number;
 };
+
+export type BoxPreset = {
+  name: string;
+  lengthCm: number;
+  widthCm: number;
+  heightCm: number;
+};
+
+export type BoxPresetsResponse = {
+  presets: BoxPreset[];
+};

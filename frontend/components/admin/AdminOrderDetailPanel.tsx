@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { FileDown, User, MapPin, ReceiptText, CreditCard, Truck } from "lucide-react";
+import { FileDown, User, MapPin, ReceiptText, CreditCard, Truck, Tag } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { AdminStatusBadge } from "@/components/admin/AdminStatusBadge";
 import { useAuthenticatedApi } from "@/hooks/use-authenticated-api";
@@ -128,7 +128,7 @@ export function AdminOrderDetailPanel({ orderId }: AdminOrderDetailPanelProps) {
       </div>
 
       {/* Summary grid */}
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
         <InfoCard icon={<User className="h-4 w-4" />} title="Customer">
           <p className="font-medium leading-tight">{order.customer.name}</p>
           <p className="mt-0.5 text-xs text-muted-foreground">
@@ -207,6 +207,18 @@ export function AdminOrderDetailPanel({ orderId }: AdminOrderDetailPanelProps) {
             <p className="text-sm text-muted-foreground">Not shipped yet</p>
           )}
         </InfoCard>
+
+        <InfoCard icon={<Tag className="h-4 w-4" />} title="Coupon">
+          {order.coupon ? (
+            <div className="grid gap-1.5">
+              <Row label="Code" value={order.coupon.code} />
+              <Row label="Discount" value={getCouponDiscountDisplay(order.coupon)} />
+              <Row label="Min. Order" value={formatPaise(order.coupon.minOrderPaise)} />
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">No coupon applied</p>
+          )}
+        </InfoCard>
       </div>
 
       {/* Order totals */}
@@ -282,4 +294,17 @@ function TotalItem({
       </span>
     </div>
   );
+}
+
+function getCouponDiscountDisplay(coupon: {
+  type: string;
+  value: number;
+}): string {
+  if (coupon.type === "PERCENTAGE_OFF") {
+    return `${coupon.value}%`;
+  }
+  if (coupon.type === "FREE_SHIPPING") {
+    return "Free Shipping";
+  }
+  return formatPaise(coupon.value);
 }

@@ -503,7 +503,10 @@ model ProductVariant {
   attributes     Json?
   price          Int
   compareAtPrice Int?
-  weight         Int?
+  weight          Int?
+  packageLengthCm Int?
+  packageWidthCm  Int?
+  packageHeightCm Int?
   hsnCode        String?
   gstRatePercent Int         @default(0)
   isActive       Boolean     @default(true)
@@ -1016,6 +1019,7 @@ model StoreSettings {
   primaryNotificationChannels Json?
   smsTemplates              Json?
   defaultLowStockThreshold  Int      @default(5)
+  boxPresets                Json?
   sellerLegalName           String?
   sellerAddress             String?
   sellerState               String?

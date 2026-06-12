@@ -8,11 +8,13 @@ import { routeRateLimitProfiles } from '@common/rate-limit/rate-limit-policies';
 import { loadShedGuard } from '@common/reliability/load-shed.guard';
 import {
   getCodSettingsSchema,
+  getBoxPresetsSchema,
   getInventorySettingsSchema,
   getNotificationSettingsSchema,
   getPublicStoreConfigSchema,
   getShippingSettingsSchema,
   getStoreProfileSchema,
+  updateBoxPresetsSchema,
   updateCodSettingsSchema,
   updateInventorySettingsSchema,
   updateNotificationSettingsSchema,
@@ -156,5 +158,25 @@ export async function registerSettingsRoutes(fastify: FastifyInstance): Promise<
       config: { rateLimit: routeRateLimitProfiles.adminWrite }
     },
     async (request) => settingsService.updateCodSettings(request.body as never)
+  );
+
+  fastify.get(
+    '/api/v1/admin/settings/box-presets',
+    {
+      schema: getBoxPresetsSchema,
+      preHandler: [...adminGuard, adminPermissionGuard('settings:read')],
+      config: { rateLimit: routeRateLimitProfiles.adminRead }
+    },
+    async () => settingsService.getBoxPresets()
+  );
+
+  fastify.patch(
+    '/api/v1/admin/settings/box-presets',
+    {
+      schema: updateBoxPresetsSchema,
+      preHandler: [...adminGuard, adminPermissionGuard('settings:write'), loadShedGuard, idempotencyPreHandler],
+      config: { rateLimit: routeRateLimitProfiles.adminWrite }
+    },
+    async (request) => settingsService.updateBoxPresets(request.body as never)
   );
 }

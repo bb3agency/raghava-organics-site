@@ -284,6 +284,15 @@ export interface AdminOrderDetailFull {
   shipBlockReason: string | null;
   shippingMode: string;
   customer: { name: string; email: string | null; phone: string | null };
+  coupon: {
+    id: string;
+    code: string;
+    type: string;
+    value: number;
+    minOrderPaise: number;
+    maxUsesTotal: number | null;
+    usesCount: number;
+  } | null;
   payment: {
     id: string;
     provider: string;

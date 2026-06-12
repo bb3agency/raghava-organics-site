@@ -84,6 +84,15 @@ const productListItemSchema = {
           weight: {
             anyOf: [{ type: 'integer', minimum: 0, maximum: 10000000 }, { type: 'null' }]
           },
+          packageLengthCm: {
+            anyOf: [{ type: 'integer', minimum: 1, maximum: 10000 }, { type: 'null' }]
+          },
+          packageWidthCm: {
+            anyOf: [{ type: 'integer', minimum: 1, maximum: 10000 }, { type: 'null' }]
+          },
+          packageHeightCm: {
+            anyOf: [{ type: 'integer', minimum: 1, maximum: 10000 }, { type: 'null' }]
+          },
           hsnCode: {
             anyOf: [{ type: 'string', pattern: '^[0-9]{1,15}$' }, { type: 'null' }]
           },
@@ -319,6 +328,9 @@ const adminProductInputProperties = {
         price: { type: 'integer', minimum: 0, maximum: 1000000000 },
         compareAtPrice: { type: 'integer', minimum: 0, maximum: 1000000000 },
         weight: { type: 'integer', minimum: 0, maximum: 10000000 },
+        packageLengthCm: { type: 'integer', minimum: 1, maximum: 10000 },
+        packageWidthCm: { type: 'integer', minimum: 1, maximum: 10000 },
+        packageHeightCm: { type: 'integer', minimum: 1, maximum: 10000 },
         quantity: { type: 'integer', minimum: 0, maximum: 1000000000 },
         lowStockThreshold: { type: 'integer', minimum: 0, maximum: 1000000 },
         attributes: {

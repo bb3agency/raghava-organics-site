@@ -38,6 +38,9 @@ export type CreateProductInput = {
     price: number;
     compareAtPrice?: number;
     weight?: number;
+    packageLengthCm?: number;
+    packageWidthCm?: number;
+    packageHeightCm?: number;
     quantity?: number;
     lowStockThreshold?: number;
     attributes?: Record<string, unknown>;
@@ -80,6 +83,9 @@ export type CreateProductVariantInput = {
   price: number;
   compareAtPrice?: number;
   weight?: number;
+  packageLengthCm?: number;
+  packageWidthCm?: number;
+  packageHeightCm?: number;
   quantity?: number;
   lowStockThreshold?: number;
   attributes?: Record<string, unknown>;

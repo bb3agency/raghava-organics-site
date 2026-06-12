@@ -14,6 +14,7 @@ import {
   normalizeIndianShippingPhone,
   resolveShiprocketCustomerEmail
 } from '@common/shipping/shiprocket-payload';
+import { parseBoxPresets, selectBestFitBox } from '@common/shipping/select-box-preset';
 import { sendTechnicalFailureAlert } from '../../src/modules/notifications/notification-failure-alert';
 
 type NotificationsQueue = Pick<Queue, 'add'>;
@@ -273,7 +274,7 @@ export function createShippingWorker(
 
         const settings = await prisma.storeSettings.findUnique({
           where: { singletonKey: 'default' },
-          select: { gstin: true, contactEmail: true }
+          select: { gstin: true, contactEmail: true, boxPresets: true }
         });
 
         const shippingAddress = (order.shippingAddress ?? {}) as {
@@ -306,6 +307,9 @@ export function createShippingWorker(
           select: {
             id: true,
             weight: true,
+            packageLengthCm: true,
+            packageWidthCm: true,
+            packageHeightCm: true,
             hsnCode: true,
             product: {
               select: {
@@ -379,6 +383,17 @@ export function createShippingWorker(
         });
         const primaryHsnCode = shipmentItems[0]?.hsnCode ?? defaultShippingHsn;
 
+        // Box preset selection: sum variant volumes × quantities, pick best-fit box.
+        const totalVolumeCm3 = order.items.reduce((sum, item) => {
+          const v = variantById.get(item.variantId);
+          if (v?.packageLengthCm && v?.packageWidthCm && v?.packageHeightCm) {
+            return sum + v.packageLengthCm * v.packageWidthCm * v.packageHeightCm * item.quantity;
+          }
+          return sum;
+        }, 0);
+        const boxPresets = parseBoxPresets(settings?.boxPresets);
+        const selectedBox = totalVolumeCm3 > 0 ? selectBestFitBox(totalVolumeCm3, boxPresets) : null;
+
         const shipmentInput = {
           orderNumber: order.orderNumber,
           amountRupees: order.total / 100,
@@ -402,7 +417,16 @@ export function createShippingWorker(
             city: shippingAddress.city,
             state: shippingAddress.state
           },
-          ...(order.courierCompanyId != null ? { courierCompanyId: order.courierCompanyId } : {})
+          ...(order.courierCompanyId != null ? { courierCompanyId: order.courierCompanyId } : {}),
+          ...(selectedBox
+            ? {
+                dimensions: {
+                  lengthCm: selectedBox.lengthCm,
+                  breadthCm: selectedBox.widthCm,
+                  heightCm: selectedBox.heightCm
+                }
+              }
+            : {})
         };
 
         // --- Phase 2: external provider call (no DB connection held) ---
