@@ -455,13 +455,14 @@ export default class ShiprocketAdapter implements ShippingProviderAdapter {
 
     const trackingData = payload.tracking_data;
     const activities = trackingData?.shipment_track_activities ?? [];
-    // Prefer the activity-level status string; fall back to the header-level
-    // current_status (Shiprocket puts "Cancelled" / "Delivered" there even when
-    // no matching activity entry exists, e.g. dashboard-triggered cancellations).
+    // Prefer header-level current_status (human-readable: "Shipped", "Delivered",
+    // "Cancelled") because activity-level statuses carry raw courier codes
+    // (e.g. "DTUP-210") that cannot be mapped to internal statuses.
+    // Fall back to activity status only if the header fields are absent.
     const latestStatus =
-      activities[0]?.status ||
       trackingData?.current_status ||
       trackingData?.shipment_track?.[0]?.current_status ||
+      activities[0]?.status ||
       'UNKNOWN';
 
     const events = activities.map((a) => ({
