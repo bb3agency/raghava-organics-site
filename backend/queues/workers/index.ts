@@ -505,6 +505,21 @@ async function bootstrapWorkers(): Promise<void> {
           component: 'shiprocket-token-refresh-schedule'
         });
       });
+
+    // Background shipment status polling: runs every 30 min to catch missed
+    // webhooks (e.g. cancellations triggered from Shiprocket's dashboard).
+    shiprocketRefreshQueue
+      .add(
+        'poll-shipment-statuses',
+        {},
+        {
+          repeat: { every: 30 * 60 * 1000 },
+          jobId: 'poll-shipment-statuses-repeatable'
+        }
+      )
+      .catch((err: unknown) => {
+        logger.warn({ err }, 'Failed to register poll-shipment-statuses repeatable job');
+      });
   }
 
   logger.info('All background workers started successfully and are listening for jobs.');

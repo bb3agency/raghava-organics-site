@@ -84,6 +84,10 @@ type ShiprocketTrackActivity = {
 type ShiprocketTrackResponse = {
   tracking_data?: {
     shipment_status?: number;
+    // Top-level human-readable status string (e.g. "Cancelled", "Delivered")
+    current_status?: string;
+    // shipment_track[0].current_status is an alternative location for the same field
+    shipment_track?: Array<{ current_status?: string; [key: string]: unknown }>;
     shipment_track_activities?: ShiprocketTrackActivity[];
   };
 };
@@ -451,7 +455,14 @@ export default class ShiprocketAdapter implements ShippingProviderAdapter {
 
     const trackingData = payload.tracking_data;
     const activities = trackingData?.shipment_track_activities ?? [];
-    const latestStatus = activities[0]?.status ?? 'UNKNOWN';
+    // Prefer the activity-level status string; fall back to the header-level
+    // current_status (Shiprocket puts "Cancelled" / "Delivered" there even when
+    // no matching activity entry exists, e.g. dashboard-triggered cancellations).
+    const latestStatus =
+      activities[0]?.status ||
+      trackingData?.current_status ||
+      trackingData?.shipment_track?.[0]?.current_status ||
+      'UNKNOWN';
 
     const events = activities.map((a) => ({
       status: a.status ?? 'UNKNOWN',

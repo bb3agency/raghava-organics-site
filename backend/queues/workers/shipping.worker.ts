@@ -566,6 +566,81 @@ export function createShippingWorker(
         return;
       }
 
+      // Background poll: sync non-terminal shipment statuses from the provider.
+      // Runs every 30 min so missed webhooks (e.g. Shiprocket dashboard cancellations)
+      // are picked up automatically without manual "Sync" clicks.
+      if (job.name === 'poll-shipment-statuses') {
+        if (!shippingProvider) return;
+
+        const TERMINAL = ['DELIVERED', 'CANCELLED', 'RTO_DELIVERED'] as const;
+        const activeShipments = await prisma.shipment.findMany({
+          where: {
+            status: { notIn: TERMINAL as unknown as ShipmentStatus[] },
+            awbNumber: { not: null }
+          },
+          include: {
+            order: { select: { id: true, orderNumber: true, status: true } }
+          },
+          take: 50, // Process max 50 per run to avoid long-running jobs
+          orderBy: { updatedAt: 'asc' } // Oldest first so stale ones are prioritised
+        });
+
+        for (const shipment of activeShipments) {
+          if (!shipment.awbNumber) continue;
+          try {
+            const tracking = await shippingProvider.trackShipment(shipment.awbNumber);
+            const nextShipmentStatus = mapShipmentWebhookStatus(tracking.status);
+
+            if (!nextShipmentStatus || nextShipmentStatus === shipment.status) continue;
+
+            const nextOrderStatus = mapShipmentStatusToOrderStatus(nextShipmentStatus);
+
+            await prisma.$transaction(async (tx) => {
+              await tx.shipment.update({
+                where: { id: shipment.id },
+                data: { status: nextShipmentStatus }
+              });
+
+              if (tracking.events.length > 0) {
+                await tx.shipmentEvent.createMany({
+                  data: tracking.events.map((event) => ({
+                    shipmentId: shipment.id,
+                    status: event.status,
+                    description: event.description,
+                    location: event.location ?? null,
+                    occurredAt: new Date(event.occurredAt)
+                  })),
+                  skipDuplicates: true
+                });
+              }
+
+              if (
+                nextOrderStatus &&
+                shipment.order.status !== nextOrderStatus &&
+                canTransitionOrder(shipment.order.status, nextOrderStatus)
+              ) {
+                await tx.order.update({
+                  where: { id: shipment.order.id },
+                  data: { status: nextOrderStatus }
+                });
+                await tx.orderStatusHistory.create({
+                  data: {
+                    orderId: shipment.order.id,
+                    fromStatus: shipment.order.status,
+                    toStatus: nextOrderStatus,
+                    triggeredBy: 'SHIPPING_WEBHOOK',
+                    note: `Auto-poll sync: provider reports ${tracking.status}`
+                  }
+                });
+              }
+            });
+          } catch {
+            // Swallow per-shipment errors — one bad AWB should not abort the rest.
+          }
+        }
+        return;
+      }
+
       if (job.name !== 'update-shipment-status' && job.name !== 'shipment-webhook') {
         return;
       }
