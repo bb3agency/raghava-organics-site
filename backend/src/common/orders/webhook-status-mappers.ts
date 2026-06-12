@@ -84,19 +84,28 @@ export function mapShipmentWebhookStatus(status: string): ShipmentStatus | null 
   if (normalized === 'BOOKED' || normalized === 'MANIFESTED' || normalized === 'MANIFEST_GENERATED') {
     return SHIPMENT_STATUS.BOOKED;
   }
-  if (normalized === 'SHIPPED' || normalized === 'DISPATCHED') return SHIPMENT_STATUS.IN_TRANSIT;
-  if (normalized === 'PICKED_UP' || normalized === 'PICKUP_SCHEDULED') return SHIPMENT_STATUS.PICKED_UP;
-  if (normalized === 'IN_TRANSIT') return SHIPMENT_STATUS.IN_TRANSIT;
+  if (normalized === 'SHIPPED' || normalized === 'DISPATCHED' || normalized === 'SHIPMENT_DISPATCHED') return SHIPMENT_STATUS.IN_TRANSIT;
+  if (
+    normalized === 'PICKED_UP' ||
+    normalized === 'PICKUP_SCHEDULED' ||
+    normalized === 'PICKUP_GENERATED' ||
+    normalized === 'PICKUP_QUEUED' ||
+    normalized === 'PICKUP_COMPLETE'
+  ) return SHIPMENT_STATUS.PICKED_UP;
+  if (normalized === 'IN_TRANSIT' || normalized === 'REACHED_AT_DESTINATION_HUB') return SHIPMENT_STATUS.IN_TRANSIT;
   if (normalized === 'OUT_FOR_DELIVERY') return SHIPMENT_STATUS.OUT_FOR_DELIVERY;
-  if (normalized === 'DELIVERED') return SHIPMENT_STATUS.DELIVERED;
-  if (normalized === 'FAILED_DELIVERY' || normalized === 'UNDELIVERED') return SHIPMENT_STATUS.FAILED_DELIVERY;
-  if (normalized === 'RTO_INITIATED' || normalized === 'RTO-INITIATED') return SHIPMENT_STATUS.RTO_INITIATED;
-  if (normalized === 'RTO_DELIVERED' || normalized === 'RTO-DELIVERED') return SHIPMENT_STATUS.RTO_DELIVERED;
+  if (normalized === 'DELIVERED' || normalized === 'SHIPMENT_DELIVERED') return SHIPMENT_STATUS.DELIVERED;
+  if (normalized === 'FAILED_DELIVERY' || normalized === 'UNDELIVERED' || normalized === 'DELIVERY_FAILED') return SHIPMENT_STATUS.FAILED_DELIVERY;
+  if (normalized === 'RTO_INITIATED' || normalized === 'RTO-INITIATED' || normalized === 'RETURN_INITIATED' || normalized === 'RTO_IN_TRANSIT') return SHIPMENT_STATUS.RTO_INITIATED;
+  if (normalized === 'RTO_DELIVERED' || normalized === 'RTO-DELIVERED' || normalized === 'RETURN_DELIVERED') return SHIPMENT_STATUS.RTO_DELIVERED;
   if (
     normalized === 'CANCELLED' ||
     normalized === 'CANCELED' ||
     normalized === 'CANCELLATION_REQUESTED' ||
     normalized === 'AWB_CANCELLATION_REQUESTED' ||
+    normalized === 'SHIPMENT_CANCELLED' ||
+    normalized === 'SHIPMENT_CANCELED' ||
+    normalized === 'CANCEL' ||
     normalized === 'PICKUP_CANCELLED' ||
     normalized === 'PICKUP_CANCELED' ||
     normalized === 'PICKUP_ERROR'
