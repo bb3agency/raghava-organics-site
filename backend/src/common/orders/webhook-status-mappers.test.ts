@@ -50,6 +50,19 @@ describe('webhook status mappers', () => {
     expect(mapShipmentWebhookStatus('Pickup Error')).toBe('CANCELLED');
   });
 
+  it('maps Delhivery StatusType short codes', () => {
+    expect(mapShipmentWebhookStatus('BO')).toBe('BOOKED');
+    expect(mapShipmentWebhookStatus('PU')).toBe('PICKED_UP');
+    expect(mapShipmentWebhookStatus('IT')).toBe('IN_TRANSIT');
+    expect(mapShipmentWebhookStatus('OFD')).toBe('OUT_FOR_DELIVERY');
+    expect(mapShipmentWebhookStatus('DL')).toBe('DELIVERED');
+    expect(mapShipmentWebhookStatus('NDR')).toBe('FAILED_DELIVERY');
+    expect(mapShipmentWebhookStatus('RTO')).toBe('RTO_INITIATED');
+    expect(mapShipmentWebhookStatus('RTD')).toBe('RTO_DELIVERED');
+    expect(mapShipmentWebhookStatus('EXP')).toBe('CANCELLED');
+    expect(mapShipmentWebhookStatus('REV')).toBe('IN_TRANSIT');
+  });
+
   it('maps shipment status to order status only for meaningful milestones', () => {
     expect(mapShipmentStatusToOrderStatus('OUT_FOR_DELIVERY')).toBe('OUT_FOR_DELIVERY');
     expect(mapShipmentStatusToOrderStatus('DELIVERED')).toBe('DELIVERED');

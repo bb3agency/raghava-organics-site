@@ -431,111 +431,70 @@ export function CheckoutForm() {
     }
   });
 
-  return (
-    <form onSubmit={submit} className="grid gap-6 rounded-[20px] bg-white p-4 shadow-sm sm:p-6 lg:p-8">
-      <h2 className="font-heading text-xl font-bold text-[#23403d]">Shipping Details</h2>
+  const inputCls = "h-11 w-full rounded-xl border border-[#e8e4e0] bg-[#faf8f5] px-4 text-sm font-medium text-[#23403d] placeholder:text-[#bbb] transition-colors focus:border-[#23403d] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#23403d]/10 sm:h-12";
+  const labelCls = "block text-xs font-bold uppercase tracking-wide text-[#555]";
+  const fieldCls = "grid gap-1.5";
 
-      {/* ── Saved Addresses ───────────────────────────────────────────── */}
-      {savedAddresses.length > 0 && (
-        <div className="grid gap-2">
-          <p className="flex items-center gap-1.5 text-sm font-bold text-[#767676]">
-            <MapPin className="size-4" aria-hidden /> Saved addresses
-          </p>
-          <div className="flex flex-wrap gap-2">
-            {savedAddresses.map((addr) => (
-              <button
-                key={addr.id}
-                type="button"
-                onClick={() => selectSavedAddress(addr)}
-                className={`rounded-full border px-3 py-1.5 text-xs font-medium transition-colors text-left ${
-                  selectedAddressId === addr.id
-                    ? "border-[#23403d] bg-[#23403d] text-white"
-                    : "border-[#efe8e4] bg-[#faf3ef] text-[#23403d] hover:border-[#23403d]"
-                }`}
-              >
-                {addr.fullName} — {addr.line1}, {addr.city}
-                {addr.isDefault ? " (default)" : ""}
-              </button>
-            ))}
-          </div>
-          <p className="text-xs text-[#767676]">
-            Manage addresses in{" "}
-            <Link href="/settings" className="font-bold text-[#ec6e55] underline">
-              account settings
-            </Link>
-            .
-          </p>
-        </div>
-      )}
+  return (
+    <form onSubmit={submit} className="flex flex-col gap-5">
 
       {/* ── Cart Item Cards ───────────────────────────────────────────── */}
       {cartItems.length > 0 && (
-        <div className="rounded-[16px] border border-[#efe8e4] bg-[#faf3ef] overflow-hidden">
-          <div className="flex items-center gap-2 border-b border-[#efe8e4] bg-white px-4 py-3">
+        <div className="overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-black/[0.04]">
+          <div className="flex items-center gap-2 border-b border-[#f0ece8] bg-[#faf8f5] px-5 py-3.5">
             <ShoppingBag className="size-4 text-[#23403d]" aria-hidden />
             <span className="text-sm font-bold text-[#23403d]">
               Your items ({cartItems.length})
             </span>
           </div>
 
-          <div className="divide-y divide-[#efe8e4]">
+          <div className="divide-y divide-[#f0ece8]">
             {cartItems.map((item) => (
-                <div key={item.id} className="flex items-center gap-3 px-4 py-3">
-                  {/* Thumbnail */}
-                  <div className="relative size-12 shrink-0 overflow-hidden rounded-[8px] bg-white shadow-sm">
-                    <Image
-                      src={getCartLineImageUrl(item)}
-                      alt={getCartLineImageAlt(item)}
-                      fill
-                      className="object-contain p-1.5"
-                      sizes="48px"
-                    />
-                    {/* Quantity badge */}
-                    <span className="absolute -right-1.5 -top-1.5 flex size-5 items-center justify-center rounded-full bg-[#23403d] text-[10px] font-bold text-white">
-                      {item.quantity}
-                    </span>
-                  </div>
-
-                  {/* Product name + short description */}
-                  <div className="min-w-0 flex-1">
-                    <CartLineProductDetails
-                      item={item}
-                      nameClassName="truncate text-xs font-bold text-[#23403d] sm:text-sm"
-                      descriptionClassName="text-[10px] text-[#767676] line-clamp-2"
-                    />
-                  </div>
-
-                  {/* Line total */}
-                  <span className="shrink-0 text-sm font-bold text-[#ec6e55]">
-                    {formatPrice(item.priceSnapshot * item.quantity)}
+              <div key={item.id} className="flex items-center gap-3 px-5 py-3.5">
+                <div className="relative size-14 shrink-0 overflow-hidden rounded-xl bg-[#faf8f5]">
+                  <Image
+                    src={getCartLineImageUrl(item)}
+                    alt={getCartLineImageAlt(item)}
+                    fill
+                    className="object-cover"
+                    sizes="56px"
+                  />
+                  <span className="absolute -right-1 -top-1 flex size-5 items-center justify-center rounded-full bg-[#23403d] text-[10px] font-bold text-white">
+                    {item.quantity}
                   </span>
                 </div>
+                <div className="min-w-0 flex-1">
+                  <CartLineProductDetails
+                    item={item}
+                    nameClassName="truncate text-xs font-bold text-[#23403d] sm:text-sm"
+                    descriptionClassName="text-[10px] text-[#999] line-clamp-1"
+                  />
+                </div>
+                <span className="shrink-0 text-sm font-extrabold text-[#ec6e55]">
+                  {formatPrice(item.priceSnapshot * item.quantity)}
+                </span>
+              </div>
             ))}
           </div>
 
-          {/* Mini totals */}
-          <div className="border-t border-[#efe8e4] bg-white px-4 py-3 space-y-1.5">
-            <div className="flex justify-between text-xs text-[#767676]">
+          <div className="border-t border-[#f0ece8] bg-[#faf8f5] px-5 py-3 space-y-1.5">
+            <div className="flex justify-between text-xs text-[#999]">
               <span>Subtotal</span>
-              <span className="font-medium">{formatPrice(cartSubtotal)}</span>
+              <span className="font-semibold text-[#23403d]">{formatPrice(cartSubtotal)}</span>
             </div>
             {cartDiscount > 0 && (
-              <div className="flex items-center justify-between text-xs text-[#00aa63]">
-                <span className="flex items-center gap-1">
-                  <Tag className="size-3" aria-hidden /> Discount
-                </span>
+              <div className="flex justify-between text-xs text-[#00aa63]">
+                <span className="flex items-center gap-1"><Tag className="size-3" aria-hidden /> Discount</span>
                 <span className="font-bold">−{formatPrice(cartDiscount)}</span>
               </div>
             )}
             {freeShippingCouponApplied && cartDiscount === 0 && (
-              <div className="flex items-center justify-between text-xs text-[#00aa63]">
-                <span className="flex items-center gap-1">
-                  <Tag className="size-3" aria-hidden /> Coupon
-                </span>
+              <div className="flex justify-between text-xs text-[#00aa63]">
+                <span className="flex items-center gap-1"><Tag className="size-3" aria-hidden /> Coupon</span>
                 <span className="font-bold">Free shipping</span>
               </div>
             )}
-            <div className="flex justify-between border-t border-[#efe8e4] pt-1.5 text-sm font-bold text-[#23403d]">
+            <div className="flex justify-between border-t border-[#e8e4e0] pt-1.5 text-sm font-bold text-[#23403d]">
               <span>Total</span>
               <span>{formatPrice(cartPayableTotal)}</span>
             </div>
@@ -545,258 +504,275 @@ export function CheckoutForm() {
 
       {/* ── Alerts ───────────────────────────────────────────────────── */}
       {!configAvailable ? (
-        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+        <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-500" aria-hidden />
           Store settings are temporarily unavailable. Please refresh the page before placing an order.
         </div>
       ) : null}
       {belowMinOrder ? (
-        <div className="flex items-start gap-2 rounded-[12px] border border-amber-200 bg-amber-50 px-3 py-2.5">
-          <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-600" aria-hidden />
-          <p className="text-xs font-bold text-amber-800">
+        <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+          <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-500" aria-hidden />
+          <p className="text-xs font-medium text-amber-800">
             Add {formatPrice(effectiveMinOrderPaise - cartSubtotal)} more to reach the{" "}
             {formatPrice(effectiveMinOrderPaise)} minimum order value.
           </p>
         </div>
       ) : null}
 
-      {/* ── Address Fields ────────────────────────────────────────────── */}
-      <div className="grid gap-4 md:grid-cols-2">
-        <div className="grid gap-1.5">
-          <label className="text-sm font-bold text-[#23403d]" htmlFor="fullName">Full Name</label>
-          <input
-            id="fullName"
-            className="h-11 w-full rounded-full border border-[#efe8e4] bg-[#faf3ef] px-4 text-sm font-medium text-[#23403d] placeholder:text-[#767676] focus:border-[#23403d] focus:outline-none focus:ring-1 focus:ring-[#23403d] sm:h-12"
-            placeholder="John Doe"
-            {...registerAddressField("fullName")}
-          />
-          {form.formState.errors.fullName && (
-            <p className="text-xs text-red-600">{form.formState.errors.fullName.message}</p>
+      {/* ── Shipping Details ─────────────────────────────────────────── */}
+      <div className="overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-black/[0.04]">
+        <div className="border-b border-[#f0ece8] bg-[#faf8f5] px-5 py-3.5">
+          <h2 className="flex items-center gap-2 text-sm font-bold text-[#23403d]">
+            <MapPin className="size-4 text-[#ec6e55]" aria-hidden />
+            Shipping Details
+          </h2>
+        </div>
+
+        <div className="grid gap-4 p-5">
+          {/* Saved Addresses */}
+          {savedAddresses.length > 0 && (
+            <div className="grid gap-2">
+              <p className="text-xs font-bold uppercase tracking-wide text-[#999]">Saved addresses</p>
+              <div className="flex flex-wrap gap-2">
+                {savedAddresses.map((addr) => (
+                  <button
+                    key={addr.id}
+                    type="button"
+                    onClick={() => selectSavedAddress(addr)}
+                    className={`rounded-xl border px-3 py-2 text-xs font-medium transition-all text-left ${
+                      selectedAddressId === addr.id
+                        ? "border-[#23403d] bg-[#23403d] text-white shadow-sm"
+                        : "border-[#e8e4e0] bg-[#faf8f5] text-[#23403d] hover:border-[#23403d]"
+                    }`}
+                  >
+                    {addr.fullName} — {addr.line1}, {addr.city}
+                    {addr.isDefault ? " ✓" : ""}
+                  </button>
+                ))}
+              </div>
+              <p className="text-xs text-[#bbb]">
+                Manage in{" "}
+                <Link href="/settings" className="font-bold text-[#ec6e55] underline">
+                  account settings
+                </Link>
+                .
+              </p>
+            </div>
+          )}
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className={fieldCls}>
+              <label className={labelCls} htmlFor="fullName">Full Name</label>
+              <input id="fullName" className={inputCls} placeholder="John Doe" {...registerAddressField("fullName")} />
+              {form.formState.errors.fullName && (
+                <p className="text-xs text-red-500">{form.formState.errors.fullName.message}</p>
+              )}
+            </div>
+            <div className={fieldCls}>
+              <label className={labelCls} htmlFor="phone">Phone</label>
+              <input id="phone" className={inputCls} placeholder="9876543210" {...registerAddressField("phone")} />
+              {form.formState.errors.phone && (
+                <p className="text-xs text-red-500">{form.formState.errors.phone.message}</p>
+              )}
+            </div>
+          </div>
+
+          <div className={fieldCls}>
+            <label className={labelCls} htmlFor="line1">Address line 1</label>
+            <input id="line1" className={inputCls} placeholder="House/Flat No., Street, Locality" {...registerAddressField("line1")} />
+            {form.formState.errors.line1 && (
+              <p className="text-xs text-red-500">{form.formState.errors.line1.message}</p>
+            )}
+          </div>
+
+          <div className={fieldCls}>
+            <label className={labelCls} htmlFor="line2">
+              Address line 2 <span className="font-normal normal-case text-[#bbb]">(optional)</span>
+            </label>
+            <input id="line2" className={inputCls} placeholder="Landmark, apartment, etc." {...registerAddressField("line2")} />
+          </div>
+
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-4">
+            <div className={fieldCls}>
+              <label className={labelCls} htmlFor="city">City</label>
+              <input id="city" className={inputCls} {...registerAddressField("city")} />
+            </div>
+            <div className={fieldCls}>
+              <label className={labelCls} htmlFor="state">State</label>
+              <input id="state" className={inputCls} {...registerAddressField("state")} />
+            </div>
+            <div className={fieldCls}>
+              <label className={labelCls} htmlFor="pincode">Pincode</label>
+              <input id="pincode" className={inputCls} maxLength={6} {...registerAddressField("pincode")} />
+            </div>
+          </div>
+
+          {!selectedAddressId && (
+            <label className="flex cursor-pointer items-center gap-2.5 text-sm font-medium text-[#555]">
+              <input type="checkbox" className="size-4 accent-[#ec6e55]" {...form.register("saveAddress")} />
+              Save this address for future orders
+            </label>
           )}
         </div>
-        <div className="grid gap-1.5">
-          <label className="text-sm font-bold text-[#23403d]" htmlFor="phone">Phone</label>
-          <input
-            id="phone"
-            className="h-12 w-full rounded-full border border-[#efe8e4] bg-[#faf3ef] px-4 text-sm font-medium text-[#23403d] placeholder:text-[#767676] focus:border-[#23403d] focus:outline-none focus:ring-1 focus:ring-[#23403d]"
-            placeholder="9876543210"
-            {...registerAddressField("phone")}
-          />
-          {form.formState.errors.phone && (
-            <p className="text-xs text-red-600">{form.formState.errors.phone.message}</p>
-          )}
-        </div>
       </div>
-
-      <div className="grid gap-1.5">
-        <label className="text-sm font-bold text-[#23403d]" htmlFor="line1">Address line 1</label>
-        <input
-          id="line1"
-          className="h-11 w-full rounded-full border border-[#efe8e4] bg-[#faf3ef] px-4 text-sm font-medium text-[#23403d] placeholder:text-[#767676] focus:border-[#23403d] focus:outline-none focus:ring-1 focus:ring-[#23403d] sm:h-12"
-          placeholder="House/Flat No., Street, Locality"
-          {...registerAddressField("line1")}
-        />
-        {form.formState.errors.line1 && (
-          <p className="text-xs text-red-600">{form.formState.errors.line1.message}</p>
-        )}
-      </div>
-
-      <div className="grid gap-1.5">
-        <label className="text-sm font-bold text-[#23403d]" htmlFor="line2">
-          Address line 2 <span className="font-normal text-[#767676]">(optional)</span>
-        </label>
-        <input
-          id="line2"
-          className="h-11 w-full rounded-full border border-[#efe8e4] bg-[#faf3ef] px-4 text-sm font-medium text-[#23403d] placeholder:text-[#767676] focus:border-[#23403d] focus:outline-none focus:ring-1 focus:ring-[#23403d] sm:h-12"
-          placeholder="Landmark, apartment, etc."
-          {...registerAddressField("line2")}
-        />
-      </div>
-
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-4">
-        <div className="grid gap-1.5">
-          <label className="text-sm font-bold text-[#23403d]" htmlFor="city">City</label>
-          <input
-            id="city"
-            className="h-11 w-full rounded-full border border-[#efe8e4] bg-[#faf3ef] px-4 text-sm font-medium text-[#23403d] placeholder:text-[#767676] focus:border-[#23403d] focus:outline-none focus:ring-1 focus:ring-[#23403d] sm:h-12"
-            {...registerAddressField("city")}
-          />
-        </div>
-        <div className="grid gap-1.5">
-          <label className="text-sm font-bold text-[#23403d]" htmlFor="state">State</label>
-          <input
-            id="state"
-            className="h-11 w-full rounded-full border border-[#efe8e4] bg-[#faf3ef] px-4 text-sm font-medium text-[#23403d] placeholder:text-[#767676] focus:border-[#23403d] focus:outline-none focus:ring-1 focus:ring-[#23403d] sm:h-12"
-            {...registerAddressField("state")}
-          />
-        </div>
-        <div className="grid gap-1.5">
-          <label className="text-sm font-bold text-[#23403d]" htmlFor="pincode">Pincode</label>
-          <input
-            id="pincode"
-            className="h-11 w-full rounded-full border border-[#efe8e4] bg-[#faf3ef] px-4 text-sm font-medium text-[#23403d] placeholder:text-[#767676] focus:border-[#23403d] focus:outline-none focus:ring-1 focus:ring-[#23403d] sm:h-12"
-            maxLength={6}
-            {...registerAddressField("pincode")}
-          />
-        </div>
-      </div>
-
-      {!selectedAddressId && (
-        <label className="flex cursor-pointer items-center gap-2 text-sm font-medium text-[#23403d]">
-          <input
-            type="checkbox"
-            className="size-4 accent-[#ec6e55]"
-            {...form.register("saveAddress")}
-          />
-          Save this address for future orders
-        </label>
-      )}
 
       {/* ── Payment Method ────────────────────────────────────────────── */}
-      <fieldset className="grid gap-3 border-t border-[#efe8e4] pt-5">
-        <legend className="text-lg font-bold text-[#23403d] mb-1">Payment Method</legend>
-        <label className="flex cursor-pointer items-center gap-3 rounded-[12px] border border-[#efe8e4] bg-[#faf3ef] px-4 py-3 text-sm font-bold text-[#23403d] transition-colors has-[:checked]:border-[#23403d] has-[:checked]:bg-white">
-          <input type="radio" value="PREPAID" className="size-4 accent-[#ec6e55]" {...form.register("paymentMode")} />
-          <span>Pay online</span>
-          <span className="ml-auto text-xs font-medium text-[#767676]">Razorpay — UPI, Cards, Wallets</span>
-        </label>
-        {isCodEnabled ? (
-          <label className="flex cursor-pointer items-center gap-3 rounded-[12px] border border-[#efe8e4] bg-[#faf3ef] px-4 py-3 text-sm font-bold text-[#23403d] transition-colors has-[:checked]:border-[#23403d] has-[:checked]:bg-white">
-            <input type="radio" value="COD" className="size-4 accent-[#ec6e55]" {...form.register("paymentMode")} />
-            <span>Cash on Delivery</span>
-            <span className="ml-auto text-xs font-medium text-[#767676]">Pay when delivered</span>
-          </label>
-        ) : (
-          <p className="rounded-[12px] border border-[#efe8e4] bg-[#faf3ef] px-4 py-3 text-xs font-medium text-[#767676]">
-            Cash on Delivery is currently disabled by store settings.
-          </p>
-        )}
-      </fieldset>
+      <div className="overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-black/[0.04]">
+        <div className="border-b border-[#f0ece8] bg-[#faf8f5] px-5 py-3.5">
+          <h2 className="flex items-center gap-2 text-sm font-bold text-[#23403d]">
+            <span className="flex size-5 items-center justify-center rounded-full bg-[#ec6e55] text-[10px] font-extrabold text-white">2</span>
+            Payment Method
+          </h2>
+        </div>
 
-      {/* ── Order Notes ───────────────────────────────────────────────── */}
-      <div className="grid gap-1.5 border-t border-[#efe8e4] pt-5">
-        <label className="text-sm font-bold text-[#23403d]" htmlFor="notes">
-          Order Notes <span className="font-normal text-[#767676]">(optional)</span>
-        </label>
-        <textarea
-          id="notes"
-          className="min-h-20 w-full rounded-[20px] border border-[#efe8e4] bg-[#faf3ef] px-4 py-3 text-sm font-medium text-[#23403d] placeholder:text-[#767676] focus:border-[#23403d] focus:outline-none focus:ring-1 focus:ring-[#23403d]"
-          placeholder="Special delivery instructions, etc."
-          {...form.register("notes")}
-        />
+        <fieldset className="grid gap-3 p-5">
+          <legend className="sr-only">Payment Method</legend>
+          <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-[#e8e4e0] bg-[#faf8f5] px-4 py-3.5 text-sm font-bold text-[#23403d] transition-all has-[:checked]:border-[#23403d] has-[:checked]:bg-white has-[:checked]:shadow-sm">
+            <input type="radio" value="PREPAID" className="size-4 accent-[#ec6e55]" {...form.register("paymentMode")} />
+            <span>Pay Online</span>
+            <span className="ml-auto rounded-full bg-[#eff5ee] px-2 py-0.5 text-[10px] font-bold text-[#23403d]">UPI · Cards · Wallets</span>
+          </label>
+          {isCodEnabled ? (
+            <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-[#e8e4e0] bg-[#faf8f5] px-4 py-3.5 text-sm font-bold text-[#23403d] transition-all has-[:checked]:border-[#23403d] has-[:checked]:bg-white has-[:checked]:shadow-sm">
+              <input type="radio" value="COD" className="size-4 accent-[#ec6e55]" {...form.register("paymentMode")} />
+              <span>Cash on Delivery</span>
+              <span className="ml-auto rounded-full bg-[#eff5ee] px-2 py-0.5 text-[10px] font-bold text-[#23403d]">Pay on arrival</span>
+            </label>
+          ) : (
+            <p className="rounded-xl border border-[#e8e4e0] bg-[#faf8f5] px-4 py-3 text-xs font-medium text-[#bbb]">
+              Cash on Delivery is currently disabled.
+            </p>
+          )}
+        </fieldset>
       </div>
 
-      {/* ── Coupon Section ────────────────────────────────────────────── */}
+      {/* ── Coupon ────────────────────────────────────────────────────── */}
       {couponsEnabled ? (
-        <div className="grid gap-2.5 rounded-[16px] border border-[#e8ddd5] bg-white p-4">
-          <div className="flex items-center gap-2">
-            <Tag className="size-4 text-[#23403d]" aria-hidden />
-            <h3 className="text-sm font-bold text-[#23403d]">Coupon Code</h3>
+        <div className="overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-black/[0.04]">
+          <div className="border-b border-[#f0ece8] bg-[#faf8f5] px-5 py-3.5">
+            <h2 className="flex items-center gap-2 text-sm font-bold text-[#23403d]">
+              <Tag className="size-4 text-[#ec6e55]" aria-hidden />
+              Promo Code
+            </h2>
           </div>
-          {hasAppliedCoupon ? (
-            <div className="flex items-center justify-between rounded-[8px] bg-[#eff5ee] px-3 py-2">
-              <span className="text-sm font-medium text-[#00aa63]">
-                {appliedCouponLabel ?? "Coupon applied"}
-              </span>
-              <button
-                type="button"
-                onClick={() => void handleRemoveCoupon()}
-                disabled={couponLoading}
-                className="text-xs font-semibold text-[#ec6e55] hover:text-[#d95a41] disabled:opacity-60"
-              >
-                Remove
-              </button>
-            </div>
-          ) : (
-            <div className="flex gap-2">
-              <input
-                type="text"
-                placeholder="Enter coupon code"
-                value={couponCode}
-                onChange={(e) => {
-                  setCouponCode(e.target.value.toUpperCase());
-                  setCouponError(null);
-                }}
-                disabled={couponLoading}
-                className="flex-1 rounded-[8px] border border-[#e8ddd5] bg-white px-3 py-2 text-sm font-medium uppercase placeholder-[#999] focus:border-[#23403d] focus:outline-none disabled:opacity-60"
-              />
-              <button
-                type="button"
-                onClick={() => void handleApplyCoupon()}
-                disabled={couponLoading || !couponCode.trim()}
-                className="rounded-[8px] bg-[#23403d] px-4 py-2 text-sm font-bold text-white hover:bg-[#ec6e55] disabled:opacity-60 disabled:cursor-not-allowed"
-              >
-                {couponLoading ? "Applying…" : "Apply"}
-              </button>
-            </div>
-          )}
-          {couponError && (
-            <p className="text-xs font-medium text-[#ec6e55]">{couponError}</p>
-          )}
+          <div className="p-5">
+            {hasAppliedCoupon ? (
+              <div className="flex items-center justify-between rounded-xl bg-[#eff5ee] px-4 py-3">
+                <span className="text-sm font-bold text-[#00aa63]">{appliedCouponLabel ?? "Coupon applied"}</span>
+                <button
+                  type="button"
+                  onClick={() => void handleRemoveCoupon()}
+                  disabled={couponLoading}
+                  className="text-xs font-bold text-[#ec6e55] hover:underline disabled:opacity-60"
+                >
+                  Remove
+                </button>
+              </div>
+            ) : (
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  placeholder="Enter coupon code"
+                  value={couponCode}
+                  onChange={(e) => { setCouponCode(e.target.value.toUpperCase()); setCouponError(null); }}
+                  disabled={couponLoading}
+                  className="flex-1 rounded-xl border border-[#e8e4e0] bg-[#faf8f5] px-4 py-2.5 text-sm font-bold uppercase placeholder:font-normal placeholder:normal-case placeholder:text-[#bbb] focus:border-[#23403d] focus:bg-white focus:outline-none disabled:opacity-60"
+                />
+                <button
+                  type="button"
+                  onClick={() => void handleApplyCoupon()}
+                  disabled={couponLoading || !couponCode.trim()}
+                  className="rounded-xl bg-[#23403d] px-5 py-2.5 text-sm font-bold text-white transition-colors hover:bg-[#ec6e55] disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {couponLoading ? "…" : "Apply"}
+                </button>
+              </div>
+            )}
+            {couponError && <p className="mt-2 text-xs font-medium text-[#ec6e55]">{couponError}</p>}
+          </div>
         </div>
       ) : null}
 
-      {/* ── Order Summary (pre-submit) ─────────────────────────────────── */}
-      <div className="grid gap-2.5 rounded-[16px] border border-[#efe8e4] bg-[#faf3ef] p-4">
-        <div className="flex items-center gap-2 mb-1">
-          <Truck className="size-4 text-[#23403d]" aria-hidden />
-          <h3 className="text-sm font-bold text-[#23403d]">Order total</h3>
+      {/* ── Order Notes ───────────────────────────────────────────────── */}
+      <div className="overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-black/[0.04]">
+        <div className="border-b border-[#f0ece8] bg-[#faf8f5] px-5 py-3.5">
+          <label className="text-sm font-bold text-[#23403d]" htmlFor="notes">
+            Order Notes <span className="font-normal text-[#bbb]">(optional)</span>
+          </label>
         </div>
-        <div className="flex justify-between text-sm text-[#767676]">
-          <span>Subtotal</span>
-          <span className="font-medium">{formatPrice(cartSubtotal)}</span>
+        <div className="p-5">
+          <textarea
+            id="notes"
+            className="min-h-[80px] w-full rounded-xl border border-[#e8e4e0] bg-[#faf8f5] px-4 py-3 text-sm font-medium text-[#23403d] placeholder:text-[#bbb] focus:border-[#23403d] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#23403d]/10"
+            placeholder="Special delivery instructions, preferred delivery time, etc."
+            {...form.register("notes")}
+          />
         </div>
-        {cartDiscount > 0 && (
-          <div className="flex justify-between text-sm text-[#00aa63]">
-            <span>Discount</span>
-            <span className="font-bold">−{formatPrice(cartDiscount)}</span>
+      </div>
+
+      {/* ── Order Summary ─────────────────────────────────────────────── */}
+      <div className="overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-black/[0.04]">
+        <div className="border-b border-[#f0ece8] bg-[#faf8f5] px-5 py-3.5">
+          <h2 className="flex items-center gap-2 text-sm font-bold text-[#23403d]">
+            <Truck className="size-4 text-[#ec6e55]" aria-hidden />
+            Order Total
+          </h2>
+        </div>
+        <div className="grid gap-2.5 p-5 text-sm">
+          <div className="flex justify-between">
+            <span className="text-[#767676]">Subtotal</span>
+            <span className="font-semibold text-[#23403d]">{formatPrice(cartSubtotal)}</span>
           </div>
-        )}
-        {freeShippingCouponApplied && cartDiscount === 0 && (
-          <div className="flex justify-between text-sm text-[#00aa63]">
-            <span>Coupon</span>
-            <span className="font-bold">Free shipping</span>
+          {cartDiscount > 0 && (
+            <div className="flex justify-between text-[#00aa63]">
+              <span>Discount</span>
+              <span className="font-bold">−{formatPrice(cartDiscount)}</span>
+            </div>
+          )}
+          {freeShippingCouponApplied && cartDiscount === 0 && (
+            <div className="flex justify-between text-[#00aa63]">
+              <span>Coupon</span>
+              <span className="font-bold">Free shipping</span>
+            </div>
+          )}
+          <div className="flex items-center justify-between">
+            <span className="text-[#767676]">Shipping</span>
+            <span className={`font-semibold ${shippingQuoteLoading ? "animate-pulse text-[#bbb]" : "text-[#23403d]"}`}>
+              {shippingQuoteLoading
+                ? "Calculating…"
+                : shippingQuoteError
+                  ? "—"
+                  : pincode?.length === 6
+                    ? hasShippingQuote
+                      ? shippingCharge === 0 ? "Free" : formatPrice(shippingCharge)
+                      : "—"
+                    : <span className="text-xs text-[#bbb]">Enter pincode</span>}
+            </span>
           </div>
-        )}
-        <div className="flex justify-between text-sm text-[#767676]">
-          <span>Shipping</span>
-          <span className={shippingQuoteLoading ? "animate-pulse text-[#767676]" : "font-medium text-[#23403d]"}>
-            {shippingQuoteLoading
-              ? "Calculating…"
-              : shippingQuoteError
-                ? "—"
-                : pincode?.length === 6
-                  ? hasShippingQuote
-                    ? shippingCharge === 0
-                      ? "Free"
-                      : formatPrice(shippingCharge)
-                    : "—"
-                  : "Enter pincode"}
-          </span>
+          {shippingQuoteError && (
+            <p className="rounded-xl bg-amber-50 px-3 py-2 text-xs font-medium text-amber-700">{shippingQuoteError}</p>
+          )}
+          {shippingQuote && shippingQuote.estimatedDays > 0 && (
+            <p className="text-xs text-[#999]">
+              Estimated delivery: {shippingQuote.estimatedDays} day{shippingQuote.estimatedDays !== 1 ? "s" : ""}
+            </p>
+          )}
+          <div className="flex items-center justify-between rounded-xl bg-[#faf8f5] px-4 py-3">
+            <span className="font-heading font-bold text-[#23403d]">
+              {hasShippingQuote ? "Estimated total" : "Cart total"}
+            </span>
+            <span className="font-heading text-xl font-extrabold text-[#ec6e55]">{formatPrice(estimatedPayableTotal)}</span>
+          </div>
+          {!hasShippingQuote && pincode?.length !== 6 && (
+            <p className="text-xs text-[#bbb]">Enter a valid pincode to preview shipping cost.</p>
+          )}
         </div>
-        {shippingQuoteError ? (
-          <p className="rounded-[8px] bg-amber-50 px-3 py-2 text-xs font-medium text-amber-700">
-            {shippingQuoteError}
-          </p>
-        ) : null}
-        {shippingQuote && shippingQuote.estimatedDays > 0 ? (
-          <p className="text-xs text-[#767676]">
-            Estimated delivery in {shippingQuote.estimatedDays} day
-            {shippingQuote.estimatedDays === 1 ? "" : "s"}
-          </p>
-        ) : null}
-        <div className="flex justify-between border-t border-[#efe8e4] pt-2.5 text-base font-bold text-[#23403d]">
-          <span>{hasShippingQuote ? "Estimated total" : "Cart total"}</span>
-          <span className="text-[#ec6e55]">{formatPrice(estimatedPayableTotal)}</span>
-        </div>
-        {!hasShippingQuote && pincode?.length !== 6 && (
-          <p className="text-xs text-[#767676]">Enter a valid pincode to preview shipping.</p>
-        )}
       </div>
 
       {/* ── Place Order ───────────────────────────────────────────────── */}
       <button
         type="submit"
-        className="h-14 w-full rounded-full bg-[#23403d] text-sm font-bold text-white shadow-md transition-all hover:-translate-y-0.5 hover:bg-[#ec6e55] hover:shadow-lg disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0"
+        className="h-14 w-full rounded-2xl bg-[#23403d] text-base font-extrabold text-white shadow-md transition-all hover:-translate-y-0.5 hover:bg-[#ec6e55] hover:shadow-xl disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0"
         disabled={submitting || checkoutBlocked}
       >
         {submitting
@@ -805,15 +781,20 @@ export function CheckoutForm() {
             ? "Store settings unavailable"
             : belowMinOrder
               ? "Minimum order not met"
-              : "Place Order"}
+              : paymentMode === "COD"
+                ? "Place Order — Cash on Delivery"
+                : "Place Order — Pay Online"}
       </button>
 
       {error ? (
-        <div className="rounded-[12px] border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">
-          {error}
-          {error.includes("order history") && (
-            <Link href="/orders" className="ml-2 font-bold underline">Go to orders</Link>
-          )}
+        <div className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">
+          <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
+          <span>
+            {error}
+            {error.includes("order history") && (
+              <Link href="/orders" className="ml-2 font-bold underline">Go to orders</Link>
+            )}
+          </span>
         </div>
       ) : null}
     </form>

@@ -112,6 +112,50 @@ describe('normalize-shipping-webhook-payload', () => {
     });
   });
 
+  it('handles Delhivery Push API array payload', () => {
+    const result = normalizeShippingWebhookPayload([
+      {
+        Waybill: '1234567890123',
+        AWB: '1234567890123',
+        Status: 'Delivered',
+        StatusType: 'DL',
+        StatusLocation: 'Bangalore',
+        StatusDateTime: '2026-06-12T14:30:00',
+        ReferenceNo: 'ORDER-123'
+      }
+    ]);
+    expect(result).toMatchObject({
+      awb: '1234567890123',
+      status: 'Delivered',
+      location: 'Bangalore'
+    });
+    expect(result?.occurredAt).toBeDefined();
+  });
+
+  it('handles Delhivery array with StatusType short code as fallback when Status absent', () => {
+    const result = normalizeShippingWebhookPayload([
+      {
+        Waybill: '9999999',
+        StatusType: 'OFD',
+        StatusLocation: 'Mumbai',
+        StatusDateTime: '2026-06-12T09:00:00'
+      }
+    ]);
+    expect(result).toMatchObject({ awb: '9999999', status: 'OFD' });
+  });
+
+  it('returns null for empty Delhivery array', () => {
+    expect(normalizeShippingWebhookPayload([])).toBeNull();
+  });
+
+  it('reads Waybill (capital W) as AWB', () => {
+    const result = normalizeShippingWebhookPayload({
+      Waybill: 'AWBCAP',
+      Status: 'IN_TRANSIT'
+    });
+    expect(result?.awb).toBe('AWBCAP');
+  });
+
   it('readStrictDelhiveryOccurredAt reads only Delhivery occurredAt fields', () => {
     expect(readStrictDelhiveryOccurredAt({ occurredAt: '2026-05-01T10:00:00.000Z' })).toBe(
       '2026-05-01T10:00:00.000Z'

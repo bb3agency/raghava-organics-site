@@ -14,7 +14,7 @@ describe('DelhiveryAdapter', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    const adapter = new DelhiveryAdapter({ apiKey: 'delhivery_key', baseUrl: 'https://track.delhivery.com/api' });
+    const adapter = new DelhiveryAdapter({ apiKey: 'delhivery_key', baseUrl: 'https://track.delhivery.com' });
     const result = await adapter.createShipment({
       orderNumber: 'ORD-2026-00001',
       amountRupees: 499.5,
@@ -38,7 +38,7 @@ describe('DelhiveryAdapter', () => {
     expect(url).toContain('/cmu/create.json');
     expect((init.headers as Record<string, string>).Authorization).toBe('Token delhivery_key');
 
-    const formBody = init.body as FormData;
+    const formBody = init.body as URLSearchParams;
     const rawData = formBody.get('data');
     const format = formBody.get('format');
     expect(format).toBe('json');
@@ -64,7 +64,7 @@ describe('DelhiveryAdapter', () => {
       pin: '560001',
       origin_pin: '110001',
       payment_mode: 'Prepaid',
-      weight: 1200,
+      weight: 1.2,
       seller_gst_tin: '29ABCDE1234F1Z5',
       hsn_code: '1001'
     });
@@ -81,7 +81,7 @@ describe('DelhiveryAdapter', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    const adapter = new DelhiveryAdapter({ apiKey: 'delhivery_key', baseUrl: 'https://track.delhivery.com/api' });
+    const adapter = new DelhiveryAdapter({ apiKey: 'delhivery_key', baseUrl: 'https://track.delhivery.com' });
     await adapter.createShipment({
       orderNumber: 'ORD-2026-00003',
       amountRupees: 100,
@@ -100,7 +100,7 @@ describe('DelhiveryAdapter', () => {
       }
     });
 
-    const formBody = (fetchMock.mock.calls[0] as [string, RequestInit])[1].body as FormData;
+    const formBody = (fetchMock.mock.calls[0] as [string, RequestInit])[1].body as URLSearchParams;
     const parsedData = JSON.parse(String(formBody.get('data'))) as {
       shipments: Array<{ hsn_code: string }>;
     };
@@ -115,7 +115,7 @@ describe('DelhiveryAdapter', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    const adapter = new DelhiveryAdapter({ apiKey: 'delhivery_key', baseUrl: 'https://track.delhivery.com/api' });
+    const adapter = new DelhiveryAdapter({ apiKey: 'delhivery_key', baseUrl: 'https://track.delhivery.com' });
     const result = await adapter.checkServiceability('560001');
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -133,7 +133,7 @@ describe('DelhiveryAdapter', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    const adapter = new DelhiveryAdapter({ apiKey: 'delhivery_key', baseUrl: 'https://track.delhivery.com/api' });
+    const adapter = new DelhiveryAdapter({ apiKey: 'delhivery_key', baseUrl: 'https://track.delhivery.com' });
     const result = await adapter.calculateDeliveryRate({
       destinationPincode: '560001',
       originPincode: '110001',
@@ -160,7 +160,7 @@ describe('DelhiveryAdapter', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    const adapter = new DelhiveryAdapter({ apiKey: 'delhivery_key', baseUrl: 'https://track.delhivery.com/api' });
+    const adapter = new DelhiveryAdapter({ apiKey: 'delhivery_key', baseUrl: 'https://track.delhivery.com' });
     await expect(adapter.checkServiceability('560001')).rejects.toMatchObject({
       statusCode: 502,
       message: 'Delhivery returned invalid JSON'

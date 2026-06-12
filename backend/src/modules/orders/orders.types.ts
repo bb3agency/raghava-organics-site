@@ -40,6 +40,7 @@ export type CreateOrderInput = {
   };
   notes?: string;
   paymentMode?: 'PREPAID' | 'COD';
+  selectedShippingProvider?: 'DELHIVERY' | 'SHIPROCKET';
 };
 
 export type RetryPaymentInput = {
@@ -82,6 +83,7 @@ export type PrepareCheckoutInput = {
     pincode: string;
   };
   notes?: string;
+  selectedShippingProvider?: 'DELHIVERY' | 'SHIPROCKET';
 };
 
 export type ConfirmPrepaidInput = {

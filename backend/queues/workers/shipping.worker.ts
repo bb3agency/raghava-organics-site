@@ -2,7 +2,10 @@ import { Queue, Worker, type ConnectionOptions } from 'bullmq';
 import { OrderStatus, ShippingProvider, ShipmentStatus, type Prisma, PrismaClient as RealPrismaClient } from '@prisma/client';
 import { canTransitionOrder } from '@common/orders/order-state-machine';
 import { mapShipmentStatusToOrderStatus, mapShipmentWebhookStatus } from '@common/orders/webhook-status-mappers';
-import { createShippingProvider } from '@modules/shipping/shipping-provider';
+import {
+  createShippingProvider,
+  createShippingAdapterForProvider
+} from '@modules/shipping/shipping-provider';
 import { featureFlags } from '@config/feature-flags';
 import { resolvePickupPincode } from '@common/shipping/resolve-pickup-pincode';
 import {
@@ -351,7 +354,24 @@ export function createShippingWorker(
           0
         );
 
-        if (!shippingProvider) {
+        // Resolve the provider for this specific order: prefer order.selectedShippingProvider,
+        // fall back to the globally configured SHIPPING_PROVIDER env var.
+        const orderSelectedProvider = (order as Record<string, unknown>)['selectedShippingProvider'] as string | null | undefined;
+        const resolvedProviderForOrder =
+          orderSelectedProvider?.toLowerCase() === 'shiprocket'
+            ? ShippingProvider.SHIPROCKET
+            : orderSelectedProvider?.toLowerCase() === 'delhivery'
+              ? ShippingProvider.DELHIVERY
+              : null;
+
+        const effectiveShippingProvider =
+          resolvedProviderForOrder === ShippingProvider.SHIPROCKET
+            ? (createShippingAdapterForProvider('shiprocket') ?? shippingProvider)
+            : resolvedProviderForOrder === ShippingProvider.DELHIVERY
+              ? (createShippingAdapterForProvider('delhivery') ?? shippingProvider)
+              : shippingProvider;
+
+        if (!effectiveShippingProvider) {
           throw new Error('Shipping provider is not configured');
         }
 
@@ -430,12 +450,13 @@ export function createShippingWorker(
         };
 
         // --- Phase 2: external provider call (no DB connection held) ---
-        const shipment = await shippingProvider.createShipment(shipmentInput);
+        const shipment = await effectiveShippingProvider.createShipment(shipmentInput);
 
         const resolvedProvider =
-          (process.env.SHIPPING_PROVIDER ?? 'delhivery').trim().toLowerCase() === 'shiprocket'
+          resolvedProviderForOrder ??
+          ((process.env.SHIPPING_PROVIDER ?? 'delhivery').trim().toLowerCase() === 'shiprocket'
             ? ShippingProvider.SHIPROCKET
-            : ShippingProvider.DELHIVERY;
+            : ShippingProvider.DELHIVERY);
 
         const shiprocketFields = {
           ...(shipment.shiprocketShipmentId != null

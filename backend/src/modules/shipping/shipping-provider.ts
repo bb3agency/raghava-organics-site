@@ -283,8 +283,26 @@ export function resolveShippingProviderRuntime(runtimeConfig: NodeJS.ProcessEnv 
     };
   }
 
-  const baseUrl = runtimeConfig.DELHIVERY_BASE_URL;
-  const adapter = baseUrl ? new DelhiveryAdapter({ apiKey, baseUrl }) : new DelhiveryAdapter({ apiKey });
+  const baseUrl = runtimeConfig.DELHIVERY_BASE_URL?.trim();
+  const pickupLocationName = runtimeConfig.DELHIVERY_PICKUP_LOCATION?.trim();
+  const pickupPincode = runtimeConfig.DELHIVERY_PICKUP_PINCODE?.trim();
+  const sellerName = runtimeConfig.DELHIVERY_SELLER_NAME?.trim();
+  const sellerAddress = runtimeConfig.DELHIVERY_SELLER_ADDRESS?.trim();
+  const sellerPhone = runtimeConfig.DELHIVERY_SELLER_PHONE?.trim();
+  const sellerCity = runtimeConfig.DELHIVERY_SELLER_CITY?.trim();
+  const sellerState = runtimeConfig.DELHIVERY_SELLER_STATE?.trim();
+
+  const adapter = new DelhiveryAdapter({
+    apiKey,
+    ...(baseUrl ? { baseUrl } : {}),
+    ...(pickupLocationName ? { pickupLocationName } : {}),
+    ...(pickupPincode ? { pickupPincode } : {}),
+    ...(sellerName ? { sellerName } : {}),
+    ...(sellerAddress ? { sellerAddress } : {}),
+    ...(sellerPhone ? { sellerPhone } : {}),
+    ...(sellerCity ? { sellerCity } : {}),
+    ...(sellerState ? { sellerState } : {})
+  });
   return {
     provider: 'delhivery',
     failoverEnabled,
@@ -303,6 +321,54 @@ export function createShippingProvider(runtimeConfig: NodeJS.ProcessEnv = proces
   const runtime = resolveShippingProviderRuntime(runtimeConfig);
   if (runtime.provider === 'noop') {
     return runtime.adapter as ShippingProviderAdapter;
+  }
+  const failureThreshold = Number(runtimeConfig.SHIPPING_CB_FAILURE_THRESHOLD ?? 5);
+  const cooldownMs = Number(runtimeConfig.SHIPPING_CB_COOLDOWN_MS ?? 30_000);
+  return new CircuitBreakerShippingAdapter(runtime.adapter as ShippingProviderAdapter, failureThreshold, cooldownMs);
+}
+
+export type DualShippingRuntime = {
+  delhivery: ShippingProviderRuntime | null;
+  shiprocket: ShippingProviderRuntime | null;
+  isDual: boolean;
+};
+
+export function resolveDualShippingRuntime(runtimeConfig: NodeJS.ProcessEnv = process.env): DualShippingRuntime {
+  const hasDelhivery = Boolean(runtimeConfig.DELHIVERY_API_KEY?.trim());
+  const hasShiprocket =
+    Boolean(runtimeConfig.SHIPROCKET_EMAIL?.trim()) &&
+    Boolean(runtimeConfig.SHIPROCKET_PASSWORD?.trim());
+
+  if (!hasDelhivery && !hasShiprocket) {
+    return { delhivery: null, shiprocket: null, isDual: false };
+  }
+
+  if (hasDelhivery && hasShiprocket) {
+    const delhiveryRuntime = resolveShippingProviderRuntime({ ...runtimeConfig, SHIPPING_PROVIDER: 'delhivery' });
+    const shiprocketRuntime = resolveShippingProviderRuntime({ ...runtimeConfig, SHIPPING_PROVIDER: 'shiprocket' });
+    return {
+      delhivery: delhiveryRuntime.provider === 'unconfigured' ? null : delhiveryRuntime,
+      shiprocket: shiprocketRuntime.provider === 'unconfigured' ? null : shiprocketRuntime,
+      isDual: delhiveryRuntime.provider !== 'unconfigured' && shiprocketRuntime.provider !== 'unconfigured'
+    };
+  }
+
+  const providerKey: 'delhivery' | 'shiprocket' = hasDelhivery ? 'delhivery' : 'shiprocket';
+  const single = resolveShippingProviderRuntime({ ...runtimeConfig, SHIPPING_PROVIDER: providerKey });
+  return {
+    delhivery: hasDelhivery ? single : null,
+    shiprocket: !hasDelhivery ? single : null,
+    isDual: false
+  };
+}
+
+export function createShippingAdapterForProvider(
+  providerKey: 'delhivery' | 'shiprocket',
+  runtimeConfig: NodeJS.ProcessEnv = process.env
+): ShippingProviderAdapter | null {
+  const runtime = resolveShippingProviderRuntime({ ...runtimeConfig, SHIPPING_PROVIDER: providerKey });
+  if (runtime.provider === 'unconfigured' || runtime.provider === 'noop') {
+    return null;
   }
   const failureThreshold = Number(runtimeConfig.SHIPPING_CB_FAILURE_THRESHOLD ?? 5);
   const cooldownMs = Number(runtimeConfig.SHIPPING_CB_COOLDOWN_MS ?? 30_000);

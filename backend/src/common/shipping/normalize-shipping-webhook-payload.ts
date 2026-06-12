@@ -103,7 +103,14 @@ function normalizeOccurredAt(raw: string | null): string | undefined {
 }
 
 function unwrapWebhookBody(raw: unknown): Record<string, unknown> | null {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+  // Delhivery Push API sends an array — extract the first element
+  if (Array.isArray(raw)) {
+    if (raw.length === 0) return null;
+    const first = raw[0];
+    if (!first || typeof first !== 'object' || Array.isArray(first)) return null;
+    return first as Record<string, unknown>;
+  }
+  if (!raw || typeof raw !== 'object') {
     return null;
   }
   const body = raw as Record<string, unknown>;
@@ -131,9 +138,13 @@ export function normalizeShippingWebhookPayload(raw: unknown): NormalizedShippin
   }
 
   const latestScan = readLatestScan(body);
-  const awbRaw = readFirstString(body, ['awb', 'awb_code', 'AWB', 'tracking_number', 'waybill']);
+  // 'Waybill' (capital W) and 'AWB' (uppercase) are used by Delhivery Push API
+  const awbRaw = readFirstString(body, ['awb', 'awb_code', 'AWB', 'Waybill', 'waybill', 'tracking_number']);
+  // 'Status' (capital S) is human-readable Delhivery status; 'StatusType' is the short code (DL, PU, OFD…)
   const status = readFirstString(body, [
     'status',
+    'Status',
+    'StatusType',
     'current_status',
     'shipment_status',
     'currentStatus',
@@ -158,13 +169,15 @@ export function normalizeShippingWebhookPayload(raw: unknown): NormalizedShippin
     (latestScan ? readFirstString(latestScan, ['activity', 'sr-status-label', 'status']) : null) ??
     status;
 
+  // 'StatusLocation' is the Delhivery Push API location field
   const location =
-    readFirstString(body, ['location']) ??
+    readFirstString(body, ['location', 'StatusLocation']) ??
     (latestScan ? readFirstString(latestScan, ['location']) : null) ??
     undefined;
 
+  // 'StatusDateTime' is the Delhivery Push API timestamp field
   const occurredAt = normalizeOccurredAt(
-    readFirstString(body, ['occurredAt', 'occurred_at', 'current_timestamp', 'currentTimestamp']) ??
+    readFirstString(body, ['occurredAt', 'occurred_at', 'StatusDateTime', 'current_timestamp', 'currentTimestamp']) ??
       (latestScan ? readFirstString(latestScan, ['date']) : null)
   );
 

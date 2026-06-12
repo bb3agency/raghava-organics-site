@@ -105,8 +105,24 @@ export const OPS_CONFIG_OVERVIEW_GROUPS: Array<{
       { key: 'SHIPPING_CB_COOLDOWN_MS', mutableViaOps: true, requiresRestart: true },
       { key: 'SHIPPING_WEBHOOK_ALLOWLIST_CIDR', mutableViaOps: true, requiresRestart: true, runtimeSource: 'db-overlay' },
       { key: 'DELHIVERY_API_KEY', mutableViaOps: true, requiresRestart: true },
-      { key: 'DELHIVERY_BASE_URL', mutableViaOps: true, requiresRestart: true },
+      {
+        key: 'DELHIVERY_BASE_URL',
+        mutableViaOps: true,
+        requiresRestart: true,
+        note: 'Override API host. Production: https://track.delhivery.com  Staging: https://staging-express.delhivery.com  (no /api suffix)'
+      },
+      {
+        key: 'DELHIVERY_PICKUP_LOCATION',
+        mutableViaOps: true,
+        requiresRestart: true,
+        note: 'Warehouse/pickup name exactly as registered in Delhivery dashboard (required for shipment creation)'
+      },
       { key: 'DELHIVERY_PICKUP_PINCODE', mutableViaOps: true, requiresRestart: true },
+      { key: 'DELHIVERY_SELLER_NAME', mutableViaOps: true, requiresRestart: true, note: 'Store/seller name used in return address fields' },
+      { key: 'DELHIVERY_SELLER_ADDRESS', mutableViaOps: true, requiresRestart: true, note: 'Seller address line for return address' },
+      { key: 'DELHIVERY_SELLER_CITY', mutableViaOps: true, requiresRestart: true },
+      { key: 'DELHIVERY_SELLER_STATE', mutableViaOps: true, requiresRestart: true },
+      { key: 'DELHIVERY_SELLER_PHONE', mutableViaOps: true, requiresRestart: true },
       { key: 'DELHIVERY_WEBHOOK_TOKEN', mutableViaOps: true, requiresRestart: true, runtimeSource: 'db-overlay' },
       { key: 'DELHIVERY_WEBHOOK_ALLOWLIST_CIDR', mutableViaOps: true, requiresRestart: true, runtimeSource: 'db-overlay' },
       { key: 'DELHIVERY_WEBHOOK_MAX_SKEW_SECONDS', mutableViaOps: true, requiresRestart: true },

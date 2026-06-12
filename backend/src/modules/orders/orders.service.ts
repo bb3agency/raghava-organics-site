@@ -21,7 +21,10 @@ import { canTransitionOrder } from '@common/orders/order-state-machine';
 import { mapShipmentWebhookStatus, mapShipmentStatusToOrderStatus } from '@common/orders/webhook-status-mappers';
 import { CartService } from '@modules/cart/cart.service';
 import { createPaymentProvider } from '@modules/payments/payment-provider';
-import { createShippingProvider } from '@modules/shipping/shipping-provider';
+import {
+  createShippingProvider,
+  createShippingAdapterForProvider
+} from '@modules/shipping/shipping-provider';
 import { createInvoiceStorageProvider } from '@modules/invoices/invoice-storage-provider';
 import {
   sendNotificationFailureAlert,
@@ -483,12 +486,18 @@ export class OrdersService {
       if (!pickupPincode) {
         throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Shipping provider is not configured', 503);
       }
+      const selectedProviderKey = input.selectedShippingProvider?.toLowerCase() as 'delhivery' | 'shiprocket' | undefined;
+      const providerOverride =
+        selectedProviderKey && !usingNoop
+          ? (createShippingAdapterForProvider(selectedProviderKey) ?? undefined)
+          : undefined;
       const shippingQuote = await cartService.computeShippingChargeForCart({
         cart,
         destinationPincode: shippingAddress.pincode,
         originPincode: pickupPincode,
         usingNoop,
-        paymentMode: requestedPaymentMode === 'COD' ? 'COD' : 'PREPAID'
+        paymentMode: requestedPaymentMode === 'COD' ? 'COD' : 'PREPAID',
+        ...(providerOverride ? { provider: providerOverride } : {})
       });
       const shippingCharge = shippingQuote.shippingChargePaise;
       const total = Math.max(subtotal + shippingCharge - discountAmount, 0);
@@ -515,6 +524,9 @@ export class OrdersService {
           userId,
           status: orderStatus,
           ...({ paymentMode: requestedPaymentMode } as Record<string, unknown>),
+          ...(input.selectedShippingProvider
+            ? ({ selectedShippingProvider: input.selectedShippingProvider } as Record<string, unknown>)
+            : {}),
           shippingAddress: {
             fullName: shippingAddress.fullName,
             phone: shippingAddress.phone,
@@ -1168,12 +1180,18 @@ export class OrdersService {
       throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Shipping provider is not configured', 503);
     }
 
+    const selectedProviderKeyForCheckout = input.selectedShippingProvider?.toLowerCase() as 'delhivery' | 'shiprocket' | undefined;
+    const providerOverrideForCheckout =
+      selectedProviderKeyForCheckout && !usingNoop
+        ? (createShippingAdapterForProvider(selectedProviderKeyForCheckout) ?? undefined)
+        : undefined;
     const shippingQuote = await cartService.computeShippingChargeForCart({
       cart,
       destinationPincode: shippingAddress.pincode,
       originPincode: pickupPincode,
       usingNoop,
-      paymentMode: 'PREPAID'
+      paymentMode: 'PREPAID',
+      ...(providerOverrideForCheckout ? { provider: providerOverrideForCheckout } : {})
     });
     const shippingCharge = shippingQuote.shippingChargePaise;
     const total = Math.max(subtotal + shippingCharge - discountAmount, 0);
@@ -1211,6 +1229,7 @@ export class OrdersService {
       total,
       couponId: effectiveCoupon?.id ?? null,
       razorpayOrderId: razorpayOrder.providerOrderId,
+      selectedShippingProvider: input.selectedShippingProvider ?? null,
       items: cart.items.map((item) => ({
         variantId: item.variantId,
         productName: item.variant.product.name,
@@ -1253,6 +1272,7 @@ export class OrdersService {
       total: number;
       couponId: string | null;
       razorpayOrderId: string;
+      selectedShippingProvider?: string | null;
       items: Array<{ variantId: string; productName: string; variantName: string; sku: string; quantity: number; unitPrice: number; totalPrice: number }>;
     };
 
@@ -1309,6 +1329,9 @@ export class OrdersService {
             userId,
             status: OrderStatus.CONFIRMED,
             paymentMode: 'PREPAID',
+            ...(session.selectedShippingProvider
+              ? ({ selectedShippingProvider: session.selectedShippingProvider } as Record<string, unknown>)
+              : {}),
             shippingAddress: {
               fullName: session.shippingAddress.fullName,
               phone: session.shippingAddress.phone,

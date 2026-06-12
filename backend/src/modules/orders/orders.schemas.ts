@@ -800,7 +800,8 @@ export const createOrderSchema = {
         }
       },
       notes: { type: 'string', maxLength: 2000 },
-      paymentMode: { type: 'string', enum: ['PREPAID', 'COD'], maxLength: 10 }
+      paymentMode: { type: 'string', enum: ['PREPAID', 'COD'], maxLength: 10 },
+      selectedShippingProvider: { type: 'string', enum: ['DELHIVERY', 'SHIPROCKET'], maxLength: 20 }
     },
     anyOf: [{ required: ['addressId'] }, { required: ['shippingAddress'] }]
   },
@@ -944,7 +945,8 @@ export const prepareCheckoutSchema = {
           pincode: { type: 'string', minLength: 6, maxLength: 6, pattern: '^[0-9]{6}$' }
         }
       },
-      notes: { type: 'string', maxLength: 2000 }
+      notes: { type: 'string', maxLength: 2000 },
+      selectedShippingProvider: { type: 'string', enum: ['DELHIVERY', 'SHIPROCKET'], maxLength: 20 }
     },
     anyOf: [{ required: ['addressId'] }, { required: ['shippingAddress'] }]
   },

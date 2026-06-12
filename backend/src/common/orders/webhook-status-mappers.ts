@@ -80,7 +80,20 @@ export function mapPaymentEventToStatuses(event: string): {
 
 export function mapShipmentWebhookStatus(status: string): ShipmentStatus | null {
   const normalized = status.trim().toUpperCase().replace(/\s+/g, '_');
-  // Delhivery + Shiprocket shared mappings
+
+  // Delhivery StatusType short codes (used in both webhook Push API and track Pull API)
+  if (normalized === 'BO') return SHIPMENT_STATUS.BOOKED;
+  if (normalized === 'PU') return SHIPMENT_STATUS.PICKED_UP;
+  if (normalized === 'IT') return SHIPMENT_STATUS.IN_TRANSIT;
+  if (normalized === 'OFD') return SHIPMENT_STATUS.OUT_FOR_DELIVERY;
+  if (normalized === 'DL') return SHIPMENT_STATUS.DELIVERED;
+  if (normalized === 'NDR') return SHIPMENT_STATUS.FAILED_DELIVERY;
+  if (normalized === 'RTO') return SHIPMENT_STATUS.RTO_INITIATED;
+  if (normalized === 'RTD') return SHIPMENT_STATUS.RTO_DELIVERED;
+  if (normalized === 'REV') return SHIPMENT_STATUS.IN_TRANSIT; // reverse pickup in transit
+  if (normalized === 'EXP') return SHIPMENT_STATUS.CANCELLED; // shipment expired without pickup
+
+  // Delhivery + Shiprocket shared human-readable mappings
   if (normalized === 'BOOKED' || normalized === 'MANIFESTED' || normalized === 'MANIFEST_GENERATED') {
     return SHIPMENT_STATUS.BOOKED;
   }

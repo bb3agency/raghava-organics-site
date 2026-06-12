@@ -261,6 +261,21 @@ export const deliveryRatesSchema = {
               estimatedDays: { type: 'integer', minimum: 1 }
             }
           }
+        },
+        rates: {
+          type: 'array',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['provider', 'providerDisplayName', 'shippingChargePaise', 'estimatedDays', 'recommended'],
+            properties: {
+              provider: { type: 'string', enum: ['DELHIVERY', 'SHIPROCKET'], maxLength: 20 },
+              providerDisplayName: { type: 'string', maxLength: 50 },
+              shippingChargePaise: { type: 'integer', minimum: 0 },
+              estimatedDays: { type: 'integer', minimum: 1, maximum: 30 },
+              recommended: { type: 'boolean' }
+            }
+          }
         }
       }
     },

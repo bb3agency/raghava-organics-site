@@ -82,42 +82,45 @@ export function ProductCard({
   return (
     <article
       className={cn(
-        "group relative flex h-full flex-col overflow-hidden rounded-2xl border border-[#e8ede7] bg-white shadow-sm transition-all duration-300 hover:-translate-y-0.5 hover:shadow-md",
+        "group relative flex h-full flex-col overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-black/[0.04] transition-all duration-300 hover:-translate-y-1 hover:shadow-xl hover:ring-black/[0.08]",
         className,
       )}
     >
       {/* Image */}
-      <div className="relative">
+      <div className="relative overflow-hidden">
         <Link
           href={`/products/${product.slug}`}
-          className="relative block aspect-square overflow-hidden bg-[#fafafa]"
+          className="relative block aspect-[4/3] overflow-hidden bg-[#f5f0eb]"
+          aria-label={product.name}
         >
           <Image
             src={imageSrc}
             alt={image?.altText ?? product.name}
             fill
             priority={priority}
-            className="object-contain p-4 transition-transform duration-500 group-hover:scale-105"
+            className="object-cover transition-transform duration-700 ease-out group-hover:scale-110"
             sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 25vw"
           />
+          {/* Gradient overlay for bottom readability */}
+          <div className="absolute inset-0 bg-gradient-to-t from-black/10 via-transparent to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100" aria-hidden />
         </Link>
 
         {/* Badges top-left */}
-        <div className="absolute left-2.5 top-2.5 flex flex-wrap gap-1">
+        <div className="absolute left-2.5 top-2.5 flex flex-wrap gap-1 z-10">
           {product.isFeatured ? (
-            <span className="inline-flex items-center gap-0.5 rounded-sm bg-[#ec6e55] px-2 py-0.5 text-[9px] font-extrabold uppercase tracking-wide text-white">
+            <span className="inline-flex items-center gap-0.5 rounded-full bg-[#ec6e55] px-2.5 py-1 text-[9px] font-extrabold uppercase tracking-wide text-white shadow-sm">
               <Sparkles className="size-2.5" aria-hidden />
               Featured
             </span>
           ) : null}
           {hasDiscount && discountPct > 0 ? (
-            <span className="rounded-sm bg-[#d94f3a] px-2 py-0.5 text-[9px] font-extrabold uppercase tracking-wide text-white">
+            <span className="rounded-full bg-[#23403d] px-2.5 py-1 text-[9px] font-extrabold uppercase tracking-wide text-white shadow-sm">
               -{discountPct}%
             </span>
           ) : null}
           {!product.inStock ? (
-            <span className="rounded-sm bg-[#d94f3a] px-2 py-0.5 text-[9px] font-extrabold uppercase tracking-wide text-white">
-              Out of stock
+            <span className="rounded-full bg-black/60 px-2.5 py-1 text-[9px] font-extrabold uppercase tracking-wide text-white backdrop-blur-sm">
+              Sold out
             </span>
           ) : null}
         </div>
@@ -127,7 +130,7 @@ export function ProductCard({
           <button
             type="button"
             className={cn(
-              "absolute right-2.5 top-2.5 flex size-8 items-center justify-center rounded-full border border-[#e8ede7] bg-white/95 text-[#23403d] shadow-sm transition-colors hover:bg-[#ec6e55] hover:text-white",
+              "absolute right-2.5 top-2.5 z-10 flex size-8 items-center justify-center rounded-full bg-white/90 text-[#23403d] shadow-md backdrop-blur-sm transition-all hover:bg-[#ec6e55] hover:text-white hover:scale-110",
               inWishlist && "bg-[#ec6e55] text-white",
               loading && "opacity-60",
             )}
@@ -138,18 +141,23 @@ export function ProductCard({
             <Heart className={cn("size-3.5", inWishlist && "fill-current")} />
           </button>
         ) : null}
-      </div>
 
-      {/* Stock status bar */}
-      <div className="h-1 w-full bg-[#f0f0f0]" aria-hidden>
-        {product.inStock && (
-          <div className="h-full w-full bg-[#ec6e55]" />
-        )}
+        {/* In-stock accent bar */}
+        <div className={cn("absolute bottom-0 left-0 right-0 h-0.5", product.inStock ? "bg-[#ec6e55]" : "bg-[#d1d5db]")} aria-hidden />
       </div>
 
       {/* Content */}
       <div className="flex flex-1 flex-col p-3.5">
-        <Link href={`/products/${product.slug}`} className="mb-1">
+        {product.category.name ? (
+          <Link
+            href={`/categories/${product.category.slug}`}
+            className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-[#ec6e55]/80 transition-colors hover:text-[#ec6e55]"
+          >
+            {product.category.name}
+          </Link>
+        ) : null}
+
+        <Link href={`/products/${product.slug}`} className="mb-1.5">
           <h3 className="line-clamp-2 text-sm font-bold leading-snug text-[#1a2e2c] transition-colors group-hover:text-[#ec6e55]">
             {product.name}
           </h3>
@@ -161,7 +169,7 @@ export function ProductCard({
             {product.description.length > 80 ? "…" : ""}
           </p>
         ) : (
-          <div className="mb-2.5 min-h-[1.5rem]" />
+          <div className="mb-2.5 min-h-[1.25rem]" />
         )}
 
         {/* Variant chips */}
@@ -170,7 +178,7 @@ export function ProductCard({
             {variantLabels.map((label) => (
               <span
                 key={label}
-                className="rounded border border-[#e8ede7] px-1.5 py-0.5 text-[10px] font-semibold text-[#555]"
+                className="rounded-full border border-[#e8ede7] bg-[#faf8f5] px-2 py-0.5 text-[10px] font-semibold text-[#666]"
               >
                 {label}
               </span>
@@ -178,43 +186,33 @@ export function ProductCard({
           </div>
         ) : null}
 
-        {/* Bottom row: category + price + cart */}
-        <div className="mt-auto flex items-end justify-between gap-2 pt-1">
-          <div>
-            {product.category.name ? (
-              <Link
-                href={`/categories/${product.category.slug}`}
-                className="mb-0.5 block text-[10px] font-semibold uppercase tracking-wide text-[#999] transition-colors hover:text-[#ec6e55]"
-              >
-                {product.category.name}
-              </Link>
-            ) : null}
-            <div className="flex items-baseline gap-1.5">
-              {hasDiscount && activeVariant?.compareAtPrice ? (
-                <span className="text-[11px] text-[#aaa] line-through">
-                  {formatPrice(activeVariant.compareAtPrice)}
-                </span>
-              ) : null}
-              <span className="text-sm font-extrabold text-[#ec6e55]">
-                {formatPrice(activeVariant?.price ?? 0)}
+        {/* Bottom row: price + cart */}
+        <div className="mt-auto flex items-center justify-between gap-2 pt-1">
+          <div className="flex items-baseline gap-1.5">
+            {hasDiscount && activeVariant?.compareAtPrice ? (
+              <span className="text-[11px] text-[#bbb] line-through">
+                {formatPrice(activeVariant.compareAtPrice)}
               </span>
-            </div>
+            ) : null}
+            <span className="text-base font-extrabold text-[#23403d]">
+              {formatPrice(activeVariant?.price ?? 0)}
+            </span>
           </div>
 
           {product.inStock && activeVariant ? (
             <AddToCartButton
               variantId={activeVariant.id}
-              className="flex size-9 shrink-0 items-center justify-center rounded-xl border border-[#e8ede7] bg-white text-[#23403d] shadow-sm transition-all hover:border-[#ec6e55] hover:bg-[#ec6e55] hover:text-white"
-              label=""
-              icon={<ShoppingCart className="size-4" />}
+              className="flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-full bg-[#23403d] px-3 text-[11px] font-bold text-white shadow-sm transition-all hover:bg-[#ec6e55] hover:shadow-md"
+              label="Add"
+              icon={<ShoppingCart className="size-3.5" />}
             />
           ) : (
             <Link
               href={`/products/${product.slug}`}
-              className="flex size-9 shrink-0 items-center justify-center rounded-xl border border-[#e8ede7] bg-[#f7fbf6] text-[#23403d] transition-colors hover:border-[#23403d]"
+              className="flex h-9 shrink-0 items-center justify-center rounded-full border border-[#e8ede7] bg-[#faf8f5] px-3 text-[11px] font-bold text-[#999] transition-colors hover:border-[#23403d] hover:text-[#23403d]"
               aria-label={`View ${product.name}`}
             >
-              <ShoppingCart className="size-4 opacity-40" />
+              View
             </Link>
           )}
         </div>
