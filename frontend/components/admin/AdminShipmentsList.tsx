@@ -37,7 +37,7 @@ import { PieChart, Pie, Cell, Tooltip } from "recharts";
 import { AdminResponsiveContainer } from "@/components/admin/AdminResponsiveContainer";
 
 const PAGE_SIZE = 8;
-const COLORS = ["#10b981", "#f59e0b", "#3b82f6", "#ef4444", "#8b5cf6"];
+const COLORS = ["#10b981", "#f59e0b", "#3b82f6", "#ef4444", "#a1a1aa"];
 
 // ── shared helpers ──────────────────────────────────────────────────────────
 
@@ -297,6 +297,7 @@ export function AdminShipmentsList({
     { name: "In Transit", value: inTransitCount },
     { name: "Pending", value: pendingCount },
     { name: "Failed", value: failedCount },
+    { name: "Cancelled", value: cancelledCount },
   ].filter((d) => d.value > 0);
 
   return (
