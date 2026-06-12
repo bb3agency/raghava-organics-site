@@ -239,15 +239,15 @@ describe('order-processing worker error and retry behavior', () => {
     expect(state.notificationsAdd).toHaveBeenCalledWith(
       'generate-invoice',
       expect.objectContaining({ orderId: 'order_1' }),
-      expect.objectContaining({ jobId: 'generate-invoice:order_1' })
+      expect.objectContaining({ jobId: 'generate-invoice-order_1' })
     );
     expect(state.notificationsAdd).toHaveBeenCalledWith(
       'record-event',
       expect.objectContaining({
-        sessionId: 'order:order_1',
+        sessionId: 'order-order_1',
         eventType: 'PURCHASE'
       }),
-      expect.objectContaining({ jobId: 'analytics:PURCHASE:order:order_1' })
+      expect.objectContaining({ jobId: 'analytics-PURCHASE-order-order_1' })
     );
   });
 
@@ -381,7 +381,7 @@ describe('order-processing worker error and retry behavior', () => {
     expect(state.notificationsAdd).toHaveBeenCalledWith(
       'generate-invoice',
       expect.objectContaining({ orderId: 'order_cod_1' }),
-      expect.objectContaining({ jobId: 'generate-invoice:order_cod_1' })
+      expect.objectContaining({ jobId: 'generate-invoice-order_cod_1' })
     );
   });
 
@@ -600,12 +600,12 @@ describe('order-processing worker error and retry behavior', () => {
         phone: '9999999999',
         template: 'OrderConfirmed'
       }),
-      expect.objectContaining({ jobId: 'notifications:primary:order_1:OrderConfirmed' })
+      expect.objectContaining({ jobId: 'notifications-primary-order_1-OrderConfirmed' })
     );
     expect(state.notificationsAdd).toHaveBeenCalledWith(
       'generate-invoice',
       expect.objectContaining({ orderId: 'order_1' }),
-      expect.objectContaining({ jobId: 'generate-invoice:order_1' })
+      expect.objectContaining({ jobId: 'generate-invoice-order_1' })
     );
   });
 

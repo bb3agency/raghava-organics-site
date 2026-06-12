@@ -158,7 +158,7 @@ describe('reconciliation worker', () => {
         triggeredBy: 'RECONCILIATION'
       }),
       expect.objectContaining({
-        jobId: 'reconcile-process-order-update:order_auto'
+        jobId: 'reconcile-process-order-update-order_auto'
       })
     );
     expect(orderUpdate).not.toHaveBeenCalledWith(
@@ -188,7 +188,7 @@ describe('reconciliation worker', () => {
         triggeredBy: 'RECONCILIATION'
       }),
       expect.objectContaining({
-        jobId: 'reconcile-process-order-update:order_failed_captured'
+        jobId: 'reconcile-process-order-update-order_failed_captured'
       })
     );
   });
