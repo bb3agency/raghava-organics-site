@@ -55,9 +55,9 @@ describe('ShiprocketAdapter', () => {
         ok: true,
         status: 200,
         text: async () => JSON.stringify({
+          awb_assign_status: 1,
           response: {
             data: {
-              awb_assign_status: 1,
               awb_code: 'AWB123456',
               courier_name: 'TestCourier',
               label_url: 'https://label.example/123'
@@ -113,7 +113,7 @@ describe('ShiprocketAdapter', () => {
         ok: true,
         status: 200,
         text: async () => JSON.stringify({
-          response: { data: { awb_assign_status: 1, awb_code: 'AWB777', courier_name: 'TestCourier' } }
+          awb_assign_status: 1, response: { data: { awb_code: 'AWB777', courier_name: 'TestCourier' } }
         })
       });
     vi.stubGlobal('fetch', fetchMock);
@@ -165,7 +165,7 @@ describe('ShiprocketAdapter', () => {
         ok: true,
         status: 200,
         text: async () => JSON.stringify({
-          response: { data: { awb_assign_status: 1, awb_code: 'AWB999', courier_name: 'TestCourier' } }
+          awb_assign_status: 1, response: { data: { awb_code: 'AWB999', courier_name: 'TestCourier' } }
         })
       });
     vi.stubGlobal('fetch', fetchMock);
@@ -213,13 +213,8 @@ describe('ShiprocketAdapter', () => {
         ok: true,
         status: 200,
         text: async () => JSON.stringify({
-          response: {
-            data: {
-              awb_assign_status: 1,
-              awb_code: 'AWB-COD-001',
-              courier_name: 'CODCourier'
-            }
-          }
+          awb_assign_status: 1,
+          response: { data: { awb_code: 'AWB-COD-001', courier_name: 'CODCourier' } }
         })
       });
     vi.stubGlobal('fetch', fetchMock);
@@ -265,7 +260,7 @@ describe('ShiprocketAdapter', () => {
         ok: true,
         status: 200,
         text: async () => JSON.stringify({
-          response: { data: { awb_assign_status: 1, awb_code: 'AWB-BREAKDOWN', courier_name: 'TestCourier' } }
+          awb_assign_status: 1, response: { data: { awb_code: 'AWB-BREAKDOWN', courier_name: 'TestCourier' } }
         })
       });
     vi.stubGlobal('fetch', fetchMock);
@@ -325,7 +320,7 @@ describe('ShiprocketAdapter', () => {
         ok: true,
         status: 200,
         text: async () => JSON.stringify({
-          response: { data: { awb_assign_status: 1, awb_code: 'AWB-DISC', courier_name: 'TestCourier' } }
+          awb_assign_status: 1, response: { data: { awb_code: 'AWB-DISC', courier_name: 'TestCourier' } }
         })
       });
     vi.stubGlobal('fetch', fetchMock);
