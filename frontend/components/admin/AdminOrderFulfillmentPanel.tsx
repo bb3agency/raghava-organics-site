@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useAuthenticatedApi } from "@/hooks/use-authenticated-api";
 import { getBrowserApiBaseUrl } from "@/lib/api-base";
 import { ApiError } from "@/lib/api";
@@ -23,7 +23,7 @@ interface AdminOrderFulfillmentPanelProps {
   hideOrderPicker?: boolean;
 }
 
-function DetailRowItem({ label, value }: { label: string; value: string }) {
+function DetailRowItem({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div>
       <dt className="text-muted-foreground">{label}</dt>
@@ -368,6 +368,29 @@ export function AdminOrderFulfillmentPanel({
     hasShiprocketId && !pickupScheduled && !pickupWasScheduled && detail?.status !== "DELIVERED";
   const canPrintLabel = hasShipment;
   const canShip = detail?.canShipNow === true;
+  const canSync = hasShipment && !["DELIVERED", "CANCELLED"].includes(detail?.shipment?.status ?? "");
+
+  const runSyncStatus = async () => {
+    if (!shipment?.id || busyAction) return;
+    setBusyAction("sync");
+    setError(null);
+    setSuccess(null);
+    try {
+      const result = await api<{ synced: boolean; message: string; shipmentStatus: string; orderStatus: string }>(
+        `/admin/shipments/${shipment.id}/sync`,
+        { method: "POST" }
+      );
+      setSuccess(result.message);
+      if (result.synced) {
+        notifyAdminDataChanged(["orders", "shipments", "dashboard"]);
+        await loadDetail(selectedOrderId!);
+      }
+    } catch (err) {
+      setError(getApiErrorMessageWithHint(err));
+    } finally {
+      setBusyAction(null);
+    }
+  };
 
   return (
     <section className="grid gap-4 rounded-lg border border-border p-4">
@@ -444,7 +467,25 @@ export function AdminOrderFulfillmentPanel({
             }
           />
           <DetailRowItem label="AWB" value={shipment?.awb ?? "Not booked yet"} />
-          <DetailRowItem label="Shipment status" value={shipment?.status ?? "—"} />
+          <DetailRowItem
+            label="Shipment status"
+            value={
+              <span className="flex items-center gap-2">
+                {shipment?.status ?? "—"}
+                {canSync && (
+                  <button
+                    type="button"
+                    onClick={runSyncStatus}
+                    disabled={busyAction !== null}
+                    className="text-xs text-blue-600 hover:underline disabled:opacity-50"
+                    title="Pull latest status from Shiprocket"
+                  >
+                    {busyAction === "sync" ? "Syncing…" : "↻ Sync"}
+                  </button>
+                )}
+              </span>
+            }
+          />
           <DetailRowItem
             label="Pickup scheduled"
             value={

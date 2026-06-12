@@ -18,6 +18,7 @@ import { normalizeShippingWebhookPayload, readStrictDelhiveryOccurredAt } from '
 import type { CheckoutRiskAssessmentPort } from '@common/interfaces/checkout-risk.interface';
 import { PaymentProviderAdapter } from '@common/interfaces/payment-provider.interface';
 import { canTransitionOrder } from '@common/orders/order-state-machine';
+import { mapShipmentWebhookStatus, mapShipmentStatusToOrderStatus } from '@common/orders/webhook-status-mappers';
 import { CartService } from '@modules/cart/cart.service';
 import { createPaymentProvider } from '@modules/payments/payment-provider';
 import { createShippingProvider } from '@modules/shipping/shipping-provider';
@@ -4414,6 +4415,97 @@ export class OrdersService {
       pickupScheduledDate: shipment.pickupScheduledDate?.toISOString() ?? null,
       createdAt: shipment.createdAt.toISOString(),
       updatedAt: shipment.updatedAt.toISOString()
+    };
+  }
+
+  /**
+   * Pull the latest status directly from the shipping provider and update our DB.
+   * Used when a webhook was missed (e.g. configured after a status change already occurred).
+   */
+  async adminSyncShipmentStatus(shipmentId: string) {
+    const shipment = await this.fastify.prisma.shipment.findUnique({
+      where: { id: shipmentId },
+      include: {
+        order: {
+          select: { id: true, orderNumber: true, status: true }
+        }
+      }
+    });
+
+    if (!shipment) {
+      throw new AppError(ERROR_CODES.NOT_FOUND, 'Shipment not found', 404);
+    }
+    if (!shipment.awbNumber) {
+      throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Shipment has no AWB number — cannot sync', 400);
+    }
+
+    const provider = createShippingProvider();
+    if (!provider) {
+      throw new AppError(ERROR_CODES.CONFIG_NOT_READY, 'Shipping provider not configured', 503);
+    }
+    const tracking = await provider.trackShipment(shipment.awbNumber);
+
+    const latestStatus = tracking.status;
+    const nextShipmentStatus = mapShipmentWebhookStatus(latestStatus);
+
+    if (!nextShipmentStatus || nextShipmentStatus === shipment.status) {
+      return {
+        synced: false,
+        message: nextShipmentStatus
+          ? `Status already up to date: ${shipment.status}`
+          : `Provider status "${latestStatus}" has no mapped internal status`,
+        shipmentStatus: shipment.status,
+        orderStatus: shipment.order.status
+      };
+    }
+
+    const nextOrderStatus = mapShipmentStatusToOrderStatus(nextShipmentStatus);
+
+    await this.fastify.prisma.$transaction(async (tx) => {
+      await tx.shipment.update({
+        where: { id: shipment.id },
+        data: { status: nextShipmentStatus }
+      });
+
+      if (tracking.events.length > 0) {
+        await tx.shipmentEvent.createMany({
+          data: tracking.events.map((event) => ({
+            shipmentId: shipment.id,
+            status: event.status,
+            description: event.description,
+            location: event.location ?? null,
+            occurredAt: new Date(event.occurredAt)
+          })),
+          skipDuplicates: false
+        });
+      }
+
+      if (
+        nextOrderStatus &&
+        shipment.order.status !== nextOrderStatus &&
+        canTransitionOrder(shipment.order.status, nextOrderStatus)
+      ) {
+        await tx.order.update({
+          where: { id: shipment.order.id },
+          data: { status: nextOrderStatus }
+        });
+        await tx.orderStatusHistory.create({
+          data: {
+            orderId: shipment.order.id,
+            fromStatus: shipment.order.status,
+            toStatus: nextOrderStatus,
+            triggeredBy: 'SHIPPING_WEBHOOK',
+            note: `Manual sync from ${shipment.provider}: provider reports ${latestStatus}`
+          }
+        });
+      }
+    });
+
+    return {
+      synced: true,
+      message: `Synced: ${shipment.status} → ${nextShipmentStatus}`,
+      shipmentStatus: nextShipmentStatus,
+      orderStatus: nextOrderStatus ?? shipment.order.status
     };
   }
 

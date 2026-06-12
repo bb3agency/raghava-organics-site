@@ -662,6 +662,23 @@ export async function registerOrdersRoutes(fastify: FastifyInstance): Promise<vo
     }
   );
 
+  fastify.post(
+    '/api/v1/admin/shipments/:id/sync',
+    {
+      schema: {
+        params: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] }
+      },
+      preHandler: [...adminGuard, adminPermissionGuard('shipments:read')],
+      config: {
+        rateLimit: routeRateLimitProfiles.adminWrite
+      }
+    },
+    async (request) => {
+      const params = request.params as { id: string };
+      return ordersService.adminSyncShipmentStatus(params.id);
+    }
+  );
+
   fastify.get(
     '/api/v1/admin/payments/:id',
     {
