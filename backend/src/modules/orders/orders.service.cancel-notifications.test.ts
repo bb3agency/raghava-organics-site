@@ -249,7 +249,7 @@ describe('OrdersService cancellation notification enqueue', () => {
         reason: 'Order cancelled and refunded by admin'
       }),
       expect.objectContaining({
-        jobId: 'initiate-razorpay-refund:order_1:full:cancelled'
+        jobId: 'initiate-razorpay-refund-order_1-full-cancelled'
       })
     );
     expect(result).toEqual(
