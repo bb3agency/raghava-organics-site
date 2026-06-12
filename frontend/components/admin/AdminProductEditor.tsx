@@ -1535,7 +1535,7 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
                     value={
                       isCreate
                         ? createVariants[0]?.packageLengthCm || ""
-                        : loadedProduct?.variants?.[0]?.packageLengthCm || ""
+                        : product?.variants?.[0]?.packageLengthCm || ""
                     }
                     onChange={(event) => {
                       updateFirstVariant("packageLengthCm", event.target.value);
@@ -1553,7 +1553,7 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
                     value={
                       isCreate
                         ? createVariants[0]?.packageWidthCm || ""
-                        : loadedProduct?.variants?.[0]?.packageWidthCm || ""
+                        : product?.variants?.[0]?.packageWidthCm || ""
                     }
                     onChange={(event) => {
                       updateFirstVariant("packageWidthCm", event.target.value);
@@ -1571,7 +1571,7 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
                     value={
                       isCreate
                         ? createVariants[0]?.packageHeightCm || ""
-                        : loadedProduct?.variants?.[0]?.packageHeightCm || ""
+                        : product?.variants?.[0]?.packageHeightCm || ""
                     }
                     onChange={(event) => {
                       updateFirstVariant("packageHeightCm", event.target.value);
