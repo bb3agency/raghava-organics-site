@@ -379,6 +379,9 @@ export interface AdminProductVariant {
   price: number;
   compareAtPrice: number | null;
   weight: number | null;
+  packageLengthCm?: number | null;
+  packageWidthCm?: number | null;
+  packageHeightCm?: number | null;
   hsnCode?: string | null;
   gstRatePercent?: number;
   isActive: boolean;
@@ -424,6 +427,10 @@ export interface AdminCreateProductInput {
     name: string;
     price: number;
     compareAtPrice?: number;
+    weight?: number;
+    packageLengthCm?: number;
+    packageWidthCm?: number;
+    packageHeightCm?: number;
     isActive?: boolean;
     quantity?: number;
     lowStockThreshold?: number;
@@ -903,6 +910,17 @@ export interface AdminStoreProfile {
 
 export interface AdminInventorySettings {
   defaultLowStockThreshold: number;
+}
+
+export interface BoxPreset {
+  name: string;
+  lengthCm: number;
+  widthCm: number;
+  heightCm: number;
+}
+
+export interface AdminBoxPresetsSettings {
+  presets: BoxPreset[];
 }
 
 export function buildAdminQuery(

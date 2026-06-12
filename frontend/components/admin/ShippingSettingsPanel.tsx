@@ -9,6 +9,7 @@ import { createIdempotencyKey } from "@/lib/idempotency";
 import type { AdminShippingSettings } from "@/lib/admin-api";
 import { getApiErrorMessage } from "@/lib/error-messages";
 import { Truck, MapPin, IndianRupee, CheckCircle2, AlertTriangle, Loader2 } from "lucide-react";
+import { BoxPresetsPanel } from "@/components/admin/BoxPresetsPanel";
 
 export function ShippingSettingsPanel() {
   const api = useAuthenticatedApi();
@@ -203,6 +204,9 @@ export function ShippingSettingsPanel() {
           </div>
         </form>
       )}
+
+      {/* Box Presets Panel */}
+      <BoxPresetsPanel canWrite={canWrite} />
     </div>
   );
 }

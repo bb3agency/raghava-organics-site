@@ -87,6 +87,9 @@ interface VariantDraft {
   pricePaise: string;
   compareAtPricePaise: string;
   weightGrams: string;
+  packageLengthCm: string;
+  packageWidthCm: string;
+  packageHeightCm: string;
   initialQuantity: string;
   isActive: boolean;
 }
@@ -115,6 +118,9 @@ function emptyVariant(): VariantDraft {
     pricePaise: "",
     compareAtPricePaise: "",
     weightGrams: "",
+    packageLengthCm: "",
+    packageWidthCm: "",
+    packageHeightCm: "",
     initialQuantity: "",
     isActive: true,
   };
@@ -370,12 +376,30 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
               wgStr !== "" && Number.isFinite(Number(wgStr)) && Number(wgStr) > 0
                 ? Math.floor(Number(wgStr))
                 : undefined;
+            const lengthStr = variant.packageLengthCm.trim();
+            const packageLengthCm =
+              lengthStr !== "" && Number.isFinite(Number(lengthStr)) && Number(lengthStr) > 0
+                ? Math.floor(Number(lengthStr))
+                : undefined;
+            const widthStr = variant.packageWidthCm.trim();
+            const packageWidthCm =
+              widthStr !== "" && Number.isFinite(Number(widthStr)) && Number(widthStr) > 0
+                ? Math.floor(Number(widthStr))
+                : undefined;
+            const heightStr = variant.packageHeightCm.trim();
+            const packageHeightCm =
+              heightStr !== "" && Number.isFinite(Number(heightStr)) && Number(heightStr) > 0
+                ? Math.floor(Number(heightStr))
+                : undefined;
             return {
               sku: variant.sku.trim(),
               name: variant.name.trim(),
               price,
               ...(compareAtPrice !== undefined ? { compareAtPrice } : {}),
               ...(weightGrams !== undefined ? { weight: weightGrams } : {}),
+              ...(packageLengthCm !== undefined ? { packageLengthCm } : {}),
+              ...(packageWidthCm !== undefined ? { packageWidthCm } : {}),
+              ...(packageHeightCm !== undefined ? { packageHeightCm } : {}),
               quantity,
               isActive: variant.isActive,
               ...(Number.isFinite(threshold) && threshold >= 0
@@ -624,6 +648,21 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
         wgStr !== "" && Number.isFinite(Number(wgStr)) && Number(wgStr) > 0
           ? Math.floor(Number(wgStr))
           : null;
+      const lengthStr = draft.packageLengthCm.trim();
+      const packageLengthCm =
+        lengthStr !== "" && Number.isFinite(Number(lengthStr)) && Number(lengthStr) > 0
+          ? Math.floor(Number(lengthStr))
+          : null;
+      const widthStr = draft.packageWidthCm.trim();
+      const packageWidthCm =
+        widthStr !== "" && Number.isFinite(Number(widthStr)) && Number(widthStr) > 0
+          ? Math.floor(Number(widthStr))
+          : null;
+      const heightStr = draft.packageHeightCm.trim();
+      const packageHeightCm =
+        heightStr !== "" && Number.isFinite(Number(heightStr)) && Number(heightStr) > 0
+          ? Math.floor(Number(heightStr))
+          : null;
       await api(`/admin/products/${productId}/variants/${variant.id}`, {
         method: "PATCH",
         idempotencyKey: createIdempotencyKey(),
@@ -632,7 +671,10 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
           name: draft.name.trim(),
           price,
           compareAtPrice: compareAtPrice ?? null,
-          weightGrams,
+          weight: weightGrams,
+          packageLengthCm,
+          packageWidthCm,
+          packageHeightCm,
           isActive: draft.isActive,
         }),
       });
@@ -667,6 +709,21 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
         wgStr !== "" && Number.isFinite(Number(wgStr)) && Number(wgStr) > 0
           ? Math.floor(Number(wgStr))
           : undefined;
+      const lengthStr = newVariant.packageLengthCm.trim();
+      const packageLengthCm =
+        lengthStr !== "" && Number.isFinite(Number(lengthStr)) && Number(lengthStr) > 0
+          ? Math.floor(Number(lengthStr))
+          : undefined;
+      const widthStr = newVariant.packageWidthCm.trim();
+      const packageWidthCm =
+        widthStr !== "" && Number.isFinite(Number(widthStr)) && Number(widthStr) > 0
+          ? Math.floor(Number(widthStr))
+          : undefined;
+      const heightStr = newVariant.packageHeightCm.trim();
+      const packageHeightCm =
+        heightStr !== "" && Number.isFinite(Number(heightStr)) && Number(heightStr) > 0
+          ? Math.floor(Number(heightStr))
+          : undefined;
       await api(`/admin/products/${productId}/variants`, {
         method: "POST",
         idempotencyKey: createIdempotencyKey(),
@@ -676,6 +733,9 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
           price,
           ...(compareAtPrice !== undefined ? { compareAtPrice } : {}),
           ...(weightGrams !== undefined ? { weightGrams } : {}),
+          ...(packageLengthCm !== undefined ? { packageLengthCm } : {}),
+          ...(packageWidthCm !== undefined ? { packageWidthCm } : {}),
+          ...(packageHeightCm !== undefined ? { packageHeightCm } : {}),
           isActive: newVariant.isActive,
         }),
       });
@@ -1466,6 +1526,60 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
                   />
                 </label>
                 <label className="grid gap-1.5 text-xs font-bold text-muted-foreground uppercase tracking-wider">
+                  Box Length (cm)
+                  <input
+                    className={`${inputClass} border-border/50 text-foreground`}
+                    type="number"
+                    min="1"
+                    placeholder="15"
+                    value={
+                      isCreate
+                        ? createVariants[0]?.packageLengthCm || ""
+                        : loadedProduct?.variants?.[0]?.packageLengthCm || ""
+                    }
+                    onChange={(event) => {
+                      updateFirstVariant("packageLengthCm", event.target.value);
+                    }}
+                    disabled={!canWrite}
+                  />
+                </label>
+                <label className="grid gap-1.5 text-xs font-bold text-muted-foreground uppercase tracking-wider">
+                  Box Width (cm)
+                  <input
+                    className={`${inputClass} border-border/50 text-foreground`}
+                    type="number"
+                    min="1"
+                    placeholder="15"
+                    value={
+                      isCreate
+                        ? createVariants[0]?.packageWidthCm || ""
+                        : loadedProduct?.variants?.[0]?.packageWidthCm || ""
+                    }
+                    onChange={(event) => {
+                      updateFirstVariant("packageWidthCm", event.target.value);
+                    }}
+                    disabled={!canWrite}
+                  />
+                </label>
+                <label className="grid gap-1.5 text-xs font-bold text-muted-foreground uppercase tracking-wider">
+                  Box Height (cm)
+                  <input
+                    className={`${inputClass} border-border/50 text-foreground`}
+                    type="number"
+                    min="1"
+                    placeholder="10"
+                    value={
+                      isCreate
+                        ? createVariants[0]?.packageHeightCm || ""
+                        : loadedProduct?.variants?.[0]?.packageHeightCm || ""
+                    }
+                    onChange={(event) => {
+                      updateFirstVariant("packageHeightCm", event.target.value);
+                    }}
+                    disabled={!canWrite}
+                  />
+                </label>
+                <label className="grid gap-1.5 text-xs font-bold text-muted-foreground uppercase tracking-wider">
                   Stock Quantity <span className="text-rose-500">*</span>
                   <input
                     className={`${inputClass} border-border/50 text-foreground`}
@@ -1790,6 +1904,45 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
                         setNewVariant({
                           ...newVariant,
                           weightGrams: event.target.value,
+                        })
+                      }
+                    />
+                    <input
+                      className={`${inputClass} border-border/50 text-foreground`}
+                      type="number"
+                      min="1"
+                      placeholder="Box Length (cm)"
+                      value={newVariant.packageLengthCm}
+                      onChange={(event) =>
+                        setNewVariant({
+                          ...newVariant,
+                          packageLengthCm: event.target.value,
+                        })
+                      }
+                    />
+                    <input
+                      className={`${inputClass} border-border/50 text-foreground`}
+                      type="number"
+                      min="1"
+                      placeholder="Box Width (cm)"
+                      value={newVariant.packageWidthCm}
+                      onChange={(event) =>
+                        setNewVariant({
+                          ...newVariant,
+                          packageWidthCm: event.target.value,
+                        })
+                      }
+                    />
+                    <input
+                      className={`${inputClass} border-border/50 text-foreground`}
+                      type="number"
+                      min="1"
+                      placeholder="Box Height (cm)"
+                      value={newVariant.packageHeightCm}
+                      onChange={(event) =>
+                        setNewVariant({
+                          ...newVariant,
+                          packageHeightCm: event.target.value,
                         })
                       }
                     />

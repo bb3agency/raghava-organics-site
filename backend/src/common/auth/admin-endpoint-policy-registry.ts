@@ -95,6 +95,8 @@ export const ADMIN_ENDPOINT_POLICY_REGISTRY: readonly EndpointPolicy[] = [
   { method: 'PATCH', path: '/api/v1/admin/settings/inventory', permission: 'settings:write', layer: 'A' },
   { method: 'GET', path: '/api/v1/admin/settings/cod', permission: 'settings:read', layer: 'A' },
   { method: 'PATCH', path: '/api/v1/admin/settings/cod', permission: 'settings:write', layer: 'A' },
+  { method: 'GET', path: '/api/v1/admin/settings/box-presets', permission: 'settings:read', layer: 'A' },
+  { method: 'PATCH', path: '/api/v1/admin/settings/box-presets', permission: 'settings:write', layer: 'A' },
   { method: 'POST', path: '/api/v1/admin/inventory/bulk-update', permission: 'inventory:write', layer: 'A' },
   { method: 'DELETE', path: '/api/v1/admin/products/:id/variants/:variantId', permission: 'products:write', layer: 'A' },
   { method: 'GET', path: '/api/v1/admin/shipments', permission: 'shipments:read', layer: 'A' },
