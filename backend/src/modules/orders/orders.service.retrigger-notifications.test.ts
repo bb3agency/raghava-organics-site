@@ -39,7 +39,7 @@ describe('OrdersService admin retrigger notification', () => {
         data: { orderId: 'order_1' }
       }),
       expect.objectContaining({
-        jobId: 'notifications:email:order_1:OrderConfirmed'
+        jobId: 'notifications-email-order_1-OrderConfirmed'
       })
     );
     expect(addNotification).toHaveBeenNthCalledWith(
@@ -51,7 +51,7 @@ describe('OrdersService admin retrigger notification', () => {
         data: { orderId: 'order_1' }
       }),
       expect.objectContaining({
-        jobId: 'notifications:sms:order_1:OrderConfirmed'
+        jobId: 'notifications-sms-order_1-OrderConfirmed'
       })
     );
     expect(result).toEqual({

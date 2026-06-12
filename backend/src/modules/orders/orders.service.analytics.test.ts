@@ -60,7 +60,7 @@ describe('OrdersService analytics producers', () => {
         userId: 'user_1'
       }),
       expect.objectContaining({
-        jobId: 'analytics:CHECKOUT_STARTED:order:order_1'
+        jobId: 'analytics-CHECKOUT_STARTED-order-order_1'
       })
     );
     expect(analyticsAdd).toHaveBeenCalledWith(
@@ -71,7 +71,7 @@ describe('OrdersService analytics producers', () => {
         userId: 'user_1'
       }),
       expect.objectContaining({
-        jobId: 'analytics:PAYMENT_INITIATED:order:order_1'
+        jobId: 'analytics-PAYMENT_INITIATED-order-order_1'
       })
     );
   });
@@ -131,7 +131,7 @@ describe('OrdersService analytics producers', () => {
         providerPaymentId: 'pay_1'
       }),
       expect.objectContaining({
-        jobId: expect.stringMatching(/^deduct-inventory:[a-f0-9]{24}$/)
+        jobId: expect.stringMatching(/^deduct-inventory-[a-f0-9]{24}$/)
       })
     );
     expect(analyticsAdd).not.toHaveBeenCalledWith(

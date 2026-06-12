@@ -122,7 +122,7 @@ describe('AuthService requestPasswordReset', () => {
         })
       }),
       expect.objectContaining({
-        jobId: expect.stringContaining('password-reset:user_1:')
+        jobId: expect.stringContaining('password-reset-user_1-')
       })
     );
   });

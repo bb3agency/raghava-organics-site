@@ -75,7 +75,7 @@ describe('CartService analytics producer', () => {
         })
       }),
       expect.objectContaining({
-        jobId: expect.stringContaining('analytics:ADD_TO_CART:user:user_1:')
+        jobId: expect.stringContaining('analytics-ADD_TO_CART-user-user_1-')
       })
     );
   });
@@ -137,7 +137,7 @@ describe('CartService analytics producer', () => {
         })
       }),
       expect.objectContaining({
-        jobId: expect.stringContaining('analytics:REMOVE_FROM_CART:user:user_1:')
+        jobId: expect.stringContaining('analytics-REMOVE_FROM_CART-user-user_1-')
       })
     );
   });

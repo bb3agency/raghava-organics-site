@@ -140,7 +140,7 @@ describe('AuthService sendOtp', () => {
         })
       }),
       expect.objectContaining({
-        jobId: expect.stringContaining('otp:sms:9876543210:')
+        jobId: expect.stringContaining('otp-sms-9876543210-')
       })
     );
   });
@@ -226,7 +226,7 @@ describe('AuthService sendOtp', () => {
         template: 'CustomerOtpVerification'
       }),
       expect.objectContaining({
-        jobId: expect.stringContaining('otp:whatsapp:9876543210:')
+        jobId: expect.stringContaining('otp-whatsapp-9876543210-')
       })
     );
   });

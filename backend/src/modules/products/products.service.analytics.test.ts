@@ -47,7 +47,7 @@ describe('ProductsService analytics producers', () => {
         })
       }),
       expect.objectContaining({
-        jobId: expect.stringContaining('analytics:PAGE_VIEW:catalog:all:')
+        jobId: expect.stringContaining('analytics-PAGE_VIEW-catalog-all-')
       })
     );
   });
@@ -160,7 +160,7 @@ describe('ProductsService analytics producers', () => {
         })
       }),
       expect.objectContaining({
-        jobId: expect.stringContaining('analytics:SEARCH:search:milk:')
+        jobId: expect.stringContaining('analytics-SEARCH-search-milk-')
       })
     );
   });
@@ -204,7 +204,7 @@ describe('ProductsService analytics producers', () => {
         })
       }),
       expect.objectContaining({
-        jobId: expect.stringContaining('analytics:PRODUCT_VIEW:product:fresh-milk:')
+        jobId: expect.stringContaining('analytics-PRODUCT_VIEW-product-fresh-milk-')
       })
     );
   });

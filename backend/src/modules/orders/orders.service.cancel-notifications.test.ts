@@ -93,7 +93,7 @@ describe('OrdersService cancellation notification enqueue', () => {
         data: { orderId: 'order_1' }
       }),
       expect.objectContaining({
-        jobId: 'notifications:primary:order_1:OrderCancelled'
+        jobId: 'notifications-primary-order_1-OrderCancelled'
       })
     );
     expect(orderProcessingAdd).not.toHaveBeenCalled();
@@ -238,7 +238,7 @@ describe('OrdersService cancellation notification enqueue', () => {
         data: { orderId: 'order_1' }
       }),
       expect.objectContaining({
-        jobId: 'notifications:primary:order_1:OrderCancelled'
+        jobId: 'notifications-primary-order_1-OrderCancelled'
       })
     );
     expect(orderProcessingAdd).not.toHaveBeenCalled();

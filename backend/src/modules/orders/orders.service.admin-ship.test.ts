@@ -100,7 +100,7 @@ describe('OrdersService admin ship enqueue', () => {
         data: { orderId: 'order_1' }
       }),
       expect.objectContaining({
-        jobId: 'merchant:notifications:primary:order_1:OrderShipped'
+        jobId: 'merchant-notifications-primary-order_1-OrderShipped'
       })
     );
     expect(result).toEqual(
