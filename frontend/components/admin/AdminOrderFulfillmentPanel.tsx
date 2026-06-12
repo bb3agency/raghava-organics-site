@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useAuthenticatedApi } from "@/hooks/use-authenticated-api";
 import { getBrowserApiBaseUrl } from "@/lib/api-base";
 import { ApiError } from "@/lib/api";
@@ -65,6 +65,7 @@ export function AdminOrderFulfillmentPanel({
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
+  const pollCancelRef = useRef<(() => void) | null>(null);
 
   const loadOrders = useCallback(async () => {
     try {
@@ -162,25 +163,37 @@ export function AdminOrderFulfillmentPanel({
   }, [api, selectedOrderId]);
 
   const pollUntilShipped = useCallback(
-    async (orderId: string) => {
-      const maxAttempts = 12; // 12 × 5s = 60s
-      for (let i = 0; i < maxAttempts; i++) {
-        await new Promise<void>((res) => setTimeout(res, 5000));
-        try {
-          const data = await api<AdminOrderDetail>(`/admin/orders/${orderId}`);
-          setDetail(data);
-          if (data.status === "SHIPPED" || data.shipment?.awb) {
-            setSuccess("Shipment booked! AWB has been assigned.");
-            notifyAdminDataChanged(["orders", "shipments", "dashboard"]);
-            return;
+    (orderId: string) => {
+      let cancelled = false;
+      // Cancel any previous poll
+      pollCancelRef.current?.();
+      pollCancelRef.current = () => { cancelled = true; };
+
+      const run = async () => {
+        const maxAttempts = 12; // 12 × 5s = 60s
+        for (let i = 0; i < maxAttempts; i++) {
+          await new Promise<void>((res) => setTimeout(res, 5000));
+          if (cancelled) return;
+          try {
+            const data = await api<AdminOrderDetail>(`/admin/orders/${orderId}`);
+            if (cancelled) return;
+            setDetail(data);
+            if (data.status === "SHIPPED" || data.shipment?.awb) {
+              setSuccess("Shipment booked! AWB has been assigned.");
+              notifyAdminDataChanged(["orders", "shipments", "dashboard"]);
+              return;
+            }
+          } catch {
+            // ignore transient errors during polling
           }
-        } catch {
-          // ignore transient errors during polling
         }
-      }
-      setSuccess(
-        "Shipment booking was queued but AWB is not yet assigned. Check the worker logs for errors, or refresh this page in a minute.",
-      );
+        if (!cancelled) {
+          setSuccess(
+            "Shipment booking was queued but AWB is not yet assigned. Check the worker logs for errors, or refresh this page in a minute.",
+          );
+        }
+      };
+      void run();
     },
     [api],
   );
@@ -210,8 +223,7 @@ export function AdminOrderFulfillmentPanel({
         if (!hideOrderPicker) {
           await loadOrders();
         }
-        void pollUntilShipped(selectedOrderId);
-        // pollUntilShipped handles notify + success message
+        pollUntilShipped(selectedOrderId);
       } else {
         setSuccess("Action completed. Refreshing order state…");
         await loadDetail(selectedOrderId);

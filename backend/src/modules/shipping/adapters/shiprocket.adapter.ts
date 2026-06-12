@@ -60,12 +60,16 @@ type ShiprocketCreateOrderResponse = {
 };
 
 type ShiprocketAssignAwbResponse = {
+  awb_assign_status?: number;
+  status_code?: number;
+  message?: string;
   response?: {
     data?: {
-      awb_assign_status?: number;
       awb_code?: string;
       courier_name?: string;
       label_url?: string;
+      awb_assign_error?: string;
+      courier_id?: number | string;
     };
   };
 };
@@ -388,17 +392,24 @@ export default class ShiprocketAdapter implements ShippingProviderAdapter {
       }
     );
 
-    const awbResponse = awbData.response?.data;
-    if (!awbResponse || awbResponse.awb_assign_status !== 1) {
-      const reason = JSON.stringify(awbData);
-      throw new AppError(
-        ERROR_CODES.INTERNAL_ERROR,
-        `Shiprocket AWB assignment failed: ${reason}`,
-        502
-      );
+    // Extract AWB from success response or from "already assigned" idempotent error
+    let awbNumber = awbData.response?.data?.awb_code ?? '';
+    if (awbData.awb_assign_status !== 1) {
+      const assignError = awbData.response?.data?.awb_assign_error ?? '';
+      // Idempotency: Shiprocket returns status=0 if AWB was already assigned in a prior attempt
+      const alreadyAssignedMatch = assignError.match(/AWB is already assigned with awb\s*-\s*(\S+)/i);
+      if (alreadyAssignedMatch) {
+        awbNumber = alreadyAssignedMatch[1] ?? '';
+      } else {
+        const reason = assignError || awbData.message || JSON.stringify(awbData);
+        throw new AppError(
+          ERROR_CODES.INTERNAL_ERROR,
+          `Shiprocket AWB assignment failed: ${reason}`,
+          502
+        );
+      }
     }
 
-    const awbNumber = awbResponse.awb_code ?? '';
     if (!awbNumber) {
       throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Shiprocket AWB code missing from assign response', 502);
     }
@@ -424,8 +435,8 @@ export default class ShiprocketAdapter implements ShippingProviderAdapter {
       ...(estimatedDays != null ? { estimatedDays } : {}),
       ...(shiprocketOrderId != null ? { shiprocketOrderId } : {}),
       shiprocketShipmentId,
-      ...(awbResponse.courier_name != null ? { courierName: awbResponse.courier_name } : {}),
-      ...(awbResponse.label_url != null ? { labelUrl: awbResponse.label_url } : {}),
+      ...(awbData.response?.data?.courier_name != null ? { courierName: awbData.response.data.courier_name } : {}),
+      ...(awbData.response?.data?.label_url != null ? { labelUrl: awbData.response.data.label_url } : {}),
       providerPayload: {
         createOrder: createData as Record<string, unknown>,
         assignAwb: awbData as Record<string, unknown>

@@ -11,7 +11,7 @@ export function resolveFeatureFlags() {
     coupons: getBoolEnv('FEATURE_COUPONS_ENABLED', false),
     reviews: getBoolEnv('FEATURE_REVIEWS_ENABLED', false),
     wishlist: getBoolEnv('FEATURE_WISHLIST_ENABLED', false),
-    gstInvoicing: getBoolEnv('FEATURE_GST_INVOICING_ENABLED', true),
+    gstInvoicing: getBoolEnv('FEATURE_GST_INVOICING_ENABLED', false),
     responseEnvelope: getBoolEnv('FEATURE_RESPONSE_ENVELOPE_ENABLED', false)
   };
 }

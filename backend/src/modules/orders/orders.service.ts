@@ -2611,6 +2611,14 @@ export class OrdersService {
         items: true,
         statusHistory: {
           orderBy: { createdAt: 'desc' }
+        },
+        user: {
+          select: {
+            firstName: true,
+            lastName: true,
+            email: true,
+            phone: true
+          }
         }
       }
     });
@@ -3917,8 +3925,8 @@ export class OrdersService {
             ...(exposeInternalReferences && order.shipment.labelUrl != null
               ? { labelUrl: order.shipment.labelUrl }
               : {}),
-            ...(exposeInternalReferences && order.shipment.pickupScheduledDate != null
-              ? { pickupScheduledDate: order.shipment.pickupScheduledDate.toISOString() }
+            ...(exposeInternalReferences
+              ? { pickupScheduledDate: order.shipment.pickupScheduledDate?.toISOString() ?? null }
               : {}),
             events: (order.shipment.events ?? []).map((event) => ({
               id: event.id,
