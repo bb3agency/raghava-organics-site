@@ -28,7 +28,7 @@ for (const line of envLines) {
   if (key && !process.env[key]) process.env[key] = val;
 }
 
-const { Client } = require('pg');
+const { PrismaClient } = require('@prisma/client');
 
 const sep  = () => console.log('─'.repeat(64));
 const ok   = (m) => console.log('  ✅', m);
@@ -71,32 +71,28 @@ async function main() {
   // ── 2. db connection ────────────────────────────────────────────────────
   console.log('2. DATABASE QUERIES');
   sep();
-  const db = new Client({ connectionString: databaseUrl });
+  const prisma = new PrismaClient({ errorFormat: 'pretty' });
   try {
-    await db.connect();
+    await prisma.$queryRaw`SELECT 1`;
     ok('Connected to PostgreSQL');
   } catch (err) {
-    fail(`Cannot connect to DB: ${err.message}`);
+    fail(`Cannot connect to DB: ${err instanceof Error ? err.message : String(err)}`);
     process.exit(1);
   }
 
   // ── 3. StoreSettings ────────────────────────────────────────────────────
   try {
-    const { rows } = await db.query(
-      `SELECT "notifyEmailEnabled", "notifySmsEnabled", "notifyWhatsappEnabled", "storeName"
-       FROM "StoreSettings" WHERE "singletonKey" = 'default' LIMIT 1`
-    );
-    if (!rows.length) {
+    const s = await prisma.storeSettings.findFirst();
+    if (!s) {
       warn('StoreSettings row not found — defaults apply (email enabled)');
     } else {
-      const s = rows[0];
       console.log();
       console.log('  StoreSettings:');
       s.notifyEmailEnabled === true ? ok('notifyEmailEnabled = true') : fail(`notifyEmailEnabled = ${s.notifyEmailEnabled} (must be true)`);
       info(`storeName = "${s.storeName}"`);
     }
   } catch (err) {
-    warn(`Could not query StoreSettings: ${err.message}`);
+    warn(`Could not query StoreSettings: ${err instanceof Error ? err.message : String(err)}`);
   }
   console.log();
 
@@ -104,11 +100,12 @@ async function main() {
   console.log('3. OPS CONFIG SECRETS (DB-backed overlay)');
   sep();
   try {
-    const { rows } = await db.query(
-      `SELECT "secretKey", "isActive" FROM "OpsConfigSecret"
-       WHERE "secretKey" IN ('RESEND_API_KEY','RESEND_FROM','NOTIFY_EMAIL_ENABLED')
-       ORDER BY "secretKey"`
-    );
+    const rows = await prisma.opsConfigSecret.findMany({
+      where: {
+        secretKey: { in: ['RESEND_API_KEY', 'RESEND_FROM', 'NOTIFY_EMAIL_ENABLED'] }
+      },
+      orderBy: { secretKey: 'asc' }
+    });
     const keys = new Set(rows.map(r => r.secretKey));
     const active = new Set(rows.filter(r => r.isActive).map(r => r.secretKey));
 
@@ -122,7 +119,7 @@ async function main() {
       }
     });
   } catch (err) {
-    warn(`Could not query OpsConfigSecret: ${err.message}`);
+    warn(`Could not query OpsConfigSecret: ${err instanceof Error ? err.message : String(err)}`);
   }
   console.log();
 
@@ -130,18 +127,17 @@ async function main() {
   console.log('4. RECENT NOTIFICATION LOG (last 10)');
   sep();
   try {
-    const { rows } = await db.query(
-      `SELECT "template", "channel", "status", "recipient", "errorMessage",
-              to_char("createdAt", 'DD Mon HH24:MI:SS') AS ts
-       FROM "NotificationLog"
-       ORDER BY "createdAt" DESC LIMIT 10`
-    );
+    const rows = await prisma.notificationLog.findMany({
+      orderBy: { createdAt: 'desc' },
+      take: 10
+    });
     if (!rows.length) {
       fail('NotificationLog is empty — notifications are NOT being enqueued at all');
       info('This means the outbox is not dispatching or the worker never ran');
     } else {
       for (const r of rows) {
-        const line = `[${r.ts}] ${r.template} → ${r.recipient} | ${r.status}`;
+        const ts = r.createdAt.toLocaleString('en-GB', { dateStyle: 'short', timeStyle: 'medium' });
+        const line = `[${ts}] ${r.template} → ${r.recipient} | ${r.status}`;
         if (r.status === 'SENT') {
           ok(line);
         } else {
@@ -153,7 +149,7 @@ async function main() {
       }
     }
   } catch (err) {
-    warn(`Could not query NotificationLog: ${err.message}`);
+    warn(`Could not query NotificationLog: ${err instanceof Error ? err.message : String(err)}`);
   }
   console.log();
 
@@ -161,40 +157,43 @@ async function main() {
   console.log('5. OUTBOX MESSAGE STATE');
   sep();
   try {
-    const { rows: counts } = await db.query(
-      `SELECT status, COUNT(*) AS cnt FROM "OutboxMessage" GROUP BY status ORDER BY status`
-    );
-    if (!counts.length) {
+    const allMessages = await prisma.outboxMessage.findMany();
+    const counts = {};
+    for (const msg of allMessages) {
+      counts[msg.status] = (counts[msg.status] || 0) + 1;
+    }
+
+    if (!Object.keys(counts).length) {
       warn('OutboxMessage table is empty');
     } else {
-      for (const r of counts) {
-        const c = Number(r.cnt);
-        if (r.status === 'FAILED' && c > 0) {
-          fail(`${r.status}: ${c} messages`);
-        } else if (r.status === 'PENDING' && c > 5) {
-          warn(`${r.status}: ${c} messages — backlog building up, check workers are running`);
+      for (const [status, cnt] of Object.entries(counts).sort()) {
+        const c = Number(cnt);
+        if (status === 'FAILED' && c > 0) {
+          fail(`${status}: ${c} messages`);
+        } else if (status === 'PENDING' && c > 5) {
+          warn(`${status}: ${c} messages — backlog building up, check workers are running`);
         } else {
-          ok(`${r.status}: ${c} messages`);
+          ok(`${status}: ${c} messages`);
         }
       }
     }
 
     // Show last 5 FAILED outbox entries
-    const { rows: failed } = await db.query(
-      `SELECT "jobName", "queueName", "lastError", "attemptCount",
-              to_char("createdAt", 'DD Mon HH24:MI:SS') AS ts
-       FROM "OutboxMessage" WHERE status='FAILED'
-       ORDER BY "createdAt" DESC LIMIT 5`
-    );
+    const failed = await prisma.outboxMessage.findMany({
+      where: { status: 'FAILED' },
+      orderBy: { createdAt: 'desc' },
+      take: 5
+    });
     if (failed.length) {
       console.log('\n  Last FAILED outbox entries:');
       for (const r of failed) {
-        fail(`[${r.ts}] ${r.queueName}:${r.jobName} (${r.attemptCount} attempts)`);
+        const ts = r.createdAt.toLocaleString('en-GB', { dateStyle: 'short', timeStyle: 'medium' });
+        fail(`[${ts}] ${r.queueName}:${r.jobName} (${r.attemptCount} attempts)`);
         if (r.lastError) console.log(`         └─ ${r.lastError}`);
       }
     }
   } catch (err) {
-    warn(`Could not query OutboxMessage: ${err.message}`);
+    warn(`Could not query OutboxMessage: ${err instanceof Error ? err.message : String(err)}`);
   }
   console.log();
 
@@ -202,24 +201,26 @@ async function main() {
   console.log('6. PENDING NOTIFICATION OUTBOX (stuck jobs)');
   sep();
   try {
-    const { rows } = await db.query(
-      `SELECT "jobName", "jobId", "attemptCount",
-              to_char("createdAt", 'DD Mon HH24:MI:SS') AS ts
-       FROM "OutboxMessage"
-       WHERE "queueName" = 'notifications' AND status = 'PENDING'
-       ORDER BY "createdAt" DESC LIMIT 10`
-    );
+    const rows = await prisma.outboxMessage.findMany({
+      where: {
+        queueName: 'notifications',
+        status: 'PENDING'
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 10
+    });
     if (!rows.length) {
       ok('No pending notification outbox messages');
     } else {
       warn(`${rows.length} notification(s) stuck as PENDING:`);
       for (const r of rows) {
-        warn(`[${r.ts}] ${r.jobName} | attempts=${r.attemptCount} | jobId=${r.jobId ?? 'none'}`);
+        const ts = r.createdAt.toLocaleString('en-GB', { dateStyle: 'short', timeStyle: 'medium' });
+        warn(`[${ts}] ${r.jobName} | attempts=${r.attemptCount} | jobId=${r.jobId ?? 'none'}`);
       }
       info('If workers are running, these should dispatch within 10s');
     }
   } catch (err) {
-    warn(`Could not query pending outbox: ${err.message}`);
+    warn(`Could not query pending outbox: ${err instanceof Error ? err.message : String(err)}`);
   }
   console.log();
 
@@ -278,10 +279,10 @@ async function main() {
   console.log('  • Everything ✅ but no email → check spam folder; verify recipient email is correct');
   console.log();
 
-  await db.end();
+  await prisma.$disconnect();
 }
 
-main().catch(err => {
-  console.error('\n❌ Fatal:', err.message);
+main().catch(async (err) => {
+  console.error('\n❌ Fatal:', err instanceof Error ? err.message : String(err));
   process.exit(1);
 });
