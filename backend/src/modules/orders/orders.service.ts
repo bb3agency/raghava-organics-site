@@ -1796,7 +1796,11 @@ export class OrdersService {
         effectiveWebhookSecret = 'test-secret';
       }
     }
-    if (!effectiveWebhookSecret) {
+
+    // Delhivery always requires a webhook secret. Shiprocket token is optional —
+    // if SHIPROCKET_WEBHOOK_TOKEN is not configured we accept unauthenticated webhooks
+    // (Shiprocket does not enforce auth by default; idempotency/dedup protects against replay).
+    if (!effectiveWebhookSecret && !isShiprocket) {
       throw new AppError(
         ERROR_CODES.INTERNAL_ERROR,
         'Shipping webhook secret is not configured',
@@ -1809,9 +1813,14 @@ export class OrdersService {
       // In noop/placeholder mode, accept any non-empty token to keep local simulations unblocked.
       tokenValid = typeof authHeader === 'string' && authHeader.trim().length > 0;
     } else if (isShiprocket) {
-      const headerToken =
-        typeof authHeader === 'string' ? authHeader.replace(/^Bearer\s+/i, '') : '';
-      tokenValid = this.secureTokenMatch(headerToken, effectiveWebhookSecret);
+      if (!effectiveWebhookSecret) {
+        // No token configured — accept all Shiprocket webhooks (optional auth).
+        tokenValid = true;
+      } else {
+        const headerToken =
+          typeof authHeader === 'string' ? authHeader.replace(/^Bearer\s+/i, '') : '';
+        tokenValid = this.secureTokenMatch(headerToken, effectiveWebhookSecret);
+      }
     } else {
       const expectedToken = `Token ${effectiveWebhookSecret}`;
       tokenValid = this.secureTokenMatch(authHeader, expectedToken);
