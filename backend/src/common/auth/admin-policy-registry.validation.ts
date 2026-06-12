@@ -101,6 +101,8 @@ function parseGuardedRoutesFromWorkspace(workspaceRoot: string): GuardedRouteRec
   records.push({ method: 'PATCH', path: '/api/v1/admin/settings/cod', permission: 'settings:write' });
   // Hard-delete endpoint added after last dist build; listed here so stale dist scans still pass.
   records.push({ method: 'DELETE', path: '/api/v1/admin/categories/:id/permanent', permission: 'categories:write' });
+  // Sync endpoint with complex schema; regex parser skips due to nested braces.
+  records.push({ method: 'POST', path: '/api/v1/admin/shipments/:id/sync', permission: 'shipments:read' });
   return records;
 }
 
