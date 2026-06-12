@@ -5,7 +5,6 @@ import { useState } from "react";
 import { AdminOrderDetailPanel } from "@/components/admin/AdminOrderDetailPanel";
 import { AdminOrderFulfillmentPanel } from "@/components/admin/AdminOrderFulfillmentPanel";
 import { AdminOrderItemsPanel } from "@/components/admin/AdminOrderItemsPanel";
-import { AdminOrderStatusPanel } from "@/components/admin/AdminOrderStatusPanel";
 import { AdminOrderTimelinePanel } from "@/components/admin/AdminOrderTimelinePanel";
 
 export function AdminOrderDetailPageClient({ orderId }: { orderId: string }) {
@@ -26,7 +25,6 @@ export function AdminOrderDetailPageClient({ orderId }: { orderId: string }) {
       <AdminOrderDetailPanel key={`detail-${refreshKey}`} orderId={orderId} />
       <AdminOrderTimelinePanel key={`timeline-${refreshKey}`} orderId={orderId} />
       <AdminOrderItemsPanel orderId={orderId} onUpdated={bumpRefresh} />
-      <AdminOrderStatusPanel orderId={orderId} onUpdated={bumpRefresh} />
       <AdminOrderFulfillmentPanel initialOrderId={orderId} hideOrderPicker />
     </div>
   );
