@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { ChevronLeft } from "lucide-react";
 import { useState } from "react";
 import { AdminOrderDetailPanel } from "@/components/admin/AdminOrderDetailPanel";
 import { AdminOrderFulfillmentPanel } from "@/components/admin/AdminOrderFulfillmentPanel";
@@ -11,21 +12,30 @@ export function AdminOrderDetailPageClient({ orderId }: { orderId: string }) {
   const [refreshKey, setRefreshKey] = useState(0);
 
   function bumpRefresh() {
-    setRefreshKey((value) => value + 1);
+    setRefreshKey((v) => v + 1);
   }
 
   return (
     <div className="grid gap-6">
       <Link
         href="/admin/orders"
-        className="text-sm text-muted-foreground hover:text-foreground"
+        className="flex w-fit items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
       >
-        ← Orders
+        <ChevronLeft className="h-4 w-4" />
+        Orders
       </Link>
+
       <AdminOrderDetailPanel key={`detail-${refreshKey}`} orderId={orderId} />
-      <AdminOrderTimelinePanel key={`timeline-${refreshKey}`} orderId={orderId} />
-      <AdminOrderItemsPanel orderId={orderId} onUpdated={bumpRefresh} />
-      <AdminOrderFulfillmentPanel initialOrderId={orderId} hideOrderPicker />
+
+      <div className="grid gap-6 lg:grid-cols-3">
+        <div className="grid gap-6 lg:col-span-2">
+          <AdminOrderItemsPanel orderId={orderId} onUpdated={bumpRefresh} />
+          <AdminOrderFulfillmentPanel initialOrderId={orderId} hideOrderPicker />
+        </div>
+        <div>
+          <AdminOrderTimelinePanel key={`timeline-${refreshKey}`} orderId={orderId} />
+        </div>
+      </div>
     </div>
   );
 }

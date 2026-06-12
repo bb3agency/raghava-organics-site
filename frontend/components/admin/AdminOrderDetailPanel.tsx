@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
+import { FileDown, User, MapPin, ReceiptText, CreditCard, Truck } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
-import { AdminSection } from "@/components/admin/AdminSection";
 import { AdminStatusBadge } from "@/components/admin/AdminStatusBadge";
 import { useAuthenticatedApi } from "@/hooks/use-authenticated-api";
 import type { AdminOrderDetailFull } from "@/lib/admin-api";
@@ -11,6 +11,7 @@ import {
   formatAdminDate,
   formatPaise,
   orderStatusTone,
+  paymentStatusTone,
 } from "@/lib/admin-format";
 import { getApiErrorMessage } from "@/lib/error-messages";
 import { useAuthStore } from "@/stores/auth";
@@ -31,9 +32,7 @@ export function AdminOrderDetailPanel({ orderId }: AdminOrderDetailPanelProps) {
     setLoading(true);
     setError(null);
     try {
-      const detail = await api<AdminOrderDetailFull>(
-        `/admin/orders/${orderId}`,
-      );
+      const detail = await api<AdminOrderDetailFull>(`/admin/orders/${orderId}`);
       setOrder(detail);
     } catch (err) {
       setError(getApiErrorMessage(err));
@@ -73,176 +72,200 @@ export function AdminOrderDetailPanel({ orderId }: AdminOrderDetailPanelProps) {
     }
   }
 
+  if (loading) {
+    return (
+      <div className="rounded-xl border border-border bg-card p-6">
+        <div className="h-6 w-40 animate-pulse rounded-md bg-muted" />
+        <div className="mt-2 h-4 w-24 animate-pulse rounded-md bg-muted" />
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">
+        {error}
+      </div>
+    );
+  }
+
+  if (!order) return null;
+
+  const shipmentStatusTone = (s: string) => {
+    if (s === "DELIVERED") return "success";
+    if (s === "CANCELLED") return "destructive";
+    if (["PICKED_UP", "IN_TRANSIT", "OUT_FOR_DELIVERY"].includes(s)) return "warning";
+    return "default";
+  };
+
   return (
-    <AdminSection
-      title={order ? order.orderNumber : "Order detail"}
-      description={
-        order
-          ? `${formatAdminDate(order.createdAt)} · ${order.paymentMode}`
-          : "Loading order…"
-      }
-      loading={loading}
-      error={error}
-      actions={
-        order ? (
-          <div className="flex flex-wrap items-center gap-2">
-            <AdminStatusBadge
-              label={order.status}
-              tone={orderStatusTone(order.status)}
-            />
-            {order.invoice?.hasPdf ? (
-              <button
-                type="button"
-                className="h-8 rounded-md border border-border px-3 text-xs"
-                disabled={downloadingInvoice}
-                onClick={() => void downloadInvoice()}
-              >
-                {downloadingInvoice ? "Downloading…" : "Invoice PDF"}
-              </button>
-            ) : null}
-          </div>
-        ) : null
-      }
-    >
-      {order ? (
-        <div className="grid gap-6">
-          <div className="grid gap-4 md:grid-cols-3">
-            <SummaryBlock title="Customer">
-              <p className="font-medium">{order.customer.name}</p>
-              <p className="text-xs text-muted-foreground">
-                {order.customer.email ?? "—"}
-              </p>
-              <p className="text-xs text-muted-foreground">
-                {order.customer.phone ?? "—"}
-              </p>
-              <Link
-                href={`/admin/customers/${order.userId}`}
-                className="mt-2 inline-block text-xs text-primary hover:underline"
-              >
-                View customer
-              </Link>
-            </SummaryBlock>
-            <SummaryBlock title="Shipping address">
-              {address ? (
-                <>
-                  <p>{address.fullName}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {address.line1}
-                  </p>
-                  {address.line2 ? (
-                    <p className="text-xs text-muted-foreground">
-                      {address.line2}
-                    </p>
-                  ) : null}
-                  <p className="text-xs text-muted-foreground">
-                    {address.city}, {address.state} {address.pincode}
-                  </p>
-                </>
-              ) : (
-                <p className="text-muted-foreground">—</p>
-              )}
-            </SummaryBlock>
-            <SummaryBlock title="Totals">
-              <dl className="grid gap-1 text-sm">
-                <Row label="Subtotal" value={formatPaise(order.subtotal)} />
-                <Row
-                  label="Shipping"
-                  value={formatPaise(order.shippingCharge)}
-                />
-                <Row
-                  label="Discount"
-                  value={formatPaise(order.discountAmount)}
-                />
-                <Row label="Total" value={formatPaise(order.total)} bold />
-              </dl>
-            </SummaryBlock>
-          </div>
-
-          <div className="grid gap-4 md:grid-cols-2">
-            <SummaryBlock title="Payment">
-              {order.payment ? (
-                <dl className="grid gap-1 text-sm">
-                  <Row label="Provider" value={order.payment.provider} />
-                  <Row label="Status" value={order.payment.status} />
-                  <Row label="Method" value={order.payment.method ?? "—"} />
-                  <Row
-                    label="Amount"
-                    value={formatPaise(order.payment.amount)}
-                  />
-                  <Row
-                    label="Captured"
-                    value={
-                      order.payment.capturedAt
-                        ? formatAdminDate(order.payment.capturedAt)
-                        : "—"
-                    }
-                  />
-                </dl>
-              ) : (
-                <p className="text-sm text-muted-foreground">
-                  No payment record
-                </p>
-              )}
-            </SummaryBlock>
-            <SummaryBlock title="Shipment">
-              {order.shipment ? (
-                <dl className="grid gap-1 text-sm">
-                  <Row label="Provider" value={order.shipment.provider} />
-                  <Row label="Status" value={order.shipment.status} />
-                  <Row label="AWB" value={order.shipment.awb ?? "—"} />
-                  {order.shipment.trackingUrl ? (
-                    <div>
-                      <dt className="text-xs text-muted-foreground">
-                        Tracking
-                      </dt>
-                      <dd>
-                        <a
-                          href={order.shipment.trackingUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="text-primary hover:underline"
-                        >
-                          Open tracking
-                        </a>
-                      </dd>
-                    </div>
-                  ) : null}
-                </dl>
-              ) : (
-                <p className="text-sm text-muted-foreground">Not shipped yet</p>
-              )}
-            </SummaryBlock>
-          </div>
-
-          {order.notes ? (
-            <SummaryBlock title="Order notes">
-              <p className="text-sm">{order.notes}</p>
-            </SummaryBlock>
+    <div className="grid gap-4">
+      {/* Page header */}
+      <div className="flex flex-wrap items-start justify-between gap-4 rounded-xl border border-border bg-card px-6 py-5">
+        <div className="grid gap-1">
+          <h1 className="font-heading text-xl font-semibold">{order.orderNumber}</h1>
+          <p className="text-sm text-muted-foreground">
+            {formatAdminDate(order.createdAt)} · {order.paymentMode}
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <AdminStatusBadge
+            label={order.status}
+            tone={orderStatusTone(order.status)}
+          />
+          {order.invoice?.hasPdf ? (
+            <button
+              type="button"
+              disabled={downloadingInvoice}
+              onClick={() => void downloadInvoice()}
+              className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted/50 disabled:opacity-60"
+            >
+              <FileDown className="h-3.5 w-3.5" />
+              {downloadingInvoice ? "Downloading…" : "Invoice PDF"}
+            </button>
           ) : null}
         </div>
+      </div>
+
+      {/* Summary grid */}
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <InfoCard icon={<User className="h-4 w-4" />} title="Customer">
+          <p className="font-medium leading-tight">{order.customer.name}</p>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            {order.customer.email ?? "—"}
+          </p>
+          <p className="text-xs text-muted-foreground">
+            {order.customer.phone ?? "—"}
+          </p>
+          <Link
+            href={`/admin/customers/${order.userId}`}
+            className="mt-2 inline-block text-xs font-medium text-primary hover:underline"
+          >
+            View customer →
+          </Link>
+        </InfoCard>
+
+        <InfoCard icon={<MapPin className="h-4 w-4" />} title="Ship to">
+          {address ? (
+            <>
+              <p className="font-medium leading-tight">{address.fullName}</p>
+              <p className="mt-0.5 text-xs text-muted-foreground">{address.line1}</p>
+              {address.line2 ? (
+                <p className="text-xs text-muted-foreground">{address.line2}</p>
+              ) : null}
+              <p className="text-xs text-muted-foreground">
+                {address.city}, {address.state} {address.pincode}
+              </p>
+            </>
+          ) : (
+            <p className="text-sm text-muted-foreground">—</p>
+          )}
+        </InfoCard>
+
+        <InfoCard icon={<CreditCard className="h-4 w-4" />} title="Payment">
+          {order.payment ? (
+            <div className="grid gap-1.5">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs text-muted-foreground">Status</span>
+                <AdminStatusBadge
+                  label={order.payment.status}
+                  tone={paymentStatusTone(order.payment.status)}
+                />
+              </div>
+              <Row label="Provider" value={order.payment.provider} />
+              <Row label="Method" value={order.payment.method ?? "—"} />
+              <Row label="Amount" value={formatPaise(order.payment.amount)} />
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">No payment record</p>
+          )}
+        </InfoCard>
+
+        <InfoCard icon={<Truck className="h-4 w-4" />} title="Shipment">
+          {order.shipment ? (
+            <div className="grid gap-1.5">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs text-muted-foreground">Status</span>
+                <AdminStatusBadge
+                  label={order.shipment.status}
+                  tone={shipmentStatusTone(order.shipment.status)}
+                />
+              </div>
+              <Row label="AWB" value={order.shipment.awb ?? "—"} />
+              {order.shipment.trackingUrl ? (
+                <a
+                  href={order.shipment.trackingUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="mt-1 text-xs font-medium text-primary hover:underline"
+                >
+                  Track shipment →
+                </a>
+              ) : null}
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">Not shipped yet</p>
+          )}
+        </InfoCard>
+      </div>
+
+      {/* Order totals */}
+      <div className="rounded-xl border border-border bg-card px-6 py-4">
+        <div className="flex flex-wrap items-center gap-x-8 gap-y-2">
+          <TotalItem label="Subtotal" value={formatPaise(order.subtotal)} />
+          <span className="hidden text-border sm:block">|</span>
+          <TotalItem label="Shipping" value={formatPaise(order.shippingCharge)} />
+          <span className="hidden text-border sm:block">|</span>
+          <TotalItem label="Discount" value={formatPaise(order.discountAmount)} />
+          <span className="hidden text-border sm:block">|</span>
+          <TotalItem label="Total" value={formatPaise(order.total)} bold />
+        </div>
+      </div>
+
+      {order.notes ? (
+        <div className="rounded-xl border border-border bg-card px-6 py-4">
+          <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            Order notes
+          </p>
+          <p className="text-sm">{order.notes}</p>
+        </div>
       ) : null}
-    </AdminSection>
+    </div>
   );
 }
 
-function SummaryBlock({
+function InfoCard({
+  icon,
   title,
   children,
 }: {
+  icon: React.ReactNode;
   title: string;
   children: React.ReactNode;
 }) {
   return (
-    <div className="rounded-md border border-border bg-muted/20 p-3">
-      <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-        {title}
-      </h4>
+    <div className="rounded-xl border border-border bg-card p-4">
+      <div className="mb-3 flex items-center gap-2">
+        <span className="text-muted-foreground">{icon}</span>
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          {title}
+        </h3>
+      </div>
       {children}
     </div>
   );
 }
 
-function Row({
+function Row({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between gap-2 text-xs">
+      <span className="text-muted-foreground">{label}</span>
+      <span className="font-medium">{value}</span>
+    </div>
+  );
+}
+
+function TotalItem({
   label,
   value,
   bold,
@@ -252,9 +275,11 @@ function Row({
   bold?: boolean;
 }) {
   return (
-    <div className="flex justify-between gap-2">
-      <dt className="text-muted-foreground">{label}</dt>
-      <dd className={bold ? "font-semibold" : undefined}>{value}</dd>
+    <div className="grid gap-0.5">
+      <span className="text-xs text-muted-foreground">{label}</span>
+      <span className={bold ? "text-base font-semibold" : "text-sm font-medium"}>
+        {value}
+      </span>
     </div>
   );
 }
