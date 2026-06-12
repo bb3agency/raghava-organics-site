@@ -330,7 +330,10 @@ export function createShippingProvider(runtimeConfig: NodeJS.ProcessEnv = proces
 export type DualShippingRuntime = {
   delhivery: ShippingProviderRuntime | null;
   shiprocket: ShippingProviderRuntime | null;
+  /** True when both providers are fully configured. */
   isDual: boolean;
+  /** True when at least one provider is configured. */
+  hasAny: boolean;
 };
 
 export function resolveDualShippingRuntime(runtimeConfig: NodeJS.ProcessEnv = process.env): DualShippingRuntime {
@@ -340,25 +343,26 @@ export function resolveDualShippingRuntime(runtimeConfig: NodeJS.ProcessEnv = pr
     Boolean(runtimeConfig.SHIPROCKET_PASSWORD?.trim());
 
   if (!hasDelhivery && !hasShiprocket) {
-    return { delhivery: null, shiprocket: null, isDual: false };
+    return { delhivery: null, shiprocket: null, isDual: false, hasAny: false };
   }
 
   if (hasDelhivery && hasShiprocket) {
     const delhiveryRuntime = resolveShippingProviderRuntime({ ...runtimeConfig, SHIPPING_PROVIDER: 'delhivery' });
     const shiprocketRuntime = resolveShippingProviderRuntime({ ...runtimeConfig, SHIPPING_PROVIDER: 'shiprocket' });
-    return {
-      delhivery: delhiveryRuntime.provider === 'unconfigured' ? null : delhiveryRuntime,
-      shiprocket: shiprocketRuntime.provider === 'unconfigured' ? null : shiprocketRuntime,
-      isDual: delhiveryRuntime.provider !== 'unconfigured' && shiprocketRuntime.provider !== 'unconfigured'
-    };
+    const delhivery = delhiveryRuntime.provider === 'unconfigured' ? null : delhiveryRuntime;
+    const shiprocket = shiprocketRuntime.provider === 'unconfigured' ? null : shiprocketRuntime;
+    const isDual = delhivery !== null && shiprocket !== null;
+    return { delhivery, shiprocket, isDual, hasAny: isDual || delhivery !== null || shiprocket !== null };
   }
 
   const providerKey: 'delhivery' | 'shiprocket' = hasDelhivery ? 'delhivery' : 'shiprocket';
   const single = resolveShippingProviderRuntime({ ...runtimeConfig, SHIPPING_PROVIDER: providerKey });
+  const isConfigured = single.provider !== 'unconfigured' && single.provider !== 'noop';
   return {
-    delhivery: hasDelhivery ? single : null,
-    shiprocket: !hasDelhivery ? single : null,
-    isDual: false
+    delhivery: hasDelhivery && isConfigured ? single : null,
+    shiprocket: !hasDelhivery && isConfigured ? single : null,
+    isDual: false,
+    hasAny: isConfigured
   };
 }
 

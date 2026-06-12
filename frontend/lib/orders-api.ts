@@ -19,6 +19,8 @@ export interface CreateOrderInput {
   shippingAddress?: CheckoutShippingAddressInput;
   notes?: string;
   paymentMode?: CheckoutPaymentMode;
+  /** Backend-selected cheapest shipping provider from delivery rates response. */
+  selectedShippingProvider?: "DELHIVERY" | "SHIPROCKET";
 }
 
 export interface OrderLineItem {
@@ -78,6 +80,8 @@ export interface PrepareCheckoutInput {
   addressId?: string;
   shippingAddress?: CheckoutShippingAddressInput;
   notes?: string;
+  /** Backend-selected cheapest shipping provider from delivery rates response. */
+  selectedShippingProvider?: "DELHIVERY" | "SHIPROCKET";
 }
 
 export interface PrepareCheckoutResponse {

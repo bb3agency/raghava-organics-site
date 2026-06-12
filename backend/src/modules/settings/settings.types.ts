@@ -3,10 +3,17 @@ export type UpdateShippingSettingsInput = {
   minOrderValuePaise: number;
 };
 
+export type ShippingProviderAvailability = {
+  delhiveryConfigured: boolean;
+  shiprocketConfigured: boolean;
+  hasAnyProvider: boolean;
+};
+
 export type ShippingSettingsResponse = {
   pickupPincode: string;
   minOrderValuePaise: number;
   source: 'database' | 'environment' | 'default';
+  providerAvailability: ShippingProviderAvailability;
 };
 
 export type StoreProfileResponse = {

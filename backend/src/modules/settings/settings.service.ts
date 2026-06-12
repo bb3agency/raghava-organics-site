@@ -3,6 +3,7 @@ import { isStorefrontCouponsEnabled } from '@common/coupons/coupons-feature';
 import { featureFlags } from '@config/feature-flags';
 import { resolveNotificationRuntimeConfig } from '@common/notifications/notification-runtime-config';
 import { resolvePickupPincode } from '@common/shipping/resolve-pickup-pincode';
+import { resolveDualShippingRuntime } from '@modules/shipping/shipping-provider';
 import { SmsTemplateRegistry } from '@modules/notifications/sms-template-registry';
 import { supportedEmailTemplates } from '@modules/notifications/templates/email-templates';
 import {
@@ -109,34 +110,32 @@ export class SettingsService {
     return normalized;
   }
 
+  private resolveShippingProviderAvailability() {
+    const runtime = resolveDualShippingRuntime();
+    return {
+      delhiveryConfigured: runtime.delhivery !== null,
+      shiprocketConfigured: runtime.shiprocket !== null,
+      hasAnyProvider: runtime.hasAny
+    };
+  }
+
   async getShippingSettings(): Promise<ShippingSettingsResponse> {
+    const providerAvailability = this.resolveShippingProviderAvailability();
     const settings = await this.fastify.prisma.storeSettings.findUnique({
       where: { singletonKey: SettingsService.singletonKey },
       select: { pickupPincode: true, minOrderValuePaise: true, defaultLowStockThreshold: true }
     });
 
     if (settings) {
-      return {
-        pickupPincode: settings.pickupPincode,
-        minOrderValuePaise: settings.minOrderValuePaise,
-        source: 'database'
-      };
+      return { pickupPincode: settings.pickupPincode, minOrderValuePaise: settings.minOrderValuePaise, source: 'database', providerAvailability };
     }
 
     const resolved = await resolvePickupPincode(this.fastify.prisma, { noopFallback: null });
     if (resolved && resolved.length === 6) {
-      return {
-        pickupPincode: resolved,
-        minOrderValuePaise: 0,
-        source: 'environment'
-      };
+      return { pickupPincode: resolved, minOrderValuePaise: 0, source: 'environment', providerAvailability };
     }
 
-    return {
-      pickupPincode: SettingsService.defaultPickupPincode,
-      minOrderValuePaise: 0,
-      source: 'default'
-    };
+    return { pickupPincode: SettingsService.defaultPickupPincode, minOrderValuePaise: 0, source: 'default', providerAvailability };
   }
 
   async updateShippingSettings(input: UpdateShippingSettingsInput): Promise<ShippingSettingsResponse> {
@@ -157,7 +156,8 @@ export class SettingsService {
     return {
       pickupPincode: updated.pickupPincode,
       minOrderValuePaise: updated.minOrderValuePaise,
-      source: 'database'
+      source: 'database',
+      providerAvailability: this.resolveShippingProviderAvailability()
     };
   }
 

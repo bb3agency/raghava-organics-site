@@ -10,7 +10,10 @@ describe('DelhiveryAdapter', () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
-      text: async () => JSON.stringify({ packages: [{ waybill: 'AWB123' }] })
+      text: async () => JSON.stringify({
+        success: true,
+        packages: [{ status: 'Success', waybill: 'AWB123' }]
+      })
     });
     vi.stubGlobal('fetch', fetchMock);
 
@@ -63,7 +66,7 @@ describe('DelhiveryAdapter', () => {
       total_amount: 499.5,
       pin: '560001',
       origin_pin: '110001',
-      payment_mode: 'Prepaid',
+      payment_mode: 'Pre-paid',
       weight: 1.2,
       seller_gst_tin: '29ABCDE1234F1Z5',
       hsn_code: '1001'
@@ -77,7 +80,10 @@ describe('DelhiveryAdapter', () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
-      text: async () => JSON.stringify({ packages: [{ waybill: 'AWB999' }] })
+      text: async () => JSON.stringify({
+        success: true,
+        packages: [{ status: 'Success', waybill: 'AWB999' }]
+      })
     });
     vi.stubGlobal('fetch', fetchMock);
 
@@ -165,5 +171,100 @@ describe('DelhiveryAdapter', () => {
       statusCode: 502,
       message: 'Delhivery returned invalid JSON'
     });
+  });
+
+  it('rate API includes all required query parameters with correct values', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ charge_with_tax: 50, estimated_delivery_days: 3 })
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new DelhiveryAdapter({ apiKey: 'test_key' });
+
+    // Test PREPAID mode
+    await adapter.calculateDeliveryRate({
+      destinationPincode: '560001',
+      originPincode: '110001',
+      totalWeightGrams: 500,
+      paymentMode: 'PREPAID'
+    });
+
+    const [urlPrepaid] = fetchMock.mock.calls[0] as [string];
+    expect(urlPrepaid).toContain('md=S');
+    expect(urlPrepaid).toContain('ss=Delivered');
+    expect(urlPrepaid).toContain('pt=Pre-paid'); // Exact format: capital P, hyphenated
+    expect(urlPrepaid).toContain('cod=0');
+
+    // Test COD mode
+    vi.clearAllMocks();
+    await adapter.calculateDeliveryRate({
+      destinationPincode: '560001',
+      originPincode: '110001',
+      totalWeightGrams: 500,
+      paymentMode: 'COD'
+    });
+
+    const [urlCod] = fetchMock.mock.calls[0] as [string];
+    expect(urlCod).toContain('md=S');
+    expect(urlCod).toContain('ss=Delivered');
+    expect(urlCod).toContain('pt=COD');
+    expect(urlCod).toContain('cod=1');
+  });
+
+  it('rate API handles weight edge cases: minimum 1g, fractional floored', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ charge_with_tax: 50, estimated_delivery_days: 2 })
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new DelhiveryAdapter({ apiKey: 'test_key' });
+
+    // Zero weight should become 1g
+    await adapter.calculateDeliveryRate({
+      destinationPincode: '560001',
+      originPincode: '110001',
+      totalWeightGrams: 0
+    });
+
+    let [url] = fetchMock.mock.calls[0] as [string];
+    expect(url).toContain('cgm=1');
+
+    // Fractional weight should be floored
+    vi.clearAllMocks();
+    await adapter.calculateDeliveryRate({
+      destinationPincode: '560001',
+      originPincode: '110001',
+      totalWeightGrams: 1234.999
+    });
+
+    [url] = fetchMock.mock.calls[0] as [string];
+    expect(url).toContain('cgm=1234');
+  });
+
+  it('rate API correctly defaults paymentMode when not provided', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ charge_with_tax: 50, estimated_delivery_days: 2 })
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new DelhiveryAdapter({ apiKey: 'test_key' });
+
+    // When paymentMode is undefined, should default to PREPAID
+    await adapter.calculateDeliveryRate({
+      destinationPincode: '560001',
+      originPincode: '110001',
+      totalWeightGrams: 500
+      // paymentMode omitted — should default to prepaid
+    });
+
+    const [url] = fetchMock.mock.calls[0] as [string];
+    expect(url).toContain('pt=Pre-paid');
+    expect(url).toContain('cod=0');
   });
 });

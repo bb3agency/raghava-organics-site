@@ -15,11 +15,21 @@ const emptyQuerystringSchema = {
 const shippingSettingsSchema = {
   type: 'object',
   additionalProperties: false,
-  required: ['pickupPincode', 'minOrderValuePaise', 'source'],
+  required: ['pickupPincode', 'minOrderValuePaise', 'source', 'providerAvailability'],
   properties: {
     pickupPincode: { type: 'string', minLength: 6, maxLength: 6, pattern: '^[0-9]{6}$' },
     minOrderValuePaise: { type: 'integer', minimum: 0, maximum: 1000000000 },
-    source: { type: 'string', enum: ['database', 'environment', 'default'], maxLength: 20 }
+    source: { type: 'string', enum: ['database', 'environment', 'default'], maxLength: 20 },
+    providerAvailability: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['delhiveryConfigured', 'shiprocketConfigured', 'hasAnyProvider'],
+      properties: {
+        delhiveryConfigured: { type: 'boolean' },
+        shiprocketConfigured: { type: 'boolean' },
+        hasAnyProvider: { type: 'boolean' }
+      }
+    }
   }
 } as const;
 

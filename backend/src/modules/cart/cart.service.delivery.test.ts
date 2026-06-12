@@ -106,7 +106,7 @@ describe('CartService delivery utility methods', () => {
       }
     } as unknown as FastifyInstance;
     const service = new CartService(fastify);
-    await expect(service.getDeliveryRates('user_1', undefined, '500001')).resolves.toEqual({
+    await expect(service.getDeliveryRates('user_1', undefined, '500001')).resolves.toMatchObject({
       pincode: '500001',
       shippingCharge: 0,
       estimatedDays: 3
@@ -176,7 +176,7 @@ describe('CartService delivery utility methods', () => {
     } as unknown as FastifyInstance;
 
     const service = new CartService(fastify);
-    await expect(service.getDeliveryRates('user_1', undefined, '500001')).resolves.toEqual({
+    await expect(service.getDeliveryRates('user_1', undefined, '500001')).resolves.toMatchObject({
       pincode: '500001',
       shippingCharge: 9950,
       estimatedDays: 3
@@ -239,7 +239,7 @@ describe('CartService delivery utility methods', () => {
     } as unknown as FastifyInstance;
 
     const service = new CartService(fastify);
-    await expect(service.getDeliveryRates('user_1', undefined, '500001')).resolves.toEqual({
+    await expect(service.getDeliveryRates('user_1', undefined, '500001')).resolves.toMatchObject({
       pincode: '500001',
       shippingCharge: 0,
       estimatedDays: 3
@@ -372,15 +372,13 @@ describe('CartService dual-provider delivery rates', () => {
       pincode: string;
       shippingCharge: number;
       estimatedDays: number;
-      rates?: Array<{ provider: string; shippingChargePaise: number; recommended: boolean }>;
+      selectedShippingProvider?: string;
     };
 
-    expect(result.rates).toBeDefined();
-    expect(result.rates?.length).toBeGreaterThanOrEqual(1);
-    const recommended = result.rates?.find((r) => r.recommended);
-    expect(recommended).toBeDefined();
-    // shippingCharge on the root should be the cheapest
-    expect(result.shippingCharge).toBe(recommended?.shippingChargePaise);
+    // Backend auto-selects cheapest provider; Delhivery (4500 paise) cheaper than Shiprocket (6500 paise)
+    expect(result.selectedShippingProvider).toBeDefined();
+    expect(result.selectedShippingProvider).toBe('DELHIVERY');
+    expect(result.shippingCharge).toBe(4500);
   });
 
   it('rejects when both providers say pincode is unserviceable in dual mode', async () => {

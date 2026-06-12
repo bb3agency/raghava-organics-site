@@ -46,6 +46,8 @@ export interface DeliveryRates {
   pincode: string;
   shippingCharge: number;
   estimatedDays: number;
+  /** Backend-selected cheapest provider — passed to order creation. */
+  selectedShippingProvider?: "DELHIVERY" | "SHIPROCKET";
   availableCouriers?: Array<{
     courierCompanyId: number;
     courierName: string;

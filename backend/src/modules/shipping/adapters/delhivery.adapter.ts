@@ -82,6 +82,13 @@ export default class DelhiveryAdapter implements ShippingProviderAdapter {
       input.items && input.items.length > 0 ? input.items.reduce((s, i) => s + i.quantity, 0) : 1;
     const orderDate = new Date().toISOString().slice(0, 10);
 
+    // Delhivery payment_mode values: 'COD' or 'Pre-paid' (hyphenated — 'Prepaid' is rejected)
+    const delhiveryPaymentMode = input.paymentMode === 'COD' ? 'COD' : 'Pre-paid';
+
+    // Seller address: prefer configured address; fall back to city+state (never a pincode string)
+    const sellerAddFallback = [this.sellerCity, this.sellerState].filter(Boolean).join(', ') || 'India';
+    const sellerAdd = this.sellerAddress || sellerAddFallback;
+
     const shipmentEntry: Record<string, unknown> = {
       name: input.customer.fullName,
       phone: input.customer.phone,
@@ -94,7 +101,7 @@ export default class DelhiveryAdapter implements ShippingProviderAdapter {
       pin: input.destinationPincode,
       order: input.orderNumber,
       waybill: '', // leave empty for auto-assignment
-      payment_mode: input.paymentMode, // 'COD' | 'Prepaid'
+      payment_mode: delhiveryPaymentMode,
       total_amount: Number(input.amountRupees.toFixed(2)),
       products_desc: productsDesc,
       hsn_code: resolveShippingHsnCode({ variantHsnCode: input.hsnCode }),
@@ -104,10 +111,10 @@ export default class DelhiveryAdapter implements ShippingProviderAdapter {
       origin_pin: input.originPincode,
       seller_gst_tin: input.sellerGstTin,
       seller_name: this.sellerName,
-      seller_add: this.sellerAddress || input.originPincode,
+      seller_add: sellerAdd,
       seller_phone: this.sellerPhone,
       return_name: this.sellerName,
-      return_add: this.sellerAddress || input.originPincode,
+      return_add: sellerAdd,
       return_pin: returnPin,
       return_city: this.sellerCity,
       return_state: this.sellerState,
@@ -133,6 +140,27 @@ export default class DelhiveryAdapter implements ShippingProviderAdapter {
     const body = new URLSearchParams({ format: 'json', data });
 
     const payload = await this.request('/api/cmu/create.json', { method: 'POST', body });
+
+    // Per Delhivery API docs, successful response must have:
+    // 1. success === true at root level
+    // 2. packages[0].status === "Success"
+    // 3. packages[0].waybill containing the AWB
+    const success = payload.success === true;
+    const firstPackage = this.pickUnknown(payload, ['packages', 0]);
+    const packageStatus =
+      firstPackage && typeof firstPackage === 'object' && !Array.isArray(firstPackage)
+        ? (firstPackage as Record<string, unknown>).status
+        : undefined;
+    const isSuccess = packageStatus === 'Success';
+
+    if (!success || !isSuccess) {
+      const remarks = this.pickString(payload, [['packages', 0, 'remarks'], ['rmk']]);
+      throw new AppError(
+        ERROR_CODES.INTERNAL_ERROR,
+        `Delhivery shipment creation failed${remarks ? `: ${remarks}` : ''}`,
+        502
+      );
+    }
 
     const packageWaybill = this.pickString(payload, [
       ['packages', 0, 'waybill'],
@@ -232,7 +260,25 @@ export default class DelhiveryAdapter implements ShippingProviderAdapter {
     const payload = await this.request(
       `/c/api/pin-codes/json/?filter_codes=${encodeURIComponent(pincode)}`
     );
-    const serviceable = this.pickArrayLength(payload, [['delivery_codes']]) > 0;
+
+    // A pincode entry exists AND postal_code.reachable must be "Y".
+    // Delhivery returns string "Y"/"N" flags (not booleans) for reachable, pre_paid, cash_on_delivery.
+    // A pincode record with reachable="N" is a known-but-non-serviceable area (ODA, NSZ).
+    const deliveryCodes = this.pickUnknown(payload, ['delivery_codes']);
+    let serviceable = false;
+    if (Array.isArray(deliveryCodes) && deliveryCodes.length > 0) {
+      const first = deliveryCodes[0];
+      if (first && typeof first === 'object' && !Array.isArray(first)) {
+        const postalCode = (first as Record<string, unknown>).postal_code;
+        if (postalCode && typeof postalCode === 'object' && !Array.isArray(postalCode)) {
+          const pc = postalCode as Record<string, unknown>;
+          const reachable = pc.reachable;
+          // Absent reachable field means serviceable (older API versions / full pincode list endpoint)
+          serviceable = reachable === 'Y' || reachable === true || reachable === undefined;
+        }
+      }
+    }
+
     return { pincode, serviceable, providerPayload: payload };
   }
 
@@ -251,14 +297,16 @@ export default class DelhiveryAdapter implements ShippingProviderAdapter {
     // Note: Delhivery's rate endpoint uses /api/kinko (not under /api prefix that would double)
     const payload = await this.request(`/api/kinko/v1/invoice/charges/.json?${query.toString()}`);
 
+    // charge_with_tax is Delhivery's primary field for the total charge inclusive of GST.
+    // total_amount is kept as a fallback for older API versions or staging responses.
     const chargeRupees = this.pickNumber(payload, [
+      ['charge_with_tax'],
       ['total_amount'],
       ['totalAmount'],
       ['freight_charge'],
       ['charges', 'total_amount'],
-      ['charges', 0, 'total_amount'],
-      ['data', 'total_amount'],
-      ['data', 0, 'total_amount']
+      ['data', 'charge_with_tax'],
+      ['data', 'total_amount']
     ]);
 
     const estimatedDaysRaw = this.pickNumber(payload, [
@@ -291,9 +339,15 @@ export default class DelhiveryAdapter implements ShippingProviderAdapter {
     const responseText = await response.text();
     const parsed = this.parsePayload(responseText);
     if (!response.ok) {
+      // Include Delhivery's error detail (often in 'message', 'error', or 'rmk') for diagnostics
+      const detail =
+        typeof parsed.message === 'string' ? parsed.message :
+        typeof parsed.error === 'string' ? parsed.error :
+        typeof parsed.rmk === 'string' ? parsed.rmk :
+        responseText.slice(0, 200);
       throw new AppError(
         ERROR_CODES.INTERNAL_ERROR,
-        `Delhivery API request failed: ${response.status}`,
+        `Delhivery API error ${response.status}: ${detail}`,
         502
       );
     }
@@ -336,16 +390,6 @@ export default class DelhiveryAdapter implements ShippingProviderAdapter {
       }
     }
     return null;
-  }
-
-  private pickArrayLength(payload: Record<string, unknown>, paths: Array<Array<string | number>>): number {
-    for (const path of paths) {
-      const value = this.pickUnknown(payload, path);
-      if (Array.isArray(value)) {
-        return value.length;
-      }
-    }
-    return 0;
   }
 
   private pickNumber(payload: Record<string, unknown>, paths: Array<Array<string | number>>): number | null {

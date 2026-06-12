@@ -103,17 +103,47 @@ function normalizeOccurredAt(raw: string | null): string | undefined {
 }
 
 function unwrapWebhookBody(raw: unknown): Record<string, unknown> | null {
-  // Delhivery Push API sends an array — extract the first element
+  // Delhivery may send an array in some configurations — unwrap first element and recurse
   if (Array.isArray(raw)) {
     if (raw.length === 0) return null;
     const first = raw[0];
     if (!first || typeof first !== 'object' || Array.isArray(first)) return null;
-    return first as Record<string, unknown>;
+    return unwrapWebhookBody(first);
   }
   if (!raw || typeof raw !== 'object') {
     return null;
   }
   const body = raw as Record<string, unknown>;
+
+  // Delhivery Push API format: { "Shipment": { "AWB": "...", "Status": { ... }, "ReferenceNo": "..." } }
+  // Flatten into a single-level record so downstream key lookups work without path awareness.
+  const shipmentObj = body.Shipment;
+  if (shipmentObj && typeof shipmentObj === 'object' && !Array.isArray(shipmentObj)) {
+    const shipment = shipmentObj as Record<string, unknown>;
+    const statusObj = shipment.Status;
+    const status =
+      statusObj && typeof statusObj === 'object' && !Array.isArray(statusObj)
+        ? (statusObj as Record<string, unknown>)
+        : {};
+    return {
+      // AWB / waybill
+      AWB: shipment.AWB,
+      Waybill: shipment.AWB,
+      // Status fields — flattened from nested Status object
+      Status: status.Status,
+      StatusType: status.StatusType,
+      StatusLocation: status.StatusLocation,
+      StatusDateTime: status.StatusDateTime,
+      Instructions: status.Instructions,
+      description: status.Instructions,
+      // Delhivery order reference (maps back to our order number)
+      ReferenceNo: shipment.ReferenceNo,
+      // Preserve originals for any downstream consumers
+      _rawShipment: shipment
+    };
+  }
+
+  // Shiprocket and other providers nest under `data`
   const nested = body.data;
   if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
     return nested as Record<string, unknown>;
@@ -127,7 +157,8 @@ export function readStrictDelhiveryOccurredAt(raw: unknown): string | null {
   if (!body) {
     return null;
   }
-  return readFirstString(body, ['occurredAt', 'occurred_at']);
+  // StatusDateTime is Delhivery Push API's primary timestamp field; the others are legacy aliases
+  return readFirstString(body, ['StatusDateTime', 'occurredAt', 'occurred_at']);
 }
 
 /** Maps Delhivery-style and native Shiprocket webhook bodies to the internal worker contract. */

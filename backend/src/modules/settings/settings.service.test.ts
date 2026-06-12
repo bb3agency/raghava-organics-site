@@ -22,7 +22,7 @@ describe('SettingsService', () => {
     } as unknown as FastifyInstance;
     const service = new SettingsService(fastify);
 
-    await expect(service.getShippingSettings()).resolves.toEqual({
+    await expect(service.getShippingSettings()).resolves.toMatchObject({
       pickupPincode: '500001',
       minOrderValuePaise: 15000,
       source: 'database'
@@ -41,7 +41,7 @@ describe('SettingsService', () => {
     } as unknown as FastifyInstance;
     const service = new SettingsService(fastify);
 
-    await expect(service.getShippingSettings()).resolves.toEqual({
+    await expect(service.getShippingSettings()).resolves.toMatchObject({
       pickupPincode: '500001',
       minOrderValuePaise: 0,
       source: 'default'
@@ -60,7 +60,7 @@ describe('SettingsService', () => {
     } as unknown as FastifyInstance;
     const service = new SettingsService(fastify);
 
-    await expect(service.getShippingSettings()).resolves.toEqual({
+    await expect(service.getShippingSettings()).resolves.toMatchObject({
       pickupPincode: '560001',
       minOrderValuePaise: 0,
       source: 'environment'
@@ -86,7 +86,7 @@ describe('SettingsService', () => {
     } as unknown as FastifyInstance;
     const service = new SettingsService(fastify);
 
-    await expect(service.getShippingSettings()).resolves.toEqual({
+    await expect(service.getShippingSettings()).resolves.toMatchObject({
       pickupPincode: '522006',
       minOrderValuePaise: 0,
       source: 'environment'
@@ -141,7 +141,7 @@ describe('SettingsService', () => {
     } as unknown as FastifyInstance;
     const service = new SettingsService(fastify);
 
-    await expect(service.updateShippingSettings({ pickupPincode: '560001', minOrderValuePaise: 12000 })).resolves.toEqual({
+    await expect(service.updateShippingSettings({ pickupPincode: '560001', minOrderValuePaise: 12000 })).resolves.toMatchObject({
       pickupPincode: '560001',
       minOrderValuePaise: 12000,
       source: 'database'

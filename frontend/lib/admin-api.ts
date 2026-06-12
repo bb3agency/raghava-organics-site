@@ -889,10 +889,17 @@ export interface AdminReconciliationIssue {
   resolvedAt?: string;
 }
 
+export interface ShippingProviderAvailability {
+  delhiveryConfigured: boolean;
+  shiprocketConfigured: boolean;
+  hasAnyProvider: boolean;
+}
+
 export interface AdminShippingSettings {
   pickupPincode: string;
   minOrderValuePaise: number;
   source: "database" | "environment" | "default";
+  providerAvailability: ShippingProviderAvailability;
 }
 
 export interface AdminStoreProfile {

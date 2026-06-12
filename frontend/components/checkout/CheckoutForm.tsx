@@ -71,7 +71,7 @@ export function CheckoutForm() {
   const [submitting, setSubmitting] = useState(false);
   const [savedAddresses, setSavedAddresses] = useState<UserAddress[]>([]);
   const [selectedAddressId, setSelectedAddressId] = useState<string | null>(null);
-  const [shippingQuote, setShippingQuote] = useState<{ shippingCharge: number; estimatedDays: number } | null>(null);
+  const [shippingQuote, setShippingQuote] = useState<{ shippingCharge: number; estimatedDays: number; selectedShippingProvider?: "DELHIVERY" | "SHIPROCKET" } | null>(null);
   const [shippingQuoteLoading, setShippingQuoteLoading] = useState(false);
   const [shippingQuoteError, setShippingQuoteError] = useState<string | null>(null);
   const [couponCode, setCouponCode] = useState("");
@@ -133,6 +133,7 @@ export function CheckoutForm() {
           setShippingQuote({
             shippingCharge: rates.shippingCharge,
             estimatedDays: rates.estimatedDays,
+            selectedShippingProvider: rates.selectedShippingProvider,
           });
           setShippingQuoteError(null);
         }
@@ -300,7 +301,7 @@ export function CheckoutForm() {
         const orderIdempotencyKey = createIdempotencyKey();
         const order = await createOrder(
           addressId
-            ? { addressId, paymentMode: "COD", notes: values.notes }
+            ? { addressId, paymentMode: "COD", notes: values.notes, selectedShippingProvider: shippingQuote?.selectedShippingProvider }
             : {
                 paymentMode: "COD",
                 shippingAddress: {
@@ -313,6 +314,7 @@ export function CheckoutForm() {
                   pincode: values.pincode,
                 },
                 notes: values.notes,
+                selectedShippingProvider: shippingQuote?.selectedShippingProvider,
               },
           accessToken,
           orderIdempotencyKey,
@@ -339,7 +341,7 @@ export function CheckoutForm() {
       const prepareKey = createIdempotencyKey();
       const checkout = await prepareCheckout(
         addressId
-          ? { addressId, notes: values.notes }
+          ? { addressId, notes: values.notes, selectedShippingProvider: shippingQuote?.selectedShippingProvider }
           : {
               shippingAddress: {
                 fullName: values.fullName,
@@ -351,6 +353,7 @@ export function CheckoutForm() {
                 pincode: values.pincode,
               },
               notes: values.notes,
+              selectedShippingProvider: shippingQuote?.selectedShippingProvider,
             },
         accessToken,
         prepareKey,

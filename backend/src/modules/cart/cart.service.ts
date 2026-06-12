@@ -586,160 +586,124 @@ export class CartService {
       noopFallback: usingNoop ? '500001' : null
     });
 
-    // Dual-provider mode: both Delhivery and Shiprocket credentials are configured.
-    // This check runs before the single-provider path regardless of the CartService constructor's
-    // shippingProvider (which may be noop when SHIPPING_PROVIDER is not explicitly set).
-    const dualRuntime = resolveDualShippingRuntime();
-    if (dualRuntime.isDual && dualRuntime.delhivery?.adapter && dualRuntime.shiprocket?.adapter) {
+    // Multi-provider mode: use all configured providers. At least one must be present.
+    // This check runs regardless of SHIPPING_PROVIDER env var — detection is credential-based.
+    const providerRuntime = resolveDualShippingRuntime();
+    if (providerRuntime.hasAny) {
       if (!pickupPincode) {
-        throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Shipping provider is not configured', 503);
+        throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Pickup pincode is not configured', 503);
       }
-      return this.getDeliveryRatesDual({
+      return this.getDeliveryRatesMultiProvider({
         cart,
         pincode,
         pickupPincode,
         paymentMode,
-        delhiveryAdapter: dualRuntime.delhivery.adapter,
-        shiprocketAdapter: dualRuntime.shiprocket.adapter
+        delhiveryAdapter: providerRuntime.delhivery?.adapter ?? null,
+        shiprocketAdapter: providerRuntime.shiprocket?.adapter ?? null
       });
     }
 
-    // Single-provider fallback (existing behavior)
-    if (!usingNoop && !this.shippingProvider) {
+    // Noop fallback — no providers configured at all
+    if (!usingNoop) {
       throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Shipping provider is not configured', 503);
     }
-    const effectiveProvider: ShippingProviderAdapter =
-      usingNoop ? new NoopShippingAdapter() : (this.shippingProvider as ShippingProviderAdapter);
     if (!pickupPincode) {
-      throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Shipping provider is not configured', 503);
+      throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Pickup pincode is not configured', 503);
     }
-
-    const serviceability = await effectiveProvider.checkServiceability(pincode, pickupPincode);
-    if (!serviceability.serviceable) {
-      throw new AppError(ERROR_CODES.PINCODE_NOT_SERVICEABLE, 'Delivery is unavailable for this pincode', 422);
-    }
-
-    const shippingQuote = await this.computeShippingChargeForCart({
+    const noopQuote = await this.computeShippingChargeForCart({
       cart,
       destinationPincode: pincode,
       originPincode: pickupPincode,
-      provider: effectiveProvider,
-      usingNoop,
+      provider: new NoopShippingAdapter(),
+      usingNoop: true,
       paymentMode
     });
-
     return {
       pincode,
-      shippingCharge: shippingQuote.shippingChargePaise,
-      estimatedDays: shippingQuote.estimatedDays,
-      ...(shippingQuote.availableCouriers && shippingQuote.availableCouriers.length > 0
-        ? { availableCouriers: shippingQuote.availableCouriers }
-        : {})
+      shippingCharge: noopQuote.shippingChargePaise,
+      estimatedDays: noopQuote.estimatedDays
     };
   }
 
-  private async getDeliveryRatesDual(input: {
+  private async getDeliveryRatesMultiProvider(input: {
     cart: { coupon: Coupon | null; items: Array<{ quantity: number; variant: { id: string; weight?: number | null } }> };
     pincode: string;
     pickupPincode: string;
     paymentMode: 'COD' | 'PREPAID';
-    delhiveryAdapter: ShippingProviderAdapter;
-    shiprocketAdapter: ShippingProviderAdapter;
+    delhiveryAdapter: ShippingProviderAdapter | null;
+    shiprocketAdapter: ShippingProviderAdapter | null;
   }) {
     const totalWeightGrams = input.cart.items.reduce((sum, item) => {
       return sum + Math.max(item.variant.weight ?? 1, 1) * item.quantity;
     }, 0);
 
-    const [delhiveryServiceability, shiprocketServiceability] = await Promise.allSettled([
-      input.delhiveryAdapter.checkServiceability(input.pincode, input.pickupPincode),
-      input.shiprocketAdapter.checkServiceability(input.pincode, input.pickupPincode)
-    ]);
+    const activeAdapters: Array<{ key: 'DELHIVERY' | 'SHIPROCKET'; adapter: ShippingProviderAdapter }> = [];
+    if (input.delhiveryAdapter) activeAdapters.push({ key: 'DELHIVERY', adapter: input.delhiveryAdapter });
+    if (input.shiprocketAdapter) activeAdapters.push({ key: 'SHIPROCKET', adapter: input.shiprocketAdapter });
 
-    const delhiveryServiceable =
-      delhiveryServiceability.status === 'fulfilled' && delhiveryServiceability.value.serviceable;
-    const shiprocketServiceable =
-      shiprocketServiceability.status === 'fulfilled' && shiprocketServiceability.value.serviceable;
+    const serviceabilityResults = await Promise.allSettled(
+      activeAdapters.map(({ adapter }) => adapter.checkServiceability(input.pincode, input.pickupPincode))
+    );
 
-    if (!delhiveryServiceable && !shiprocketServiceable) {
+    const serviceableAdapters = activeAdapters.filter(
+      (_, i) => serviceabilityResults[i]?.status === 'fulfilled' &&
+        (serviceabilityResults[i] as PromiseFulfilledResult<{ serviceable: boolean }>).value.serviceable
+    );
+
+    if (serviceableAdapters.length === 0) {
       throw new AppError(ERROR_CODES.PINCODE_NOT_SERVICEABLE, 'Delivery is unavailable for this pincode', 422);
     }
 
     const couponsEnabled = await isStorefrontCouponsEnabled(this.fastify.prisma);
-    const effectiveCoupon = couponsEnabled ? input.cart.coupon : null;
-    const isFreeShipping = effectiveCoupon?.type === CouponType.FREE_SHIPPING;
+    const isFreeShipping = couponsEnabled && input.cart.coupon?.type === CouponType.FREE_SHIPPING;
 
-    const [delhiveryRate, shiprocketRate] = await Promise.allSettled([
-      delhiveryServiceable
-        ? input.delhiveryAdapter.calculateDeliveryRate({
-            destinationPincode: input.pincode,
-            originPincode: input.pickupPincode,
-            totalWeightGrams,
-            paymentMode: input.paymentMode
-          })
-        : Promise.reject(new Error('not serviceable')),
-      shiprocketServiceable
-        ? input.shiprocketAdapter.calculateDeliveryRate({
-            destinationPincode: input.pincode,
-            originPincode: input.pickupPincode,
-            totalWeightGrams,
-            paymentMode: input.paymentMode
-          })
-        : Promise.reject(new Error('not serviceable'))
-    ]);
+    const rateResults = await Promise.allSettled(
+      serviceableAdapters.map(({ adapter }) =>
+        adapter.calculateDeliveryRate({
+          destinationPincode: input.pincode,
+          originPincode: input.pickupPincode,
+          totalWeightGrams,
+          paymentMode: input.paymentMode
+        })
+      )
+    );
 
-    type ProviderRate = {
+    type CandidateRate = {
       provider: 'DELHIVERY' | 'SHIPROCKET';
-      providerDisplayName: string;
       shippingChargePaise: number;
       estimatedDays: number;
-      recommended: boolean;
     };
 
-    const rates: ProviderRate[] = [];
-
-    if (delhiveryRate.status === 'fulfilled') {
-      rates.push({
-        provider: 'DELHIVERY',
-        providerDisplayName: 'Delhivery',
-        shippingChargePaise: isFreeShipping ? 0 : delhiveryRate.value.shippingChargePaise,
-        estimatedDays: delhiveryRate.value.estimatedDays,
-        recommended: false
-      });
-    }
-
-    if (shiprocketRate.status === 'fulfilled') {
-      rates.push({
-        provider: 'SHIPROCKET',
-        providerDisplayName: 'Shiprocket',
-        shippingChargePaise: isFreeShipping ? 0 : shiprocketRate.value.shippingChargePaise,
-        estimatedDays: shiprocketRate.value.estimatedDays,
-        recommended: false
-      });
-    }
-
-    if (rates.length === 0) {
-      throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Unable to fetch delivery rates from any provider', 503);
-    }
-
-    // Sort by cheapest, then by fastest delivery as tiebreaker
-    rates.sort((a, b) => {
-      if (a.shippingChargePaise !== b.shippingChargePaise) {
-        return a.shippingChargePaise - b.shippingChargePaise;
+    const candidates: CandidateRate[] = [];
+    for (let i = 0; i < serviceableAdapters.length; i++) {
+      const result = rateResults[i];
+      if (result?.status === 'fulfilled') {
+        candidates.push({
+          provider: serviceableAdapters[i]!.key,
+          shippingChargePaise: isFreeShipping ? 0 : result.value.shippingChargePaise,
+          estimatedDays: result.value.estimatedDays
+        });
       }
-      return a.estimatedDays - b.estimatedDays;
-    });
+    }
 
-    const cheapest = rates[0];
-    if (!cheapest) {
+    if (candidates.length === 0) {
       throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Unable to fetch delivery rates from any provider', 503);
     }
-    cheapest.recommended = true;
+
+    // Sort by cheapest, then fastest as tiebreaker
+    candidates.sort((a, b) =>
+      a.shippingChargePaise !== b.shippingChargePaise
+        ? a.shippingChargePaise - b.shippingChargePaise
+        : a.estimatedDays - b.estimatedDays
+    );
+
+    const winner = candidates[0]!;
 
     return {
       pincode: input.pincode,
-      shippingCharge: cheapest.shippingChargePaise,
-      estimatedDays: cheapest.estimatedDays,
-      rates
+      shippingCharge: winner.shippingChargePaise,
+      estimatedDays: winner.estimatedDays,
+      selectedShippingProvider: winner.provider
     };
   }
 

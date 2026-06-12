@@ -8,7 +8,7 @@ import { ADMIN_PERMISSIONS, hasAdminPermission } from "@/lib/permissions";
 import { createIdempotencyKey } from "@/lib/idempotency";
 import type { AdminShippingSettings } from "@/lib/admin-api";
 import { getApiErrorMessage } from "@/lib/error-messages";
-import { Truck, MapPin, IndianRupee, CheckCircle2, AlertTriangle, Loader2 } from "lucide-react";
+import { Truck, MapPin, IndianRupee, CheckCircle2, AlertTriangle, Loader2, Package, Settings } from "lucide-react";
 import { BoxPresetsPanel } from "@/components/admin/BoxPresetsPanel";
 
 export function ShippingSettingsPanel() {
@@ -167,6 +167,60 @@ export function ShippingSettingsPanel() {
           {settings?.source && settings.source !== "default" && (
             <div className="text-xs text-muted-foreground px-1">
               Configuration Active Source: <span className="font-semibold text-foreground uppercase">{settings.source}</span>
+            </div>
+          )}
+
+          {/* Provider Availability Card */}
+          {settings?.providerAvailability && (
+            <div className="rounded-xl border border-border bg-muted/10 p-4 sm:p-5 space-y-3">
+              <h4 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                <Package className="h-4 w-4 text-primary" />
+                Shipping Provider Status
+              </h4>
+              {!settings.providerAvailability.hasAnyProvider && (
+                <div className="flex min-w-0 items-start gap-2.5 rounded-lg border border-destructive/20 bg-destructive/10 p-3 text-xs text-destructive overflow-hidden">
+                  <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" aria-hidden />
+                  <span className="break-words min-w-0">
+                    <strong>No shipping provider is configured.</strong> Customers cannot get delivery rates at checkout.
+                    Configure Delhivery or Shiprocket credentials in the{" "}
+                    <a href="/ops/config" className="underline font-medium">Ops Config panel</a>.
+                  </span>
+                </div>
+              )}
+              <div className="grid gap-2 sm:grid-cols-2">
+                <div className={`flex items-center gap-2.5 rounded-lg border p-3 text-sm ${settings.providerAvailability.delhiveryConfigured ? "border-green-500/30 bg-green-500/10" : "border-border bg-muted/20"}`}>
+                  <div className={`h-2 w-2 shrink-0 rounded-full ${settings.providerAvailability.delhiveryConfigured ? "bg-green-500" : "bg-muted-foreground/30"}`} />
+                  <div className="min-w-0">
+                    <div className="font-medium text-foreground text-xs">Delhivery</div>
+                    <div className={`text-xs ${settings.providerAvailability.delhiveryConfigured ? "text-green-700" : "text-muted-foreground"}`}>
+                      {settings.providerAvailability.delhiveryConfigured ? "Configured" : "Not configured"}
+                    </div>
+                  </div>
+                  {!settings.providerAvailability.delhiveryConfigured && (
+                    <Settings className="h-3.5 w-3.5 text-muted-foreground/50 ml-auto shrink-0" aria-hidden />
+                  )}
+                </div>
+                <div className={`flex items-center gap-2.5 rounded-lg border p-3 text-sm ${settings.providerAvailability.shiprocketConfigured ? "border-green-500/30 bg-green-500/10" : "border-border bg-muted/20"}`}>
+                  <div className={`h-2 w-2 shrink-0 rounded-full ${settings.providerAvailability.shiprocketConfigured ? "bg-green-500" : "bg-muted-foreground/30"}`} />
+                  <div className="min-w-0">
+                    <div className="font-medium text-foreground text-xs">Shiprocket</div>
+                    <div className={`text-xs ${settings.providerAvailability.shiprocketConfigured ? "text-green-700" : "text-muted-foreground"}`}>
+                      {settings.providerAvailability.shiprocketConfigured ? "Configured" : "Not configured"}
+                    </div>
+                  </div>
+                  {!settings.providerAvailability.shiprocketConfigured && (
+                    <Settings className="h-3.5 w-3.5 text-muted-foreground/50 ml-auto shrink-0" aria-hidden />
+                  )}
+                </div>
+              </div>
+              {settings.providerAvailability.hasAnyProvider && (
+                <p className="text-xs text-muted-foreground">
+                  {settings.providerAvailability.delhiveryConfigured && settings.providerAvailability.shiprocketConfigured
+                    ? "Both providers active — cheapest rate auto-selected at checkout."
+                    : "One provider active — rates fetched from configured provider."}
+                  {" "}Configure credentials in the <a href="/ops/config" className="underline">Ops Config panel</a>.
+                </p>
+              )}
             </div>
           )}
 
