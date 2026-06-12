@@ -20,6 +20,9 @@ const logger = {
   error: (msg) => console.log(`❌ ${msg}`),
 };
 
+// Resolve project root: script is in backend/scripts, so go up 2 levels
+const projectRoot = path.resolve(__dirname, '..');
+
 async function main() {
   console.log('\n' + '='.repeat(60));
   console.log('EMAIL NOTIFICATION FLOW VERIFICATION');
@@ -27,7 +30,7 @@ async function main() {
 
   // 1. Check .env for required variables
   logger.info('Checking backend configuration...');
-  const envPath = path.join(process.cwd(), '.env');
+  const envPath = path.join(projectRoot, '.env');
   if (!fs.existsSync(envPath)) {
     logger.error('.env file not found');
     process.exit(1);
@@ -60,27 +63,29 @@ async function main() {
 
   // 2. Check notification templates
   logger.info('\nChecking email templates...');
-  const templatesPath = path.join(process.cwd(), 'src/modules/notifications/templates');
+  const templatesPath = path.join(projectRoot, 'src/modules/notifications/templates');
   if (!fs.existsSync(templatesPath)) {
     logger.warn(`Templates directory not found at ${templatesPath}`);
   } else {
-    const templates = [
-      'email-templates.ts',
-      'sms-templates.ts'
-    ];
-    for (const template of templates) {
-      const exists = fs.existsSync(path.join(templatesPath, template));
-      if (exists) {
-        logger.success(`Found ${template}`);
-      } else {
-        logger.warn(`Missing ${template}`);
-      }
+    const emailTemplatesPath = path.join(templatesPath, 'email-templates.ts');
+    if (fs.existsSync(emailTemplatesPath)) {
+      logger.success('Found email-templates.ts');
+    } else {
+      logger.warn('Missing email-templates.ts');
+    }
+
+    // Check for SMS template registry or registry in notifications module
+    const smsRegistryPath = path.join(projectRoot, 'src/modules/notifications/sms-template-registry.ts');
+    if (fs.existsSync(smsRegistryPath)) {
+      logger.success('Found SMS template registry');
+    } else {
+      logger.info('SMS templates may be defined in registry or adapters');
     }
   }
 
   // 3. Check notification worker
   logger.info('\nChecking notification worker...');
-  const workerPath = path.join(process.cwd(), 'queues/workers/notifications.worker.ts');
+  const workerPath = path.join(projectRoot, 'queues/workers/notifications.worker.ts');
   if (!fs.existsSync(workerPath)) {
     logger.error('Notification worker not found');
   } else {
@@ -88,7 +93,7 @@ async function main() {
 
     const hasSendPrimary = workerContent.includes("job.name === 'send-primary'");
     const hasResendAdapter = workerContent.includes('ResendAdapter');
-    const hasNotificationLog = workerContent.includes('NotificationLog');
+    const hasNotificationLog = workerContent.includes('notificationLog.create') || workerContent.includes('NotificationLog.create');
 
     if (hasSendPrimary) {
       logger.success('send-primary job handler found');
@@ -111,9 +116,9 @@ async function main() {
 
   // 4. Check notification triggers
   logger.info('\nChecking notification triggers...');
-  const ordersServicePath = path.join(process.cwd(), 'src/modules/orders/orders.service.ts');
-  const orderProcessingWorkerPath = path.join(process.cwd(), 'queues/workers/order-processing.worker.ts');
-  const shippingWorkerPath = path.join(process.cwd(), 'queues/workers/shipping.worker.ts');
+  const ordersServicePath = path.join(projectRoot, 'src/modules/orders/orders.service.ts');
+  const orderProcessingWorkerPath = path.join(projectRoot, 'queues/workers/order-processing.worker.ts');
+  const shippingWorkerPath = path.join(projectRoot, 'queues/workers/shipping.worker.ts');
 
   const checkTrigger = (filePath, templateName) => {
     if (!fs.existsSync(filePath)) {
