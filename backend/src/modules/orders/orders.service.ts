@@ -1784,10 +1784,13 @@ export class OrdersService {
     // trusting SHIPPING_PROVIDER (which names only one of the two active providers).
     //   Delhivery: Authorization: Token <secret>
     //   Shiprocket: x-api-key: <secret>  OR  Authorization: Bearer <secret>
-    const hasDelhivery = Boolean((runtimeConfig.DELHIVERY_API_KEY ?? '').trim());
+    // When runtimeConfig is empty (test harness), fall back to process.env
+    const hasDelhivery = Boolean(
+      (runtimeConfig.DELHIVERY_API_KEY ?? process.env.DELHIVERY_API_KEY ?? '').trim()
+    );
     const hasShiprocket =
-      Boolean((runtimeConfig.SHIPROCKET_EMAIL ?? '').trim()) &&
-      Boolean((runtimeConfig.SHIPROCKET_PASSWORD ?? '').trim());
+      Boolean((runtimeConfig.SHIPROCKET_EMAIL ?? process.env.SHIPROCKET_EMAIL ?? '').trim()) &&
+      Boolean((runtimeConfig.SHIPROCKET_PASSWORD ?? process.env.SHIPROCKET_PASSWORD ?? '').trim());
     const isDualMode = hasDelhivery && hasShiprocket;
 
     let activeProvider: string;
@@ -1812,7 +1815,7 @@ export class OrdersService {
 
     let effectiveWebhookSecret: string;
     if (isShiprocket) {
-      effectiveWebhookSecret = (runtimeConfig.SHIPROCKET_WEBHOOK_TOKEN ?? '').trim();
+      effectiveWebhookSecret = (runtimeConfig.SHIPROCKET_WEBHOOK_TOKEN ?? process.env.SHIPROCKET_WEBHOOK_TOKEN ?? '').trim();
     } else if (isNoopShipping) {
       const headerToken =
         typeof authHeader === 'string' ? authHeader.replace(/^Bearer\s+/i, '').trim() : '';

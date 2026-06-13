@@ -277,7 +277,10 @@ describe('OrdersService webhook idempotency integration', () => {
   });
 
   it('accepts native Shiprocket webhook payload shape (current_status + scans)', async () => {
-    process.env.SHIPPING_PROVIDER = 'shiprocket';
+    // Enable dual-mode by setting both Delhivery and Shiprocket credentials.
+    // The Bearer token prefix will trigger Shiprocket selection in dual mode.
+    process.env.SHIPROCKET_EMAIL = 'test@shiprocket.com';
+    process.env.SHIPROCKET_PASSWORD = 'shiprocket-password';
     process.env.SHIPROCKET_WEBHOOK_TOKEN = 'shiprocket-webhook-secret';
     const { service, shippingJobs, shippingAdd } = createServiceHarness();
     const payload = Buffer.from(
@@ -313,7 +316,9 @@ describe('OrdersService webhook idempotency integration', () => {
   });
 
   it('accepts Shiprocket Bearer token format when SHIPPING_PROVIDER=shiprocket', async () => {
-    process.env.SHIPPING_PROVIDER = 'shiprocket';
+    // Enable dual-mode by setting both Delhivery and Shiprocket credentials
+    process.env.SHIPROCKET_EMAIL = 'test@shiprocket.com';
+    process.env.SHIPROCKET_PASSWORD = 'shiprocket-password';
     process.env.SHIPROCKET_WEBHOOK_TOKEN = 'shiprocket-webhook-secret';
     const { service, shippingJobs, shippingAdd } = createServiceHarness();
     const occurredAt = new Date().toISOString();
@@ -343,7 +348,9 @@ describe('OrdersService webhook idempotency integration', () => {
   });
 
   it('accepts Shiprocket x-api-key header format (raw token, no Bearer prefix)', async () => {
-    process.env.SHIPPING_PROVIDER = 'shiprocket';
+    // Enable dual-mode by setting both Delhivery and Shiprocket credentials
+    process.env.SHIPROCKET_EMAIL = 'test@shiprocket.com';
+    process.env.SHIPROCKET_PASSWORD = 'shiprocket-password';
     process.env.SHIPROCKET_WEBHOOK_TOKEN = 'shiprocket-xapikey-secret';
     const { service, shippingJobs, shippingAdd } = createServiceHarness();
     const occurredAt = new Date().toISOString();
