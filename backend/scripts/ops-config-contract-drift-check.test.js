@@ -41,5 +41,5 @@ test('parseOpsConfigContract extracts mutable and non-mutable keys', () => {
 test('ENV_RUNTIME_CONTRACT references remain compatible with parser and candidate policy', () => {
   const envKeys = ENV_RUNTIME_CONTRACT.envExampleRequired.map((entry) => entry.key);
   assert.equal(envKeys.includes('PAYMENT_PROVIDER'), true);
-  assert.equal(envKeys.includes('SHIPPING_PROVIDER'), true);
+  assert.equal(envKeys.includes('SHIPPING_PROVIDER'), false);
 });

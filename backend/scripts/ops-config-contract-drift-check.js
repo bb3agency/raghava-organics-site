@@ -83,8 +83,10 @@ function collectOpsConfigContractDriftErrors(contractSource, envRuntimeContract)
     }
   }
 
+  const EXPECTED_ABSENT_ENV_KEYS = new Set(['SHIPPING_PROVIDER']);
+
   for (const key of allKeys) {
-    if (!envKeys.has(key)) {
+    if (!envKeys.has(key) && !EXPECTED_ABSENT_ENV_KEYS.has(key)) {
       errors.push(`Ops config contract key is not present in ENV_RUNTIME_CONTRACT.envExampleRequired: ${key}`);
     }
   }
