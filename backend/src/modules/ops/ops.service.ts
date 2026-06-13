@@ -2374,7 +2374,7 @@ export class OpsService {
     email: string;
     requestIp: string;
     turnstileToken?: string;
-  }): Promise<{ message: string }> {
+  }): Promise<{ message: string; expiresAt: string; devOtp?: string }> {
     await assertTurnstileToken({
       clientIp: input.requestIp,
       ...(input.turnstileToken ? { turnstileToken: input.turnstileToken } : {})
@@ -2383,6 +2383,8 @@ export class OpsService {
     const email = input.email.trim().toLowerCase();
     const prisma = this.prisma();
     const opsUser = await prisma.opsUser.findUnique({ where: { email } });
+
+    const ttl = getLoginOtpTtlSeconds();
 
     if (!opsUser || !opsUser.isActive) {
       // Blind audit: record the failed attempt using system actor to preserve anti-enumeration
@@ -2398,10 +2400,11 @@ export class OpsService {
         method: 'POST',
         summary: { reason: 'account_not_found_or_inactive' }
       });
-      return { message: 'If a registered ops account exists for this email, an OTP has been sent.' };
+      return {
+        message: 'If a registered ops account exists for this email, an OTP has been sent.',
+        expiresAt: new Date(Date.now() + ttl * 1000).toISOString()
+      };
     }
-
-    const ttl = getLoginOtpTtlSeconds();
     const otpKey = `ops:login-otp:${hashOpaqueToken(email)}`;
     const attemptKey = `ops:login-otp-attempts:${hashOpaqueToken(email)}`;
 
@@ -2421,7 +2424,9 @@ export class OpsService {
         summary: { channel: 'dev-bypass', action: 'ops-login' }
       });
       return {
-        message: `Development mode: use OTP ${devOtp} (no email sent).`
+        message: `Development mode: use OTP ${devOtp} (no email sent).`,
+        expiresAt: new Date(Date.now() + ttl * 1000).toISOString(),
+        devOtp
       };
     }
 
@@ -2469,7 +2474,10 @@ export class OpsService {
       summary: { channel: 'email', action: 'ops-login' }
     });
 
-    return { message: 'If a registered ops account exists for this email, an OTP has been sent.' };
+    return {
+      message: 'If a registered ops account exists for this email, an OTP has been sent.',
+      expiresAt: new Date(Date.now() + ttl * 1000).toISOString()
+    };
   }
 
   /**

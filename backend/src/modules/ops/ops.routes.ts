@@ -1322,9 +1322,11 @@ export async function registerOpsRoutes(fastify: FastifyInstance): Promise<void>
           200: {
             type: 'object',
             additionalProperties: false,
-            required: ['message'],
+            required: ['message', 'expiresAt'],
             properties: {
-              message: { type: 'string', maxLength: 200 }
+              message: { type: 'string', maxLength: 200 },
+              expiresAt: { type: 'string', format: 'date-time' },
+              devOtp: { type: 'string', maxLength: 6 }
             }
           },
           ...standardAdminErrorResponses
