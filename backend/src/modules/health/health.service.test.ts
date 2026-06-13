@@ -57,7 +57,7 @@ describe('HealthService queue freshness threshold', () => {
   it('reports runtime config missing in production-like profile', async () => {
     vi.stubEnv('NODE_ENV', 'production');
     vi.stubEnv('PAYMENT_PROVIDER', '');
-    vi.stubEnv('SHIPPING_PROVIDER', '');
+    // SHIPPING_PROVIDER not stubbed — it's non-mutable and not in the required set
     vi.stubEnv('SMS_PROVIDER', '');
     vi.stubEnv('OPS_METRICS_TOKEN', '');
     vi.stubEnv('REPLAY_APPROVAL_TOKEN', '');
@@ -69,7 +69,8 @@ describe('HealthService queue freshness threshold', () => {
     expect(result.status).toBe('not_ready');
     expect(result.degradationMode).toBe('runtime_config_missing');
     expect(result.runtimeConfigMissingKeys).toContain('PAYMENT_PROVIDER');
-    expect(result.runtimeConfigMissingKeys).toContain('SHIPPING_PROVIDER');
+    // SHIPPING_PROVIDER is not required (routing auto-detects from credentials)
+    expect(result.runtimeConfigMissingKeys).not.toContain('SHIPPING_PROVIDER');
     expect(result.runtimeConfigMissingKeys).toContain('MEDIA_STORAGE_PROVIDER');
     expect(result.runtimeConfigMissingKeys).toContain('OPS_METRICS_TOKEN');
     expect(result.runtimeConfigMissingKeys).toContain('REPLAY_APPROVAL_TOKEN');

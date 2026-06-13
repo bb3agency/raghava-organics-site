@@ -29,6 +29,11 @@ describe('ops config contract', () => {
     expect(isOpsConfigRuntimeOverlayKey('CLIENT_ID')).toBe(false);
   });
 
+  it('SHIPPING_PROVIDER is not mutable via ops (routing is credential-based)', () => {
+    expect(isOpsConfigMutableKey('SHIPPING_PROVIDER')).toBe(false);
+    expect(isOpsConfigRuntimeOverlayKey('SHIPPING_PROVIDER')).toBe(false);
+  });
+
   it('newly added dbOverlay keys are correctly classified as mutable runtime overlay keys', () => {
     expect(isOpsConfigMutableKey('EMAIL_PROVIDER')).toBe(true);
     expect(isOpsConfigRuntimeOverlayKey('EMAIL_PROVIDER')).toBe(true);
@@ -46,15 +51,27 @@ describe('ops config contract', () => {
     expect(mutableKeys).toContain('RAZORPAY_KEY_ID');
     expect(mutableKeys).toContain('OPS_METRICS_TOKEN');
     expect(mutableKeys).not.toContain('OPS_DB_ENCRYPTION_KEY');
+    // SHIPPING_PROVIDER is intentionally non-mutable (routing is credential-based)
+    expect(mutableKeys).not.toContain('SHIPPING_PROVIDER');
     expect(listOpsConfigRuntimeOverlayKeys()).toContain('RAZORPAY_KEY_ID');
     expect(listOpsConfigRuntimeOverlayKeys()).not.toContain('REDIS_URL');
+    expect(listOpsConfigRuntimeOverlayKeys()).not.toContain('SHIPPING_PROVIDER');
   });
 
-  it('computes provider-specific required keys for non-strict profile', () => {
+  it('SHIPPING_PROVIDER is not in the required set (routing auto-detects from credentials)', () => {
+    const required = computeRequiredOpsConfigKeys(
+      { PAYMENT_PROVIDER: 'razorpay', SMS_PROVIDER: 'msg91' },
+      false
+    );
+    expect(required).not.toContain('SHIPPING_PROVIDER');
+  });
+
+  it('computes provider-specific required keys for non-strict profile — Shiprocket detected from credentials', () => {
     const required = computeRequiredOpsConfigKeys(
       {
         PAYMENT_PROVIDER: 'razorpay',
-        SHIPPING_PROVIDER: 'shiprocket',
+        // Shiprocket activation: email present → system detects it as partial/active
+        SHIPROCKET_EMAIL: 'ops@example.com',
         SMS_PROVIDER: 'msg91',
         NOTIFY_EMAIL_ENABLED: 'true',
         NOTIFY_SMS_ENABLED: 'true'
@@ -66,22 +83,48 @@ describe('ops config contract', () => {
     expect(required).toContain('RAZORPAY_KEY_ID');
     expect(required).toContain('RAZORPAY_KEY_SECRET');
     expect(required).toContain('RAZORPAY_WEBHOOK_SECRET');
+    // Shiprocket credential set required when any Shiprocket credential is present
     expect(required).toContain('SHIPROCKET_EMAIL');
     expect(required).toContain('SHIPROCKET_PASSWORD');
+    expect(required).toContain('SHIPROCKET_PICKUP_PINCODE');
+    expect(required).toContain('SHIPROCKET_PICKUP_LOCATION');
     expect(required).toContain('RESEND_API_KEY');
     expect(required).toContain('RESEND_FROM');
     expect(required).toContain('SMS_PROVIDER');
     expect(required).toContain('MSG91_AUTH_KEY');
     expect(required).toContain('MSG91_SENDER_ID');
+    // Non-strict: no webhook requirements
     expect(required).not.toContain('DELHIVERY_WEBHOOK_TOKEN');
+    expect(required).not.toContain('SHIPROCKET_WEBHOOK_TOKEN');
     expect(required).not.toContain('FAST2SMS_API_KEY');
+  });
+
+  it('no shipping keys required when neither Delhivery nor Shiprocket credentials are present', () => {
+    const required = computeRequiredOpsConfigKeys(
+      { PAYMENT_PROVIDER: 'cod', SMS_PROVIDER: 'noop' },
+      false
+    );
+
+    expect(required).not.toContain('DELHIVERY_API_KEY');
+    expect(required).not.toContain('SHIPROCKET_EMAIL');
+    expect(required).not.toContain('SHIPROCKET_PASSWORD');
+  });
+
+  it('Delhivery creds present → no additional non-strict keys required (API key is the sole activation credential)', () => {
+    const required = computeRequiredOpsConfigKeys(
+      { PAYMENT_PROVIDER: 'cod', SMS_PROVIDER: 'noop', DELHIVERY_API_KEY: 'test-key' },
+      false
+    );
+
+    // Delhivery is active but no required keys beyond what's already provided
+    expect(required).not.toContain('DELHIVERY_WEBHOOK_TOKEN');
+    expect(required).not.toContain('SHIPPING_WEBHOOK_ALLOWLIST_CIDR');
   });
 
   it('requires Fast2SMS keys when SMS_PROVIDER=fast2sms', () => {
     const required = computeRequiredOpsConfigKeys(
       {
         PAYMENT_PROVIDER: 'cod',
-        SHIPPING_PROVIDER: 'noop',
         SMS_PROVIDER: 'fast2sms',
         NOTIFY_SMS_ENABLED: 'true'
       },
@@ -98,7 +141,6 @@ describe('ops config contract', () => {
     const required = computeRequiredOpsConfigKeys(
       {
         PAYMENT_PROVIDER: 'cod',
-        SHIPPING_PROVIDER: 'noop',
         SMS_PROVIDER: 'noop',
         NOTIFY_SMS_ENABLED: 'true'
       },
@@ -111,11 +153,11 @@ describe('ops config contract', () => {
     expect(required).not.toContain('MSG91_SENDER_ID');
   });
 
-  it('adds strict-profile-only requirements', () => {
+  it('adds strict-profile-only requirements — Delhivery webhook required when Delhivery creds present', () => {
     const required = computeRequiredOpsConfigKeys(
       {
         PAYMENT_PROVIDER: 'cod',
-        SHIPPING_PROVIDER: 'delhivery',
+        DELHIVERY_API_KEY: 'some-key',
         SMS_PROVIDER: 'msg91'
       },
       true
@@ -126,13 +168,50 @@ describe('ops config contract', () => {
     expect(required).toContain('DELHIVERY_WEBHOOK_TOKEN');
     expect(required).toContain('SHIPPING_WEBHOOK_ALLOWLIST_CIDR');
     expect(required).toContain('SMS_PROVIDER');
+    // No Shiprocket creds → no Shiprocket webhook required
+    expect(required).not.toContain('SHIPROCKET_WEBHOOK_TOKEN');
   });
 
-  it('requires Shiprocket pickup pincode and location when shipping provider is shiprocket', () => {
+  it('adds Shiprocket strict requirements when Shiprocket creds present', () => {
     const required = computeRequiredOpsConfigKeys(
       {
         PAYMENT_PROVIDER: 'cod',
-        SHIPPING_PROVIDER: 'shiprocket',
+        SHIPROCKET_EMAIL: 'ops@example.com',
+        SHIPROCKET_PASSWORD: 'pass',
+        SMS_PROVIDER: 'noop'
+      },
+      true
+    );
+
+    expect(required).toContain('SHIPROCKET_WEBHOOK_TOKEN');
+    expect(required).toContain('SHIPPING_WEBHOOK_ALLOWLIST_CIDR');
+    // No Delhivery creds → no Delhivery webhook required
+    expect(required).not.toContain('DELHIVERY_WEBHOOK_TOKEN');
+  });
+
+  it('adds both provider webhook requirements in dual-provider mode', () => {
+    const required = computeRequiredOpsConfigKeys(
+      {
+        PAYMENT_PROVIDER: 'cod',
+        DELHIVERY_API_KEY: 'del-key',
+        SHIPROCKET_EMAIL: 'ops@example.com',
+        SHIPROCKET_PASSWORD: 'pass',
+        SMS_PROVIDER: 'noop'
+      },
+      true
+    );
+
+    expect(required).toContain('DELHIVERY_WEBHOOK_TOKEN');
+    expect(required).toContain('SHIPROCKET_WEBHOOK_TOKEN');
+    expect(required).toContain('SHIPPING_WEBHOOK_ALLOWLIST_CIDR');
+  });
+
+  it('requires Shiprocket credential set when partial Shiprocket config is present', () => {
+    // Only email present (no password) → system still requires full credential set
+    const required = computeRequiredOpsConfigKeys(
+      {
+        PAYMENT_PROVIDER: 'cod',
+        SHIPROCKET_EMAIL: 'ops@example.com',
         SMS_PROVIDER: 'noop'
       },
       false
@@ -148,7 +227,6 @@ describe('ops config contract', () => {
     const required = computeRequiredOpsConfigKeys(
       {
         PAYMENT_PROVIDER: 'razorpay',
-        SHIPPING_PROVIDER: 'noop',
         SMS_PROVIDER: 'noop'
       },
       true
@@ -161,7 +239,6 @@ describe('ops config contract', () => {
     const required = computeRequiredOpsConfigKeys(
       {
         PAYMENT_PROVIDER: 'cod',
-        SHIPPING_PROVIDER: 'noop',
         SMS_PROVIDER: 'noop',
         MEDIA_STORAGE_PROVIDER: 'r2'
       },
@@ -175,19 +252,21 @@ describe('ops config contract', () => {
     expect(required).toContain('R2_PUBLIC_BASE_URL');
   });
 
-  it('detects missing strict keys', () => {
+  it('detects missing strict keys when Delhivery is credential-active', () => {
+    // DELHIVERY_API_KEY present → Delhivery is active → webhook key required
     const missing = findMissingStrictOpsConfigKeys({
       PAYMENT_PROVIDER: 'cod',
-      SHIPPING_PROVIDER: 'delhivery',
+      DELHIVERY_API_KEY: 'some-key',
       SMS_PROVIDER: 'msg91',
       OPS_METRICS_TOKEN: 'token-present'
     });
 
     expect(missing).toContain('REPLAY_APPROVAL_TOKEN');
-    expect(missing).toContain('DELHIVERY_API_KEY');
     expect(missing).toContain('DELHIVERY_WEBHOOK_TOKEN');
     expect(missing).toContain('MSG91_AUTH_KEY');
     expect(missing).toContain('MSG91_SENDER_ID');
+    // Delhivery API key IS present in draftEnv so it should NOT be in missing
+    expect(missing).not.toContain('DELHIVERY_API_KEY');
   });
 
   it('ensures overview groups contain unique keys', () => {

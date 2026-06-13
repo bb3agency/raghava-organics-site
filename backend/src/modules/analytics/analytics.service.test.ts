@@ -4,7 +4,7 @@ import { AnalyticsService } from './analytics.service';
 
 function createAnalyticsServiceHarness() {
   const orderFindManyMock = vi.fn();
-  const analyticsGroupByMock = vi.fn();
+  const analyticsQueryRawMock = vi.fn();
   const inventoryFindManyMock = vi.fn();
   const lowStockAlertEventFindManyMock = vi.fn();
   const notificationGroupByMock = vi.fn();
@@ -14,9 +14,8 @@ function createAnalyticsServiceHarness() {
       order: {
         findMany: orderFindManyMock
       },
-      analyticsEvent: {
-        groupBy: analyticsGroupByMock
-      },
+      // getFunnel uses $queryRaw for COUNT(DISTINCT sessionId)
+      $queryRaw: analyticsQueryRawMock,
       inventory: {
         findMany: inventoryFindManyMock
       },
@@ -32,7 +31,7 @@ function createAnalyticsServiceHarness() {
   return {
     service: new AnalyticsService(fastify),
     orderFindManyMock,
-    analyticsGroupByMock,
+    analyticsQueryRawMock,
     inventoryFindManyMock,
     lowStockAlertEventFindManyMock,
     notificationGroupByMock
@@ -110,8 +109,8 @@ describe('AnalyticsService date-window and empty-data behavior', () => {
   });
 
   it('returns zeroed funnel conversion when no events exist', async () => {
-    const { service, analyticsGroupByMock } = createAnalyticsServiceHarness();
-    analyticsGroupByMock.mockResolvedValue([]);
+    const { service, analyticsQueryRawMock } = createAnalyticsServiceHarness();
+    analyticsQueryRawMock.mockResolvedValue([]);
 
     const result = await service.getFunnel({});
 
@@ -119,6 +118,32 @@ describe('AnalyticsService date-window and empty-data behavior', () => {
     for (const step of result.steps) {
       expect(step.count).toBe(0);
       expect(step.conversionRatePercent).toBe(0);
+    }
+  });
+
+  it('deduplicates sessions in funnel — repeated actions by same session count once', async () => {
+    const { service, analyticsQueryRawMock } = createAnalyticsServiceHarness();
+    // Simulate: 10 unique sessions viewed product, 7 added to cart, 5 started checkout,
+    // 3 began payment (some retried but same session deduped), 2 completed purchase
+    analyticsQueryRawMock.mockResolvedValue([
+      { event_type: 'PRODUCT_VIEW', unique_sessions: BigInt(10) },
+      { event_type: 'ADD_TO_CART', unique_sessions: BigInt(7) },
+      { event_type: 'CHECKOUT_STARTED', unique_sessions: BigInt(5) },
+      { event_type: 'PAYMENT_INITIATED', unique_sessions: BigInt(3) },
+      { event_type: 'PURCHASE', unique_sessions: BigInt(2) }
+    ]);
+
+    const result = await service.getFunnel({});
+
+    expect(result.steps[0]).toMatchObject({ eventType: 'PRODUCT_VIEW', count: 10, conversionRatePercent: 100 });
+    expect(result.steps[1]).toMatchObject({ eventType: 'ADD_TO_CART', count: 7, conversionRatePercent: 70 });
+    expect(result.steps[2]).toMatchObject({ eventType: 'CHECKOUT_STARTED', count: 5, conversionRatePercent: 50 });
+    expect(result.steps[3]).toMatchObject({ eventType: 'PAYMENT_INITIATED', count: 3, conversionRatePercent: 30 });
+    expect(result.steps[4]).toMatchObject({ eventType: 'PURCHASE', count: 2, conversionRatePercent: 20 });
+
+    // All steps must be <= previous step (monotonic funnel)
+    for (let i = 1; i < result.steps.length; i++) {
+      expect(result.steps[i]!.count).toBeLessThanOrEqual(result.steps[i - 1]!.count);
     }
   });
 

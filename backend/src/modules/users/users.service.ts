@@ -356,7 +356,8 @@ export class UsersService {
       ? await this.fastify.prisma.order.groupBy({
           by: ['userId'],
           where: {
-            userId: { in: userIds }
+            userId: { in: userIds },
+            status: { notIn: ['PENDING_PAYMENT', 'PAYMENT_FAILED', 'CANCELLED'] }
           },
           _count: { _all: true },
           _sum: { total: true }

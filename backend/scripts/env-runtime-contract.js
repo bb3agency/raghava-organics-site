@@ -21,7 +21,7 @@ const ENV_RUNTIME_CONTRACT = {
     requiredEnv('RAZORPAY_WEBHOOK_SECRET', { dbOverlay: true }),
     requiredEnv('RAZORPAY_WEBHOOK_SECRET_OLD', { dbOverlay: true }),
     requiredEnv('RAZORPAY_WEBHOOK_ALLOWLIST_CIDR', { dbOverlay: true }),
-    requiredEnv('SHIPPING_PROVIDER', { dbOverlay: true }),
+    // SHIPPING_PROVIDER intentionally absent — routing auto-detects from credentials (mutableViaOps: false)
     requiredEnv('SHIPPING_PROVIDER_FAILOVER_ENABLED', { dbOverlay: true }),
     requiredEnv('SHIPPING_CB_FAILURE_THRESHOLD', { dbOverlay: true }),
     requiredEnv('SHIPPING_CB_COOLDOWN_MS', { dbOverlay: true }),
@@ -134,7 +134,7 @@ const ENV_RUNTIME_CONTRACT = {
       'RAZORPAY_WEBHOOK_SECRET',
       'RAZORPAY_WEBHOOK_SECRET_OLD',
       'RAZORPAY_WEBHOOK_ALLOWLIST_CIDR',
-      'SHIPPING_PROVIDER',
+      // SHIPPING_PROVIDER omitted — routing auto-detects from credentials (mutableViaOps: false)
       'SHIPPING_PROVIDER_FAILOVER_ENABLED',
       'SHIPPING_CB_FAILURE_THRESHOLD',
       'SHIPPING_CB_COOLDOWN_MS',
@@ -235,7 +235,7 @@ const ENV_RUNTIME_CONTRACT = {
       'RAZORPAY_WEBHOOK_SECRET',
       'RAZORPAY_WEBHOOK_SECRET_OLD',
       'RAZORPAY_WEBHOOK_ALLOWLIST_CIDR',
-      'SHIPPING_PROVIDER',
+      // SHIPPING_PROVIDER omitted — routing auto-detects from credentials (mutableViaOps: false)
       'SHIPPING_PROVIDER_FAILOVER_ENABLED',
       'SHIPPING_CB_FAILURE_THRESHOLD',
       'SHIPPING_CB_COOLDOWN_MS',

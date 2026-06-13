@@ -95,6 +95,66 @@ describe('ProductsService variant management', () => {
     });
   });
 
+  it('updates variant box dimensions (packageLengthCm, packageWidthCm, packageHeightCm)', async () => {
+    const existingVariant = {
+      id: 'variant_1',
+      productId: 'prod_1',
+      sku: 'SKU-1',
+      name: 'Default',
+      price: 5000,
+      compareAtPrice: null,
+      weight: 500,
+      packageLengthCm: null,
+      packageWidthCm: null,
+      packageHeightCm: null,
+      updatedAt: new Date('2026-06-01T00:00:00.000Z'),
+      inventory: { quantity: 10, lowStockThreshold: 5 }
+    };
+    const updatedVariant = {
+      ...existingVariant,
+      packageLengthCm: 20,
+      packageWidthCm: 15,
+      packageHeightCm: 10
+    };
+    const updateManyFn = vi.fn().mockResolvedValue({ count: 1 });
+
+    const fastify = {
+      prisma: {
+        storeSettings: {
+          findUnique: vi.fn().mockResolvedValue({ defaultLowStockThreshold: 5 })
+        },
+        productVariant: {
+          findFirst: vi.fn().mockResolvedValue(existingVariant),
+          updateMany: updateManyFn,
+          findUniqueOrThrow: vi.fn().mockResolvedValue(updatedVariant)
+        }
+      },
+      redis: {
+        scan: vi.fn().mockResolvedValue(['0', []]),
+        del: vi.fn().mockResolvedValue(0)
+      },
+      queues: { analytics: { add: vi.fn() } },
+      log: { error: vi.fn() }
+    } as unknown as FastifyInstance;
+
+    const service = new ProductsService(fastify);
+    const result = await service.adminUpdateProductVariant('prod_1', 'variant_1', {
+      packageLengthCm: 20,
+      packageWidthCm: 15,
+      packageHeightCm: 10
+    });
+
+    expect(result).toEqual(updatedVariant);
+    expect(updateManyFn).toHaveBeenCalledWith({
+      where: { id: 'variant_1', updatedAt: existingVariant.updatedAt },
+      data: {
+        packageLengthCm: 20,
+        packageWidthCm: 15,
+        packageHeightCm: 10
+      }
+    });
+  });
+
   it('updates primary variant price and compareAtPrice without touching sku or name', async () => {
     const existingVariant = {
       id: 'variant_1',

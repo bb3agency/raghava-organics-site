@@ -454,9 +454,13 @@ export function createShippingWorker(
         // --- Phase 2: external provider call (no DB connection held) ---
         const shipment = await effectiveShippingProvider.createShipment(shipmentInput);
 
+        // Determine which provider handled this shipment.
+        // Prefer the order-level selection; fall back to shipment response signature
+        // (shiprocketShipmentId present → Shiprocket, absent → Delhivery).
+        // SHIPPING_PROVIDER env var is intentionally NOT used — routing is credential-based.
         const resolvedProvider =
           resolvedProviderForOrder ??
-          ((process.env.SHIPPING_PROVIDER ?? 'delhivery').trim().toLowerCase() === 'shiprocket'
+          (shipment.shiprocketShipmentId != null
             ? ShippingProvider.SHIPROCKET
             : ShippingProvider.DELHIVERY);
 

@@ -171,6 +171,9 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
   const [editPrimaryCompareAtPrice, setEditPrimaryCompareAtPrice] =
     useState("");
   const [editPrimaryWeight, setEditPrimaryWeight] = useState("");
+  const [editPrimaryLength, setEditPrimaryLength] = useState("");
+  const [editPrimaryWidth, setEditPrimaryWidth] = useState("");
+  const [editPrimaryHeight, setEditPrimaryHeight] = useState("");
   const [status, setStatus] = useState("Draft");
   const [categoryId, setCategoryId] = useState("");
   const [tagsText, setTagsText] = useState("");
@@ -249,6 +252,21 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
         setEditPrimaryWeight(
           primaryVariant.weight !== null
             ? String(primaryVariant.weight)
+            : ""
+        );
+        setEditPrimaryLength(
+          primaryVariant.packageLengthCm !== null
+            ? String(primaryVariant.packageLengthCm)
+            : ""
+        );
+        setEditPrimaryWidth(
+          primaryVariant.packageWidthCm !== null
+            ? String(primaryVariant.packageWidthCm)
+            : ""
+        );
+        setEditPrimaryHeight(
+          primaryVariant.packageHeightCm !== null
+            ? String(primaryVariant.packageHeightCm)
             : ""
         );
       }
@@ -534,13 +552,31 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
           wgStr !== "" && Number.isFinite(Number(wgStr)) && Number(wgStr) > 0
             ? Math.floor(Number(wgStr))
             : null;
+        const lengthStr = editPrimaryLength.trim();
+        const packageLengthCm =
+          lengthStr !== "" && Number.isFinite(Number(lengthStr)) && Number(lengthStr) > 0
+            ? Math.floor(Number(lengthStr))
+            : null;
+        const widthStr = editPrimaryWidth.trim();
+        const packageWidthCm =
+          widthStr !== "" && Number.isFinite(Number(widthStr)) && Number(widthStr) > 0
+            ? Math.floor(Number(widthStr))
+            : null;
+        const heightStr = editPrimaryHeight.trim();
+        const packageHeightCm =
+          heightStr !== "" && Number.isFinite(Number(heightStr)) && Number(heightStr) > 0
+            ? Math.floor(Number(heightStr))
+            : null;
         await api(`/admin/products/${productId}/variants/${primaryVariant.id}`, {
           method: "PATCH",
           idempotencyKey: createIdempotencyKey(),
           body: JSON.stringify({
             price: pricePatch.price,
             compareAtPrice: pricePatch.compareAtPrice,
-            ...(weightGrams !== null ? { weightGrams } : {}),
+            ...(weightGrams !== null ? { weight: weightGrams } : {}),
+            packageLengthCm,
+            packageWidthCm,
+            packageHeightCm,
           }),
         });
         normalizedUpdated = mergePrimaryVariantPrices(
@@ -1535,10 +1571,14 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
                     value={
                       isCreate
                         ? createVariants[0]?.packageLengthCm || ""
-                        : product?.variants?.[0]?.packageLengthCm || ""
+                        : editPrimaryLength
                     }
                     onChange={(event) => {
-                      updateFirstVariant("packageLengthCm", event.target.value);
+                      if (isCreate) {
+                        updateFirstVariant("packageLengthCm", event.target.value);
+                      } else {
+                        setEditPrimaryLength(event.target.value);
+                      }
                     }}
                     disabled={!canWrite}
                   />
@@ -1553,10 +1593,14 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
                     value={
                       isCreate
                         ? createVariants[0]?.packageWidthCm || ""
-                        : product?.variants?.[0]?.packageWidthCm || ""
+                        : editPrimaryWidth
                     }
                     onChange={(event) => {
-                      updateFirstVariant("packageWidthCm", event.target.value);
+                      if (isCreate) {
+                        updateFirstVariant("packageWidthCm", event.target.value);
+                      } else {
+                        setEditPrimaryWidth(event.target.value);
+                      }
                     }}
                     disabled={!canWrite}
                   />
@@ -1571,10 +1615,14 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
                     value={
                       isCreate
                         ? createVariants[0]?.packageHeightCm || ""
-                        : product?.variants?.[0]?.packageHeightCm || ""
+                        : editPrimaryHeight
                     }
                     onChange={(event) => {
-                      updateFirstVariant("packageHeightCm", event.target.value);
+                      if (isCreate) {
+                        updateFirstVariant("packageHeightCm", event.target.value);
+                      } else {
+                        setEditPrimaryHeight(event.target.value);
+                      }
                     }}
                     disabled={!canWrite}
                   />

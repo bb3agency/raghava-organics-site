@@ -1506,22 +1506,8 @@ export class OpsService {
       }
     }
 
-    if (checkedKeys.includes('SHIPPING_PROVIDER')) {
-      const shippingProvider = (draftEnv.SHIPPING_PROVIDER ?? '').trim().toLowerCase();
-      if (shippingProvider && !['delhivery', 'shiprocket', 'noop'].includes(shippingProvider)) {
-        errors.push({
-          key: 'SHIPPING_PROVIDER',
-          code: 'UNSUPPORTED_PROVIDER',
-          message: `Unsupported SHIPPING_PROVIDER: ${shippingProvider}`
-        });
-      } else if (strictProfile && shippingProvider === 'noop') {
-        errors.push({
-          key: 'SHIPPING_PROVIDER',
-          code: 'NOOP_BLOCKED_IN_STRICT_PROFILE',
-          message: 'SHIPPING_PROVIDER=noop is not allowed in production-like profiles.'
-        });
-      }
-    }
+    // SHIPPING_PROVIDER validation removed — mutableViaOps: false means it cannot appear
+    // in a config draft. Routing auto-detects from credentials (resolveDualShippingRuntime).
 
     if (checkedKeys.includes('SMS_PROVIDER')) {
       const smsProvider = (draftEnv.SMS_PROVIDER ?? '').trim().toLowerCase();

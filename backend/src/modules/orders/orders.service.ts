@@ -1797,21 +1797,13 @@ export class OrdersService {
         typeof authHeader === 'string' && authHeader.trimStart().startsWith('Token ');
       activeProvider = looksLikeDelhivery ? 'delhivery' : 'shiprocket';
     } else {
+      // No credentials configured — noop mode (dev/test only, or unconfigured instance).
+      // SHIPPING_PROVIDER env var is intentionally NOT used; provider detection is credential-based.
       activeProvider = hasDelhivery
         ? 'delhivery'
         : hasShiprocket
           ? 'shiprocket'
-          : (runtimeConfig.SHIPPING_PROVIDER ?? process.env.SHIPPING_PROVIDER ?? 'delhivery')
-              .trim()
-              .toLowerCase();
-      // Test-env override
-      if (
-        env === 'test' &&
-        activeProvider === 'delhivery' &&
-        typeof process.env.SHIPPING_PROVIDER === 'string'
-      ) {
-        activeProvider = process.env.SHIPPING_PROVIDER.trim().toLowerCase();
-      }
+          : 'noop';
     }
 
     const isShiprocket = activeProvider === 'shiprocket';

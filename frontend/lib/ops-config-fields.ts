@@ -41,11 +41,6 @@ const SELECT_OPTIONS: Record<string, Array<{ value: string; label: string }>> = 
   PAYMENT_PROVIDER: [
     { value: "razorpay", label: "Razorpay" },
   ],
-  SHIPPING_PROVIDER: [
-    { value: "delhivery", label: "Delhivery" },
-    { value: "shiprocket", label: "Shiprocket" },
-    { value: "noop", label: "Noop (dev only)" },
-  ],
   SMS_PROVIDER: [
     { value: "msg91", label: "MSG91" },
     { value: "fast2sms", label: "Fast2SMS" },

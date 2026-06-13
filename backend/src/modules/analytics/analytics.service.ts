@@ -117,18 +117,21 @@ export class AnalyticsService {
       AnalyticsEventType.PURCHASE
     ];
 
-    const events = await this.fastify.prisma.analyticsEvent.groupBy({
-      by: ['eventType'],
-      where: {
-        eventType: { in: eventTypes },
-        occurredAt: { gte: from, lte: to }
-      },
-      _count: { _all: true }
-    });
+    // Count distinct sessions per event type so repeated actions by the same
+    // session (e.g. multiple product views, payment retries) don't inflate a
+    // funnel stage beyond the stage above it.
+    const rows = await this.fastify.prisma.$queryRaw<Array<{ event_type: string; unique_sessions: bigint }>>`
+      SELECT "eventType" AS event_type, COUNT(DISTINCT "sessionId") AS unique_sessions
+      FROM "AnalyticsEvent"
+      WHERE "eventType" = ANY(${eventTypes}::text[])
+        AND "occurredAt" >= ${from}
+        AND "occurredAt" <= ${to}
+      GROUP BY "eventType"
+    `;
 
     const countMap = new Map<AnalyticsEventType, number>();
-    for (const event of events) {
-      countMap.set(event.eventType, event._count._all);
+    for (const row of rows) {
+      countMap.set(row.event_type as AnalyticsEventType, Number(row.unique_sessions));
     }
 
     const base = countMap.get(AnalyticsEventType.PRODUCT_VIEW) ?? 0;

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { Eye, EyeOff, KeyRound, RotateCcw, Trash2 } from "lucide-react";
+import { Eye, EyeOff, KeyRound, Package, RotateCcw, Trash2 } from "lucide-react";
 import { useOpsCanWrite } from "@/components/ops/OpsSessionProvider";
 import {
   OpsAlert,
@@ -183,6 +183,55 @@ function OpsConfigFieldRow({
           <Trash2 className="size-3.5" aria-hidden />
           Clear
         </Button>
+      </div>
+    </div>
+  );
+}
+
+function ShippingModeStatus({ overview }: { overview: OpsConfigOverview }) {
+  const shippingDomain = overview.domains.find((d) => d.domain === "shipping");
+  const itemMap = new Map(shippingDomain?.items.map((i) => [i.key, i]) ?? []);
+
+  const hasDelhivery = Boolean(itemMap.get("DELHIVERY_API_KEY")?.present);
+  const hasShiprocket =
+    Boolean(itemMap.get("SHIPROCKET_EMAIL")?.present) &&
+    Boolean(itemMap.get("SHIPROCKET_PASSWORD")?.present);
+
+  const isDual = hasDelhivery && hasShiprocket;
+  const hasAny = hasDelhivery || hasShiprocket;
+
+  const label = isDual
+    ? "Dual-provider mode active"
+    : hasDelhivery
+      ? "Single-provider mode: Delhivery"
+      : hasShiprocket
+        ? "Single-provider mode: Shiprocket"
+        : "No shipping provider configured";
+
+  const description = isDual
+    ? "Both Delhivery and Shiprocket are configured. At checkout the system queries both in parallel and assigns each order to the cheaper provider automatically. No manual selection needed."
+    : hasAny
+      ? "One provider is configured. Configure credentials for the second provider below to enable dual-provider mode."
+      : "Neither Delhivery nor Shiprocket credentials are present. Customers cannot get delivery rates at checkout until credentials are saved and the API is restarted.";
+
+  const tone = isDual ? "border-green-500/30 bg-green-500/10 text-green-800" : hasAny ? "border-amber-500/30 bg-amber-500/10 text-amber-800" : "border-destructive/30 bg-destructive/10 text-destructive";
+
+  return (
+    <div className={`flex items-start gap-3 rounded-lg border p-4 ${tone}`}>
+      <Package className="mt-0.5 size-4 shrink-0" aria-hidden />
+      <div className="grid gap-1">
+        <p className="text-sm font-medium">{label}</p>
+        <p className="text-xs">{description}</p>
+        <div className="mt-1 flex gap-3 text-xs">
+          <span className={`flex items-center gap-1.5 ${hasDelhivery ? "font-medium" : "opacity-60"}`}>
+            <span className={`inline-block size-2 rounded-full ${hasDelhivery ? "bg-green-500" : "bg-current opacity-30"}`} />
+            Delhivery {hasDelhivery ? "✓" : "—"}
+          </span>
+          <span className={`flex items-center gap-1.5 ${hasShiprocket ? "font-medium" : "opacity-60"}`}>
+            <span className={`inline-block size-2 rounded-full ${hasShiprocket ? "bg-green-500" : "bg-current opacity-30"}`} />
+            Shiprocket {hasShiprocket ? "✓" : "—"}
+          </span>
+        </div>
       </div>
     </div>
   );
@@ -411,6 +460,9 @@ export function OpsConfigEditor({ overview, stored, onConfigSaved }: OpsConfigEd
             description="DB-overlay keys — variable name is fixed; edit the value column."
           />
           <div className="grid gap-3">
+            {section.domain === "shipping" ? (
+              <ShippingModeStatus overview={overview} />
+            ) : null}
             {section.fields.map((field) => (
               <OpsConfigFieldRow
                 key={field.key}

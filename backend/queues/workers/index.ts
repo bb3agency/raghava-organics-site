@@ -123,35 +123,23 @@ function validateWorkerEnv(): void {
     requireWorkerEnv('OTEL_EXPORTER_OTLP_ENDPOINT');
   }
 
-  // Shipping — validate enum + placeholder safety only. The shipping worker
-  // resolves provider credentials per-job from OpsConfigSecret, identical to
-  // the notifications worker pattern.
-  const shippingProviderRaw = (process.env.SHIPPING_PROVIDER ?? '').trim().toLowerCase();
-  if (shippingProviderRaw && !['delhivery', 'shiprocket', 'noop'].includes(shippingProviderRaw)) {
-    throw new Error(
-      `Unsupported SHIPPING_PROVIDER for workers: ${shippingProviderRaw}. Allowed: delhivery, shiprocket, noop`
-    );
-  }
-  if (shippingProviderRaw === 'delhivery') {
+  // Shipping — SHIPPING_PROVIDER env var is not used for routing (credential-based auto-detection).
+  // Validate placeholder safety based on which credentials are present.
+  if ((process.env.DELHIVERY_API_KEY ?? '').trim()) {
     assertWorkerEnvNotPlaceholderIfPresent('DELHIVERY_API_KEY');
     assertWorkerEnvNotPlaceholderIfPresent('DELHIVERY_WEBHOOK_TOKEN');
   }
-  if (shippingProviderRaw === 'shiprocket') {
+  if ((process.env.SHIPROCKET_EMAIL ?? '').trim() || (process.env.SHIPROCKET_PASSWORD ?? '').trim()) {
     assertWorkerEnvNotPlaceholderIfPresent('SHIPROCKET_EMAIL');
     assertWorkerEnvNotPlaceholderIfPresent('SHIPROCKET_PASSWORD');
     assertWorkerEnvNotPlaceholderIfPresent('SHIPROCKET_WEBHOOK_TOKEN');
   }
 
   if (isStrictProfile) {
-    // noop providers are dev/test only — same rule as the API process.
+    // noop SMS is dev/test only.
     if (smsProviderRaw === 'noop') {
       throw new Error(
         `Invalid SMS_PROVIDER=noop when NODE_ENV=${env}. 'noop' is allowed only in development-like profiles (development/test).`
-      );
-    }
-    if (shippingProviderRaw === 'noop') {
-      throw new Error(
-        `Invalid SHIPPING_PROVIDER=noop when NODE_ENV=${env}. 'noop' is allowed only in development-like profiles (development/test).`
       );
     }
   }
@@ -470,7 +458,12 @@ async function bootstrapWorkers(): Promise<void> {
 
   let shiprocketRefreshQueue: Queue | null = null;
   let shiprocketRefreshConnection: IORedis | null = null;
-  if ((process.env.SHIPPING_PROVIDER ?? 'delhivery').trim().toLowerCase() === 'shiprocket') {
+  // Start Shiprocket token refresh queue when Shiprocket credentials are present.
+  // Credential-based detection mirrors resolveDualShippingRuntime — SHIPPING_PROVIDER env var is unused.
+  const shiprocketActive =
+    Boolean((process.env.SHIPROCKET_EMAIL ?? '').trim()) &&
+    Boolean((process.env.SHIPROCKET_PASSWORD ?? '').trim());
+  if (shiprocketActive) {
     shiprocketRefreshConnection = guardRedisDuplicate(
       workerRedis,
       workerRedisLog,

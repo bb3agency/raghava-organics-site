@@ -101,9 +101,9 @@ export const OPS_CONFIG_OVERVIEW_GROUPS: Array<{
     items: [
       {
         key: 'SHIPPING_PROVIDER',
-        mutableViaOps: true,
+        mutableViaOps: false,
         requiresRestart: true,
-        note: 'Fallback provider when only one set of credentials is configured (delhivery or shiprocket). In dual-shipping mode (both DELHIVERY_API_KEY and SHIPROCKET_EMAIL/PASSWORD set), this field is NOT used for routing — the cheapest rate per order is auto-selected by comparing both providers, and each order stores which provider won.'
+        note: 'Not used by the routing logic. Routing is fully auto-detected from credentials: both DELHIVERY_API_KEY and SHIPROCKET_EMAIL/PASSWORD set → dual mode (cheapest rate per order wins); only one set → that provider is used. Set credentials below — do not change this field.'
       },
       { key: 'SHIPPING_PROVIDER_FAILOVER_ENABLED', mutableViaOps: true, requiresRestart: true },
       { key: 'SHIPPING_CB_FAILURE_THRESHOLD', mutableViaOps: true, requiresRestart: true },
@@ -201,20 +201,13 @@ const OPS_CONFIG_KNOWN_KEYS = new Set(
   OPS_CONFIG_OVERVIEW_GROUPS.flatMap((group) => group.items.map((item) => item.key))
 );
 
+// Shipping is intentionally absent from this map. Routing auto-detects from
+// credentials via resolveDualShippingRuntime (SHIPPING_PROVIDER env var is unused).
+// Shipping key requirements are computed directly from credential presence below.
 const OPS_CONFIG_REQUIRED_BY_PROVIDER: Record<string, Record<string, string[]>> = {
   PAYMENT_PROVIDER: {
     razorpay: ['RAZORPAY_KEY_ID', 'RAZORPAY_KEY_SECRET', 'RAZORPAY_WEBHOOK_SECRET'],
     cod: [],
-    noop: []
-  },
-  SHIPPING_PROVIDER: {
-    delhivery: ['DELHIVERY_API_KEY'],
-    shiprocket: [
-      'SHIPROCKET_EMAIL',
-      'SHIPROCKET_PASSWORD',
-      'SHIPROCKET_PICKUP_PINCODE',
-      'SHIPROCKET_PICKUP_LOCATION'
-    ],
     noop: []
   },
   SMS_PROVIDER: {
@@ -241,13 +234,10 @@ const OPS_CONFIG_REQUIRED_BY_PROVIDER: Record<string, Record<string, string[]>> 
   }
 };
 
+// Shipping strict requirements are handled credential-based in computeRequiredOpsConfigKeys.
 const OPS_CONFIG_STRICT_ADDITIONAL_REQUIRED_BY_PROVIDER: Record<string, Record<string, string[]>> = {
   PAYMENT_PROVIDER: {
     razorpay: ['RAZORPAY_WEBHOOK_ALLOWLIST_CIDR']
-  },
-  SHIPPING_PROVIDER: {
-    delhivery: ['DELHIVERY_WEBHOOK_TOKEN', 'SHIPPING_WEBHOOK_ALLOWLIST_CIDR'],
-    shiprocket: ['SHIPROCKET_WEBHOOK_TOKEN', 'SHIPPING_WEBHOOK_ALLOWLIST_CIDR']
   }
 };
 
@@ -273,7 +263,6 @@ function isEnabled(value: string | undefined): boolean {
 
 const OPS_PROVIDER_DEFAULTS: Record<string, string> = {
   PAYMENT_PROVIDER: 'razorpay',
-  SHIPPING_PROVIDER: 'delhivery',
   SMS_PROVIDER: 'msg91'
 };
 
@@ -367,11 +356,12 @@ export function resolveOpsConfigDomainForKey(key: string): OpsConfigDomain | nul
 export function computeRequiredOpsConfigKeys(draftEnv: NodeJS.ProcessEnv, strictProfile: boolean): string[] {
   const required = new Set<string>([
     'PAYMENT_PROVIDER',
-    'SHIPPING_PROVIDER',
+    // SHIPPING_PROVIDER omitted — routing auto-detects from credentials (resolveDualShippingRuntime)
     'SMS_PROVIDER',
     'MEDIA_STORAGE_PROVIDER'
   ]);
 
+  // Payment, SMS, and media storage: selector-based required keys
   for (const [providerKey, providerMap] of Object.entries(OPS_CONFIG_REQUIRED_BY_PROVIDER)) {
     const hasExplicitProvider = (draftEnv[providerKey] ?? '').trim().length > 0;
     if (!hasExplicitProvider) {
@@ -381,6 +371,19 @@ export function computeRequiredOpsConfigKeys(draftEnv: NodeJS.ProcessEnv, strict
     for (const key of providerMap[providerValue] ?? []) {
       required.add(key);
     }
+  }
+
+  // Shipping: credential-presence-based (mirrors resolveDualShippingRuntime detection logic)
+  const hasDelhiveryCreds = Boolean((draftEnv['DELHIVERY_API_KEY'] ?? '').trim());
+  const hasPartialShiprocket =
+    Boolean((draftEnv['SHIPROCKET_EMAIL'] ?? '').trim()) ||
+    Boolean((draftEnv['SHIPROCKET_PASSWORD'] ?? '').trim());
+  if (hasPartialShiprocket) {
+    // If operator has started configuring Shiprocket, require all activation credentials
+    required.add('SHIPROCKET_EMAIL');
+    required.add('SHIPROCKET_PASSWORD');
+    required.add('SHIPROCKET_PICKUP_PINCODE');
+    required.add('SHIPROCKET_PICKUP_LOCATION');
   }
 
   for (const [flagKey, keys] of Object.entries(OPS_CONFIG_REQUIRED_BY_FLAG)) {
@@ -396,6 +399,7 @@ export function computeRequiredOpsConfigKeys(draftEnv: NodeJS.ProcessEnv, strict
       required.add(key);
     }
 
+    // Payment strict requirements (selector-based)
     for (const [providerKey, strictMap] of Object.entries(OPS_CONFIG_STRICT_ADDITIONAL_REQUIRED_BY_PROVIDER)) {
       const hasExplicitProvider = (draftEnv[providerKey] ?? '').trim().length > 0;
       if (!hasExplicitProvider) {
@@ -405,6 +409,16 @@ export function computeRequiredOpsConfigKeys(draftEnv: NodeJS.ProcessEnv, strict
       for (const key of strictMap[providerValue] ?? []) {
         required.add(key);
       }
+    }
+
+    // Shipping strict: webhook requirements per credential-active provider
+    if (hasDelhiveryCreds) {
+      required.add('DELHIVERY_WEBHOOK_TOKEN');
+      required.add('SHIPPING_WEBHOOK_ALLOWLIST_CIDR');
+    }
+    if (hasPartialShiprocket) {
+      required.add('SHIPROCKET_WEBHOOK_TOKEN');
+      required.add('SHIPPING_WEBHOOK_ALLOWLIST_CIDR');
     }
   }
 

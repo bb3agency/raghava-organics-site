@@ -98,17 +98,13 @@ function validateSecureFlowEnv(): void {
 function validateConditionalEnv(): void {
   const isStrictProfile = isProductionLikeProfile();
   const paymentProviderRaw = (process.env.PAYMENT_PROVIDER ?? '').trim().toLowerCase();
-  const shippingProviderRaw = (process.env.SHIPPING_PROVIDER ?? '').trim().toLowerCase();
+  // SHIPPING_PROVIDER is not validated here — it is not used for routing.
+  // Shipping provider is auto-detected from credentials by resolveDualShippingRuntime().
 
   // Provider dependency sets are enforced by GET /health/ready (findMissingStrictOpsConfigKeys).
   // Boot must tolerate incremental Ops DB saves — do not require full provider chains here.
   if (paymentProviderRaw && !['razorpay', 'cod', 'noop'].includes(paymentProviderRaw)) {
     throw new Error(`Unsupported PAYMENT_PROVIDER: ${paymentProviderRaw}. Allowed: razorpay, cod, noop`);
-  }
-  if (shippingProviderRaw && !['delhivery', 'shiprocket', 'noop'].includes(shippingProviderRaw)) {
-    throw new Error(
-      `Unsupported SHIPPING_PROVIDER: ${shippingProviderRaw}. Allowed: delhivery, shiprocket, noop`
-    );
   }
 
   const smsProviderRaw = (process.env.SMS_PROVIDER ?? '').trim().toLowerCase();
@@ -145,16 +141,11 @@ function validateProductionProviderSafetyEnv(): void {
   }
 
   const paymentProviderRaw = (process.env.PAYMENT_PROVIDER ?? '').trim().toLowerCase();
-  const shippingProviderRaw = (process.env.SHIPPING_PROVIDER ?? '').trim().toLowerCase();
+  // SHIPPING_PROVIDER not validated — routing is credential-based (resolveDualShippingRuntime)
 
   if (paymentProviderRaw === 'noop') {
     throw new Error(
       `Invalid PAYMENT_PROVIDER=noop when NODE_ENV=${nodeEnv}. 'noop' is allowed only in development-like profiles (development/test).`
-    );
-  }
-  if (shippingProviderRaw === 'noop') {
-    throw new Error(
-      `Invalid SHIPPING_PROVIDER=noop when NODE_ENV=${nodeEnv}. 'noop' is allowed only in development-like profiles (development/test).`
     );
   }
 
@@ -166,9 +157,6 @@ function validateProductionProviderSafetyEnv(): void {
 
   if (paymentProviderRaw && !['razorpay', 'cod'].includes(paymentProviderRaw)) {
     throw new Error(`Unsupported PAYMENT_PROVIDER in production-like profile: ${paymentProviderRaw}`);
-  }
-  if (shippingProviderRaw && !['delhivery', 'shiprocket'].includes(shippingProviderRaw)) {
-    throw new Error(`Unsupported SHIPPING_PROVIDER in production-like profile: ${shippingProviderRaw}`);
   }
 
   const mediaProvider = (process.env.MEDIA_STORAGE_PROVIDER ?? '').trim().toLowerCase();
@@ -189,11 +177,12 @@ function validateProductionProviderSafetyEnv(): void {
     assertEnvNotPlaceholderIfPresent('RAZORPAY_WEBHOOK_SECRET_OLD');
   }
 
-  if (shippingProviderRaw === 'delhivery') {
+  // Placeholder safety: check against whichever shipping credentials are present
+  if ((process.env.DELHIVERY_API_KEY ?? '').trim()) {
     assertEnvNotPlaceholderIfPresent('DELHIVERY_API_KEY');
     assertEnvNotPlaceholderIfPresent('DELHIVERY_WEBHOOK_TOKEN');
   }
-  if (shippingProviderRaw === 'shiprocket') {
+  if ((process.env.SHIPROCKET_EMAIL ?? '').trim() || (process.env.SHIPROCKET_PASSWORD ?? '').trim()) {
     assertEnvNotPlaceholderIfPresent('SHIPROCKET_EMAIL');
     assertEnvNotPlaceholderIfPresent('SHIPROCKET_PASSWORD');
     assertEnvNotPlaceholderIfPresent('SHIPROCKET_WEBHOOK_TOKEN');

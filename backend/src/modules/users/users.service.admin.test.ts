@@ -45,6 +45,52 @@ describe('UsersService admin APIs', () => {
       totalOrders: 3,
       totalSpendPaise: 15000
     });
+
+    // Verify the groupBy query excludes non-completed order statuses
+    expect(fastify.prisma.order.groupBy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          status: { notIn: ['PENDING_PAYMENT', 'PAYMENT_FAILED', 'CANCELLED'] }
+        })
+      })
+    );
+  });
+
+  it('excludes cancelled and payment-failed orders from totalOrders and totalSpendPaise', async () => {
+    const fastify = {
+      prisma: {
+        user: {
+          findMany: vi.fn().mockResolvedValue([
+            {
+              id: 'user_2',
+              email: 'bad@example.com',
+              phone: '8888888888',
+              firstName: 'Bad',
+              lastName: 'Luck',
+              isBanned: false,
+              createdAt: new Date('2026-04-27T00:00:00.000Z')
+            }
+          ]),
+          count: vi.fn().mockResolvedValue(1)
+        },
+        // groupBy returns empty because all orders are cancelled/failed
+        order: { groupBy: vi.fn().mockResolvedValue([]) },
+        $transaction: vi
+          .fn()
+          .mockImplementation(async (queries: Array<Promise<unknown>>) =>
+            Promise.all(queries)
+          )
+      }
+    } as unknown as FastifyInstance;
+
+    const service = new UsersService(fastify);
+    const result = await service.adminListUsers({ page: 1, limit: 20 });
+
+    expect(result.items[0]).toMatchObject({
+      id: 'user_2',
+      totalOrders: 0,
+      totalSpendPaise: 0
+    });
   });
 
   it('applies banned and createdAt filters for admin user list', async () => {
