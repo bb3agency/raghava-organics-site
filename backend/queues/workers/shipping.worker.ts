@@ -26,6 +26,7 @@ type ShippingWorkerDeps = {
   PrismaClient?: typeof RealPrismaClient;
   Worker?: typeof Worker;
   createShippingProvider?: typeof createShippingProvider;
+  createShippingAdapterForProvider?: (providerKey: 'delhivery' | 'shiprocket') => ReturnType<typeof createShippingAdapterForProvider>;
   sendTechnicalFailureAlert?: typeof sendTechnicalFailureAlert;
 };
 
@@ -222,6 +223,7 @@ export function createShippingWorker(
   const PrismaClientCtor = deps?.PrismaClient ?? RealPrismaClient;
   const WorkerCtor = deps?.Worker ?? Worker;
   const shippingProviderFactory = deps?.createShippingProvider ?? createShippingProvider;
+  const shippingAdapterFactory = deps?.createShippingAdapterForProvider ?? createShippingAdapterForProvider;
   const alertFn = deps?.sendTechnicalFailureAlert ?? sendTechnicalFailureAlert;
   const prisma = new PrismaClientCtor();
   const notificationsQueue = notificationsQueueArg ?? new Queue('notifications', { connection });
@@ -366,9 +368,9 @@ export function createShippingWorker(
 
         const effectiveShippingProvider =
           resolvedProviderForOrder === ShippingProvider.SHIPROCKET
-            ? (createShippingAdapterForProvider('shiprocket') ?? shippingProvider)
+            ? (shippingAdapterFactory('shiprocket') ?? shippingProvider)
             : resolvedProviderForOrder === ShippingProvider.DELHIVERY
-              ? (createShippingAdapterForProvider('delhivery') ?? shippingProvider)
+              ? (shippingAdapterFactory('delhivery') ?? shippingProvider)
               : shippingProvider;
 
         if (!effectiveShippingProvider) {
@@ -560,9 +562,10 @@ export function createShippingWorker(
           }
         });
 
-        if (awbToCancel && shippingProvider) {
+        if (awbToCancel) {
           try {
-            await shippingProvider.cancelShipment(awbToCancel);
+            // Use the same adapter that created the AWB, not the global env-based one.
+            await effectiveShippingProvider.cancelShipment(awbToCancel);
           } catch (error) {
             await alertFn({
               prisma,
@@ -583,11 +586,31 @@ export function createShippingWorker(
 
       if (job.name === 'cancel-shipment') {
         const data = job.data as CancelShipmentJobData;
-        if (!shippingProvider) {
+
+        // Look up which provider created this shipment so we cancel with the same one.
+        // In dual-shipping mode the global shippingProvider may be wrong (env-based).
+        const existingShipment = await prisma.shipment.findFirst({
+          where: { orderId: data.orderId },
+          select: { provider: true }
+        });
+
+        const cancelAdapterKey: 'delhivery' | 'shiprocket' | null =
+          existingShipment?.provider === ShippingProvider.SHIPROCKET
+            ? 'shiprocket'
+            : existingShipment?.provider === ShippingProvider.DELHIVERY
+              ? 'delhivery'
+              : null;
+
+        const cancelAdapter =
+          cancelAdapterKey != null
+            ? (shippingAdapterFactory(cancelAdapterKey) ?? shippingProvider)
+            : shippingProvider;
+
+        if (!cancelAdapter) {
           return;
         }
 
-        await shippingProvider.cancelShipment(data.awbNumber);
+        await cancelAdapter.cancelShipment(data.awbNumber);
         await prisma.shipment.updateMany({
           where: {
             orderId: data.orderId,
@@ -633,7 +656,20 @@ export function createShippingWorker(
         for (const shipment of activeShipments) {
           if (!shipment.awbNumber) continue;
           try {
-            const tracking = await shippingProvider.trackShipment(shipment.awbNumber);
+            // In dual-shipping mode, shipments may belong to different providers.
+            // Use the provider recorded on the shipment row, not the global env-based one.
+            const pollAdapterKey: 'delhivery' | 'shiprocket' | null =
+              shipment.provider === ShippingProvider.SHIPROCKET
+                ? 'shiprocket'
+                : shipment.provider === ShippingProvider.DELHIVERY
+                  ? 'delhivery'
+                  : null;
+            const pollAdapter =
+              pollAdapterKey != null
+                ? (shippingAdapterFactory(pollAdapterKey) ?? shippingProvider)
+                : shippingProvider;
+            if (!pollAdapter) continue;
+            const tracking = await pollAdapter.trackShipment(shipment.awbNumber);
             const nextShipmentStatus = mapShipmentWebhookStatus(tracking.status);
 
             if (!nextShipmentStatus || nextShipmentStatus === shipment.status) continue;

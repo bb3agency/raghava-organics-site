@@ -6,6 +6,16 @@ const state = {
   processor: undefined as undefined | ((job: { name: string; data: unknown }) => Promise<void>),
   notificationsAdd: vi.fn(),
   createShipment: vi.fn(),
+  cancelShipmentDelhivery: vi.fn(),
+  cancelShipmentShiprocket: vi.fn(),
+  trackShipmentDelhivery: vi.fn(),
+  trackShipmentShiprocket: vi.fn(),
+  // Top-level prisma shipment (used outside $transaction, e.g. cancel-shipment job)
+  shipment: {
+    findFirst: vi.fn(),
+    findMany: vi.fn(),
+    updateMany: vi.fn()
+  },
   tx: {
     shipment: {
       findFirst: vi.fn(),
@@ -51,6 +61,12 @@ function MockPrismaClient() {
     productVariant: {
       findMany: state.tx.productVariant.findMany
     },
+    // Top-level shipment methods used outside $transaction (cancel-shipment, poll jobs)
+    shipment: {
+      findFirst: state.shipment.findFirst,
+      findMany: state.shipment.findMany,
+      updateMany: state.shipment.updateMany
+    },
     $transaction<T>(fn: (tx: typeof state.tx) => Promise<T>) {
       return fn(state.tx);
     }
@@ -62,6 +78,27 @@ function mockCreateShippingProvider() {
     createShipment: state.createShipment,
     trackShipment: vi.fn(),
     cancelShipment: vi.fn(),
+    checkServiceability: vi.fn(),
+    calculateDeliveryRate: vi.fn()
+  };
+}
+
+// Per-provider adapter factory — returns distinct mocks keyed by provider name so
+// tests can assert that the correct provider's methods were called.
+function mockCreateShippingAdapterForProvider(providerKey: 'delhivery' | 'shiprocket') {
+  if (providerKey === 'delhivery') {
+    return {
+      createShipment: state.createShipment,
+      trackShipment: state.trackShipmentDelhivery,
+      cancelShipment: state.cancelShipmentDelhivery,
+      checkServiceability: vi.fn(),
+      calculateDeliveryRate: vi.fn()
+    };
+  }
+  return {
+    createShipment: state.createShipment,
+    trackShipment: state.trackShipmentShiprocket,
+    cancelShipment: state.cancelShipmentShiprocket,
     checkServiceability: vi.fn(),
     calculateDeliveryRate: vi.fn()
   };
@@ -85,6 +122,7 @@ describe('shipping worker error and retry behavior', () => {
     Worker: MockWorker as unknown as ShippingWorkerType,
     PrismaClient: MockPrismaClient as unknown as ShippingPrismaType,
     createShippingProvider: mockCreateShippingProvider,
+    createShippingAdapterForProvider: mockCreateShippingAdapterForProvider,
     sendTechnicalFailureAlert
   };
   const boot = () =>
@@ -98,6 +136,13 @@ describe('shipping worker error and retry behavior', () => {
     process.env.DELHIVERY_PICKUP_PINCODE = '500001';
     state.processor = undefined;
     state.createShipment.mockReset();
+    state.cancelShipmentDelhivery.mockReset();
+    state.cancelShipmentShiprocket.mockReset();
+    state.trackShipmentDelhivery.mockReset();
+    state.trackShipmentShiprocket.mockReset();
+    state.shipment.findFirst.mockReset();
+    state.shipment.findMany.mockReset();
+    state.shipment.updateMany.mockReset();
     state.tx.shipment.findFirst.mockReset();
     state.tx.shipment.update.mockReset();
     state.tx.shipment.create.mockReset();
@@ -932,6 +977,119 @@ describe('shipping worker error and retry behavior', () => {
     failedHandler?.(retryJob, new Error('transient error'));
 
     expect(sendTechnicalFailureAlert).not.toHaveBeenCalled();
+  });
+
+  // ── Dual-shipping provider routing ──────────────────────────────────────────
+
+  it('cancel-shipment routes to Delhivery adapter when shipment.provider is DELHIVERY', async () => {
+    boot();
+    state.shipment.findFirst.mockResolvedValue({ provider: 'DELHIVERY' });
+    state.shipment.updateMany.mockResolvedValue({ count: 1 });
+    state.cancelShipmentDelhivery.mockResolvedValue(undefined);
+
+    await state.processor?.({
+      name: 'cancel-shipment',
+      data: { orderId: 'order_del', awbNumber: 'DEL-AWB-001' }
+    });
+
+    expect(state.cancelShipmentDelhivery).toHaveBeenCalledWith('DEL-AWB-001');
+    expect(state.cancelShipmentShiprocket).not.toHaveBeenCalled();
+    expect(state.shipment.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ orderId: 'order_del', awbNumber: 'DEL-AWB-001' }),
+        data: { status: 'CANCELLED' }
+      })
+    );
+  });
+
+  it('cancel-shipment routes to Shiprocket adapter when shipment.provider is SHIPROCKET', async () => {
+    boot();
+    state.shipment.findFirst.mockResolvedValue({ provider: 'SHIPROCKET' });
+    state.shipment.updateMany.mockResolvedValue({ count: 1 });
+    state.cancelShipmentShiprocket.mockResolvedValue(undefined);
+
+    await state.processor?.({
+      name: 'cancel-shipment',
+      data: { orderId: 'order_sr', awbNumber: 'SR-AWB-002' }
+    });
+
+    expect(state.cancelShipmentShiprocket).toHaveBeenCalledWith('SR-AWB-002');
+    expect(state.cancelShipmentDelhivery).not.toHaveBeenCalled();
+  });
+
+  it('create-shipment compensating cancel uses the same adapter that created the AWB', async () => {
+    // Simulate: order gets cancelled mid-flight after AWB was created by Delhivery.
+    // The compensating cancel must use the Delhivery adapter, not the global one.
+    boot();
+    state.tx.order.findUnique.mockResolvedValue({
+      id: 'order_comp',
+      orderNumber: 'ORD-COMP-001',
+      total: 1000,
+      status: 'PROCESSING',
+      selectedShippingProvider: 'DELHIVERY',
+      shippingAddress: {
+        fullName: 'Test Customer',
+        phone: '9999999999',
+        line1: 'Street 1',
+        city: 'Hyderabad',
+        state: 'Telangana',
+        pincode: '500001'
+      },
+      payment: { status: 'CAPTURED' },
+      shipment: null,
+      items: [{ variantId: 'v1', quantity: 1, productName: 'Spice', sku: 'S1', unitPrice: 1000 }]
+    });
+    state.tx.productVariant.findMany.mockResolvedValue([
+      { id: 'v1', weight: 300, hsnCode: '1001', product: { attributes: { hsnCode: '1001' } } }
+    ]);
+    state.createShipment.mockResolvedValue({
+      awbNumber: 'DEL-COMP-AWB',
+      trackingUrl: 'https://track.del/DEL-COMP-AWB',
+      providerPayload: {}
+    });
+    // Simulate order already cancelled when Phase 3 transaction runs
+    state.tx.shipment.findFirst.mockResolvedValue({
+      id: null,
+      awbNumber: null
+    });
+    const freshOrderDelegate = state.tx.order as unknown as { findUnique: ReturnType<typeof vi.fn> };
+    freshOrderDelegate.findUnique
+      .mockResolvedValueOnce({
+        id: 'order_comp',
+        orderNumber: 'ORD-COMP-001',
+        total: 1000,
+        status: 'PROCESSING',
+        selectedShippingProvider: 'DELHIVERY',
+        shippingAddress: {
+          fullName: 'Test Customer',
+          phone: '9999999999',
+          line1: 'Street 1',
+          city: 'Hyderabad',
+          state: 'Telangana',
+          pincode: '500001'
+        },
+        payment: { status: 'CAPTURED' },
+        shipment: null,
+        items: [{ variantId: 'v1', quantity: 1, productName: 'Spice', sku: 'S1', unitPrice: 1000 }]
+      })
+      // Phase 3 re-read returns CANCELLED — triggers compensating cancel path
+      .mockResolvedValueOnce({
+        id: 'order_comp',
+        status: 'CANCELLED',
+        shipment: null
+      });
+    state.cancelShipmentDelhivery.mockResolvedValue(undefined);
+
+    await state.processor?.({
+      name: 'create-shipment',
+      data: { orderId: 'order_comp' }
+    });
+
+    // Compensating cancel must use Delhivery (the provider that created the AWB)
+    expect(state.cancelShipmentDelhivery).toHaveBeenCalledWith('DEL-COMP-AWB');
+    expect(state.cancelShipmentShiprocket).not.toHaveBeenCalled();
+    // Order must not be marked SHIPPED
+    expect(state.tx.order.update).not.toHaveBeenCalled();
   });
 });
 

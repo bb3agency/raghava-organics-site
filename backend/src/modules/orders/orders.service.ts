@@ -1761,26 +1761,59 @@ export class OrdersService {
       'SHIPPING_PROVIDER',
       'DELHIVERY_API_KEY',
       'DELHIVERY_WEBHOOK_TOKEN',
+      'SHIPROCKET_EMAIL',
+      'SHIPROCKET_PASSWORD',
       'SHIPROCKET_WEBHOOK_TOKEN',
       'SHIPROCKET_WEBHOOK_MAX_SKEW_SECONDS',
       'DELHIVERY_WEBHOOK_MAX_SKEW_SECONDS'
     ]);
     // Frontend integration contract:
     // - Browser clients MUST NOT call this webhook route directly.
-    // - Delhivery expects `Authorization: Token <DELHIVERY_WEBHOOK_TOKEN>`.
+    // - Delhivery Push API: client creates their own secret, tells Delhivery to echo it back
+    //   as `Authorization: Token <DELHIVERY_WEBHOOK_TOKEN>`. Token is optional — if unset, all
+    //   Delhivery webhooks are accepted (rely on SHIPPING_WEBHOOK_ALLOWLIST_CIDR instead).
     // - Shiprocket expects `x-api-key: <SHIPROCKET_WEBHOOK_TOKEN>` (per official Shiprocket docs).
     //   Also accepts `Authorization: Bearer <SHIPROCKET_WEBHOOK_TOKEN>` for backward compatibility.
+    //   Token is optional — if unset, all Shiprocket webhooks are accepted.
     // - `noop` fallback acceptance is for local/dev simulation only.
     const startedAt = Date.now();
     const env = (runtimeConfig.NODE_ENV ?? process.env.NODE_ENV ?? 'development').toLowerCase();
-    let activeProvider = (runtimeConfig.SHIPPING_PROVIDER ?? 'delhivery').trim().toLowerCase();
-    if (
-      env === 'test' &&
-      activeProvider === 'delhivery' &&
-      typeof process.env.SHIPPING_PROVIDER === 'string'
-    ) {
-      activeProvider = process.env.SHIPPING_PROVIDER.trim().toLowerCase();
+
+    // In dual-shipping mode both providers post to the same endpoint.
+    // Detect which provider sent this call from auth header format rather than
+    // trusting SHIPPING_PROVIDER (which names only one of the two active providers).
+    //   Delhivery: Authorization: Token <secret>
+    //   Shiprocket: x-api-key: <secret>  OR  Authorization: Bearer <secret>
+    const hasDelhivery = Boolean((runtimeConfig.DELHIVERY_API_KEY ?? '').trim());
+    const hasShiprocket =
+      Boolean((runtimeConfig.SHIPROCKET_EMAIL ?? '').trim()) &&
+      Boolean((runtimeConfig.SHIPROCKET_PASSWORD ?? '').trim());
+    const isDualMode = hasDelhivery && hasShiprocket;
+
+    let activeProvider: string;
+    if (isDualMode) {
+      // Discriminate by auth header prefix so each provider's token is validated correctly.
+      const looksLikeDelhivery =
+        typeof authHeader === 'string' && authHeader.trimStart().startsWith('Token ');
+      activeProvider = looksLikeDelhivery ? 'delhivery' : 'shiprocket';
+    } else {
+      activeProvider = hasDelhivery
+        ? 'delhivery'
+        : hasShiprocket
+          ? 'shiprocket'
+          : (runtimeConfig.SHIPPING_PROVIDER ?? process.env.SHIPPING_PROVIDER ?? 'delhivery')
+              .trim()
+              .toLowerCase();
+      // Test-env override
+      if (
+        env === 'test' &&
+        activeProvider === 'delhivery' &&
+        typeof process.env.SHIPPING_PROVIDER === 'string'
+      ) {
+        activeProvider = process.env.SHIPPING_PROVIDER.trim().toLowerCase();
+      }
     }
+
     const isShiprocket = activeProvider === 'shiprocket';
     // isNoopShipping: true when SHIPPING_PROVIDER=noop or delhivery is configured with placeholder/empty API key
     const isNoopShipping = activeProvider === 'noop';
@@ -1821,16 +1854,12 @@ export class OrdersService {
       }
     }
 
-    // Delhivery always requires a webhook secret. Shiprocket token is optional —
-    // if SHIPROCKET_WEBHOOK_TOKEN is not configured we accept unauthenticated webhooks
-    // (Shiprocket does not enforce auth by default; idempotency/dedup protects against replay).
-    if (!effectiveWebhookSecret && !isShiprocket) {
-      throw new AppError(
-        ERROR_CODES.INTERNAL_ERROR,
-        'Shipping webhook secret is not configured',
-        500
-      );
-    }
+    // Both DELHIVERY_WEBHOOK_TOKEN and SHIPROCKET_WEBHOOK_TOKEN are optional.
+    // Delhivery does NOT generate or provide a webhook secret — the merchant creates their own
+    // secret and tells Delhivery (via their account manager) to echo it back in the
+    // Authorization header on every push call. If DELHIVERY_WEBHOOK_TOKEN is not configured,
+    // we accept all Delhivery webhooks and rely on IP allowlisting (SHIPPING_WEBHOOK_ALLOWLIST_CIDR)
+    // for security. Same behaviour as Shiprocket. Idempotency/dedup protects against replay.
 
     let tokenValid: boolean;
     if (isNoopShipping) {
@@ -1846,8 +1875,13 @@ export class OrdersService {
         tokenValid = this.secureTokenMatch(headerToken, effectiveWebhookSecret);
       }
     } else {
-      const expectedToken = `Token ${effectiveWebhookSecret}`;
-      tokenValid = this.secureTokenMatch(authHeader, expectedToken);
+      if (!effectiveWebhookSecret) {
+        // No token configured — accept all Delhivery webhooks (optional auth).
+        tokenValid = true;
+      } else {
+        const expectedToken = `Token ${effectiveWebhookSecret}`;
+        tokenValid = this.secureTokenMatch(authHeader, expectedToken);
+      }
     }
 
     if (!tokenValid) {
@@ -2735,11 +2769,13 @@ export class OrdersService {
     if (!shiprocketShipmentId) {
       throw new AppError(
         ERROR_CODES.VALIDATION_ERROR,
-        'Shipment does not have a Shiprocket shipment ID — ensure SHIPPING_PROVIDER=shiprocket and AWB has been assigned',
+        'Shipment does not have a Shiprocket shipment ID — schedule pickup is only supported for Shiprocket shipments',
         422
       );
     }
-    const provider = createShippingProvider();
+    // Schedule pickup is Shiprocket-only. Use the Shiprocket adapter directly so this
+    // works correctly in dual-shipping mode regardless of what SHIPPING_PROVIDER is set to.
+    const provider = createShippingAdapterForProvider('shiprocket');
     if (!provider?.schedulePickup) {
       throw new AppError(
         ERROR_CODES.INTERNAL_ERROR,
@@ -2777,11 +2813,13 @@ export class OrdersService {
     if (!shiprocketShipmentId) {
       throw new AppError(
         ERROR_CODES.VALIDATION_ERROR,
-        'Shipment does not have a Shiprocket shipment ID — ensure SHIPPING_PROVIDER=shiprocket and AWB has been assigned',
+        'Shipment does not have a Shiprocket shipment ID — label generation is only supported for Shiprocket shipments',
         422
       );
     }
-    const provider = createShippingProvider();
+    // Label generation is Shiprocket-only. Use the Shiprocket adapter directly so this
+    // works correctly in dual-shipping mode regardless of what SHIPPING_PROVIDER is set to.
+    const provider = createShippingAdapterForProvider('shiprocket');
     if (!provider?.generateLabel) {
       throw new AppError(
         ERROR_CODES.INTERNAL_ERROR,
@@ -4486,7 +4524,13 @@ export class OrdersService {
       throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Shipment has no AWB number — cannot sync', 400);
     }
 
-    const provider = createShippingProvider();
+    // Use the provider that created this shipment, not the global env-based one.
+    const syncAdapterKey: 'delhivery' | 'shiprocket' | null =
+      shipment.provider === 'SHIPROCKET' ? 'shiprocket' :
+      shipment.provider === 'DELHIVERY' ? 'delhivery' : null;
+    const provider = syncAdapterKey != null
+      ? (createShippingAdapterForProvider(syncAdapterKey) ?? createShippingProvider())
+      : createShippingProvider();
     if (!provider) {
       throw new AppError(ERROR_CODES.CONFIG_NOT_READY, 'Shipping provider not configured', 503);
     }

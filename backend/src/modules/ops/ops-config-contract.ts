@@ -99,7 +99,12 @@ export const OPS_CONFIG_OVERVIEW_GROUPS: Array<{
     domain: 'shipping',
     label: 'Shipping',
     items: [
-      { key: 'SHIPPING_PROVIDER', mutableViaOps: true, requiresRestart: true },
+      {
+        key: 'SHIPPING_PROVIDER',
+        mutableViaOps: true,
+        requiresRestart: true,
+        note: 'Fallback provider when only one set of credentials is configured (delhivery or shiprocket). In dual-shipping mode (both DELHIVERY_API_KEY and SHIPROCKET_EMAIL/PASSWORD set), this field is NOT used for routing — the cheapest rate per order is auto-selected by comparing both providers, and each order stores which provider won.'
+      },
       { key: 'SHIPPING_PROVIDER_FAILOVER_ENABLED', mutableViaOps: true, requiresRestart: true },
       { key: 'SHIPPING_CB_FAILURE_THRESHOLD', mutableViaOps: true, requiresRestart: true },
       { key: 'SHIPPING_CB_COOLDOWN_MS', mutableViaOps: true, requiresRestart: true },
@@ -123,7 +128,13 @@ export const OPS_CONFIG_OVERVIEW_GROUPS: Array<{
       { key: 'DELHIVERY_SELLER_CITY', mutableViaOps: true, requiresRestart: true },
       { key: 'DELHIVERY_SELLER_STATE', mutableViaOps: true, requiresRestart: true },
       { key: 'DELHIVERY_SELLER_PHONE', mutableViaOps: true, requiresRestart: true },
-      { key: 'DELHIVERY_WEBHOOK_TOKEN', mutableViaOps: true, requiresRestart: true, runtimeSource: 'db-overlay' },
+      {
+        key: 'DELHIVERY_WEBHOOK_TOKEN',
+        mutableViaOps: true,
+        requiresRestart: true,
+        runtimeSource: 'db-overlay',
+        note: 'Optional. A secret token you create and tell Delhivery to echo in the Authorization header on every webhook push. If not set, all incoming Delhivery webhooks are accepted — use SHIPPING_WEBHOOK_ALLOWLIST_CIDR as the security layer instead. Delhivery does not generate or provide this token; you supply it when registering your webhook endpoint with your account manager.'
+      },
       { key: 'DELHIVERY_WEBHOOK_ALLOWLIST_CIDR', mutableViaOps: true, requiresRestart: true, runtimeSource: 'db-overlay' },
       { key: 'DELHIVERY_WEBHOOK_MAX_SKEW_SECONDS', mutableViaOps: true, requiresRestart: true },
       { key: 'SHIPROCKET_EMAIL', mutableViaOps: true, requiresRestart: true },
