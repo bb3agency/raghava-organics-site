@@ -1,5 +1,5 @@
 import { AnalyticsEventType, Role } from '@prisma/client';
-import { FastifyInstance } from 'fastify';
+import { FastifyInstance, FastifyRequest } from 'fastify';
 import { adminPermissionGuard } from '@common/guards/admin-permissions.guard';
 import { jwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import { rolesGuard } from '@common/guards/roles.guard';
@@ -38,6 +38,16 @@ export async function registerAnalyticsRoutes(fastify: FastifyInstance): Promise
     '/api/v1/analytics/event',
     {
       schema: analyticsEventRecordSchema,
+      preHandler: [
+        // Optionally extract JWT if present — public route so never throw on missing token
+        async (request: FastifyRequest) => {
+          try {
+            await request.jwtVerify();
+          } catch {
+            // No valid token — unauthenticated request, continue as guest
+          }
+        }
+      ],
       config: {
         rateLimit: routeRateLimitProfiles.cartOps
       }
