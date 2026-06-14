@@ -1495,6 +1495,32 @@ export const adminGetShipmentByIdSchema = {
   }
 } as const;
 
+export const adminSyncShipmentStatusSchema = {
+  tags: ['admin', 'shipments'],
+  summary: 'Force-sync shipment status from shipping provider',
+  params: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['id'],
+    properties: { id: { type: 'string', maxLength: 64 } }
+  },
+  response: {
+    200: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['id', 'status', 'updatedAt'],
+      properties: {
+        id: { type: 'string' },
+        status: { type: 'string' },
+        awbNumber: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+        trackingUrl: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+        updatedAt: { type: 'string' }
+      }
+    },
+    ...standardAdminErrorResponses
+  }
+} as const;
+
 export const adminGetPaymentByIdSchema = {
   tags: ['admin', 'payments'],
   summary: 'Get a single payment by ID',

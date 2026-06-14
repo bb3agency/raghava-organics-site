@@ -49,10 +49,13 @@ export async function registerAnalyticsRoutes(fastify: FastifyInstance): Promise
         userId?: string;
         payload?: Record<string, unknown>;
       };
+      // If authenticated, use the verified token subject — never trust body userId
+      const authenticatedUserId = (request as { user?: { sub?: string } }).user?.sub;
+      const resolvedUserId = authenticatedUserId ?? (body.userId ?? undefined);
       const result = await service.recordEvent({
         eventType: body.eventType as AnalyticsEventType,
         sessionId: body.sessionId,
-        ...(body.userId ? { userId: body.userId } : {}),
+        ...(resolvedUserId ? { userId: resolvedUserId } : {}),
         ...(body.payload ? { payload: body.payload } : {})
       });
       reply.status(201);

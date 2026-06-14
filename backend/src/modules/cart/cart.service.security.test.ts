@@ -55,6 +55,7 @@ describe('CartService secure response contracts', () => {
                 product: {
                   categoryId: 'category_1',
                   name: 'Organic Honey',
+                  slug: 'organic-honey',
                   metaDescription: 'Pure organic honey from Kerala.',
                   images: [{ url: '/api/v1/media/products/product_1/hero.webp', altText: 'Organic honey jar' }]
                 }
@@ -70,6 +71,7 @@ describe('CartService secure response contracts', () => {
       expect.objectContaining({
         product: {
           name: 'Organic Honey',
+          slug: 'organic-honey',
           metaDescription: 'Pure organic honey from Kerala.',
           imageUrl: '/api/v1/media/products/product_1/hero.webp',
           imageAlt: 'Organic honey jar'

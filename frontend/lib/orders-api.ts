@@ -76,28 +76,6 @@ export interface VerifyPaymentInput {
   razorpaySignature: string;
 }
 
-export interface PrepareCheckoutInput {
-  addressId?: string;
-  shippingAddress?: CheckoutShippingAddressInput;
-  notes?: string;
-  /** Backend-selected cheapest shipping provider from delivery rates response. */
-  selectedShippingProvider?: "DELHIVERY" | "SHIPROCKET";
-}
-
-export interface PrepareCheckoutResponse {
-  checkoutSessionId: string;
-  razorpayOrderId: string;
-  amount: number;
-  currency: string;
-}
-
-export interface ConfirmPrepaidInput {
-  checkoutSessionId: string;
-  razorpayOrderId: string;
-  razorpayPaymentId: string;
-  razorpaySignature: string;
-}
-
 export async function createOrder(
   input: CreateOrderInput,
   accessToken: string,
@@ -135,6 +113,27 @@ export async function verifyPayment(
     idempotencyKey,
     body: JSON.stringify(input),
   });
+}
+
+export interface PrepareCheckoutInput {
+  addressId?: string;
+  shippingAddress?: CheckoutShippingAddressInput;
+  notes?: string;
+  selectedShippingProvider?: "DELHIVERY" | "SHIPROCKET";
+}
+
+export interface PrepareCheckoutResponse {
+  checkoutSessionId: string;
+  razorpayOrderId: string;
+  amount: number;
+  currency: string;
+}
+
+export interface ConfirmPrepaidInput {
+  checkoutSessionId: string;
+  razorpayOrderId: string;
+  razorpayPaymentId: string;
+  razorpaySignature: string;
 }
 
 export async function prepareCheckout(

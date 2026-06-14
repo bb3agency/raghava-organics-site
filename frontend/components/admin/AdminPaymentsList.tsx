@@ -270,7 +270,7 @@ export function AdminPaymentsList({ from, to }: AdminPaymentsListProps = {}) {
                     {items.map((payment) => (
                       <tr key={payment.id} className="group hover:bg-muted/30">
                         <td className="px-4 py-3 font-mono text-xs font-semibold text-foreground">
-                          {payment.providerPaymentId || `PAY-${payment.id.split("-")[0].toUpperCase()}`}
+                          {payment.providerPaymentId || "—"}
                         </td>
                         <td className="px-4 py-3">
                           <Link
@@ -311,7 +311,7 @@ export function AdminPaymentsList({ from, to }: AdminPaymentsListProps = {}) {
                         <td className="px-4 py-3">
                           <AdminStatusBadge
                             label={
-                              payment.status === "captured" || payment.status === "paid"
+                              payment.status.toUpperCase() === "CAPTURED" || payment.status.toUpperCase() === "PAID"
                                 ? "Successful"
                                 : payment.status
                             }

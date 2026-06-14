@@ -35,6 +35,7 @@ const HOT_SKU_SHARD_COUNT = Number(process.env.HOT_SKU_SHARD_COUNT ?? 8);
 const CART_ITEM_PRODUCT_SELECT = {
   categoryId: true,
   name: true,
+  slug: true,
   metaDescription: true,
   images: {
     orderBy: { sortOrder: 'asc' as const },
@@ -135,6 +136,7 @@ export class CartService {
           product: {
             categoryId: string;
             name: string;
+            slug?: string | null;
             metaDescription: string | null;
             images: Array<{ url: string; altText: string }>;
           };
@@ -192,6 +194,7 @@ export class CartService {
           product: {
             categoryId: string;
             name: string;
+            slug?: string | null;
             metaDescription: string | null;
             images: Array<{ url: string; altText: string }>;
           };
@@ -982,6 +985,7 @@ export class CartService {
           product: {
             categoryId: string;
             name: string;
+            slug?: string | null;
             metaDescription: string | null;
             images: Array<{ url: string; altText: string }>;
           };
@@ -1008,6 +1012,7 @@ export class CartService {
         lineTotal: item.priceSnapshot * item.quantity,
         product: {
           name: item.variant.product?.name ?? item.variant.name,
+          slug: item.variant.product?.slug ?? null,
           metaDescription: item.variant.product?.metaDescription ?? null,
           imageUrl: item.variant.product?.images?.[0]?.url ?? null,
           imageAlt: item.variant.product?.images?.[0]?.altText ?? null

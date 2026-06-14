@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { FileDown, User, MapPin, ReceiptText, CreditCard, Truck, Tag } from "lucide-react";
+import { FileDown, User, MapPin, CreditCard, Truck, Tag } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { AdminStatusBadge } from "@/components/admin/AdminStatusBadge";
 import { useAuthenticatedApi } from "@/hooks/use-authenticated-api";

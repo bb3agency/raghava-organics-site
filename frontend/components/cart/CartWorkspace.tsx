@@ -166,7 +166,7 @@ export function CartWorkspace() {
               >
                 {/* Image */}
                 <Link
-                  href="#"
+                  href={item.product?.slug ? `/products/${item.product.slug}` : "#"}
                   className="relative size-20 shrink-0 overflow-hidden rounded-xl bg-[#faf8f5] sm:size-24"
                 >
                   <Image

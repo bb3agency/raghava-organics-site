@@ -560,7 +560,7 @@ export function NotificationsChannelPanel() {
           <button
             type="button"
             onClick={handleSave}
-            disabled={isSubmitting}
+            disabled={isSubmitting || !canWrite}
             className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg bg-primary px-5 text-sm font-semibold text-primary-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {isSubmitting ? (

@@ -20,7 +20,8 @@ function RegisterPageContent() {
   const [mobileOtpEnabled, setMobileOtpEnabled] = useState(false);
   const [configLoaded, setConfigLoaded] = useState(false);
 
-  const redirectTo = searchParams.get("redirect") ?? "/dashboard";
+  const rawRedirect = searchParams.get("redirect") ?? "";
+  const redirectTo = rawRedirect.startsWith("/") && !rawRedirect.startsWith("//") ? rawRedirect : "/dashboard";
 
   // Fetch mobileOtpSignupEnabled from the public store config.
   // This is a lightweight ISR-cached endpoint — no auth needed.

@@ -16,6 +16,7 @@ const baseItem: CartLineItem = {
   quantity: 2,
   product: {
     name: "Organic Tomatoes",
+    slug: "organic-tomatoes",
     metaDescription: "Farm-fresh chemical-free tomatoes.",
     imageUrl: "/api/v1/media/products/p1/hero.webp",
     imageAlt: "Organic tomatoes",

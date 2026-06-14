@@ -7,6 +7,8 @@ import {
   type StorefrontProductSort,
 } from "@/lib/storefront-products";
 
+const VALID_SORTS = new Set<StorefrontProductSort>(["newest", "popularity", "price_asc", "price_desc"]);
+
 interface CategoryProductsPageProps {
   params: Promise<{ slug: string }>;
   searchParams: Promise<{ page?: string; limit?: string; sort?: string }>;
@@ -36,7 +38,9 @@ export default async function CategoryProductsPage({
   const query = await searchParams;
   const page = Math.max(1, Number(query.page ?? "1") || 1);
   const limit = Math.min(48, Math.max(1, Number(query.limit ?? "12") || 12));
-  const sort = (query.sort ?? "newest") as StorefrontProductSort;
+  const sort: StorefrontProductSort = VALID_SORTS.has(query.sort as StorefrontProductSort)
+    ? (query.sort as StorefrontProductSort)
+    : "newest";
   const categoryName = formatCategoryName(slug);
 
   const { products, meta } = await fetchStorefrontCategoryProducts(slug, {

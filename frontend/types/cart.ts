@@ -7,6 +7,7 @@ export interface CartLineItem {
   /** Present on API responses; optional for legacy persisted cart snapshots. */
   product?: {
     name: string;
+    slug: string | null;
     metaDescription: string | null;
     imageUrl: string | null;
     imageAlt: string | null;

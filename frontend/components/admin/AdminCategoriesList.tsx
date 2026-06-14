@@ -90,11 +90,13 @@ export function AdminCategoriesList() {
 
   const [categoryKpis, setCategoryKpis] = useState<CategoryKpis | null>(null);
   const [kpisLoading, setKpisLoading] = useState(true);
+  const [kpisError, setKpisError] = useState(false);
   const kpisRequestIdRef = useRef(0);
 
   const loadKpis = useCallback(async () => {
     const requestId = ++kpisRequestIdRef.current;
     setKpisLoading(true);
+    setKpisError(false);
     try {
       const [totalRes, activeRes] = await Promise.all([
         api<PaginatedResponse<AdminCategoryListItem>>(
@@ -111,7 +113,7 @@ export function AdminCategoriesList() {
       const active = safeTotal(activeRes);
       setCategoryKpis({ total, active, inactive: total - active });
     } catch {
-      // keep prior values
+      if (requestId === kpisRequestIdRef.current) setKpisError(true);
     } finally {
       if (requestId === kpisRequestIdRef.current) setKpisLoading(false);
     }
@@ -228,7 +230,7 @@ export function AdminCategoriesList() {
               <div className="flex flex-col gap-0.5 sm:gap-1">
                 <p className="text-[10px] sm:text-xs font-medium text-muted-foreground">Total Categories</p>
                 <p className="font-heading text-lg sm:text-2xl font-bold tracking-tight text-foreground">
-                  {categoryKpis ? categoryKpis.total.toLocaleString() : kpisLoading ? "…" : "—"}
+                  {categoryKpis ? categoryKpis.total.toLocaleString() : kpisLoading ? "…" : kpisError ? "!" : "—"}
                 </p>
               </div>
             </div>

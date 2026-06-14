@@ -85,7 +85,9 @@ function AdminConsoleFrame({ children }: { children: ReactNode }) {
         if (!cancelled)
           setPendingOrdersCount(coercePaginatedResponse(res).meta.total);
       })
-      .catch(() => {});
+      .catch((err: unknown) => {
+        console.error("[AdminConsoleShell] Failed to fetch pending orders count", err);
+      });
     return () => {
       cancelled = true;
     };
@@ -106,7 +108,9 @@ function AdminConsoleFrame({ children }: { children: ReactNode }) {
     if (!accessToken || adminUser?.firstName) return;
     void getCurrentUser(accessToken)
       .then((user) => useAuthStore.getState().setSession(accessToken, user))
-      .catch(() => {});
+      .catch((err: unknown) => {
+        console.error("[AdminConsoleShell] Failed to hydrate admin profile", err);
+      });
   }, [accessToken, adminUser?.firstName]);
 
   // ⌘K / Ctrl+K opens search

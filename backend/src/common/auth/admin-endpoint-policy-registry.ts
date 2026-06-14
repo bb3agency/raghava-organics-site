@@ -102,7 +102,7 @@ export const ADMIN_ENDPOINT_POLICY_REGISTRY: readonly EndpointPolicy[] = [
   { method: 'DELETE', path: '/api/v1/admin/products/:id/variants/:variantId', permission: 'products:write', layer: 'A' },
   { method: 'GET', path: '/api/v1/admin/shipments', permission: 'shipments:read', layer: 'A' },
   { method: 'GET', path: '/api/v1/admin/shipments/:id', permission: 'shipments:read', layer: 'A' },
-  { method: 'POST', path: '/api/v1/admin/shipments/:id/sync', permission: 'shipments:read', layer: 'A' },
+  { method: 'POST', path: '/api/v1/admin/shipments/:id/sync', permission: 'orders:write', layer: 'A' },
   { method: 'GET', path: '/api/v1/admin/payments', permission: 'payments:read', layer: 'A' },
   { method: 'GET', path: '/api/v1/admin/payments/:id', permission: 'payments:read', layer: 'A' },
   { method: 'GET', path: '/api/v1/admin/users', permission: 'users:read', layer: 'A' },

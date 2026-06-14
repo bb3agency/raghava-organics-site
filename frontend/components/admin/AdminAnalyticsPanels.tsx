@@ -48,6 +48,7 @@ export function AdminAnalyticsPageContent() {
   const { adminUser } = useAdminAuth();
   const canExport = hasAdminPermission(adminUser, ADMIN_PERMISSIONS.analyticsExport);
   const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
   const { registerExportHandler } = useAdminShell();
 
   const handleExport = useCallback(async () => {
@@ -70,8 +71,8 @@ export function AdminAnalyticsPageContent() {
       anchor.download = `analytics-revenue-${range.from}-to-${range.to}.csv`;
       anchor.click();
       URL.revokeObjectURL(objectUrl);
-    } catch {
-      // user can retry
+    } catch (err: unknown) {
+      setExportError(getApiErrorMessage(err));
     } finally {
       setExporting(false);
     }
@@ -90,6 +91,19 @@ export function AdminAnalyticsPageContent() {
         range={range}
         onRangeChange={setRange}
       />
+      {exportError && (
+        <div className="flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-2.5 text-sm text-destructive">
+          <span className="font-medium">Export failed:</span> {exportError}
+          <button
+            type="button"
+            onClick={() => setExportError(null)}
+            className="ml-auto text-xs text-destructive/70 hover:text-destructive"
+            aria-label="Dismiss"
+          >
+            ✕
+          </button>
+        </div>
+      )}
       <AdminDashboardKpisPanel
         from={range.from}
         to={range.to}

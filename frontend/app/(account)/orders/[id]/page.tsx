@@ -128,10 +128,17 @@ export default function AccountOrderDetailPage() {
         },
         accessToken,
       );
-      alert("Return request submitted successfully. We will review it shortly.");
       setShowReturnForm(false);
+      setReturnReason("");
+      setReturnItems({});
       const result = await getMyOrder(order.id, accessToken);
       setOrder(result);
+      // Re-initialise return item config from refreshed order
+      const refreshed: Record<string, { quantity: number; reason: string; selected: boolean }> = {};
+      result.items?.forEach((item) => {
+        refreshed[item.id] = { quantity: item.quantity, reason: "", selected: false };
+      });
+      setReturnItems(refreshed);
     } catch (err) {
       setError(getApiErrorMessage(err));
     } finally {
@@ -374,7 +381,7 @@ export default function AccountOrderDetailPage() {
                 rel="noreferrer"
                 className="text-primary underline"
               >
-                Track on {shippingProviderLabel(order.shipment.provider)}
+                Track on {shippingProviderLabel(order.shipment?.provider ?? "")}
               </a>
             )}
           </div>

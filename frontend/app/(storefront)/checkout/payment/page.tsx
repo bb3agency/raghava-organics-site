@@ -27,7 +27,7 @@ function PaymentContent() {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    if (!isReady || !orderId || accessToken) return;
+    if (!isReady || !orderId || !accessToken) return;
     replace(
       `/login?redirect=${encodeURIComponent(`/checkout/payment?orderId=${orderId}`)}`,
     );

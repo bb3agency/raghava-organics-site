@@ -454,7 +454,6 @@ export function AdminTopProductsPanel({
                 <th className="pb-3 px-2 font-medium hidden sm:table-cell">Variant</th>
                 <th className="pb-3 px-2 font-medium">Sold</th>
                 <th className="pb-3 px-2 font-medium">Revenue</th>
-                <th className="pb-3 pr-2 font-medium text-right hidden sm:table-cell">Trend</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border/40">
@@ -475,23 +474,6 @@ export function AdminTopProductsPanel({
                   <td className="py-3 px-2 font-medium">{item.quantitySold}</td>
                   <td className="py-3 px-2 font-medium">
                     {formatPaise(item.revenuePaise)}
-                  </td>
-                  <td className="py-3 pr-2 text-right hidden sm:table-cell">
-                    {/* Mock sparkline for visual effect */}
-                    <svg
-                      className="ml-auto h-5 w-16 text-zinc-900"
-                      viewBox="0 0 60 20"
-                      fill="none"
-                      xmlns="http://www.w3.org/2000/svg"
-                    >
-                      <path
-                        d="M0 15L10 10L20 12L30 5L40 8L50 2L60 0"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
                   </td>
                 </tr>
               ))}

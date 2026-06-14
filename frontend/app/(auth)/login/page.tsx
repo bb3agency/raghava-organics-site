@@ -55,7 +55,8 @@ function LoginPageContent() {
   const searchParams = useSearchParams();
   const setSession = useAuthStore((s) => s.setSession);
   const justReset = searchParams.get("reset") === "success";
-  const redirectTo = searchParams.get("redirect") ?? "/dashboard";
+  const rawRedirect = searchParams.get("redirect") ?? "";
+  const redirectTo = rawRedirect.startsWith("/") && !rawRedirect.startsWith("//") ? rawRedirect : "/dashboard";
 
   const [step, setStep] = useState<Step>({ kind: "identifier" });
   const [error, setError] = useState<string | null>(null);

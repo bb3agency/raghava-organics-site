@@ -56,11 +56,14 @@ export function AdminNotificationsPanel({ onClose }: AdminNotificationsPanelProp
   const [issueOrders, setIssueOrders] = useState<AdminOrderListItem[]>([]);
   const [loadingPending, setLoadingPending] = useState(true);
   const [loadingIssues, setLoadingIssues] = useState(true);
+  const [errorPending, setErrorPending] = useState(false);
+  const [errorIssues, setErrorIssues] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
     setLoadingPending(true);
+    setErrorPending(false);
     void api<PaginatedResponse<AdminOrderListItem>>(
       "/admin/orders?limit=8&status=CONFIRMED",
     )
@@ -68,7 +71,7 @@ export function AdminNotificationsPanel({ onClose }: AdminNotificationsPanelProp
         if (!cancelled)
           setPendingOrders(coercePaginatedResponse(res).items as AdminOrderListItem[]);
       })
-      .catch(() => {})
+      .catch(() => { if (!cancelled) setErrorPending(true); })
       .finally(() => { if (!cancelled) setLoadingPending(false); });
     return () => { cancelled = true; };
   }, [api, refreshKey]);
@@ -76,6 +79,7 @@ export function AdminNotificationsPanel({ onClose }: AdminNotificationsPanelProp
   useEffect(() => {
     let cancelled = false;
     setLoadingIssues(true);
+    setErrorIssues(false);
     void api<PaginatedResponse<AdminOrderListItem>>(
       "/admin/orders?limit=8&status=PAYMENT_FAILED",
     )
@@ -83,7 +87,7 @@ export function AdminNotificationsPanel({ onClose }: AdminNotificationsPanelProp
         if (!cancelled)
           setIssueOrders(coercePaginatedResponse(res).items as AdminOrderListItem[]);
       })
-      .catch(() => {})
+      .catch(() => { if (!cancelled) setErrorIssues(true); })
       .finally(() => { if (!cancelled) setLoadingIssues(false); });
     return () => { cancelled = true; };
   }, [api, refreshKey]);
@@ -92,6 +96,7 @@ export function AdminNotificationsPanel({ onClose }: AdminNotificationsPanelProp
   const issuesCount = issueOrders.length;
 
   const loading = tab === "pending" ? loadingPending : loadingIssues;
+  const hasError = tab === "pending" ? errorPending : errorIssues;
   const items = tab === "pending" ? pendingOrders : issueOrders;
 
   return (
@@ -162,6 +167,18 @@ export function AdminNotificationsPanel({ onClose }: AdminNotificationsPanelProp
         {loading ? (
           <div className="flex h-32 items-center justify-center">
             <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+          </div>
+        ) : hasError ? (
+          <div className="flex h-32 flex-col items-center justify-center gap-2 text-muted-foreground">
+            <AlertCircle className="h-7 w-7 text-destructive/70" />
+            <p className="text-xs font-medium">Could not load orders</p>
+            <button
+              type="button"
+              onClick={() => setRefreshKey((k) => k + 1)}
+              className="text-[11px] text-primary hover:underline"
+            >
+              Retry
+            </button>
           </div>
         ) : items.length === 0 ? (
           <div className="flex h-32 flex-col items-center justify-center gap-2 text-muted-foreground">

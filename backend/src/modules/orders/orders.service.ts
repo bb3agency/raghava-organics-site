@@ -4072,7 +4072,11 @@ export class OrdersService {
         originalInvoiceNumber: payload.originalInvoiceNumber,
         reason: payload.reason
       };
-    } catch {
+    } catch (err) {
+      this.fastify.log.warn(
+        { err, context: 'parseCreditNoteInfo' },
+        'Malformed credit note payload in DB — credit note details will be omitted from invoice'
+      );
       return null;
     }
   }
