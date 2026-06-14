@@ -293,28 +293,41 @@ describe('admin routes integration', () => {
     const app = createApp({
       user: { sub: 'real-user-999', role: Role.CUSTOMER, permissions: [] }
     });
-    // Spy before decorating so instances created during route registration are captured
-    vi.spyOn(AnalyticsService.prototype, 'recordEvent').mockResolvedValue({ id: 'evt-1' } as never);
+    vi.spyOn(AnalyticsService.prototype, 'recordEvent').mockResolvedValue({ ok: true } as never);
     const prisma = {
       $connect: vi.fn(),
       $disconnect: vi.fn(),
-      analyticsEvent: { create: vi.fn().mockResolvedValue({ id: 'evt-1' }) }
+      analyticsEvent: {
+        create: vi.fn().mockResolvedValue({ ok: true })
+      }
     };
     app.decorate('prisma', prisma as any);
     app.decorate('redis', { get: vi.fn(), set: vi.fn(), del: vi.fn() } as any);
-    app.decorate('queues', { analytics: { add: vi.fn() }, shipping: { add: vi.fn() }, orderProcessing: { add: vi.fn() }, refunds: { add: vi.fn() }, notifications: { add: vi.fn() } } as any);
+    app.decorate('queues', {
+      analytics: { add: vi.fn() },
+      shipping: { add: vi.fn() },
+      orderProcessing: { add: vi.fn() },
+      refunds: { add: vi.fn() },
+      notifications: { add: vi.fn() }
+    } as any);
     await registerAnalyticsRoutes(app);
 
+    // eventType must match the enum: PRODUCT_VIEW, ADD_TO_CART, etc. (uppercase)
     const response = await app.inject({
       method: 'POST',
       url: '/api/v1/analytics/event',
-      payload: { eventType: 'product_view', sessionId: 'sess-abc', userId: 'spoofed-user-999' }
+      payload: { eventType: 'PRODUCT_VIEW', sessionId: 'sess-abc', userId: 'spoofed-user-999' }
     });
 
-    // Verify the route handler was invoked successfully
-    expect(response.statusCode).toBe(200);
-    // Verify the database was called with the analytics event
-    expect(prisma.analyticsEvent.create).toHaveBeenCalled();
+    // Route returns 201 on success
+    expect(response.statusCode).toBe(201);
+    // Verify recordEvent was called with the authenticated user id, not the body userId
+    expect(AnalyticsService.prototype.recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'real-user-999' })
+    );
+    expect(AnalyticsService.prototype.recordEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'spoofed-user-999' })
+    );
 
     await app.close();
   });
