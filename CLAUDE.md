@@ -307,18 +307,97 @@ export default function ProductCard(props: any) { ... }
 
 ## 4.5 Security & Backend Integration Rules — MUST Follow
 
-### Content Security Policy (CSP) Headers
-When configuring Nginx or middleware, enforce these CSP rules:
+### Content Security Policy (CSP) Headers — Third-Party Integration Compliance
+
+**⚠️ CRITICAL:** CSP is enforced in `frontend/next.config.ts` in the `buildSecurityHeaders()` function. Every third-party service (payment gateway, analytics, CAPTCHA, CDN) requires explicit CSP allowlisting OR the browser silently blocks it.
+
+**Current CSP Configuration (frontend/next.config.ts):**
+
+```javascript
+// script-src: Controls which scripts can execute
+"script-src 'self' 'unsafe-inline' https://checkout.razorpay.com https://cdn.razorpay.com https://static.cloudflareinsights.com https://challenges.cloudflare.com"
+
+// frame-src: Controls which iframes can load
+"frame-src 'self' https://checkout.razorpay.com https://api.razorpay.com https://challenges.cloudflare.com"
+
+// connect-src: Controls fetch/WebSocket/etc to external services
+"connect-src 'self' https://api.razorpay.com https://lumberjack.razorpay.com https://cloudflareinsights.com"
+
+// Full policy with all directives in next.config.ts
 ```
-default-src 'self';
-connect-src 'self' https://api.yourdomain.com https://*.razorpay.com;
-script-src 'self' 'unsafe-inline' https://checkout.razorpay.com;
-style-src 'self' 'unsafe-inline';
-img-src 'self' https: data: blob:;
-frame-src https://checkout.razorpay.com;
-```
-- Never use `unsafe-eval` (prevents XSS via eval())
-- Never use wildcard `*` in production CSP
+
+**Currently Allowed Third-Party Services:**
+| Service | Purpose | CSP Directives | Status |
+|---------|---------|----------------|--------|
+| **Razorpay** | Payment gateway | `script-src`, `frame-src`, `connect-src` | ✅ Active |
+| **Cloudflare Turnstile** | CAPTCHA/bot prevention | `script-src`, `frame-src` | ✅ Active |
+| **Cloudflare Insights** | Analytics beacon | `script-src`, `connect-src` | ✅ Active |
+
+**How to Add a New Third-Party Integration:**
+
+1. **Identify what the service needs** (check service docs):
+   - Scripts loaded from CDN? → Add to `script-src`
+   - Iframes for UI? (payment, chat, video) → Add to `frame-src`
+   - Fetch/API calls? (analytics, webhooks, tracking) → Add to `connect-src`
+   - Stylesheets? → Add to `style-src`
+   - Images/videos? → Add to `img-src`
+   - Fonts from external CDN? → Add to `font-src`
+
+2. **Test locally** with CSP disabled temporarily (or use nonce patterns):
+   ```bash
+   # In next.config.ts, comment out the CSP headers() to test
+   # async headers() { return []; }
+   # Then: npm run build && npm run start
+   ```
+
+3. **Add the domain to frontend/next.config.ts**:
+   ```typescript
+   // Example: Adding Google Analytics
+   const connectSrc = [
+     "'self'",
+     apiPublicOrigin || "'self'",
+     "https://api.razorpay.com",
+     "https://lumberjack.razorpay.com",
+     "https://cloudflareinsights.com",
+     "https://www.google-analytics.com",  // ← Add here
+     "https://www.googletagmanager.com",  // ← Add here
+   ].filter(Boolean).join(" ");
+   
+   const csp = [
+     ...
+     "script-src 'self' 'unsafe-inline' https://checkout.razorpay.com https://cdn.razorpay.com https://static.cloudflareinsights.com https://challenges.cloudflare.com https://www.googletagmanager.com",  // ← Add here
+     ...
+   ].join("; ");
+   ```
+
+4. **Commit with CSP domain additions** (separate commit):
+   ```bash
+   git add frontend/next.config.ts
+   git commit -m "fix(csp): allow [Service Name] domains for [Feature Name]"
+   ```
+
+5. **Document in this CLAUDE.md** (update the table above) and link from the commit.
+
+6. **Test in production** (VPS):
+   ```bash
+   # After deployment, check browser DevTools Console for CSP violations:
+   # "Executing inline script violates CSP"
+   # "Framing ... violates CSP"
+   # "Connecting to ... violates CSP"
+   ```
+
+**CSP Violations Are Silent Failures:**
+- Blocked script → React never hydrates → Add to Cart broken, auth effects don't run
+- Blocked iframe → Payment modal never loads, chat widget frozen
+- Blocked fetch → Analytics drop silently, user notifications don't send
+
+Always check the **Network** tab (for failed resource loads) and **Console** tab (for CSP violation messages) when adding integrations.
+
+**Rules:**
+- ❌ Never use `unsafe-eval` (code injection risk)
+- ❌ Never use wildcard `*` in production CSP
+- ✅ Keep domains specific and minimal
+- ✅ Always test locally AND on VPS before assuming "it works"
 
 ### XSS Prevention When Rendering Backend Content
 - **ALWAYS sanitize** user-generated content (reviews, product descriptions) before rendering
