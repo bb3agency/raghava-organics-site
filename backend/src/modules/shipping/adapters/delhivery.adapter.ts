@@ -3,6 +3,8 @@ import {
   type CreateShipmentResult,
   type DeliveryRateInput,
   type DeliveryRateResult,
+  type GenerateLabelResult,
+  type SchedulePickupResult,
   type ServiceabilityResult,
   type ShippingProviderAdapter,
   type TrackShipmentResult
@@ -197,8 +199,12 @@ export default class DelhiveryAdapter implements ShippingProviderAdapter {
     );
 
     const shipmentData = this.pickUnknown(payload, ['ShipmentData', 0, 'Shipment']);
+    // Prefer StatusType (authoritative short code e.g. "DL", "OFD") over Status (human-readable)
     const status =
-      this.pickString(payload, [['ShipmentData', 0, 'Shipment', 'Status', 'Status']]) ?? 'UNKNOWN';
+      this.pickString(payload, [
+        ['ShipmentData', 0, 'Shipment', 'Status', 'StatusType'],
+        ['ShipmentData', 0, 'Shipment', 'Status', 'Status']
+      ]) ?? 'UNKNOWN';
 
     const events: TrackShipmentResult['events'] = [];
 
@@ -354,6 +360,136 @@ export default class DelhiveryAdapter implements ShippingProviderAdapter {
     const estimatedDays = estimatedDaysRaw !== null ? this.normalizeEstimatedDays(estimatedDaysRaw) : 4;
 
     return { shippingChargePaise, estimatedDays, providerPayload: payload };
+  }
+
+  // Delhivery pickup is location-based (one request per warehouse slot), not per-waybill.
+  // The _awbNumber param is accepted for interface compatibility but is not sent to Delhivery.
+  async schedulePickup(_awbNumber: string): Promise<SchedulePickupResult> {
+    if (!this.pickupLocationName) {
+      throw new AppError(
+        ERROR_CODES.CONFIG_NOT_READY,
+        'Delhivery schedulePickup requires a pickupLocationName — configure it in Ops config',
+        503
+      );
+    }
+
+    // Schedule for today at 11:00 AM IST. Delhivery requires date as YYYY-MM-DD.
+    const todayIST = new Date(Date.now() + 5.5 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const pickupTime = '11:00:00';
+
+    const payload = await this.request('/fm/request/new/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        pickup_location: this.pickupLocationName,
+        pickup_time: pickupTime,
+        pickup_date: todayIST,
+        expected_package_count: 1
+      })
+    });
+
+    const pickupId =
+      payload.pickup_id != null ? String(payload.pickup_id) : null;
+
+    return {
+      scheduled: pickupId !== null || payload.success === true,
+      pickupScheduledDate: `${todayIST}T${pickupTime}+05:30`,
+      ...(pickupId ? { pickupTokenNumber: pickupId } : {}),
+      providerPayload: payload
+    };
+  }
+
+  // Delhivery packing slip returns JSON for client rendering, not a PDF URL.
+  // This method fetches the raw JSON; the service layer renders it to HTML.
+  async generateLabel(awbNumber: string): Promise<GenerateLabelResult> {
+    if (!awbNumber) {
+      throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'AWB number is required for Delhivery label generation', 422);
+    }
+
+    const payload = await this.request(
+      `/api/p/packing_slip?wbns=${encodeURIComponent(awbNumber)}`
+    );
+
+    // Render a self-contained HTML shipping label from the Delhivery packing slip JSON.
+    // The JSON structure varies; we pull known fields and fall back gracefully.
+    const labelHtml = this.renderPackingSlipHtml(awbNumber, payload);
+
+    return { labelHtml, providerPayload: payload };
+  }
+
+  private renderPackingSlipHtml(awbNumber: string, data: Record<string, unknown>): string {
+    // Delhivery packing slip JSON field names observed in production:
+    // wbn/waybill, cname, cadd, cpn/cphone, cpin, origin, pm (payment mode), cod, order, wt
+    const getString = (keys: string[]): string => {
+      for (const k of keys) {
+        const v = data[k];
+        if (typeof v === 'string' && v.trim()) return v.trim();
+      }
+      return '';
+    };
+    const customerName = getString(['cname', 'customer_name', 'name']);
+    const customerAddress = getString(['cadd', 'customer_address', 'add']);
+    const customerPhone = getString(['cpn', 'cphone', 'phone']);
+    const customerPin = getString(['cpin', 'pincode', 'pin']);
+    const originName = getString(['origin', 'org', 'pickup_location']);
+    const paymentMode = getString(['pm', 'payment_mode']);
+    const orderRef = getString(['order', 'order_id', 'ref_id']);
+    const weight = getString(['wt', 'weight']);
+    const codAmount = getString(['cod', 'cod_amount']);
+
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Delhivery Label — ${awbNumber}</title>
+<script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"><\/script>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:Arial,sans-serif;font-size:11px;background:#fff;color:#000}
+  .label{width:100mm;border:2px solid #000;padding:6px;page-break-inside:avoid}
+  .header{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #000;padding-bottom:4px;margin-bottom:4px}
+  .header h1{font-size:14px;font-weight:bold}
+  .barcode-wrap{text-align:center;margin:6px 0}
+  .awb{font-size:13px;font-weight:bold;letter-spacing:1px;text-align:center}
+  table{width:100%;border-collapse:collapse;margin-top:4px}
+  td{padding:2px 3px;vertical-align:top}
+  .label-cell{font-weight:bold;width:36%;white-space:nowrap}
+  .section{border-top:1px solid #ccc;margin-top:6px;padding-top:4px}
+  .cod-badge{background:#000;color:#fff;padding:2px 6px;font-size:11px;font-weight:bold;display:inline-block;margin-top:4px}
+  @media print{body{margin:0}button{display:none}}
+</style>
+</head>
+<body>
+<div class="label" id="label">
+  <div class="header">
+    <h1>DELHIVERY</h1>
+    <span>${paymentMode === 'COD' ? `<span class="cod-badge">COD ₹${codAmount}</span>` : '<strong>PREPAID</strong>'}</span>
+  </div>
+  <div class="barcode-wrap">
+    <svg id="barcode"></svg>
+  </div>
+  <div class="awb">${awbNumber}</div>
+  <div class="section">
+    <table>
+      <tr><td class="label-cell">To:</td><td>${customerName}${customerAddress ? `, ${customerAddress}` : ''}${customerPhone ? ` | Ph: ${customerPhone}` : ''}${customerPin ? ` — ${customerPin}` : ''}</td></tr>
+      ${originName ? `<tr><td class="label-cell">From:</td><td>${originName}</td></tr>` : ''}
+      ${orderRef ? `<tr><td class="label-cell">Order:</td><td>${orderRef}</td></tr>` : ''}
+      ${weight ? `<tr><td class="label-cell">Weight:</td><td>${weight} kg</td></tr>` : ''}
+    </table>
+  </div>
+</div>
+<br>
+<button onclick="window.print()">🖨 Print Label</button>
+<script>
+  JsBarcode('#barcode', '${awbNumber.replace(/'/g, "\\'")}', {
+    format: 'CODE128',
+    width: 2,
+    height: 60,
+    displayValue: false
+  });
+<\/script>
+</body>
+</html>`;
   }
 
   private async request(path: string, init?: RequestInit): Promise<Record<string, unknown>> {

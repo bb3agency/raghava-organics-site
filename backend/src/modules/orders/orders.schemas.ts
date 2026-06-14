@@ -481,6 +481,8 @@ const adminOrderDetailSchema = {
     shippingAddress: shippingAddressSnapshotSchema,
     subtotal: { type: 'integer', minimum: 0, maximum: 1000000000 },
     shippingCharge: { type: 'integer', minimum: 0, maximum: 1000000000 },
+    shippingChargeQuotedPaise: { anyOf: [{ type: 'integer', minimum: 0, maximum: 1000000000 }, { type: 'null' }] },
+    selectedShippingProvider: { anyOf: [{ type: 'string', maxLength: 40 }, { type: 'null' }] },
     discountAmount: { type: 'integer', minimum: 0, maximum: 1000000000 },
     couponCode: { anyOf: [{ type: 'string', maxLength: 50 }, { type: 'null' }] },
     total: { type: 'integer', minimum: 0, maximum: 1000000000 },
@@ -1171,9 +1173,10 @@ export const adminPrintLabelSchema = {
     200: {
       type: 'object',
       additionalProperties: false,
-      required: ['labelUrl'],
+      // Either labelUrl (Shiprocket PDF) or labelHtml (Delhivery rendered HTML) is present.
       properties: {
-        labelUrl: { type: 'string', maxLength: 2048 }
+        labelUrl: { anyOf: [{ type: 'string', maxLength: 2048 }, { type: 'null' }] },
+        labelHtml: { anyOf: [{ type: 'string', maxLength: 524288 }, { type: 'null' }] }
       }
     },
     ...standardAdminErrorResponses

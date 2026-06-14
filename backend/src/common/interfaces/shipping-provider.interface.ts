@@ -100,7 +100,10 @@ export type SchedulePickupResult = {
 };
 
 export type GenerateLabelResult = {
-  labelUrl: string;
+  /** Direct URL to the label PDF (Shiprocket). Mutually exclusive with labelHtml. */
+  labelUrl?: string;
+  /** Self-contained HTML label page (Delhivery). Mutually exclusive with labelUrl. */
+  labelHtml?: string;
   providerPayload: Record<string, unknown>;
 };
 

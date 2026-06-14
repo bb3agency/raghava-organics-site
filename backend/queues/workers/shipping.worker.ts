@@ -366,15 +366,33 @@ export function createShippingWorker(
               ? ShippingProvider.DELHIVERY
               : null;
 
-        const effectiveShippingProvider =
-          resolvedProviderForOrder === ShippingProvider.SHIPROCKET
-            ? (shippingAdapterFactory('shiprocket') ?? shippingProvider)
-            : resolvedProviderForOrder === ShippingProvider.DELHIVERY
-              ? (shippingAdapterFactory('delhivery') ?? shippingProvider)
-              : shippingProvider;
-
-        if (!effectiveShippingProvider) {
-          throw new Error('Shipping provider is not configured');
+        // Strict rate-lock enforcement: the provider selected at checkout MUST be used for AWB.
+        // Never fall back to a different provider — doing so would ship at a different rate than quoted.
+        let effectiveShippingProvider: typeof shippingProvider;
+        if (resolvedProviderForOrder === ShippingProvider.DELHIVERY) {
+          const adapter = shippingAdapterFactory('delhivery');
+          if (!adapter) {
+            throw new Error(
+              `Order ${order.id} has shipping locked to DELHIVERY at checkout but the Delhivery ` +
+              `adapter is not configured. Verify Delhivery credentials in Ops config and restart the worker.`
+            );
+          }
+          effectiveShippingProvider = adapter;
+        } else if (resolvedProviderForOrder === ShippingProvider.SHIPROCKET) {
+          const adapter = shippingAdapterFactory('shiprocket');
+          if (!adapter) {
+            throw new Error(
+              `Order ${order.id} has shipping locked to SHIPROCKET at checkout but the Shiprocket ` +
+              `adapter is not configured. Verify Shiprocket credentials in Ops config and restart the worker.`
+            );
+          }
+          effectiveShippingProvider = adapter;
+        } else {
+          // No provider locked at checkout (legacy orders or single-provider mode): use global default.
+          if (!shippingProvider) {
+            throw new Error('Shipping provider is not configured');
+          }
+          effectiveShippingProvider = shippingProvider;
         }
 
         const orderPaymentMode = (order as Record<string, unknown>)['paymentMode'] as string | undefined;
@@ -605,13 +623,28 @@ export function createShippingWorker(
               ? 'delhivery'
               : null;
 
-        const cancelAdapter =
-          cancelAdapterKey != null
-            ? (shippingAdapterFactory(cancelAdapterKey) ?? shippingProvider)
-            : shippingProvider;
-
-        if (!cancelAdapter) {
-          return;
+        // Strict: cancel MUST use the same adapter that created the AWB — never fall back.
+        let cancelAdapter: typeof shippingProvider;
+        if (cancelAdapterKey === 'delhivery') {
+          const adapter = shippingAdapterFactory('delhivery');
+          if (!adapter) {
+            throw new Error(
+              `Cannot cancel AWB ${data.awbNumber}: shipment belongs to DELHIVERY but the Delhivery adapter is not configured.`
+            );
+          }
+          cancelAdapter = adapter;
+        } else if (cancelAdapterKey === 'shiprocket') {
+          const adapter = shippingAdapterFactory('shiprocket');
+          if (!adapter) {
+            throw new Error(
+              `Cannot cancel AWB ${data.awbNumber}: shipment belongs to SHIPROCKET but the Shiprocket adapter is not configured.`
+            );
+          }
+          cancelAdapter = adapter;
+        } else {
+          // No shipment record found — fall back to global provider.
+          if (!shippingProvider) return;
+          cancelAdapter = shippingProvider;
         }
 
         await cancelAdapter.cancelShipment(data.awbNumber);
@@ -668,10 +701,13 @@ export function createShippingWorker(
                 : shipment.provider === ShippingProvider.DELHIVERY
                   ? 'delhivery'
                   : null;
+            // Use the correct adapter for this shipment — never cross-provider.
             const pollAdapter =
-              pollAdapterKey != null
-                ? (shippingAdapterFactory(pollAdapterKey) ?? shippingProvider)
-                : shippingProvider;
+              pollAdapterKey === 'delhivery'
+                ? shippingAdapterFactory('delhivery')
+                : pollAdapterKey === 'shiprocket'
+                  ? shippingAdapterFactory('shiprocket')
+                  : shippingProvider;
             if (!pollAdapter) continue;
             const tracking = await pollAdapter.trackShipment(shipment.awbNumber);
             const nextShipmentStatus = mapShipmentWebhookStatus(tracking.status);

@@ -605,9 +605,10 @@ model Order {
   total           Int
   notes              String?
   paymentMode        PaymentMode          @default(PREPAID)
-  courierCompanyId         Int?
-  shiprocketOrderId        String?
-  selectedShippingProvider ShippingProvider?
+  courierCompanyId              Int?
+  shiprocketOrderId             String?
+  selectedShippingProvider      ShippingProvider?
+  shippingChargeQuotedPaise     Int?
   items              OrderItem[]
   payment            Payment?
   shipment           Shipment?

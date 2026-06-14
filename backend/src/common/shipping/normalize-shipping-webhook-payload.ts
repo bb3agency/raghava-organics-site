@@ -174,11 +174,11 @@ export function normalizeShippingWebhookPayload(raw: unknown): NormalizedShippin
   const latestScan = readLatestScan(body);
   // 'Waybill' (capital W) and 'AWB' (uppercase) are used by Delhivery Push API
   const awbRaw = readFirstString(body, ['awb', 'awb_code', 'AWB', 'Waybill', 'waybill', 'tracking_number']);
-  // 'Status' (capital S) is human-readable Delhivery status; 'StatusType' is the short code (DL, PU, OFD…)
+  // 'StatusType' (short code e.g. "DL", "OFD") is preferred over human-readable 'Status' for Delhivery
   const status = readFirstString(body, [
     'status',
-    'Status',
     'StatusType',
+    'Status',
     'current_status',
     'shipment_status',
     'currentStatus',

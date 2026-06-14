@@ -83,15 +83,21 @@ export function mapShipmentWebhookStatus(status: string): ShipmentStatus | null 
 
   // Delhivery StatusType short codes (used in both webhook Push API and track Pull API)
   if (normalized === 'BO') return SHIPMENT_STATUS.BOOKED;
+  if (normalized === 'PP') return SHIPMENT_STATUS.BOOKED;      // Pickup Pending
   if (normalized === 'PU') return SHIPMENT_STATUS.PICKED_UP;
   if (normalized === 'IT') return SHIPMENT_STATUS.IN_TRANSIT;
   if (normalized === 'OFD') return SHIPMENT_STATUS.OUT_FOR_DELIVERY;
   if (normalized === 'DL') return SHIPMENT_STATUS.DELIVERED;
-  if (normalized === 'NDR') return SHIPMENT_STATUS.FAILED_DELIVERY;
+  if (normalized === 'UD') return SHIPMENT_STATUS.FAILED_DELIVERY;  // Undelivered
+  if (normalized === 'NDR') return SHIPMENT_STATUS.FAILED_DELIVERY; // Non-Delivery Report
+  if (normalized === 'CC') return SHIPMENT_STATUS.FAILED_DELIVERY;  // Call Center (post-NDR follow-up)
   if (normalized === 'RTO') return SHIPMENT_STATUS.RTO_INITIATED;
   if (normalized === 'RTD') return SHIPMENT_STATUS.RTO_DELIVERED;
+  if (normalized === 'RT') return SHIPMENT_STATUS.RTO_DELIVERED;    // Returned (RVP/reverse shipment)
+  if (normalized === 'CN') return SHIPMENT_STATUS.CANCELLED;        // Cancelled
   if (normalized === 'REV') return SHIPMENT_STATUS.IN_TRANSIT; // reverse pickup in transit
   if (normalized === 'EXP') return SHIPMENT_STATUS.CANCELLED; // shipment expired without pickup
+  if (normalized === 'MIS') return SHIPMENT_STATUS.IN_TRANSIT; // Misrouted — still in transit
 
   // Delhivery + Shiprocket shared human-readable mappings
   if (normalized === 'BOOKED' || normalized === 'MANIFESTED' || normalized === 'MANIFEST_GENERATED') {

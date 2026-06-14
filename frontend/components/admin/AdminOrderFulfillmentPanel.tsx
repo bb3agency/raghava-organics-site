@@ -223,7 +223,17 @@ export function AdminOrderFulfillmentPanel({
         `/admin/orders/${selectedOrderId}/print-label`,
         { method: "POST", idempotencyKey: createIdempotencyKey(), body: JSON.stringify({}) },
       );
-      if (result.labelUrl) window.open(result.labelUrl, "_blank", "noopener,noreferrer");
+      if (result.labelUrl) {
+        window.open(result.labelUrl, "_blank", "noopener,noreferrer");
+      } else if (result.labelHtml) {
+        // Delhivery: label is rendered HTML — open in a new tab via document.write
+        const win = window.open("", "_blank", "noopener,noreferrer");
+        if (win) {
+          win.document.open();
+          win.document.write(result.labelHtml);
+          win.document.close();
+        }
+      }
       setSuccess("Label ready.");
       await loadDetail(selectedOrderId);
       notifyAdminDataChanged(["orders", "shipments", "dashboard"]);
@@ -444,14 +454,32 @@ export function AdminOrderFulfillmentPanel({
                 )
               }
             />
-            {shipment?.provider ? (
+            {detail?.selectedShippingProvider ? (
               <InfoChip
-                label="Shipping provider"
-                value={
-                  shippingProviderLabel(shipment.provider)
+                label="Provider (locked at checkout)"
+                valueNode={
+                  <span className="flex items-center gap-1.5">
+                    <span className="font-medium">{shippingProviderLabel(detail.selectedShippingProvider)}</span>
+                    {!shipment?.awb && (
+                      <span className="rounded-sm bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-800">
+                        Awaiting AWB
+                      </span>
+                    )}
+                  </span>
                 }
               />
+            ) : shipment?.provider ? (
+              <InfoChip
+                label="Shipping provider"
+                value={shippingProviderLabel(shipment.provider)}
+              />
             ) : null}
+            {detail?.shippingChargeQuotedPaise != null && (
+              <InfoChip
+                label="Rate quoted at checkout"
+                value={`₹${(detail.shippingChargeQuotedPaise / 100).toFixed(2)}`}
+              />
+            )}
             <InfoChip label="AWB" value={shipment?.awb ?? "Not booked yet"} mono />
             <InfoChip
               label="Shipment status"

@@ -42,6 +42,10 @@ export interface OrderSummary {
   shippingAddress: CheckoutShippingAddressInput;
   subtotal: number;
   shippingCharge: number;
+  /** Shipping rate quoted at checkout (paise). Immutable — preserved even if shippingCharge is later adjusted. */
+  shippingChargeQuotedPaise?: number | null;
+  /** Provider locked at checkout — used for AWB assignment enforcement. */
+  selectedShippingProvider?: "DELHIVERY" | "SHIPROCKET" | null;
   discountAmount: number;
   couponCode?: string | null;
   total: number;

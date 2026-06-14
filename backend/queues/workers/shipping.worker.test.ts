@@ -1091,5 +1091,148 @@ describe('shipping worker error and retry behavior', () => {
     // Order must not be marked SHIPPED
     expect(state.tx.order.update).not.toHaveBeenCalled();
   });
+
+  it('throws when order is locked to DELHIVERY but Delhivery adapter is unavailable', async () => {
+    // Rate-lock enforcement: if Delhivery was selected at checkout but adapter is not configured,
+    // the worker must throw — never silently fall back to a different provider.
+    const adapterFactoryReturningNull = (_key: 'delhivery' | 'shiprocket') => null;
+    const depsWithNullDelhivery = {
+      ...shippingDeps,
+      createShippingAdapterForProvider: adapterFactoryReturningNull
+    };
+    createShippingWorker(mockConnection, mockNotificationsQueue, depsWithNullDelhivery);
+
+    state.tx.order.findUnique.mockResolvedValue({
+      id: 'order_locked_del',
+      orderNumber: 'ORD-LOCK-DEL-001',
+      total: 13000,
+      status: 'PROCESSING',
+      selectedShippingProvider: 'DELHIVERY',
+      paymentMode: 'PREPAID',
+      shippingAddress: {
+        fullName: 'Test Customer',
+        phone: '9999999999',
+        line1: 'Street 1',
+        city: 'Hyderabad',
+        state: 'Telangana',
+        pincode: '500001'
+      },
+      payment: { status: 'CAPTURED' },
+      shipment: null,
+      items: [{ variantId: 'v1', quantity: 1, productName: 'Spice', sku: 'S1', unitPrice: 13000 }]
+    });
+    state.tx.productVariant.findMany.mockResolvedValue([
+      { id: 'v1', weight: 300, hsnCode: '0910', product: { attributes: {} } }
+    ]);
+
+    await expect(
+      state.processor?.({ name: 'create-shipment', data: { orderId: 'order_locked_del' } })
+    ).rejects.toThrow(/DELHIVERY.*not configured/);
+
+    // Must never create a shipment via any provider
+    expect(state.createShipment).not.toHaveBeenCalled();
+  });
+
+  it('throws when order is locked to SHIPROCKET but Shiprocket adapter is unavailable', async () => {
+    // Rate-lock enforcement: if Shiprocket was selected at checkout but adapter is not configured,
+    // the worker must throw — never silently fall back to a different provider.
+    const adapterFactoryReturningNull = (_key: 'delhivery' | 'shiprocket') => null;
+    const depsWithNullShiprocket = {
+      ...shippingDeps,
+      createShippingAdapterForProvider: adapterFactoryReturningNull
+    };
+    createShippingWorker(mockConnection, mockNotificationsQueue, depsWithNullShiprocket);
+
+    state.tx.order.findUnique.mockResolvedValue({
+      id: 'order_locked_spr',
+      orderNumber: 'ORD-LOCK-SPR-001',
+      total: 48000,
+      status: 'PROCESSING',
+      selectedShippingProvider: 'SHIPROCKET',
+      paymentMode: 'PREPAID',
+      shippingAddress: {
+        fullName: 'Test Customer',
+        phone: '9999999999',
+        line1: 'Street 1',
+        city: 'Hyderabad',
+        state: 'Telangana',
+        pincode: '500001'
+      },
+      payment: { status: 'CAPTURED' },
+      shipment: null,
+      items: [{ variantId: 'v1', quantity: 1, productName: 'Oil', sku: 'O1', unitPrice: 48000 }]
+    });
+    state.tx.productVariant.findMany.mockResolvedValue([
+      { id: 'v1', weight: 1000, hsnCode: '1515', product: { attributes: {} } }
+    ]);
+
+    await expect(
+      state.processor?.({ name: 'create-shipment', data: { orderId: 'order_locked_spr' } })
+    ).rejects.toThrow(/SHIPROCKET.*not configured/);
+
+    // Must never create a shipment via any provider
+    expect(state.createShipment).not.toHaveBeenCalled();
+  });
+
+  it('uses legacy global provider for orders with no selectedShippingProvider', async () => {
+    // Backward compat: orders created before rate-lock was implemented have null
+    // selectedShippingProvider and must continue to use the global env-var provider.
+    boot();
+    state.tx.order.findUnique.mockResolvedValue({
+      id: 'order_legacy',
+      orderNumber: 'ORD-LEGACY-001',
+      total: 5000,
+      status: 'PROCESSING',
+      selectedShippingProvider: null,
+      paymentMode: 'PREPAID',
+      shippingAddress: {
+        fullName: 'Legacy Customer',
+        phone: '8888888888',
+        line1: 'Old Street',
+        city: 'Hyderabad',
+        state: 'Telangana',
+        pincode: '500001'
+      },
+      payment: { status: 'CAPTURED' },
+      shipment: null,
+      items: [{ variantId: 'v1', quantity: 1, productName: 'Legacy Product', sku: 'LP1', unitPrice: 5000 }]
+    });
+    state.tx.productVariant.findMany.mockResolvedValue([
+      { id: 'v1', weight: 200, hsnCode: '0910', product: { attributes: {} } }
+    ]);
+    state.createShipment.mockResolvedValue({
+      awbNumber: 'LEGACY-AWB',
+      trackingUrl: 'https://track/LEGACY-AWB',
+      providerPayload: {}
+    });
+    state.tx.shipment.findFirst.mockResolvedValue(null);
+    state.tx.shipment.create.mockResolvedValue({ id: 'ship_legacy', awbNumber: 'LEGACY-AWB' });
+    state.tx.order.findUnique
+      .mockResolvedValueOnce({
+        id: 'order_legacy',
+        orderNumber: 'ORD-LEGACY-001',
+        total: 5000,
+        status: 'PROCESSING',
+        selectedShippingProvider: null,
+        paymentMode: 'PREPAID',
+        shippingAddress: {
+          fullName: 'Legacy Customer',
+          phone: '8888888888',
+          line1: 'Old Street',
+          city: 'Hyderabad',
+          state: 'Telangana',
+          pincode: '500001'
+        },
+        payment: { status: 'CAPTURED' },
+        shipment: null,
+        items: [{ variantId: 'v1', quantity: 1, productName: 'Legacy Product', sku: 'LP1', unitPrice: 5000 }]
+      })
+      .mockResolvedValueOnce({ id: 'order_legacy', status: 'PROCESSING', shipment: null });
+
+    await state.processor?.({ name: 'create-shipment', data: { orderId: 'order_legacy' } });
+
+    // Global provider's createShipment was called (backward compat path)
+    expect(state.createShipment).toHaveBeenCalledTimes(1);
+  });
 });
 

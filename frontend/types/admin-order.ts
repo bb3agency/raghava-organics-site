@@ -42,6 +42,10 @@ export interface AdminOrderDetail {
   canShipNow: boolean;
   shipBlockReason: string | null;
   shippingMode: "MANUAL";
+  /** Provider locked at checkout — must be used for AWB assignment */
+  selectedShippingProvider: ShippingProviderEnum | null;
+  /** Shipping rate quoted to customer at checkout (paise). Immutable after creation. */
+  shippingChargeQuotedPaise: number | null;
   payment: {
     status: string;
     provider: string;
@@ -55,7 +59,10 @@ export interface AdminOrderDetail {
 }
 
 export interface AdminPrintLabelResponse {
-  labelUrl: string;
+  /** Shiprocket: direct PDF URL */
+  labelUrl?: string | null;
+  /** Delhivery: self-contained HTML to render in a new tab */
+  labelHtml?: string | null;
 }
 
 export interface AdminSchedulePickupResponse {

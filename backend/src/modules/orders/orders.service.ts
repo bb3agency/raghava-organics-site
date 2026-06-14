@@ -7,7 +7,8 @@ import {
   PaymentProvider,
   PaymentStatus,
   Prisma,
-  PrismaClient
+  PrismaClient,
+  ShippingProvider
 } from '@prisma/client';
 import { FastifyInstance } from 'fastify';
 import { AppError } from '@common/errors/app-error';
@@ -21,10 +22,7 @@ import { canTransitionOrder } from '@common/orders/order-state-machine';
 import { mapShipmentWebhookStatus, mapShipmentStatusToOrderStatus } from '@common/orders/webhook-status-mappers';
 import { CartService } from '@modules/cart/cart.service';
 import { createPaymentProvider } from '@modules/payments/payment-provider';
-import {
-  createShippingProvider,
-  createShippingAdapterForProvider
-} from '@modules/shipping/shipping-provider';
+import { createShippingAdapterForProvider } from '@modules/shipping/shipping-provider';
 import { createInvoiceStorageProvider } from '@modules/invoices/invoice-storage-provider';
 import {
   sendNotificationFailureAlert,
@@ -540,6 +538,7 @@ export class OrdersService {
           },
           subtotal,
           shippingCharge,
+          ...({ shippingChargeQuotedPaise: shippingCharge } as Record<string, unknown>),
           discountAmount,
           total,
           ...(input.notes !== undefined ? { notes: input.notes } : {}),
@@ -1349,6 +1348,7 @@ export class OrdersService {
             },
             subtotal: session.subtotal,
             shippingCharge: session.shippingCharge,
+            ...({ shippingChargeQuotedPaise: session.shippingCharge } as Record<string, unknown>),
             discountAmount: session.discountAmount,
             total: session.total,
             ...(session.notes ? { notes: session.notes } : {}),
@@ -2764,27 +2764,37 @@ export class OrdersService {
     if (!shipment) {
       throw new AppError(ERROR_CODES.NOT_FOUND, 'Shipment not found for this order', 404);
     }
-    const shiprocketShipmentId = (
-      shipment as typeof shipment & { shiprocketShipmentId?: string | null }
-    ).shiprocketShipmentId;
-    if (!shiprocketShipmentId) {
-      throw new AppError(
-        ERROR_CODES.VALIDATION_ERROR,
-        'Shipment does not have a Shiprocket shipment ID — schedule pickup is only supported for Shiprocket shipments',
-        422
-      );
+
+    const shipmentExt = shipment as typeof shipment & {
+      shiprocketShipmentId?: string | null;
+      awbNumber?: string | null;
+    };
+
+    let result: import('@common/interfaces/shipping-provider.interface').SchedulePickupResult;
+
+    if (shipment.provider === ShippingProvider.DELHIVERY) {
+      const provider = createShippingAdapterForProvider('delhivery');
+      if (!provider?.schedulePickup) {
+        throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Delhivery adapter is not configured', 501);
+      }
+      result = await provider.schedulePickup(shipmentExt.awbNumber ?? '');
+    } else {
+      // Shiprocket (and legacy single-provider) path
+      const shiprocketShipmentId = shipmentExt.shiprocketShipmentId;
+      if (!shiprocketShipmentId) {
+        throw new AppError(
+          ERROR_CODES.VALIDATION_ERROR,
+          'Shipment does not have a Shiprocket shipment ID — schedule pickup requires a Shiprocket shipment',
+          422
+        );
+      }
+      const provider = createShippingAdapterForProvider('shiprocket');
+      if (!provider?.schedulePickup) {
+        throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Shiprocket adapter is not configured', 501);
+      }
+      result = await provider.schedulePickup(shiprocketShipmentId);
     }
-    // Schedule pickup is Shiprocket-only. Use the Shiprocket adapter directly so this
-    // works correctly in dual-shipping mode regardless of what SHIPPING_PROVIDER is set to.
-    const provider = createShippingAdapterForProvider('shiprocket');
-    if (!provider?.schedulePickup) {
-      throw new AppError(
-        ERROR_CODES.INTERNAL_ERROR,
-        'Schedule pickup is not supported by the active shipping provider',
-        501
-      );
-    }
-    const result = await provider.schedulePickup(shiprocketShipmentId);
+
     if (result.pickupScheduledDate) {
       await this.fastify.prisma.shipment.update({
         where: { id: shipment.id },
@@ -2806,7 +2816,26 @@ export class OrdersService {
     const shipmentExt = shipment as typeof shipment & {
       shiprocketShipmentId?: string | null;
       labelUrl?: string | null;
+      awbNumber?: string | null;
     };
+
+    // --- Delhivery path ---
+    if (shipment.provider === ShippingProvider.DELHIVERY) {
+      const awbNumber = shipmentExt.awbNumber;
+      if (!awbNumber) {
+        throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Shipment has no AWB — cannot generate Delhivery label', 422);
+      }
+      const provider = createShippingAdapterForProvider('delhivery');
+      if (!provider?.generateLabel) {
+        throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Delhivery adapter is not configured', 501);
+      }
+      const result = await provider.generateLabel(awbNumber);
+      // Delhivery returns HTML for in-browser rendering (no PDF URL).
+      // labelHtml is returned to the frontend which opens it in a new tab via document.write.
+      return { labelHtml: result.labelHtml };
+    }
+
+    // --- Shiprocket path (and legacy single-provider) ---
     if (shipmentExt.labelUrl) {
       return { labelUrl: shipmentExt.labelUrl };
     }
@@ -2814,19 +2843,13 @@ export class OrdersService {
     if (!shiprocketShipmentId) {
       throw new AppError(
         ERROR_CODES.VALIDATION_ERROR,
-        'Shipment does not have a Shiprocket shipment ID — label generation is only supported for Shiprocket shipments',
+        'Shipment does not have a Shiprocket shipment ID — label generation requires a Shiprocket shipment',
         422
       );
     }
-    // Label generation is Shiprocket-only. Use the Shiprocket adapter directly so this
-    // works correctly in dual-shipping mode regardless of what SHIPPING_PROVIDER is set to.
     const provider = createShippingAdapterForProvider('shiprocket');
     if (!provider?.generateLabel) {
-      throw new AppError(
-        ERROR_CODES.INTERNAL_ERROR,
-        'Label generation is not supported by the active shipping provider',
-        501
-      );
+      throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Shiprocket adapter is not configured', 501);
     }
     const result = await provider.generateLabel(shiprocketShipmentId);
     await this.fastify.prisma.shipment.update({
@@ -3961,6 +3984,12 @@ export class OrdersService {
       shippingAddress: order.shippingAddress as Record<string, unknown>,
       subtotal: order.subtotal,
       shippingCharge: order.shippingCharge,
+      ...((order as Record<string, unknown>)['shippingChargeQuotedPaise'] != null
+        ? { shippingChargeQuotedPaise: (order as Record<string, unknown>)['shippingChargeQuotedPaise'] as number }
+        : {}),
+      ...((order as Record<string, unknown>)['selectedShippingProvider'] != null
+        ? { selectedShippingProvider: (order as Record<string, unknown>)['selectedShippingProvider'] as string }
+        : {}),
       discountAmount: order.discountAmount,
       ...(order.couponUsages && order.couponUsages.length > 0 && order.couponUsages[0]?.coupon
         ? { coupon: order.couponUsages[0].coupon }
@@ -4532,15 +4561,26 @@ export class OrdersService {
       throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Shipment has no AWB number — cannot sync', 400);
     }
 
-    // Use the provider that created this shipment, not the global env-based one.
+    // Use the provider that created this shipment — never fall back to a different provider.
     const syncAdapterKey: 'delhivery' | 'shiprocket' | null =
       shipment.provider === 'SHIPROCKET' ? 'shiprocket' :
       shipment.provider === 'DELHIVERY' ? 'delhivery' : null;
-    const provider = syncAdapterKey != null
-      ? (createShippingAdapterForProvider(syncAdapterKey) ?? createShippingProvider())
-      : createShippingProvider();
-    if (!provider) {
-      throw new AppError(ERROR_CODES.CONFIG_NOT_READY, 'Shipping provider not configured', 503);
+
+    let provider: ReturnType<typeof createShippingAdapterForProvider>;
+    if (syncAdapterKey != null) {
+      provider = createShippingAdapterForProvider(syncAdapterKey);
+      if (!provider) {
+        throw new AppError(
+          ERROR_CODES.CONFIG_NOT_READY,
+          `Shipment belongs to ${shipment.provider} but the ${shipment.provider} adapter is not configured — cannot sync`,
+          503
+        );
+      }
+    } else {
+      provider = createShippingAdapterForProvider('shiprocket') ?? createShippingAdapterForProvider('delhivery');
+      if (!provider) {
+        throw new AppError(ERROR_CODES.CONFIG_NOT_READY, 'No shipping provider configured', 503);
+      }
     }
     const tracking = await provider.trackShipment(shipment.awbNumber);
 
