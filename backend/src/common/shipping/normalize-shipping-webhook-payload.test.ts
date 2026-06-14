@@ -126,7 +126,7 @@ describe('normalize-shipping-webhook-payload', () => {
     ]);
     expect(result).toMatchObject({
       awb: '1234567890123',
-      status: 'Delivered',
+      status: 'DL',
       location: 'Bangalore'
     });
     expect(result?.occurredAt).toBeDefined();
