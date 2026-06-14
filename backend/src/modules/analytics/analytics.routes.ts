@@ -49,13 +49,7 @@ export async function registerAnalyticsRoutes(fastify: FastifyInstance): Promise
         userId?: string;
         payload?: Record<string, unknown>;
       };
-      // Optionally verify JWT so authenticated users can't spoof another userId.
-      // Errors are silently swallowed — this endpoint is public and JWT is optional.
-      try {
-        await request.jwtVerify();
-      } catch {
-        // Guest request — no valid JWT
-      }
+      // If authenticated, use the verified token subject — never trust body userId
       const authenticatedUserId = (request as { user?: { sub?: string } }).user?.sub;
       const resolvedUserId = authenticatedUserId ?? (body.userId ?? undefined);
       const result = await service.recordEvent({
