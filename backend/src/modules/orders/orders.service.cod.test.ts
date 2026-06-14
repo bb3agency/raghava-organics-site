@@ -43,6 +43,7 @@ describe('OrdersService createOrder — COD', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     invalidateStorefrontCouponsCache();
+    vi.spyOn(CartService.prototype, 'usesNoopShipping').mockReturnValue(true);
     vi.spyOn(CartService.prototype, 'checkPincodeServiceability').mockResolvedValue({
       pincode: '500001',
       serviceable: true

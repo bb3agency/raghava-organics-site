@@ -16,6 +16,7 @@ describe('OrdersService createOrder coupon merchant toggle', () => {
   });
 
   it('ignores stale cart coupon when storefront coupons are disabled', async () => {
+    vi.spyOn(CartService.prototype, 'usesNoopShipping').mockReturnValue(true);
     vi.spyOn(CartService.prototype, 'checkPincodeServiceability').mockResolvedValue({
       pincode: '500001',
       serviceable: true
