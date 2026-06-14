@@ -121,9 +121,9 @@ export class AnalyticsService {
     // session (e.g. multiple product views, payment retries) don't inflate a
     // funnel stage beyond the stage above it.
     const rows = await this.fastify.prisma.$queryRaw<Array<{ event_type: string; unique_sessions: bigint }>>`
-      SELECT "eventType" AS event_type, COUNT(DISTINCT "sessionId") AS unique_sessions
+      SELECT "eventType"::text AS event_type, COUNT(DISTINCT "sessionId") AS unique_sessions
       FROM "AnalyticsEvent"
-      WHERE "eventType" = ANY(${eventTypes}::text[])
+      WHERE "eventType"::text = ANY(${eventTypes}::text[])
         AND "occurredAt" >= ${from}
         AND "occurredAt" <= ${to}
       GROUP BY "eventType"
