@@ -275,9 +275,8 @@ All provider credentials and runtime config are set via **Ops UI → Config**. N
 - `RAZORPAY_WEBHOOK_SECRET`
 
 ### Shipping
-- `SHIPPING_PROVIDER` = `delhivery` or `shiprocket`
-- `DELHIVERY_API_KEY` / `SHIPROCKET_EMAIL` + `SHIPROCKET_PASSWORD`
-- Webhook tokens and pickup pincodes
+- Set credentials for whichever provider(s) are active: `DELHIVERY_API_KEY` (Delhivery) and/or `SHIPROCKET_EMAIL`+`SHIPROCKET_PASSWORD` (Shiprocket). Both can coexist. `SHIPPING_PROVIDER` is not a valid key — provider detection is credential-based.
+- Webhook tokens and pickup pincodes for each active provider
 
 ### Notifications
 - `RESEND_API_KEY`, `RESEND_FROM` — can now be rotated here (replaces Phase 1 env values)

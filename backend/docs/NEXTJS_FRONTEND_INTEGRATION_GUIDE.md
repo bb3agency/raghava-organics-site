@@ -89,7 +89,7 @@ For any AI agent generating frontend code, enforce these constraints:
 4. Use PREPAID vs COD checkout split exactly as documented; never call `/payments/initiate` for COD orders.
 5. Never call `/payments/webhook` or `/shipping/webhook` from browser code.
 6. Branch UX on `error.code` only; never parse free-form `error.message`.
-7. Treat `PAYMENT_PROVIDER=noop` and `SHIPPING_PROVIDER=noop` as dev-only, never production.
+7. Treat `PAYMENT_PROVIDER=noop` as dev-only, never production. For shipping, at least one provider's credentials (Delhivery and/or Shiprocket) must be configured in production — `SHIPPING_PROVIDER` env var is ignored; detection is credential-based.
 8. Treat shipment booking as manual-only admin action (`POST /api/v1/admin/orders/:id/ship`) and use backend ship-state fields (`canShipNow`, `shipBlockReason`, `shippingMode`) to drive button enablement and messaging.
 9. If frontend work reveals a reusable backend fix, classify it as template-worthy and follow the manual upstream command protocol in `docs/MASTER_DEPLOYMENT_PLAYBOOK.md` §3.2.2.
 

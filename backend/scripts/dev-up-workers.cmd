@@ -68,7 +68,6 @@ if errorlevel 1 (
 
 echo [4/4] Starting workers (tsx watch)...
 set PAYMENT_PROVIDER=noop
-set SHIPPING_PROVIDER=noop
 set RAZORPAY_WEBHOOK_SECRET=test_webhook_secret
 set SHIPROCKET_WEBHOOK_TOKEN=test_webhook_token
 set NODE_ENV=development

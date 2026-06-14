@@ -1,5 +1,7 @@
 /** Admin API response shapes — aligned with backend route schemas. */
 
+export type ShippingProviderEnum = "DELHIVERY" | "SHIPROCKET" | "SELF";
+
 export interface PaginationMeta {
   page: number;
   limit: number;
@@ -307,7 +309,7 @@ export interface AdminOrderDetailFull {
   } | null;
   shipment: {
     id: string;
-    provider: string;
+    provider: ShippingProviderEnum;
     status: string;
     awb: string | null;
     trackingUrl: string | null;
@@ -708,11 +710,12 @@ export interface AdminShipmentDetail {
   orderId: string;
   orderNumber: string;
   userId: string;
-  provider: string;
+  provider: ShippingProviderEnum;
   status: string;
   awbNumber: string | null;
   trackingUrl: string | null;
-  shiprocketShipmentId: string | null;
+  /** Only present for Shiprocket shipments */
+  shiprocketShipmentId?: string | null;
   labelUrl: string | null;
   pickupScheduledDate: string | null;
   createdAt: string;
@@ -775,11 +778,10 @@ export interface AdminShipmentListItem {
   orderId: string;
   orderNumber: string;
   customerName: string;
-  provider: string;
+  provider: ShippingProviderEnum;
   status: string;
   awbNumber: string | null;
   trackingUrl: string | null;
-  shiprocketShipmentId?: string | null;
   labelUrl: string | null;
   pickupScheduledDate: string | null;
   createdAt: string;
@@ -874,6 +876,17 @@ export interface AdminAnalyticsCategoryBreakdown {
     revenuePaise: number;
     sharePercent: number;
   }>;
+}
+
+export interface AdminShippingProviderStats {
+  providers: Array<{
+    provider: ShippingProviderEnum;
+    shipmentsCount: number;
+    revenuePaise: number;
+    deliveredCount: number;
+    sharePercent: number;
+  }>;
+  totalShipments: number;
 }
 
 export interface AdminReconciliationIssue {

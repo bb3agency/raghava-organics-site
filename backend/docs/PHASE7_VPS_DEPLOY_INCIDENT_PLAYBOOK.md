@@ -224,10 +224,12 @@ Fix:
 
 ### K) Storefront 502 + API crash loop after Ops config save (May 2026, Raghava Organics)
 Cause:
-- Operator saved a partial set of overlay keys via Ops UI (e.g. `PAYMENT_PROVIDER=razorpay` and `SHIPPING_PROVIDER=shiprocket` without the matching credentials).
+- Operator saved a partial set of overlay keys via Ops UI (e.g. `PAYMENT_PROVIDER=razorpay` and shipping credentials without the matching secrets).
 - After restart, the DB overlay applied those selectors but the matching secrets were still empty.
 - Earlier `validateConditionalEnv` in `src/config/app.config.ts` called `requireEnv` on the full provider dependency chain → API exited with `Missing required env var: RAZORPAY_KEY_ID` (or `RAZORPAY_WEBHOOK_SECRET`, `SHIPROCKET_PASSWORD`, etc.).
 - Docker's restart policy kept relaunching the container; nginx returned `502 Bad Gateway` on `/api/v1/cart`, `/api/v1/health`, every storefront request.
+
+> **Note:** `SHIPPING_PROVIDER` is NOT a valid `OpsConfigSecret` key — shipping provider selection is credential-based (`DELHIVERY_API_KEY` presence → Delhivery active; `SHIPROCKET_EMAIL`+`SHIPROCKET_PASSWORD` presence → Shiprocket active). The historical incident involved saving payment provider keys without credentials.
 
 Symptoms:
 - Storefront homepage: `API error (UNKNOWN_ERROR, HTTP 502)` (or the older generic `API error (UNKNOWN_ERROR)` without HTTP status).
@@ -250,10 +252,11 @@ Recovery on a live VPS:
 2. **Emergency rollback (no pull yet):** deactivate the incomplete overlay rows so the next boot does not enter the crash path:
    ```bash
    docker compose -p <client-id> exec postgres psql -U postgres -d <db_name> -c \
-     "UPDATE \"OpsConfigSecret\" SET \"isActive\" = false WHERE \"secretKey\" IN ('PAYMENT_PROVIDER','SHIPPING_PROVIDER') AND \"isActive\" = true;"
+     "UPDATE \"OpsConfigSecret\" SET \"isActive\" = false WHERE \"secretKey\" = 'PAYMENT_PROVIDER' AND \"isActive\" = true;"
    docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml up -d backend workers
    ```
    Then finish the remaining provider keys via Ops UI and restart again.
+   > **Note:** `SHIPPING_PROVIDER` is never stored in `OpsConfigSecret` — shipping is credential-based. Only deactivate `PAYMENT_PROVIDER` here. If shipping credentials were the issue, deactivate `DELHIVERY_API_KEY` or `SHIPROCKET_EMAIL`/`SHIPROCKET_PASSWORD` rows instead.
 3. After recovery, `/health/ready` may still list `runtimeConfigMissingKeys` — that is expected during Phase 8 setup. Complete the keys, restart, then verify `status: ready` before opening to traffic.
 
 Cross-reference: `docs/DECISIONS.md` → `[2026-05-25] Incremental Ops config save + boot tolerance`.

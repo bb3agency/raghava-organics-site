@@ -7,6 +7,7 @@ import { getMyOrder, cancelMyOrder, createReturnRequest, downloadCustomerInvoice
 import { getApiErrorMessage } from "@/lib/error-messages";
 import { formatPrice } from "@/lib/format-price";
 import { formatPaymentModeLabel } from "@/lib/format-payment-mode";
+import { shippingProviderLabel } from "@/lib/shipping-provider-labels";
 import { Button } from "@/components/ui/button";
 
 export default function AccountOrderDetailPage() {
@@ -373,7 +374,7 @@ export default function AccountOrderDetailPage() {
                 rel="noreferrer"
                 className="text-primary underline"
               >
-                Track on {order.shipment.provider}
+                Track on {shippingProviderLabel(order.shipment.provider)}
               </a>
             )}
           </div>

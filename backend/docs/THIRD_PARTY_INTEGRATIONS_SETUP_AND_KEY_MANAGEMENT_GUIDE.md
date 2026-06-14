@@ -56,9 +56,11 @@ Cross-cutting credential governance notes:
 - `RAZORPAY_WEBHOOK_MAX_SKEW_SECONDS`
 - Frontend: `NEXT_PUBLIC_RAZORPAY_KEY_ID` (only this one is public)
 
-### 1.2 Shipping (Delhivery or Shiprocket)
+### 1.2 Shipping (Delhivery and/or Shiprocket)
+
+> Provider detection is credential-based — `SHIPPING_PROVIDER` env var is ignored. Set credentials for whichever provider(s) the client uses. Both can be active simultaneously.
+
 - Common:
-  - `SHIPPING_PROVIDER=delhivery|shiprocket`
   - `SHIPPING_WEBHOOK_ALLOWLIST_CIDR`
   - `DELHIVERY_WEBHOOK_MAX_SKEW_SECONDS`
   - `SHIPROCKET_WEBHOOK_MAX_SKEW_SECONDS`
@@ -213,8 +215,7 @@ Dispatch policy (applies regardless of provider):
 - Use Delhivery developer portal (`ucp.delhivery.com`) to validate serviceability and shipment APIs.
 
 ### Env mapping
-- `SHIPPING_PROVIDER=delhivery`
-- `DELHIVERY_API_KEY=<token>`
+- `DELHIVERY_API_KEY=<token>` — presence of this key activates Delhivery (no `SHIPPING_PROVIDER` needed)
 - `DELHIVERY_WEBHOOK_TOKEN=<shared secret/token used for webhook auth>`
 - `DELHIVERY_PICKUP_PINCODE=<client pickup pin>`
 
@@ -326,9 +327,7 @@ Receive real-time shipment status updates without polling.
 ### Environment Mapping
 
 ```bash
-# Core provider selection
-SHIPPING_PROVIDER=shiprocket
-
+# No SHIPPING_PROVIDER needed — presence of credentials activates Shiprocket
 # API credentials (from Settings → API)
 SHIPROCKET_EMAIL=your-api-user@example.com
 SHIPROCKET_PASSWORD=your-api-password

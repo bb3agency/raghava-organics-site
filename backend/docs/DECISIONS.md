@@ -298,7 +298,7 @@
 **Decision:**
 1. Created `scripts/verify-integration-readiness.mjs` that:
    - Checks `POST /api/v1/health/ready` for `db: connected` and `redis: connected`.
-   - Checks `runtimeConfigMissingKeys` for missing `PAYMENT_PROVIDER`, `SHIPPING_PROVIDER`, `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET`, `SHIPROCKET_EMAIL`, `SHIPROCKET_PASSWORD`, `SHIPROCKET_WEBHOOK_TOKEN`.
+   - Checks `runtimeConfigMissingKeys` for missing `PAYMENT_PROVIDER`, `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET`, and at least one shipping provider's credentials (`DELHIVERY_API_KEY` or `SHIPROCKET_EMAIL`/`SHIPROCKET_PASSWORD`). Note: `SHIPPING_PROVIDER` is not a required key — provider detection is credential-based since 2026-06.
    - Verifies webhook routes `POST /api/v1/payments/webhook` and `POST /api/v1/shipping/webhook` return `404` (route exists, no raw body → Fastify validation rejects) rather than `404 Not Found` (route missing).
    - Prints a color-coded readiness report.
 2. Added `npm run verify:integration` alias to `package.json`.
@@ -424,9 +424,11 @@
 
 **[2026-05-07] JWT HS256 + Redis timeout** — Pinned `HS256` for sign/verify; Redis bootstrap rejects after 20s. **Affects:** `jwt.plugin.ts`, `auth.service.ts`, `redis.plugin.ts`.
 
+**[2026-06-14] Dual shipping provider + provider analytics** — Provider selection is now credential-based, not env-var-based. `SHIPPING_PROVIDER` env var is dead/ignored. `resolveDualShippingRuntime()` activates Delhivery if `DELHIVERY_API_KEY` is present, Shiprocket if `SHIPROCKET_EMAIL`+`SHIPROCKET_PASSWORD` are present — both can be active simultaneously. At checkout, all active providers are queried in parallel; the cheapest rate wins and `selectedShippingProvider` is stored on the order. At ship time, the stored provider is used. `Shipment.provider` DB field (DELHIVERY|SHIPROCKET|SELF) records which provider fulfilled each order. New analytics endpoint: `GET /api/v1/admin/analytics/shipping-providers`. `CartService` constructor no longer calls `createShippingProvider()` — shipping detection happens at method call time via `resolveDualShippingRuntime()`. **Affects:** `cart.service.ts`, `orders.service.ts`, `shipping-provider.ts`, `shipping.worker.ts`, analytics module, admin + storefront frontend.
+
 **[2026-05-07] Dev orchestrator scripts** — `dev-up.cmd` / `dev-up-workers.cmd`: container start, Redis/Postgres polling, stale node kill, Prisma bootstrap, noop env, `tsx watch`. **Affects:** `scripts/dev-up.cmd`, `scripts/dev-up-workers.cmd`, `scripts/dev-ensure-prisma-ready.js`.
 
-**[2026-05-06] Shipping webhook noop bypass** — Accepts any non-empty `Authorization` when `SHIPPING_PROVIDER=noop`. Postman idempotency keys use `Date.now()`. **Affects:** `orders.service.ts`, Postman collection.
+**[2026-05-06] Shipping webhook noop bypass** — Accepts any non-empty `Authorization` when no shipping credentials are configured (noop mode). Postman idempotency keys use `Date.now()`. **Affects:** `orders.service.ts`, Postman collection.
 
 **[2026-05-05] Noop providers functional** — `NoopShippingAdapter` serviceable/rate mock; `NoopPaymentAdapter` mock order + signature pass. Cart falls back to pincode `500001` in noop mode. **Affects:** noop adapters, `cart.service.ts`, `orders.service.ts`.
 

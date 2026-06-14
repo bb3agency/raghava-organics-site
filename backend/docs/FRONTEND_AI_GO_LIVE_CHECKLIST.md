@@ -18,7 +18,7 @@ Pair this with `docs/BACKEND_GO_LIVE_CHECKLIST.md` for final go-live sign-off. T
 - [ ] Production-like backend profile is understood:
   - `NODE_ENV=development` or `test` => development-like
   - Any other value (`production`, `staging`, `qa`, `uat`, custom, or unset) => production-like
-- [ ] `PAYMENT_PROVIDER=noop` and `SHIPPING_PROVIDER=noop` are treated as local simulation only.
+- [ ] `PAYMENT_PROVIDER=noop` is treated as local simulation only — never production. For shipping, `SHIPPING_PROVIDER` env var is ignored; at least one provider's credentials must be set for production (Delhivery and/or Shiprocket).
 - [ ] Frontend repo has latest AI rules synced from backend: `frontend-agent-rules.md` -> `.agents/rules/dev-rules.md`.
 
 ### 1.1) CSP & Security Headers Verification
@@ -271,7 +271,7 @@ Sign-off expectation:
 ## 10) Final Go-Live Sign-Off
 
 - [ ] Real payment provider credentials configured for production-like profile.
-- [ ] Real shipping provider credentials configured for production-like profile.
+- [ ] At least one shipping provider's credentials configured for production (Delhivery and/or Shiprocket). Both can be active simultaneously — cheapest rate wins at checkout. `Shipment.provider` DB field records which provider fulfilled each order.
 - [ ] Frontend env values match deployed domains exactly.
 - [ ] UAT completed for guest checkout, auth checkout, COD, prepaid, retry, cancellation.
 - [ ] Team confirms no `noop` usage in production-like deploy.

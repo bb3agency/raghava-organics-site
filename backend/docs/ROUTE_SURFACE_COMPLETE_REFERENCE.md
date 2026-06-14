@@ -433,7 +433,7 @@ Manual stock adjustment for a variant. Body: `{ quantity, note? }`. Creates an a
 | Route | What it does |
 |---|---|
 | `PATCH /api/v1/admin/orders/:id/status` | Update order status. Body: `{ status, note? }`. Note is tagged with admin ID. Setting status to `REFUNDED` additionally requires `orders:refund` permission. |
-| `POST /api/v1/admin/orders/:id/ship` | Manually trigger shipment booking with the courier provider. Creates shipment, fetches AWB and estimated delivery days from Shiprocket, updates order status to SHIPPED, and **immediately sends `OrderShipped` notification to customer** (email + SMS) with tracking URL and estimated delivery days. Idempotent — if AWB already exists, skips external call and re-sends notification. |
+| `POST /api/v1/admin/orders/:id/ship` | Manually trigger shipment booking with the active courier provider. Uses the provider stored on the order's `selectedShippingProvider` field (chosen at checkout based on cheapest rate across all configured providers). Creates shipment, fetches AWB and estimated delivery days, updates order status to SHIPPED, and **immediately sends `OrderShipped` notification to customer** (email + SMS) with tracking URL and estimated delivery days. The `Shipment.provider` DB field records which provider (DELHIVERY or SHIPROCKET) fulfilled this specific order. Idempotent — if AWB already exists, skips external call and re-sends notification. |
 | `POST /api/v1/admin/orders/:id/schedule-pickup` | Schedule a courier pickup for a booked shipment. Idempotent. |
 | `POST /api/v1/admin/orders/:id/notifications/retrigger` | Re-enqueue notification for this order. Body: `{ template }`. Requires `orders:notify` permission. Idempotent. |
 

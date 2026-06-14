@@ -21,6 +21,7 @@ import { ApiError } from "@/lib/api";
 import { createIdempotencyKey } from "@/lib/idempotency";
 import { notifyAdminDataChanged } from "@/lib/admin-data-refresh";
 import { getApiErrorMessageWithHint } from "@/lib/error-messages";
+import { shippingProviderLabel } from "@/lib/shipping-provider-labels";
 import { ADMIN_PERMISSIONS, hasAdminPermission } from "@/lib/permissions";
 import { useAuthStore } from "@/stores/auth";
 import { getPaginatedItems } from "@/lib/admin-api";
@@ -40,17 +41,21 @@ function codCollectionCopy(
   paymentMode: AdminOrderDetail["paymentMode"],
   paymentStatus: string | null | undefined,
   orderStatus: string,
+  shippingProvider?: string | null,
 ): string {
   if (paymentMode !== "COD") {
     return "Prepaid — captured via Razorpay.";
   }
+  const providerLabel = shippingProvider
+    ? (shippingProviderLabel(shippingProvider) === "—" ? "the shipping provider" : shippingProviderLabel(shippingProvider))
+    : "the shipping provider";
   if (paymentStatus === "CAPTURED") {
-    return "COD collected — synced from Shiprocket delivery webhook.";
+    return `COD collected — synced from ${providerLabel} delivery webhook.`;
   }
   if (orderStatus === "DELIVERED") {
     return "Delivered — awaiting payment capture from webhook.";
   }
-  return "Shiprocket collects cash on delivery; captured automatically on DELIVERED webhook.";
+  return `${providerLabel} collects cash on delivery; captured automatically on DELIVERED webhook.`;
 }
 
 export function AdminOrderFulfillmentPanel({
@@ -241,7 +246,7 @@ export function AdminOrderFulfillmentPanel({
       setSuccess(
         result.pickupScheduledDate
           ? `Pickup scheduled for ${result.pickupScheduledDate}.`
-          : "Pickup scheduled with Shiprocket.",
+          : "Pickup scheduled.",
       );
       await loadDetail(selectedOrderId);
       notifyAdminDataChanged(["orders", "shipments", "dashboard"]);
@@ -332,7 +337,12 @@ export function AdminOrderFulfillmentPanel({
         <div className="flex items-center justify-between gap-2">
           <h2 className="font-heading text-sm font-semibold">
             Order fulfillment
-            <span className="ml-2 text-xs font-normal text-muted-foreground">via Shiprocket</span>
+            {shipment?.provider ? (
+              <span className="ml-2 text-xs font-normal text-muted-foreground">
+                via{" "}
+                {shippingProviderLabel(shipment.provider)}
+              </span>
+            ) : null}
           </h2>
           {!hideOrderPicker && selectedOrderId ? (
             <Link
@@ -344,8 +354,8 @@ export function AdminOrderFulfillmentPanel({
           ) : null}
         </div>
         <p className="mt-0.5 text-xs text-muted-foreground">
-          COD cash collection is synced automatically from Shiprocket on delivery — do not
-          mark COD collected manually.
+          COD cash collection is synced automatically on delivery via the shipping provider
+          webhook — do not mark COD collected manually.
         </p>
       </header>
 
@@ -414,6 +424,7 @@ export function AdminOrderFulfillmentPanel({
                 detail.paymentMode,
                 detail.payment?.status,
                 detail.status,
+                detail.shipment?.provider,
               )}
             />
             <InfoChip
@@ -431,6 +442,14 @@ export function AdminOrderFulfillmentPanel({
                 )
               }
             />
+            {shipment?.provider ? (
+              <InfoChip
+                label="Shipping provider"
+                value={
+                  shippingProviderLabel(shipment.provider)
+                }
+              />
+            ) : null}
             <InfoChip label="AWB" value={shipment?.awb ?? "Not booked yet"} mono />
             <InfoChip
               label="Shipment status"
@@ -453,7 +472,7 @@ export function AdminOrderFulfillmentPanel({
                       onClick={runSyncStatus}
                       disabled={busyAction !== null}
                       className="flex items-center gap-1 text-xs text-blue-600 hover:underline disabled:opacity-50"
-                      title="Pull latest status from Shiprocket"
+                      title="Pull latest status from shipping provider"
                     >
                       <RefreshCw className={`h-3 w-3 ${busyAction === "sync" ? "animate-spin" : ""}`} />
                       {busyAction === "sync" ? "Syncing…" : "Sync"}

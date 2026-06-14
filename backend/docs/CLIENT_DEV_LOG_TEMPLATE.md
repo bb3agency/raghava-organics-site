@@ -84,11 +84,12 @@
 
 - [ ] Backend template cloned into `client-<client-id>/backend`
 - [ ] `.env.example` copied to `.env`
-- [ ] **Bootstrap keys** filled in `.env` (no `replace_with` placeholders): `CLIENT_ID`, `DATABASE_URL`, `REDIS_URL`, `REDIS_PASSWORD`, `JWT_SECRET`, `JWT_REFRESH_SECRET`, `OPS_DB_ENCRYPTION_KEY`, `OPS_COOKIE_SECRET`, `PAYMENT_PROVIDER`, `SHIPPING_PROVIDER`, feature flags, OTEL vars
+- [ ] **Bootstrap keys** filled in `.env` (no `replace_with` placeholders): `CLIENT_ID`, `DATABASE_URL`, `REDIS_URL`, `REDIS_PASSWORD`, `JWT_SECRET`, `JWT_REFRESH_SECRET`, `OPS_DB_ENCRYPTION_KEY`, `OPS_COOKIE_SECRET`, `PAYMENT_PROVIDER`, feature flags, OTEL vars
   - **Also set** `RESEND_API_KEY` and `RESEND_FROM` — required for `node scripts/ops-newuser.mjs` invite email (Phase 1). After first ops login, manage via Ops UI. See `docs/PRODUCTION_FIRST_DEPLOY_CHECKLIST.md`.
   > **Note:** All other provider credentials (`RAZORPAY_*`, `DELHIVERY_*`, `MSG91_*`, etc.) and ops-security params (`OPS_METRICS_TOKEN`, `REPLAY_APPROVAL_TOKEN`, etc.) are **DB-overlay keys** — they are NOT set in `.env` in production. They are provisioned via Ops UI after Phase 8. For local dev (Phase 2–5), you may temporarily set them in `.env` for dry-runs. See `docs/ENV_VS_DB_CONFIG_REFERENCE.md`.
+  > **Shipping:** `SHIPPING_PROVIDER` is not a valid config key. Shipping provider detection is credential-based — set `DELHIVERY_API_KEY` (Delhivery) and/or `SHIPROCKET_EMAIL`+`SHIPROCKET_PASSWORD` (Shiprocket) via Ops UI. Both providers can coexist.
 - [ ] `PAYMENT_PROVIDER` set (not `noop` unless explicitly staging-only)
-- [ ] `SHIPPING_PROVIDER` set (not `noop` unless explicitly staging-only)
+- [ ] Shipping credentials configured via Ops UI — `DELHIVERY_API_KEY` (Delhivery) and/or `SHIPROCKET_EMAIL`+`SHIPROCKET_PASSWORD` (Shiprocket). At least one required for production.
 - [ ] `npm ci` — passes
 - [ ] `npm run build` — passes
 - [ ] `npm run validate:env` — passes

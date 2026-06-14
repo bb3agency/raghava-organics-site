@@ -906,7 +906,7 @@ Restart-specific note:
 
 If the storefront starts returning `502 Bad Gateway` on `/api/v1/*` shortly after an Ops config save followed by an API/worker restart, the API container is almost always **crash-looping**, not the network. Most common cause:
 
-- The DB overlay applied a partial provider setting (e.g. `PAYMENT_PROVIDER=razorpay` or `SHIPPING_PROVIDER=shiprocket`) before the matching provider secrets were saved.
+- The DB overlay applied a partial provider setting (e.g. `PAYMENT_PROVIDER=razorpay`) before the matching provider secrets were saved. For shipping: setting `DELHIVERY_API_KEY` without a valid pickup pincode or webhook token can also cause boot failures if strict validation is enforced.
 - Older boot validation (`validateConditionalEnv` in `src/config/app.config.ts`) called `requireEnv` on the full dependency chain and threw `Missing required env var: …` at startup, exiting the API process. Docker restart policy keeps re-launching the container, and nginx returns 502 between attempts.
 
 **Triage on the VPS:**
@@ -923,12 +923,14 @@ curl -sS http://127.0.0.1:<BACKEND_PORT>/api/v1/health # 502/connection refused 
 2. Rebuild: `docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml build backend && docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml up -d backend workers`. (Both `-f` flags are required on the VPS — see §6.10. Skipping the prod overlay tries to start the containerised Postgres and collides with the host's native Postgres on port 5432.)
 3. Confirm `/api/v1/health` returns `ok`, then finish remaining Ops keys and restart again.
 
-**Emergency rollback (no pull yet):** deactivate the incomplete overlay rows so the next boot does not enter the crash path. Example for `PAYMENT_PROVIDER` / `SHIPPING_PROVIDER`:
+**Emergency rollback (no pull yet):** deactivate the incomplete overlay rows so the next boot does not enter the crash path. Example for `PAYMENT_PROVIDER` (note: `SHIPPING_PROVIDER` is no longer a recognized key — shipping is credential-based; deactivate the relevant shipping credential key instead):
 
 ```sql
 UPDATE "OpsConfigSecret"
 SET "isActive" = false
-WHERE "secretKey" IN ('PAYMENT_PROVIDER','SHIPPING_PROVIDER') AND "isActive" = true;
+WHERE "secretKey" IN ('PAYMENT_PROVIDER') AND "isActive" = true;
+-- For shipping: deactivate the specific credential key causing the issue, e.g.:
+-- WHERE "secretKey" IN ('DELHIVERY_API_KEY') AND "isActive" = true;
 ```
 
 Then `docker compose -p <client-id> -f docker-compose.yml -f docker-compose.prod.yml up -d backend workers` (or bare `docker compose up -d backend workers` if `COMPOSE_FILE` is set in the VPS `.env` per §6.10). After the site is back, save the remaining provider secrets via Ops UI and restart again. This is incident-only; the boot-tolerance fix is the long-term answer.

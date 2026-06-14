@@ -37,9 +37,9 @@ Phase 4 frontend build evidence must follow the mandatory sequence: Foundation -
 | **`REDIS_URL`** uses auth format (`redis://:<password>@redis:6379` in Compose) | Verified |
 | **`JWT_SECRET`**, **`JWT_REFRESH_SECRET`** unique — **never** shared across clients (`ECOM_MASTER.md` §5). Both fail-fast if missing/empty (config `requireEnv()` + auth service `resolveRefreshSecret()`) | Verified |
 | `PAYMENT_PROVIDER` is **not** `noop` — must be `razorpay` (or `cod` for COD-only deployments) | Never `noop` in production-like profiles (`NODE_ENV` is not `development`/`test`) |
-| `SHIPPING_PROVIDER` is **not** `noop` — must be `delhivery` or `shiprocket` | Never `noop` in production-like profiles (`NODE_ENV` is not `development`/`test`) |
+| **Shipping provider credentials present** — `DELHIVERY_API_KEY` (Delhivery) and/or `SHIPROCKET_EMAIL`+`SHIPROCKET_PASSWORD` (Shiprocket). Both can coexist. `SHIPPING_PROVIDER` is not a valid config key — detection is credential-based. | At least one provider active in production |
 | Razorpay **live** keys for production (`RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET`) | Match Razorpay dashboard |
-| **Shipping provider credentials** — Delhivery `DELHIVERY_API_KEY` + `DELHIVERY_BASE_URL` OR Shiprocket `SHIPROCKET_EMAIL` + `SHIPROCKET_PASSWORD` (depending on `SHIPPING_PROVIDER`) | Verified |
+| **Shipping provider credentials verified** — at least one of: Delhivery (`DELHIVERY_API_KEY` + `DELHIVERY_BASE_URL`) or Shiprocket (`SHIPROCKET_EMAIL` + `SHIPROCKET_PASSWORD`) set via Ops UI | Verified via `/api/v1/health/ready` `runtimeConfigMissingKeys: []` |
 | **`REPLAY_APPROVAL_TOKEN`** set when production replay endpoints are enabled | Per ops policy |
 | **`OPS_METRICS_TOKEN`** (production required) + optional **`OPS_METRICS_ALLOWLIST`** defense-in-depth for `/api/v1/ops/metrics` | Scraper can authenticate |
 | Admin permission snapshot caveat acknowledged in ops SOP | Mid-window permission grant/revoke changes require token revocation/logout for immediate effect |

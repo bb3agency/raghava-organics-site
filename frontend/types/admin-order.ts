@@ -19,13 +19,16 @@ export interface AdminOrdersListResponse {
   };
 }
 
+export type ShippingProviderEnum = "DELHIVERY" | "SHIPROCKET" | "SELF";
+
 export interface AdminOrderShipment {
   id: string;
-  provider: string;
+  provider: ShippingProviderEnum;
   status: string;
   awb: string | null;
   trackingUrl: string | null;
   shipmentLabelUrl?: string | null;
+  /** Only present for Shiprocket shipments */
   shiprocketShipmentId?: string | null;
   labelUrl?: string | null;
   pickupScheduledDate?: string | null;

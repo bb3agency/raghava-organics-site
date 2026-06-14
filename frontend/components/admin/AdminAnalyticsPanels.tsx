@@ -27,6 +27,7 @@ import type {
   AdminInventoryAlertItem,
   AdminNotificationDeliveryStats,
   AdminSalesChartPoint,
+  AdminShippingProviderStats,
 } from "@/lib/admin-api";
 import {
   buildAdminQuery,
@@ -35,6 +36,7 @@ import {
   toIsoDateRange,
 } from "@/lib/admin-api";
 import { formatAdminDate, formatPaise } from "@/lib/admin-format";
+import { shippingProviderLabel } from "@/lib/shipping-provider-labels";
 import { getApiErrorMessage } from "@/lib/error-messages";
 import { useAuthenticatedApi } from "@/hooks/use-authenticated-api";
 import { useAdminShell } from "@/contexts/admin-shell-context";
@@ -97,6 +99,7 @@ export function AdminAnalyticsPageContent() {
       <AdminFunnelPanel from={range.from} to={range.to} />
       <AdminCategoryBreakdownPanel from={range.from} to={range.to} />
       <AdminInventoryAlertsPanel />
+      <AdminShippingProviderStatsPanel from={range.from} to={range.to} />
       <AdminNotificationStatsPanel from={range.from} to={range.to} />
       <AdminSalesChartPanel from={range.from} to={range.to} />
       <AdminTopProductsPanel from={range.from} to={range.to} />
@@ -484,6 +487,100 @@ function AdminInventoryAlertsPanel() {
                 </td>
               </tr>
             ))}
+          </tbody>
+        </table>
+      </div>
+    </AdminSection>
+  );
+}
+
+function AdminShippingProviderStatsPanel({
+  from,
+  to,
+}: {
+  from: string;
+  to: string;
+}) {
+  const api = useAuthenticatedApi();
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [data, setData] = useState<AdminShippingProviderStats | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void api<AdminShippingProviderStats>(
+      `/admin/analytics/shipping-providers${buildAdminQuery({
+        from: toIsoDateRange(from),
+        to: toIsoDateRange(to, true),
+      })}`,
+    )
+      .then((response) => {
+        if (!cancelled) setData(response);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(getApiErrorMessage(err));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [api, from, to]);
+
+  const providers = ensureArray<AdminShippingProviderStats["providers"][number]>(
+    data?.providers,
+  );
+
+  return (
+    <AdminSection
+      title="Shipping provider breakdown"
+      description={
+        data
+          ? `${data.totalShipments} total shipment${data.totalShipments !== 1 ? "s" : ""} in range`
+          : undefined
+      }
+      loading={loading}
+      error={error}
+      empty={!loading && !error && providers.length === 0}
+      emptyMessage="No shipments in this period."
+    >
+      <div className="overflow-x-auto rounded-md border border-border">
+        <table className="w-full text-left text-sm">
+          <thead className="border-b border-border bg-muted/50 text-xs uppercase text-muted-foreground">
+            <tr>
+              <th className="px-3 py-2 font-medium">Provider</th>
+              <th className="px-3 py-2 font-medium">Shipments</th>
+              <th className="px-3 py-2 font-medium">Share</th>
+              <th className="px-3 py-2 font-medium">Delivered</th>
+              <th className="px-3 py-2 font-medium">Revenue</th>
+            </tr>
+          </thead>
+          <tbody>
+            {providers.map((row) => {
+              const label = shippingProviderLabel(row.provider);
+              const deliveryRate =
+                row.shipmentsCount > 0
+                  ? Math.round((row.deliveredCount / row.shipmentsCount) * 100)
+                  : 0;
+              return (
+                <tr
+                  key={row.provider}
+                  className="border-b border-border last:border-0"
+                >
+                  <td className="px-3 py-2 font-medium">{label}</td>
+                  <td className="px-3 py-2">{row.shipmentsCount}</td>
+                  <td className="px-3 py-2">{row.sharePercent}%</td>
+                  <td className="px-3 py-2">
+                    {row.deliveredCount}{" "}
+                    <span className="text-xs text-muted-foreground">
+                      ({deliveryRate}%)
+                    </span>
+                  </td>
+                  <td className="px-3 py-2">{formatPaise(row.revenuePaise)}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>

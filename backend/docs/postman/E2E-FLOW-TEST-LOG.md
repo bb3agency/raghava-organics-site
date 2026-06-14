@@ -36,11 +36,11 @@ npm run dev:e2e
 npm run dev:e2e:workers
 ```
 
-> Both scripts are at `scripts/dev-up.cmd` and `scripts/dev-up-workers.cmd`. They auto-start Redis/Postgres, ensure the Prisma target DB exists from `DATABASE_URL`, run `prisma generate` + `prisma migrate deploy`, and then boot Node with env vars baked into the script (`PAYMENT_PROVIDER=noop`, `SHIPPING_PROVIDER=noop`, `RAZORPAY_WEBHOOK_SECRET=test_webhook_secret`, `SHIPROCKET_WEBHOOK_TOKEN=test_webhook_token`, `NODE_ENV=development`). Other connection vars (`DATABASE_URL`, `REDIS_URL`, `JWT_SECRET`, etc.) are read from your `.env` file.
+> Both scripts are at `scripts/dev-up.cmd` and `scripts/dev-up-workers.cmd`. They auto-start Redis/Postgres, ensure the Prisma target DB exists from `DATABASE_URL`, run `prisma generate` + `prisma migrate deploy`, and then boot Node with env vars baked into the script (`PAYMENT_PROVIDER=noop`, `RAZORPAY_WEBHOOK_SECRET=test_webhook_secret`, `SHIPROCKET_WEBHOOK_TOKEN=test_webhook_token`, `NODE_ENV=development`). Other connection vars (`DATABASE_URL`, `REDIS_URL`, `JWT_SECRET`, etc.) are read from your `.env` file.
 
-> ⚠️ `PAYMENT_PROVIDER=noop` and `SHIPPING_PROVIDER=noop` are **required** for the E2E simulation to pass without live credentials.
+> ⚠️ `PAYMENT_PROVIDER=noop` is **required** for the E2E simulation to pass without live payment credentials. Shipping noop mode is inferred automatically from the absence of shipping credentials (`DELHIVERY_API_KEY`, `SHIPROCKET_EMAIL`) — `SHIPPING_PROVIDER=noop` is not a valid setting and is no longer set by the scripts.
 
-> ⚠️ Shipping webhook token relaxation applies in noop/placeholder mode (`SHIPPING_PROVIDER=noop` or placeholder/empty `DELHIVERY_API_KEY`). In that mode, any non-empty auth header is accepted for simulation. Real provider configurations remain strictly token-validated.
+> ⚠️ Shipping webhook token relaxation applies in noop/placeholder mode (placeholder/empty `DELHIVERY_API_KEY` and no Shiprocket credentials). In that mode, any non-empty auth header is accepted for simulation. Real provider configurations remain strictly token-validated.
 
 > ℹ️ Shiprocket webhook token header priority: `x-api-key` (primary, per official Shiprocket docs) → `x-shiprocket-token` → `Authorization: Bearer`. In E2E noop mode the Postman collection sends `Authorization: Bearer` — all three formats work in production.
 
@@ -56,7 +56,7 @@ If you prefer manual control, run these in two separate terminals (after ensurin
 
 ```cmd
 REM Terminal 1 — server
-set PAYMENT_PROVIDER=noop&& set SHIPPING_PROVIDER=noop&& set RAZORPAY_WEBHOOK_SECRET=test_webhook_secret&& set SHIPROCKET_WEBHOOK_TOKEN=test_webhook_token&& set NODE_ENV=development&& npx tsx watch src/main.ts
+set PAYMENT_PROVIDER=noop&& set RAZORPAY_WEBHOOK_SECRET=test_webhook_secret&& set SHIPROCKET_WEBHOOK_TOKEN=test_webhook_token&& set NODE_ENV=development&& npx tsx watch src/main.ts
 
 REM Terminal 2 — workers
 set PAYMENT_PROVIDER=noop&& npx tsx watch queues/workers/index.ts
@@ -554,7 +554,7 @@ Ramu (COD):
 | 3.2/3.3/3.6/3.7 returns 404 | `rajOrderId`/`ramuOrderId` stale — orders from prior runs deleted or not matching | Tests now pass with warning; re-run folders 1+2 |
 | 3.4/3.5 returns 409 | Order not in CONFIRMED/PROCESSING state — workers not running (Raj stuck at PENDING_PAYMENT) or stale env var | Fixed — 3.4/3.5 now accept 400 and 409; start workers for full flow |
 | 3.4/3.5 returns 409 | Hardcoded idempotency key reused across runs | Fixed — keys now `ship-raj-{{rajOrderId}}` / `ship-ramu-{{ramuOrderId}}` (dynamic per order) |
-| 3.8/3.9/3.13/3.15 returns 401 | Server running old `orders.service.ts` code or runtime not in noop/placeholder shipping mode | Restart server after `orders.service.ts` edit; ensure `SHIPPING_PROVIDER=noop` (or placeholder/empty Delhivery key) for simulation |
+| 3.8/3.9/3.13/3.15 returns 401 | Server running old `orders.service.ts` code or runtime not in noop/placeholder shipping mode | Restart server after `orders.service.ts` edit; ensure no shipping credentials are set (absence of `DELHIVERY_API_KEY` and `SHIPROCKET_EMAIL` triggers noop mode automatically) |
 | 3.10/3.11 `SHIPPED` fails | Order not shipped (ship step 409'd) | Fixed — asserts `SHIPPED or PROCESSING`, passes with warning |
 | 3.6/3.7 AWB is null | Ship worker still running | Wait 3–5s, re-run; test falls back to mock AWB so subsequent steps still run |
 | 3.14 `payment.status` not CAPTURED | Worker hasn't run yet | Wait 2–3s, re-run |
@@ -572,10 +572,10 @@ Ramu (COD):
 | 2026-05-05 | 1.3/2.3 | `j.quantity` undefined — returns full cart | Test checks `j.items[0].quantity` |
 | 2026-05-05 | 1.3/2.3 | quantity > 1 on re-run | Pre-request `DELETE /api/v1/cart` added |
 | 2026-05-05 | 1.5/2.4 | 503 from noop shipping `checkServiceability` + `calculateDeliveryRate` | `NoopShippingAdapter` returns serviceable+zero rate; `resolvePickupPincode` falls back to `'500001'` in noop mode |
-| 2026-05-05 | 1.5/2.4 | 422 from zero-weight variant when `SHIPPING_PROVIDER=noop` | Weight check skipped in noop mode; weight clamped to 1g minimum |
+| 2026-05-05 | 1.5/2.4 | 422 from zero-weight variant in noop mode | Weight check skipped in noop mode; weight clamped to 1g minimum |
 | 2026-05-05 | 1.6 | 503 on payment initiate — `razorpayAdapter.createOrder` called even in noop | `NoopPaymentAdapter.createOrder` now returns mock order; `initiatePayment` uses `this.paymentProvider` |
 | 2026-05-05 | 1.7 | 401 on payment webhook — `razorpayAdapter.verifyWebhookSignature` hardcoded | `processPaymentWebhook` now uses `this.paymentProvider`; noop adapter accepts all signatures |
-| 2026-05-05 | All | Server must run with `PAYMENT_PROVIDER=noop SHIPPING_PROVIDER=noop RAZORPAY_WEBHOOK_SECRET=test_webhook_secret` | See restart command in Pre-run Checklist |
+| 2026-05-05 | All | Server must run with `PAYMENT_PROVIDER=noop RAZORPAY_WEBHOOK_SECRET=test_webhook_secret`; shipping noop inferred from absence of credentials | See restart command in Pre-run Checklist |
 | 2026-05-06 | 1.5 | 503 persists — `DELHIVERY_API_KEY` placeholder triggers circuit-broken adapter before noop fallback | `CartService.isNoopMode()` detects placeholder keys; `effectiveProvider` uses `NoopShippingAdapter` directly |
 | 2026-05-06 | 1.6 | 409 on re-run — hardcoded idempotency key conflicts | Key changed to `pay-init-{{rajOrderId}}` |
 | 2026-05-06 | 1.7 | 409 on re-run — hardcoded `pay_sim_raj_001` hits Redis capture lock | `payId` now `pay_sim_raj_<timestamp>` |

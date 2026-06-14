@@ -176,7 +176,7 @@ if (ready.ok) {
   }
 
   const paymentMissing = missing.filter((k) => k.startsWith('RAZORPAY') || k === 'PAYMENT_PROVIDER');
-  const shippingMissing = missing.filter((k) => k.startsWith('SHIPROCKET') || k.startsWith('DELHIVERY') || k === 'SHIPPING_PROVIDER');
+  const shippingMissing = missing.filter((k) => k.startsWith('SHIPROCKET') || k.startsWith('DELHIVERY'));
 
   if (paymentMissing.length === 0) {
     ok('Payment provider config: complete');
@@ -191,8 +191,10 @@ if (ready.ok) {
     ok('Shipping provider config: complete');
   } else {
     fail(`Shipping provider config missing: ${shippingMissing.join(', ')}`);
-    warn('  → Log into the Ops UI (/ops), go to Config → Shipping, and set:');
-    warn('     SHIPPING_PROVIDER=shiprocket, SHIPROCKET_EMAIL, SHIPROCKET_PASSWORD, SHIPROCKET_WEBHOOK_TOKEN');
+    warn('  → Log into the Ops UI (/ops), go to Config → Shipping, and set credentials for one or both providers:');
+    warn('     Delhivery: DELHIVERY_API_KEY, DELHIVERY_BASE_URL, DELHIVERY_WEBHOOK_TOKEN');
+    warn('     Shiprocket: SHIPROCKET_EMAIL, SHIPROCKET_PASSWORD, SHIPROCKET_WEBHOOK_TOKEN');
+    warn('  → Note: SHIPPING_PROVIDER is not a config key — provider detection is credential-based.');
     exitCode = 1;
   }
 

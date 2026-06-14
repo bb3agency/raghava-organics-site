@@ -31,7 +31,8 @@ Container raghava-organics-redis Started
 
 ```powershell
 cd backend
-$env:PAYMENT_PROVIDER='noop'; $env:SHIPPING_PROVIDER='noop'; $env:NODE_ENV='development'
+$env:PAYMENT_PROVIDER='noop'; $env:NODE_ENV='development'
+# No SHIPPING_PROVIDER needed — shipping noop mode is inferred from absence of credentials
 npx tsx watch src/main.ts
 # separate terminal:
 npx tsx watch queues/workers/index.ts

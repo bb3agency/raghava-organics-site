@@ -19,6 +19,7 @@ import {
 import { prevRange, rangeToISO, trendPeriodLabel } from "@/components/admin/AdminDateRangePicker";
 import { formatAdminDate } from "@/lib/admin-format";
 import { getApiErrorMessage } from "@/lib/error-messages";
+import { shippingProviderLabel } from "@/lib/shipping-provider-labels";
 import { useAuthenticatedApi } from "@/hooks/use-authenticated-api";
 import { useAdminDataRefreshEffect } from "@/hooks/use-admin-data-refresh-effect";
 import {
@@ -504,8 +505,8 @@ export function AdminShipmentsList({
                 </select>
                 <select className="h-9 rounded-md border border-border/50 bg-background px-3 text-sm text-muted-foreground focus:border-zinc-900 focus:outline-none hidden sm:block">
                   <option value="">All Delivery Partners</option>
-                  <option value="delhivery">Delhivery</option>
-                  <option value="shiprocket">Shiprocket</option>
+                  <option value="DELHIVERY">Delhivery</option>
+                  <option value="SHIPROCKET">Shiprocket</option>
                 </select>
                 <div className="hidden sm:flex h-9 items-center gap-2 rounded-md border border-border/50 bg-background px-3 text-sm text-muted-foreground">
                   <Calendar className="h-4 w-4" />
@@ -628,7 +629,7 @@ export function AdminShipmentsList({
                                 </div>
                                 <div className="flex flex-col gap-0.5">
                                   <span className="font-medium text-foreground">
-                                    {shipment.provider ?? "—"}
+                                    {shippingProviderLabel(shipment.provider)}
                                   </span>
                                   {shipment.awbNumber && (
                                     <span className="text-[11px] text-muted-foreground">

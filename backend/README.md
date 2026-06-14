@@ -338,7 +338,7 @@ Expected result for release sign-off:
 - `prisma validate` confirms schema validity.
 - `test:guardrails` passes `admin-layer-drift-check`, `docs-runtime-drift-check`, and `config-runtime-parity-check`.
 - `stress:flash-sale:api:matrix` does not fail invariant enforcement (including fixture precondition checks).
-- App startup in production-like profiles now **fails fast** if `PAYMENT_PROVIDER=noop`, `SHIPPING_PROVIDER=noop`, provider/auth secrets use placeholder values (`replace_with_*`, `change_me*`, `<...>`), or required webhook allowlists are missing.
+- App startup in production-like profiles now **fails fast** if `PAYMENT_PROVIDER=noop`, no shipping provider credentials are set (Delhivery or Shiprocket), provider/auth secrets use placeholder values (`replace_with_*`, `change_me*`, `<...>`), or required webhook allowlists are missing. `SHIPPING_PROVIDER` env var is ignored — provider detection is credential-based.
 - Release evidence includes completed `docs/BACKEND_GO_LIVE_CHECKLIST.md` (full env + implementation parity) and `docs/FRONTEND_AI_GO_LIVE_CHECKLIST.md`.
 
 `NODE_ENV` profile mapping used by backend startup guards:
@@ -546,14 +546,14 @@ npm run dev
 **Key notes:**
 - Shipment dispatch is manual-only: payment confirmation does not auto-create shipment jobs.
 - Admin must trigger `POST /api/v1/admin/orders/:id/ship` (or click Ship Order in admin UI) to create shipment/AWB.
-- Shipping webhook token validation is relaxed only in noop/placeholder shipping mode (`SHIPPING_PROVIDER=noop` or placeholder/empty `DELHIVERY_API_KEY`), where any non-empty auth header is accepted for simulation. In production, Shiprocket sends the token via `x-api-key` header (per official docs); the backend also accepts `Authorization: Bearer` as a fallback. Delhivery uses `Authorization: Token`.
+- Shipping webhook token validation is relaxed only when no shipping provider credentials are configured (noop mode — empty `DELHIVERY_API_KEY` and no Shiprocket credentials), where any non-empty auth header is accepted for simulation. In production, Shiprocket sends the token via `x-api-key` header (per official docs); the backend also accepts `Authorization: Bearer` as a fallback. Delhivery uses `Authorization: Token`.
 - Order idempotency keys are timestamp-based — each run creates fresh orders; re-running the full sequence is safe.
 - Without workers: all tests PASS with warnings; Raj's order stays at `PENDING_PAYMENT` so ship step (3.4) returns `409` warning instead of `200`.
 - With workers + restarted server: all steps return `200`; final board shows both orders `DELIVERED`.
 
 See [`docs/postman/E2E-FLOW-TEST-LOG.md`](docs/postman/E2E-FLOW-TEST-LOG.md) for per-step assertion details, environment variable chain, failure-mode table, and complete fix history.
 
-> ⚠️ `PAYMENT_PROVIDER=noop` and `SHIPPING_PROVIDER=noop` must **never** be set in production `.env`.
+> ⚠️ `PAYMENT_PROVIDER=noop` must **never** be set in production `.env`. For shipping, at least one provider's credentials (Delhivery or Shiprocket) must be configured. `SHIPPING_PROVIDER` is not a valid env var.
 
 ---
 
@@ -569,7 +569,7 @@ Categories (see `.env.example` for full details):
 | **Infrastructure** | `DATABASE_URL`, `REDIS_URL`, `STOREFRONT_URL` |
 | **Auth** | `JWT_SECRET`, `JWT_REFRESH_SECRET` (both fail-fast on missing/empty — `resolveRefreshSecret()` in auth service, `requireEnv()` in config) |
 | **Payments** | `PAYMENT_PROVIDER` (`razorpay`/`cod`/`noop`; unrecognised values rejected at startup), `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET` (Razorpay keys required only when `PAYMENT_PROVIDER=razorpay`) |
-| **Shipping** | `SHIPPING_PROVIDER` (`delhivery`/`shiprocket`/`noop`; unrecognised values rejected at startup), `DELHIVERY_API_KEY`, `DELHIVERY_WEBHOOK_TOKEN` |
+| **Shipping** | `DELHIVERY_API_KEY`, `DELHIVERY_WEBHOOK_TOKEN`, `SHIPROCKET_EMAIL`, `SHIPROCKET_PASSWORD`, `SHIPROCKET_WEBHOOK_TOKEN` — provider detection is credential-based; both can be active simultaneously (cheapest rate wins at checkout). `SHIPPING_PROVIDER` is ignored. |
 | **Notifications** | `RESEND_API_KEY`, active SMS provider key (`MSG91_AUTH_KEY` when `SMS_PROVIDER=msg91` or `FAST2SMS_API_KEY` when `SMS_PROVIDER=fast2sms`), channel toggles (`NOTIFY_*`). Provider keys are fail-fast at startup when respective channel is enabled; MSG91 input phones are normalized to `91XXXXXXXXXX`. Merchant SMS templates can be stored in `StoreSettings.smsTemplates` (DB-backed) and override defaults at runtime. |
 | **Invoice Storage** | `INVOICE_STORAGE_ROOT` |
 | **Feature Flags** | `FEATURE_COUPONS_ENABLED`, `FEATURE_REVIEWS_ENABLED`, `FEATURE_RESPONSE_ENVELOPE_ENABLED`, etc. |

@@ -62,7 +62,7 @@ Use these three tracker files when you need explicit phase-by-phase progress and
 
 1. Confirm the client's **domain name(s)**: storefront domain (e.g. `client1.com`) and whether admin is a sub-path or subdomain.
 2. Confirm **payment provider**: Razorpay (default) or COD-only. If Razorpay, confirm whether live keys are ready or test keys only (staging vs production).
-3. Confirm **shipping provider**: Delhivery or Shiprocket (or noop for staging only — must be replaced for production).
+3. Confirm **shipping provider(s)**: Delhivery and/or Shiprocket — both can be active simultaneously (cheapest rate wins at checkout). Obtain credentials for each provider the client wants active. No env var selection needed; presence of credentials activates the provider.
 4. Confirm **notification channels**: email (`RESEND_API_KEY`), SMS provider (`SMS_PROVIDER`: `msg91` or `fast2sms`), WhatsApp (`META_WHATSAPP_ACCESS_TOKEN`). If MSG91, confirm DLT registration status.
 5. Confirm **VPS slot availability**: which backend port (`3000+N`) and storefront port (`3100+N`) will be assigned. See `docs/CLIENT_VPS_SETUP_GUIDE.md` §3 (Port assignment).
 6. Confirm **`CLIENT_ID`** slug (e.g. `foodstore`, `fashionhub`) — must be unique across all clients on this VPS.
@@ -184,7 +184,7 @@ Before Phase 5 sign-off and again during Phase 12 go-live validation, verify:
    - Feature flags per Phase 0 scoping
 
    **DB-overlay keys — do NOT put these in `.env` for production.** Set them via Ops UI after Phase 8:
-   - Provider credentials: `PAYMENT_PROVIDER`, `RAZORPAY_*`, `SHIPPING_PROVIDER`, `DELHIVERY_*`, `SHIPROCKET_*`
+   - Provider credentials: `PAYMENT_PROVIDER`, `RAZORPAY_*`, `DELHIVERY_*`, `SHIPROCKET_*` (set whichever shipping provider credentials apply — both can coexist)
    - Notification credentials: `MSG91_AUTH_KEY`, `FAST2SMS_API_KEY`, `META_WHATSAPP_*`, `SMS_PROVIDER` (and `RESEND_*` after Phase 1 rotation)
    - Webhook tokens and allowlists: `RAZORPAY_WEBHOOK_SECRET`, `RAZORPAY_WEBHOOK_ALLOWLIST_CIDR`, `DELHIVERY_WEBHOOK_TOKEN`, `SHIPROCKET_WEBHOOK_TOKEN`
    - Ops security: `OPS_METRICS_TOKEN`, `REPLAY_APPROVAL_TOKEN`, `TRUSTED_PROXY_ALLOWLIST_CIDR`
@@ -279,9 +279,9 @@ Perform each dry-run as part of the vertical slice that builds the relevant fron
    - Confirm order transitions to `CONFIRMED`.
    - Record evidence in credential register.
 
-2. **Shipping provider dry-run:**
-   - Start local backend with the target shipping provider.
-   - Trigger `POST /api/v1/admin/orders/:id/ship` for a confirmed test order.
+2. **Shipping provider dry-run (per active provider):**
+   - Start local backend with the target shipping provider credentials set. The system auto-detects which providers are active based on credentials.
+   - Trigger `POST /api/v1/admin/orders/:id/ship` for a confirmed test order. The backend will use whichever provider's credentials are configured (cheapest rate if dual active).
    - Confirm AWB is created and tracking state is correct.
    - Send a test shipping webhook to the local backend and verify order state transitions.
    - Record evidence in credential register.
@@ -359,7 +359,7 @@ Perform each dry-run as part of the vertical slice that builds the relevant fron
    - No API call returns unexpected 404, 500, or schema mismatch.
    - No browser console errors that indicate broken API integration.
    - No hardcoded data visible in the UI (all content comes from backend).
-   - No `noop` payment or shipping provider active.
+   - No `PAYMENT_PROVIDER=noop` active. For shipping: at least one provider's credentials set (Delhivery or Shiprocket).
    - Auth guard works: unauthenticated requests to protected routes return 401, not 200 with empty data.
    - Admin permission guard works: user without permission cannot access admin routes.
    - CORS is correct: no CORS errors in browser dev tools.
@@ -690,7 +690,7 @@ git push origin main
 
    For each domain in order:
    - **Payments:** `PAYMENT_PROVIDER`, `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET`, `RAZORPAY_WEBHOOK_ALLOWLIST_CIDR`, `PAYMENT_CB_FAILURE_THRESHOLD`, `PAYMENT_CB_COOLDOWN_MS`
-   - **Shipping:** `SHIPPING_PROVIDER`, `DELHIVERY_API_KEY` / `SHIPROCKET_EMAIL` + `SHIPROCKET_PASSWORD`, webhook token + allowlist, circuit breaker params
+   - **Shipping:** `DELHIVERY_API_KEY` and/or `SHIPROCKET_EMAIL` + `SHIPROCKET_PASSWORD` (both can coexist), webhook token + allowlist, circuit breaker params. `SHIPPING_PROVIDER` is not a configurable key.
    - **Notifications:** `RESEND_API_KEY`, `RESEND_FROM`, `SMS_PROVIDER`, `MSG91_AUTH_KEY` / `FAST2SMS_API_KEY`, `META_WHATSAPP_*` keys
    - **Ops security:** `OPS_MFA_ENFORCE`, `OPS_METRICS_TOKEN`, `REPLAY_APPROVAL_TOKEN`, `TRUSTED_PROXY_ALLOWLIST_CIDR`
    - **Risk/replay:** `WEBHOOK_TIMESTAMP_SKEW_SECONDS`, `REPLAY_AUDIT_RETENTION_DAYS`

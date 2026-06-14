@@ -150,7 +150,7 @@ NEXT_PUBLIC_IMAGE_CDN_URL=https://cdn.raghavaorganics.com
 | Slice | Status | Notes |
 |---|---|---|
 | Mutation panels with idempotency keys | [x] | `components/admin/AdminMutationPanel.tsx` |
-| Ship/cancel/refund fulfillment (Shiprocket; COD via webhook) | [x] | `AdminOrderFulfillmentPanel.tsx` — refund via `PATCH .../status` REFUNDED |
+| Ship/cancel/refund fulfillment (dual-provider: Delhivery + Shiprocket; COD via webhook) | [x] | `AdminOrderFulfillmentPanel.tsx` — provider shown dynamically from `Shipment.provider`; refund via `PATCH .../status` REFUNDED |
 | Customer ban/unban + notes CRUD | [x] | `AdminCustomerDetailPanel.tsx` |
 | Inventory bulk + variant delete + review delete | [x] | `AdminMutationPanel` presets on inventory/reviews pages |
 | Coupons lifecycle (feature-flagged) | [x] | `admin/coupons` + mutation presets |
@@ -294,7 +294,7 @@ NEXT_PUBLIC_IMAGE_CDN_URL=https://cdn.raghavaorganics.com
   - `npx: not found` in deploy path traced to production image intentionally removing npm/npx.
   - `EACCES` on `.prisma/client` traced to runtime container generate step under non-root user.
   - `backend/scripts/vps-deploy.sh` updated: run migrations on host via local Prisma CLI and skip runtime-container Prisma generate.
-- Final backend deploy blocker was expected readiness gate (`/health/ready`) due to missing Ops DB-overlay runtime keys (`PAYMENT_PROVIDER`, `SHIPPING_PROVIDER`, `SMS_PROVIDER`).
+- Final backend deploy blocker was expected readiness gate (`/health/ready`) due to missing Ops DB-overlay runtime keys (`PAYMENT_PROVIDER`, `SMS_PROVIDER`, shipping provider credentials).
   - Resolution path documented in client CD setup doc: complete Ops Config (Phase 8), restart API/workers, verify `runtimeConfigMissingKeys: []`.
 - Ops permissions model update:
   - Backend now enforces both `OPS_READ` + `OPS_WRITE` for every ops user during invite creation, invite consumption, and login session normalization.
@@ -1293,4 +1293,28 @@ Documented in §2026-06-03; still required: sign in on the **network URL** from 
 **Notification Timing:**
 - Customer gets notified immediately when admin clicks "Ship" (not waiting for `IN_TRANSIT` webhook)
 - Additional notification on webhook status changes (IN_TRANSIT, OUT_FOR_DELIVERY, DELIVERED)
+
+---
+
+## 2026-06-14 — Dual shipping provider + provider analytics
+
+**Scope:** Support both Delhivery and Shiprocket simultaneously. Provider detection is now credential-based (not env-var). `SHIPPING_PROVIDER` env var is dead and ignored. Analytics endpoint added for provider breakdown.
+
+### Backend Changes
+
+- `resolveDualShippingRuntime()` — returns which providers are active based solely on credentials; `SHIPPING_PROVIDER` env var ignored
+- Cart service: `getDeliveryRates()` queries all active providers in parallel, picks cheapest; `selectedShippingProvider` stored on order
+- Ship action: uses `selectedShippingProvider` from order to route to correct adapter; `Shipment.provider` DB field records which provider fulfilled each order
+- `CartService` constructor: removed `createShippingProvider()` call (was returning NoopShippingAdapter in dual mode, silently bypassing real shipping logic); all detection now happens at call time
+- New endpoint: `GET /api/v1/admin/analytics/shipping-providers` — returns shipment count, revenue, delivery rate, and share % per provider (`analytics:read` permission)
+- Removed stale `vi.stubEnv('SHIPPING_PROVIDER', ...)` from all test files
+
+### Frontend Changes
+
+- `lib/shipping-provider-labels.ts` — shared `SHIPPING_PROVIDER_LABELS` map + `shippingProviderLabel()` helper (replaces inline ternary chains throughout)
+- `AdminShipmentsList.tsx` — filter `<option>` values fixed from lowercase (`delhivery`) to uppercase (`DELHIVERY`) enum values; provider column now shows friendly names
+- `AdminOrderFulfillmentPanel.tsx` — provider label uses shared helper; "Shipping provider" InfoChip shows actual provider
+- `AdminAnalyticsPanels.tsx` — new `AdminShippingProviderStatsPanel` with provider breakdown table
+- Storefront order detail — "Track on DELHIVERY" → "Track on Delhivery"
+- `types/admin-order.ts` + `lib/admin-api.ts` — `provider` fields typed as `ShippingProviderEnum` instead of `string`; `shiprocketShipmentId` kept as optional (Shiprocket-specific)
 

@@ -1173,9 +1173,10 @@ PCI scope, caller-class JSON minimisation (public vs customer vs admin vs ops), 
 7. `POST /payments/retry` returns `400 VALIDATION_ERROR` for COD orders
 8. `CodPaymentAdapter` implements `PaymentProviderAdapter`: `verifyPaymentSignature` always returns `true`; `verifyWebhookSignature` always returns `false`; `initiateRefund` returns a manual-refund reference
 
-### 🚚 Shipping Module (Pluggable — `IShippingProvider`)
-- **Delhivery** (default): API token auth (`Authorization: Token <key>`). Programmatic AWB generation. Push webhook tracking.
-- **Shiprocket** (switch via `SHIPPING_PROVIDER=shiprocket`): JWT auth with 9-day auto-refresh. Courier comparison + NDR management. Pickup scheduling. Label generation. Push webhook tracking.
+### 🚚 Shipping Module (Dual-provider — `IShippingProvider`)
+- **Delhivery**: API token auth (`Authorization: Token <key>`). Programmatic AWB generation. Push webhook tracking.
+- **Shiprocket**: JWT auth with 9-day auto-refresh. Courier comparison + NDR management. Pickup scheduling. Label generation. Push webhook tracking.
+- Both providers can be **simultaneously active**. Provider detection is credential-based (`resolveDualShippingRuntime()`): Delhivery active if `DELHIVERY_API_KEY` present; Shiprocket active if `SHIPROCKET_EMAIL`+`SHIPROCKET_PASSWORD` present. At checkout, rates from all active providers are compared and the cheapest wins.
 - Both adapters implement the same `ShippingProviderAdapter` interface — business logic is provider-agnostic.
 - `createShipment`: maps Order to provider API, returns AWB number + tracking URL
 - Admin triggers shipment manually from admin panel after packing
@@ -1477,15 +1478,15 @@ RAZORPAY_KEY_ID=rzp_live_XXXXXXXX
 RAZORPAY_KEY_SECRET=<secret>
 RAZORPAY_WEBHOOK_SECRET=<webhook-secret>
 
-# Shipping adapter (set SHIPPING_PROVIDER to switch — zero code changes)
-SHIPPING_PROVIDER=delhivery
+# Shipping — provider detection is credential-based (SHIPPING_PROVIDER is not a valid key)
+# Set credentials for whichever provider(s) are active — both can coexist for dual-provider mode
 
-# Delhivery credentials (used when SHIPPING_PROVIDER=delhivery)
+# Delhivery credentials (active when DELHIVERY_API_KEY is present)
 DELHIVERY_API_KEY=<api-key>
 DELHIVERY_WEBHOOK_TOKEN=<webhook-secret>
 DELHIVERY_PICKUP_PINCODE=<pincode>
 
-# Shiprocket credentials (used when SHIPPING_PROVIDER=shiprocket)
+# Shiprocket credentials (active when SHIPROCKET_EMAIL + SHIPROCKET_PASSWORD are present)
 SHIPROCKET_EMAIL=<shiprocket-email>
 SHIPROCKET_PASSWORD=<shiprocket-password>
 SHIPROCKET_WEBHOOK_TOKEN=<webhook-secret>

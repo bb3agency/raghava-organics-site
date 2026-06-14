@@ -228,6 +228,7 @@ Admin UI should be served under `/admin/*` in the frontend and call `/api/v1/adm
 | GET | `/api/v1/admin/analytics/notifications` | Notification analytics |
 | GET | `/api/v1/admin/analytics/reconciliation-issues` | Reconciliation issue list |
 | GET | `/api/v1/admin/analytics/category-breakdown` | Category analytics |
+| GET | `/api/v1/admin/analytics/shipping-providers` | Shipping provider breakdown (shipment count, revenue, delivery rate, share % per provider) |
 | GET | `/api/v1/admin/analytics/outbox-dead-letter` | Outbox DLQ table |
 | POST | `/api/v1/admin/analytics/outbox-dead-letter/:id/replay-preview` | Preview outbox replay |
 | POST | `/api/v1/admin/analytics/outbox-dead-letter/:id/replay` | Execute outbox replay |

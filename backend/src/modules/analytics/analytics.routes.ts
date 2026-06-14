@@ -8,6 +8,7 @@ import { routeRateLimitProfiles } from '@common/rate-limit/rate-limit-policies';
 import { loadShedGuard } from '@common/reliability/load-shed.guard';
 import {
   analyticsCategoryBreakdownSchema,
+  analyticsShippingProviderStatsSchema,
   analyticsEventRecordSchema,
   analyticsFunnelSchema,
   analyticsInventoryAlertsSchema,
@@ -264,6 +265,18 @@ export async function registerAnalyticsRoutes(fastify: FastifyInstance): Promise
       }
     },
     async (request) => service.getCategoryBreakdown(request.query as never)
+  );
+
+  fastify.get(
+    '/api/v1/admin/analytics/shipping-providers',
+    {
+      schema: analyticsShippingProviderStatsSchema,
+      preHandler: [...adminGuard, adminPermissionGuard('analytics:read')],
+      config: {
+        rateLimit: routeRateLimitProfiles.adminRead
+      }
+    },
+    async (request) => service.getShippingProviderStats(request.query as never)
   );
 }
 

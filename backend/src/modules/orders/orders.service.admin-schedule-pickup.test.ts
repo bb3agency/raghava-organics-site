@@ -36,7 +36,6 @@ describe('OrdersService adminSchedulePickup', () => {
   });
 
   it('schedules pickup for Shiprocket shipment and updates pickupScheduledDate', async () => {
-    vi.stubEnv('SHIPPING_PROVIDER', 'shiprocket');
     vi.stubEnv('SHIPROCKET_EMAIL', 'test@example.com');
     vi.stubEnv('SHIPROCKET_PASSWORD', 'secret');
     vi.stubGlobal('fetch', vi.fn()

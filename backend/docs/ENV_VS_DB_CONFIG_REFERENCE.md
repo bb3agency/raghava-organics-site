@@ -297,9 +297,7 @@ These are stored AES-256-GCM encrypted in the `OpsConfigSecret` table and applie
 
 ### Shipping
 
-**`SHIPPING_PROVIDER`**
-- **What:** Selects the active shipping provider. Never `noop` in production.
-- **Values:** `delhivery` | `shiprocket`.
+> **Dual-provider model (2026-06):** Provider selection is now credential-based, not env-var-based. If `DELHIVERY_API_KEY` is present, Delhivery is active. If `SHIPROCKET_EMAIL` + `SHIPROCKET_PASSWORD` are present, Shiprocket is active. Both can be active simultaneously — the system quotes rates from all configured providers at checkout and selects the cheapest. `SHIPPING_PROVIDER` is **ignored** — do not set it.
 
 **`DELHIVERY_API_KEY`**
 - **What:** Delhivery API bearer token. Used for all Delhivery API calls (create shipment, track, cancel).
@@ -326,7 +324,7 @@ These are stored AES-256-GCM encrypted in the `OpsConfigSecret` table and applie
 - **What:** IP allowlists for shipping webhook endpoints, same defense-in-depth pattern as Razorpay.
 
 **`SHIPPING_PROVIDER_FAILOVER_ENABLED`**, **`SHIPPING_CB_FAILURE_THRESHOLD`**, **`SHIPPING_CB_COOLDOWN_MS`**
-- **What:** Circuit-breaker controls for shipping provider, same pattern as payment.
+- **What:** Circuit-breaker controls per shipping provider. In dual-provider mode, each provider maintains its own process-local circuit breaker — if one trips open, the other continues serving requests.
 
 ---
 
@@ -607,7 +605,7 @@ At a minimum, ensure these are populated before opening the site to traffic:
 
 - `REPLAY_APPROVAL_TOKEN`
 - `OPS_METRICS_TOKEN`
-- explicit provider mode and compatible keys (`PAYMENT_PROVIDER`, `SHIPPING_PROVIDER`, and required provider credentials for the chosen mode)
+- explicit payment provider mode and compatible keys (`PAYMENT_PROVIDER` + `RAZORPAY_*`), plus at least one shipping provider's credentials (`DELHIVERY_API_KEY` or `SHIPROCKET_EMAIL`/`SHIPROCKET_PASSWORD`)
 
 See:
 

@@ -45,7 +45,6 @@ describe('OrdersService adminPrintLabel', () => {
   });
 
   it('generates label and persists labelUrl when not cached', async () => {
-    vi.stubEnv('SHIPPING_PROVIDER', 'shiprocket');
     vi.stubEnv('SHIPROCKET_EMAIL', 'test@example.com');
     vi.stubEnv('SHIPROCKET_PASSWORD', 'secret');
     vi.stubGlobal('fetch', vi.fn()

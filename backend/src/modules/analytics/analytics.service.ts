@@ -1,4 +1,4 @@
-import { AnalyticsEventType, NotificationStatus, OrderStatus, Prisma } from '@prisma/client';
+import { AnalyticsEventType, NotificationStatus, OrderStatus, Prisma, ShipmentStatus } from '@prisma/client';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -11,7 +11,8 @@ import {
   AnalyticsCategoryBreakdownQuery,
   AnalyticsFunnelQuery,
   AnalyticsGranularity,
-  AnalyticsRevenueQuery
+  AnalyticsRevenueQuery,
+  AnalyticsShippingProviderQuery
 } from './analytics.types';
 import { OrdersService } from '@modules/orders/orders.service';
 type PrismaClientExt = FastifyInstance['prisma'] & {
@@ -289,6 +290,48 @@ export class AnalyticsService {
       .sort((a, b) => b.revenuePaise - a.revenuePaise);
 
     return { items };
+  }
+
+  async getShippingProviderStats(query: AnalyticsShippingProviderQuery) {
+    const { from, to } = this.resolveRange(query.from, query.to);
+
+    const shipments = await this.fastify.prisma.shipment.findMany({
+      where: {
+        createdAt: { gte: from, lte: to },
+        order: { status: { in: includedOrderStatuses } }
+      },
+      select: {
+        provider: true,
+        status: true,
+        order: { select: { total: true } }
+      }
+    });
+
+    const providerMap = new Map<string, { shipmentsCount: number; revenuePaise: number; deliveredCount: number }>();
+    for (const shipment of shipments) {
+      const key = shipment.provider as string;
+      const current = providerMap.get(key) ?? { shipmentsCount: 0, revenuePaise: 0, deliveredCount: 0 };
+      current.shipmentsCount += 1;
+      current.revenuePaise += shipment.order?.total ?? 0;
+      if (shipment.status === ShipmentStatus.DELIVERED) {
+        current.deliveredCount += 1;
+      }
+      providerMap.set(key, current);
+    }
+
+    const totalShipments = shipments.length;
+    return {
+      providers: Array.from(providerMap.entries())
+        .map(([provider, stats]) => ({
+          provider,
+          shipmentsCount: stats.shipmentsCount,
+          revenuePaise: stats.revenuePaise,
+          deliveredCount: stats.deliveredCount,
+          sharePercent: totalShipments > 0 ? Number(((stats.shipmentsCount / totalShipments) * 100).toFixed(2)) : 0
+        }))
+        .sort((a, b) => b.shipmentsCount - a.shipmentsCount),
+      totalShipments
+    };
   }
 
   async listReconciliationIssues(query: { page?: number; limit?: number }) {

@@ -14,10 +14,7 @@ import {
   isStorefrontCouponsEnabled
 } from '@common/coupons/coupons-feature';
 import { NoopShippingAdapter } from '@modules/shipping/adapters/noop-shipping.adapter';
-import {
-  createShippingProvider,
-  resolveDualShippingRuntime
-} from '@modules/shipping/shipping-provider';
+import { resolveDualShippingRuntime } from '@modules/shipping/shipping-provider';
 import { sendTechnicalFailureAlert } from '@modules/notifications/notification-failure-alert';
 import { AddCartItemInput, ApplyCouponInput, UpdateCartItemInput } from './cart.types';
 
@@ -62,11 +59,7 @@ type CouponScope = {
 };
 
 export class CartService {
-  private readonly shippingProvider: ShippingProviderAdapter | null;
-
-  constructor(private readonly fastify: FastifyInstance) {
-    this.shippingProvider = createShippingProvider();
-  }
+  constructor(private readonly fastify: FastifyInstance) {}
 
   private async updateCartItemQuantityWithCas(
     tx: Prisma.TransactionClient,
@@ -531,7 +524,7 @@ export class CartService {
   }
 
   private isNoopMode(): boolean {
-    return !this.shippingProvider || this.shippingProvider instanceof NoopShippingAdapter;
+    return !resolveDualShippingRuntime().hasAny;
   }
 
   usesNoopShipping(): boolean {
@@ -539,21 +532,34 @@ export class CartService {
   }
 
   async checkPincodeServiceability(pincode: string) {
-    const usingNoop = this.isNoopMode();
-    if (!usingNoop && !this.shippingProvider) {
-      throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Shipping provider is not configured', 503);
-    }
-    const effectiveProvider: ShippingProviderAdapter =
-      usingNoop ? new NoopShippingAdapter() : (this.shippingProvider as ShippingProviderAdapter);
+    const runtime = resolveDualShippingRuntime();
+    const usingNoop = !runtime.hasAny;
     const originPincode =
       (await resolvePickupPincode(this.fastify.prisma, {
         noopFallback: usingNoop ? '500001' : null
       })) ?? undefined;
+
+    if (usingNoop) {
+      const result = await new NoopShippingAdapter().checkServiceability(pincode, originPincode);
+      return { pincode, serviceable: result.serviceable };
+    }
+
+    // Multi-provider mode: serviceable if ANY configured provider can service the pincode
+    const adapters = [runtime.delhivery?.adapter, runtime.shiprocket?.adapter].filter(
+      (a): a is ShippingProviderAdapter => a != null
+    );
     try {
-      const result = await effectiveProvider.checkServiceability(pincode, originPincode);
+      const results = await Promise.allSettled(
+        adapters.map((a) => a.checkServiceability(pincode, originPincode))
+      );
+      if (results.every((r) => r.status === 'rejected')) {
+        throw (results[0] as PromiseRejectedResult).reason;
+      }
       return {
         pincode,
-        serviceable: result.serviceable
+        serviceable: results.some(
+          (r) => r.status === 'fulfilled' && r.value.serviceable
+        )
       };
     } catch (error) {
       if (error instanceof AppError && error.code === ERROR_CODES.CONFIG_NOT_READY) {
@@ -725,10 +731,11 @@ export class CartService {
     estimatedDays: number;
     availableCouriers?: DeliveryRateResult['availableCouriers'];
   }> {
-    const usingNoop = input.usingNoop ?? this.isNoopMode();
-    const effectiveProvider =
-      input.provider ??
-      (usingNoop ? new NoopShippingAdapter() : (this.shippingProvider as ShippingProviderAdapter));
+    const usingNoop = input.usingNoop ?? !resolveDualShippingRuntime().hasAny;
+    if (!input.provider && !usingNoop) {
+      throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Shipping provider is required', 503);
+    }
+    const effectiveProvider = input.provider ?? new NoopShippingAdapter();
 
     const totalWeightGrams = input.cart.items.reduce((sum, item) => {
       const unitWeight = item.variant.weight ?? 0;

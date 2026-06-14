@@ -52,9 +52,8 @@ This checklist validates both:
 
 ### 2.4 Payment and shipping providers
 - [ ] `PAYMENT_PROVIDER` is valid for business mode (`razorpay` or `cod`). Invalid/missing runtime config yields call-time `CONFIG_NOT_READY` and must be resolved before launch.
-- [ ] `SHIPPING_PROVIDER` is valid (`delhivery` or `shiprocket`). Invalid/missing runtime config yields call-time `CONFIG_NOT_READY` and must be resolved before launch.
+- [ ] At least one shipping provider's credentials are set: `DELHIVERY_API_KEY` (Delhivery) and/or `SHIPROCKET_EMAIL`+`SHIPROCKET_PASSWORD` (Shiprocket). Both can be active simultaneously — cheapest rate wins at checkout. `SHIPPING_PROVIDER` env var is ignored (detection is credential-based). Missing all credentials yields noop mode — not acceptable in production.
 - [ ] `PAYMENT_PROVIDER=noop` is not used in production-like profiles (startup guard rejects it).
-- [ ] `SHIPPING_PROVIDER=noop` is not used in production-like profiles (startup guard rejects it).
 - [ ] Production-like startup guard rejects placeholder secrets (`replace_with_*`, `change_me*`, `<...>`) for **any provider key that is actually set** (boot tolerance — May 2026 — does **not** require missing provider chain keys at startup; readiness gate enforces completeness).
 - [ ] All external provider adapters have fetch timeouts configured (10s for Delhivery/Razorpay/Resend/MSG91).
 - [ ] Razorpay env vars are only required when `PAYMENT_PROVIDER=razorpay` (COD-only stores skip them).

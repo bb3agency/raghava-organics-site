@@ -514,6 +514,37 @@ export const analyticsInboxReplayPreviewSchema = {
   }
 } as const;
 
+export const analyticsShippingProviderStatsSchema = {
+  params: emptyParamsSchema,
+  querystring: dateRangeQuerySchema,
+  response: {
+    200: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['providers', 'totalShipments'],
+      properties: {
+        providers: {
+          type: 'array',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['provider', 'shipmentsCount', 'revenuePaise', 'deliveredCount', 'sharePercent'],
+            properties: {
+              provider: { type: 'string', maxLength: 32 },
+              shipmentsCount: { type: 'integer', minimum: 0, maximum: 1000000000 },
+              revenuePaise: { type: 'integer', minimum: 0, maximum: 1000000000000 },
+              deliveredCount: { type: 'integer', minimum: 0, maximum: 1000000000 },
+              sharePercent: { type: 'number', minimum: 0, maximum: 100 }
+            }
+          }
+        },
+        totalShipments: { type: 'integer', minimum: 0, maximum: 1000000000 }
+      }
+    },
+    ...standardAdminErrorResponses
+  }
+} as const;
+
 export const analyticsEventRecordSchema = {
   params: {
     type: 'object',

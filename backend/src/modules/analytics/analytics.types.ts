@@ -16,3 +16,8 @@ export type AnalyticsCategoryBreakdownQuery = {
   to?: string;
 };
 
+export type AnalyticsShippingProviderQuery = {
+  from?: string;
+  to?: string;
+};
+

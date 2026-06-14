@@ -277,7 +277,7 @@ Expected:
    | Group | Keys (representative) | Notes |
    | --- | --- | --- |
    | Payments | `PAYMENT_PROVIDER`, `RAZORPAY_*`, `PAYMENT_CB_*` | `PAYMENT_PROVIDER`: `razorpay` or `cod`; never `noop` in production |
-   | Shipping | `SHIPPING_PROVIDER`, `DELHIVERY_*`, `SHIPROCKET_*`, `SHIPPING_*` | Must be `delhivery` or `shiprocket`; never `noop` in production |
+   | Shipping | `DELHIVERY_*`, `SHIPROCKET_*`, `SHIPPING_*` | Detection is credential-based — set keys for whichever provider(s) you use; both can be active simultaneously (cheapest rate wins). `SHIPPING_PROVIDER` is ignored. At least one provider must be configured for production. |
    | Webhook security | `RAZORPAY_WEBHOOK_ALLOWLIST_CIDR`, `SHIPPING_WEBHOOK_ALLOWLIST_CIDR`, skew windows, webhook tokens | Hard-fail in production-like profiles if missing |
    | Notifications | `NOTIFY_*`, `RESEND_*`, `MSG91_*`, `FAST2SMS_API_KEY`, `META_WHATSAPP_*`, `SMS_PROVIDER` | Provider credentials; per-template channels configured in `StoreSettings` |
    | Invoice storage | `INVOICE_STORAGE_ROOT` | Local filesystem root for invoice PDFs |
@@ -596,7 +596,7 @@ Provider lifecycle controls for this stage:
 | Checkout split | PREPAID uses `/payments/initiate` + `/payments/verify`; COD skips Razorpay init path |
 | Webhook boundary | No browser calls to `/payments/webhook` or `/shipping/webhook` |
 | Auth refresh | On first `401`, frontend performs single refresh + retry policy |
-| Production provider posture | Frontend/release docs explicitly forbid `PAYMENT_PROVIDER=noop` and `SHIPPING_PROVIDER=noop` in production |
+| Production provider posture | `PAYMENT_PROVIDER=noop` is forbidden in production. For shipping, at least one provider's credentials must be set (Delhivery and/or Shiprocket). `SHIPPING_PROVIDER` env var is ignored. |
 
 ---
 
@@ -1418,7 +1418,7 @@ Runtime env files are **never written by deploy scripts** — they must be place
 - `deploy.yml` uses `vars.VPS_DEPLOY_ENABLED` / `vars.FRONTEND_DEPLOY_ENABLED` and `secrets.VPS_CLIENT_PATH` / `secrets.VPS_FRONTEND_PATH`; wrong placement silently skips or fails jobs.
 - Self-hosted runner under systemd can have minimal PATH; VPS scripts must prefer project-local CLIs (`node_modules/.bin/*`) over global `npx`.
 - Production backend image intentionally strips `npm`/`npx`; do not run `npx prisma generate` inside runtime containers.
-- Runtime readiness (`/api/v1/health/ready`) is a hard gate. Missing Ops DB-overlay keys (`PAYMENT_PROVIDER`, `SHIPPING_PROVIDER`, `SMS_PROVIDER`, strict tokens/allowlists) correctly fail deploy until Phase 8 config is complete.
+- Runtime readiness (`/api/v1/health/ready`) is a hard gate. Missing Ops DB-overlay keys (`PAYMENT_PROVIDER`, `SMS_PROVIDER`, shipping provider credentials, strict tokens/allowlists) correctly fail deploy until Phase 8 config is complete.
 
 ---
 

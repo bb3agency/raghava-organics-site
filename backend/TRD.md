@@ -1346,17 +1346,17 @@ if (paymentProvider === 'razorpay') {
   throw new Error(`Unsupported PAYMENT_PROVIDER: ${paymentProvider}. Allowed: razorpay, cod, noop`)
 }
 
-const shippingProvider = (process.env.SHIPPING_PROVIDER ?? 'delhivery').trim().toLowerCase()
-if (shippingProvider === 'delhivery') {
-  requireEnv('DELHIVERY_API_KEY')
-  if (isStrictProfile) requireEnv('DELHIVERY_WEBHOOK_TOKEN')
-} else if (shippingProvider === 'shiprocket') {
-  requireEnv('SHIPROCKET_EMAIL')
-  requireEnv('SHIPROCKET_PASSWORD')
-  if (isStrictProfile) requireEnv('SHIPROCKET_WEBHOOK_TOKEN')
-} else if (shippingProvider !== 'noop') {
-  throw new Error(`Unsupported SHIPPING_PROVIDER: ${shippingProvider}. Allowed: delhivery, shiprocket, noop`)
+// Shipping — provider detection is credential-based (SHIPPING_PROVIDER is not used)
+// resolveDualShippingRuntime() determines active providers from credential presence:
+//   DELHIVERY_API_KEY present → Delhivery active
+//   SHIPROCKET_EMAIL + SHIPROCKET_PASSWORD present → Shiprocket active
+//   Both can coexist; absence of both → noop mode (no shipping validation)
+const { delhivery: delhiveryRuntime, shiprocket: shiprocketRuntime } = resolveDualShippingRuntime()
+if (isStrictProfile && !delhiveryRuntime && !shiprocketRuntime) {
+  throw new Error('No shipping provider credentials found. Set DELHIVERY_API_KEY or SHIPROCKET_EMAIL+SHIPROCKET_PASSWORD via Ops UI.')
 }
+if (isStrictProfile && delhiveryRuntime) requireEnv('DELHIVERY_WEBHOOK_TOKEN')
+if (isStrictProfile && shiprocketRuntime) requireEnv('SHIPROCKET_WEBHOOK_TOKEN')
 
 // 3. Redis URL protocol and password validation
 const redis = new URL(process.env.REDIS_URL!)
@@ -1382,8 +1382,8 @@ if (isStrictProfile && !redis.password) {
 Additional env vars (annotated by config tier):
 
 **DB-overlay keys (set via Ops UI — `POST /api/v1/ops/config/save`):**
-- `DELHIVERY_WEBHOOK_TOKEN` — required in production-like profiles when `SHIPPING_PROVIDER=delhivery`; dev/test may use `.env` temporarily
-- `SHIPROCKET_WEBHOOK_TOKEN` — required in production-like profiles when `SHIPPING_PROVIDER=shiprocket`
+- `DELHIVERY_WEBHOOK_TOKEN` — required in production-like profiles when Delhivery credentials are present; dev/test may use `.env` temporarily
+- `SHIPROCKET_WEBHOOK_TOKEN` — required in production-like profiles when Shiprocket credentials are present
 - `REPLAY_APPROVAL_TOKEN` — required in non-dev/test profiles; replay endpoints fail closed when missing
 - `OPS_METRICS_TOKEN` — ops security surface
 - `TRUSTED_PROXY_ALLOWLIST_CIDR`, `RAZORPAY_WEBHOOK_ALLOWLIST_CIDR` — IP allowlisting
@@ -1835,7 +1835,7 @@ This section is an evidence-oriented implementation starter, not legal certifica
 | C-07 | Webhook idempotency enforced via Redis `providerPaymentId` key | Reliability |
 | C-08 | Secrets only in `.env` — never in source code or Git history | Security |
 | C-09 | Modules never import each other's internal files — only public service interfaces | Architecture |
-| C-10 | `PAYMENT_PROVIDER` and `SHIPPING_PROVIDER` are the only change required to swap adapters | Architecture |
+| C-10 | `PAYMENT_PROVIDER` selects the payment adapter; shipping provider selection is credential-based (`resolveDualShippingRuntime()`) — both can coexist | Architecture |
 | C-11 | All notifications dispatched via BullMQ — never synchronous in the request cycle | Reliability |
 | C-12 | Refresh token stored as bcrypt hash in DB — never the raw token | Security |
 | C-13 | `additionalProperties: false` on all request body JSON schemas | Security |

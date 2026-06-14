@@ -199,7 +199,7 @@ In local dev (`NODE_ENV=development`), you may temporarily set provider keys in 
 # RAZORPAY_KEY_ID=rzp_test_xxxxx
 # RAZORPAY_KEY_SECRET=<from phase 1>
 # RAZORPAY_WEBHOOK_SECRET=<from phase 1>
-# SHIPPING_PROVIDER=delhivery
+# SHIPPING_PROVIDER is ignored — provider detection is credential-based
 # DELHIVERY_API_KEY=<from phase 1>
 # ... etc — full list in .env.example commented stubs
 ```
@@ -330,9 +330,9 @@ npm run dev:e2e:workers
 > - Wait for Redis readiness (`redis-cli ping`) and Postgres readiness (`pg_isready`, up to 30s) before proceeding — prevents `EPERM rename query_engine-windows.dll.node` when Postgres container is started but server isn't accepting connections yet
 > - Kill all stale `node.exe` processes + port-3000 PID **before** Prisma bootstrap (fixes `EPERM: operation not permitted, rename query_engine-windows.dll.node` on Windows when a previous `tsx watch` holds the DLL)
 > - Ensure Prisma target DB exists from `DATABASE_URL`, then run `prisma generate` + `prisma migrate deploy` against the squashed `0_init` baseline before API/worker boot (fixes first-clone `Database "..." does not exist`)
-> - Set all noop/E2E env vars (`PAYMENT_PROVIDER=noop`, `SHIPPING_PROVIDER=noop`, `RAZORPAY_WEBHOOK_SECRET=test_webhook_secret`, `SHIPROCKET_WEBHOOK_TOKEN=test_webhook_token`, `NODE_ENV=development`)
+> - Set all noop/E2E env vars (`PAYMENT_PROVIDER=noop`, `RAZORPAY_WEBHOOK_SECRET=test_webhook_secret`, `SHIPROCKET_WEBHOOK_TOKEN=test_webhook_token`, `NODE_ENV=development`). For shipping noop mode: leave all shipping credentials empty — no `SHIPPING_PROVIDER` env var needed.
 
-> ⚠️ Shipping webhook token relaxation applies only in noop/placeholder shipping mode (`SHIPPING_PROVIDER=noop` or placeholder/empty `DELHIVERY_API_KEY`). In that simulation mode any non-empty `Authorization` header is accepted. Real provider configurations remain strictly validated.
+> ⚠️ Shipping webhook token relaxation applies only when no shipping credentials are configured (noop mode: empty `DELHIVERY_API_KEY` and no Shiprocket credentials). In that simulation mode any non-empty `Authorization` header is accepted. Real provider credentials enforce strict token validation.
 
 > Workers process the `payment-webhook` → `process-order-update` job chain after the Razorpay payment webhook, transitioning Raj's order from `PENDING_PAYMENT` → `CONFIRMED`. `confirm-order` and `deduct-inventory` are now thin delegation stubs that resolve the `orderId` and enqueue `process-order-update`; all status mutations, inventory deduction, and side effects execute inside the `process-order-update` handler. Without workers, step 3.4 (admin ship Raj) returns `409` — the test still passes with a warning, but the full flow will not complete to `DELIVERED`.
 
@@ -349,7 +349,7 @@ npm run dev:e2e:workers
 
 See `docs/postman/E2E-FLOW-TEST-LOG.md` for full per-step assertion details, environment variable chain, failure-mode table, and fix history.
 
-> ⚠️ `PAYMENT_PROVIDER=noop` and `SHIPPING_PROVIDER=noop` must **never** be set in production `.env`. They bypass live API calls and accept all webhook signatures — intended exclusively for local E2E simulation.
+> ⚠️ `PAYMENT_PROVIDER=noop` must **never** be set in production `.env`. For shipping noop mode: leave all shipping credentials unset (no `SHIPPING_PROVIDER` env var exists). Both bypass live API calls and accept relaxed webhook auth — intended exclusively for local E2E simulation.
 
 ### 2.7 Create first admin user
 
@@ -372,7 +372,7 @@ If you use an AI agent to generate frontend code, enforce this baseline:
 - Send `idempotency-key` on critical order/payment/admin mutations.
 - Implement checkout split exactly: PREPAID uses Razorpay initiate/verify; COD skips Razorpay.
 - Never call backend webhook endpoints from browser code.
-- Treat `PAYMENT_PROVIDER=noop` and `SHIPPING_PROVIDER=noop` as local simulation only.
+- Treat `PAYMENT_PROVIDER=noop` as local simulation only. Shipping noop mode is inferred from absence of credentials — no env var to set.
 - For release, complete `docs/FRONTEND_AI_GO_LIVE_CHECKLIST.md` and pair it with `docs/BACKEND_GO_LIVE_CHECKLIST.md` (full backend env-to-implementation parity).
 
 ### 3.0.1 Recommended execution model: simultaneous build + integration (required)
@@ -635,8 +635,8 @@ npm run parity:scorecard
 - `test:guardrails` passes the three drift contracts: admin layer, docs-runtime, config-runtime parity.
 - `stress:flash-sale:api:matrix` passes invariant enforcement and does not fail fixture precondition checks.
 - Prisma schema validates and client generation succeeds.
-- Backend boot in production-like profiles hard-fails on unsafe provider config (`PAYMENT_PROVIDER=noop`, `SHIPPING_PROVIDER=noop`, or placeholder provider/auth secrets).
-- Unrecognised `PAYMENT_PROVIDER` or `SHIPPING_PROVIDER` values (typos) are rejected at startup in **all** profiles — not just production-like.
+- Backend boot in production-like profiles hard-fails on unsafe provider config (`PAYMENT_PROVIDER=noop`, missing shipping provider credentials, or placeholder provider/auth secrets).
+- Unrecognised `PAYMENT_PROVIDER` values (typos) are rejected at startup in **all** profiles — not just production-like. `SHIPPING_PROVIDER` is not a runtime config key; provider detection is credential-based.
 - Razorpay env vars (`RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET`) are only required when `PAYMENT_PROVIDER=razorpay`.
 - `database.config.ts` and `redis.config.ts` fail fast on missing URLs (no silent `undefined` from `as string`).
 - Completed `docs/BACKEND_GO_LIVE_CHECKLIST.md` is attached, including env-to-implementation parity checks (not provider-only checks).
@@ -984,7 +984,7 @@ All provider credentials, webhook tokens, and ops-security parameters are stored
 | Domain | Representative keys | Notes |
 |--------|--------------------|----|
 | Payments | `PAYMENT_PROVIDER`, `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET`, `PAYMENT_CB_*` | Live keys — never test keys in production |
-| Shipping | `SHIPPING_PROVIDER`, `DELHIVERY_API_KEY`, `SHIPROCKET_EMAIL`, `SHIPROCKET_PASSWORD`, `SHIPPING_CB_*` | Allowlist + token also overlay |
+| Shipping | `DELHIVERY_API_KEY`, `SHIPROCKET_EMAIL`, `SHIPROCKET_PASSWORD`, `SHIPPING_CB_*` | Both providers can be active simultaneously; detection is credential-based. Allowlist + token also overlay. `SHIPPING_PROVIDER` is not a configurable key. |
 | Webhook security | `RAZORPAY_WEBHOOK_ALLOWLIST_CIDR`, `DELHIVERY_WEBHOOK_TOKEN`, `SHIPROCKET_WEBHOOK_TOKEN`, skew windows | Strict-profile requires non-empty |
 | Notifications | `RESEND_API_KEY`, `RESEND_FROM`, `MSG91_AUTH_KEY`, `FAST2SMS_API_KEY`, `META_WHATSAPP_*`, `SMS_PROVIDER` | `RESEND_FROM` must use verified domain |
 | Invoice | `INVOICE_STORAGE_ROOT` | PDF storage path — must be writable |
@@ -2053,23 +2053,24 @@ Token: <SHIPROCKET_WEBHOOK_TOKEN>
 
 ### F.5 Shipping provider
 
+> **Dual-provider model:** `SHIPPING_PROVIDER` env var is **ignored** — do not set it. Provider detection is credential-based. If `DELHIVERY_API_KEY` is set, Delhivery is active. If `SHIPROCKET_EMAIL`+`SHIPROCKET_PASSWORD` are set, Shiprocket is active. Both can coexist — the system picks the cheapest rate at checkout. At least one provider must be configured in production.
+
 | Variable | Required | Example | Notes |
 |----------|----------|---------|-------|
-| `SHIPPING_PROVIDER` | No | `delhivery` | Default: `delhivery`. Supported: `delhivery`, `shiprocket`, `noop` (dev only). Unrecognised values are rejected at startup. |
-| `SHIPPING_PROVIDER_FAILOVER_ENABLED` | No | `false` | Enable failover. Default: `false`. |
-| `SHIPPING_CB_FAILURE_THRESHOLD` | No | `5` | Circuit breaker threshold. Default: `5`. |
-| `SHIPPING_CB_COOLDOWN_MS` | No | `30000` | Circuit breaker cooldown. Default: `30000`. |
-| `DELHIVERY_API_KEY` | When `SHIPPING_PROVIDER=delhivery` | `api-token` | From Delhivery developer portal. |
+| `SHIPPING_PROVIDER_FAILOVER_ENABLED` | No | `false` | Enable per-provider failover. Default: `false`. |
+| `SHIPPING_CB_FAILURE_THRESHOLD` | No | `5` | Circuit breaker threshold (per provider). Default: `5`. |
+| `SHIPPING_CB_COOLDOWN_MS` | No | `30000` | Circuit breaker cooldown (per provider). Default: `30000`. |
+| `DELHIVERY_API_KEY` | To activate Delhivery | `api-token` | Presence activates Delhivery. From Delhivery developer portal. |
 | `DELHIVERY_BASE_URL` | No | `https://track.delhivery.com` | API base URL. Has sensible default. |
 | `DELHIVERY_PICKUP_PINCODE` | No | `522006` | Bootstrap default for shipping rate calc. Admin can override via settings API. |
-| `DELHIVERY_WEBHOOK_TOKEN` | **Prod** (delhivery) | `webhook-token` | Token for webhook verification. Required in production profile when `SHIPPING_PROVIDER=delhivery`. |
+| `DELHIVERY_WEBHOOK_TOKEN` | **Prod** (when Delhivery active) | `webhook-token` | Token for webhook verification. |
 | `DELHIVERY_WEBHOOK_ALLOWLIST_CIDR` | No | `13.234.0.0/16` | Comma-separated CIDRs. |
 | `DELHIVERY_WEBHOOK_MAX_SKEW_SECONDS` | No | `300` | Reject webhooks with stale timestamps. Default: `300`. |
-| `SHIPROCKET_EMAIL` | When `SHIPPING_PROVIDER=shiprocket` | `api-user@domain.com` | Dedicated Shiprocket API user email. |
-| `SHIPROCKET_PASSWORD` | When `SHIPPING_PROVIDER=shiprocket` | `password` | Shiprocket API user password. |
+| `SHIPROCKET_EMAIL` | To activate Shiprocket | `api-user@domain.com` | Presence (with PASSWORD) activates Shiprocket. Dedicated API user email. |
+| `SHIPROCKET_PASSWORD` | To activate Shiprocket | `password` | Shiprocket API user password. |
 | `SHIPROCKET_BASE_URL` | No | `https://apiv2.shiprocket.in/v1/external` | API base URL. Has sensible default. |
 | `SHIPROCKET_PICKUP_PINCODE` | No | `522006` | Bootstrap default for shipping rate calc. Admin can override via settings API. |
-| `SHIPROCKET_WEBHOOK_TOKEN` | **Prod** (shiprocket) | `webhook-token` | Token for webhook verification. Required in production profile when `SHIPPING_PROVIDER=shiprocket`. |
+| `SHIPROCKET_WEBHOOK_TOKEN` | **Prod** (when Shiprocket active) | `webhook-token` | Token for webhook verification. |
 | `SHIPROCKET_WEBHOOK_ALLOWLIST_CIDR` | No | `—` | Comma-separated CIDRs. |
 | `SHIPROCKET_WEBHOOK_MAX_SKEW_SECONDS` | No | `300` | Reject webhooks with stale timestamps. Default: `300`. |
 | `SHIPPING_WEBHOOK_ALLOWLIST_CIDR` | No | `—` | Provider-agnostic alias for shipping webhook allowlist. Falls back to `DELHIVERY_WEBHOOK_ALLOWLIST_CIDR` for backward compatibility. |
