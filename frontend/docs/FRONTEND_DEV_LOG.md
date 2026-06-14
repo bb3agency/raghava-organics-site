@@ -45,6 +45,43 @@
 
 ---
 
+## Deployment & Build Reliability (2026-06-14)
+
+**Issue:** Build corruption on GitHub Actions deployment (`.next/image-optimizer` missing, causing "Cannot find module" on VPS startup).
+
+**Root cause:** Incomplete npm builds from stale cache, race conditions on parallel npm operations, or mid-build interruptions leaving .next in corrupt state.
+
+**Solution implemented:**
+- `scripts/vps-frontend-deploy.sh` § Build step now:
+  - ✅ Cleans `node_modules/.cache` and `.next` before every build (not just on failure)
+  - ✅ Uses **atomic swap**: moves old `.next` → `.next.old` before building, easy rollback if new build fails
+  - ✅ Validates build output: checks `.next/BUILD_ID` exists (Next.js creates this on success)
+  - ✅ Captures full npm build log on failure for debugging
+  - ✅ Automatic rollback: if build fails, restore previous `.next` and exit (zero downtime)
+- `.github/workflows/deploy.yml` § Pre-deploy checks:
+  - ✅ Verifies Node.js/npm versions available on runner
+  - ✅ Validates VPS paths before running deploy script
+  - ✅ Post-deploy result summary (success/failure with troubleshooting guidance)
+
+**How to prevent in future:**
+1. **Always use `npm ci`** (clean install, not `npm install`) — reproducible builds, no cache drift
+2. **Clean build artifacts** before starting: `rm -rf .next node_modules/.cache`
+3. **Verify build output** — check `.next/BUILD_ID` file exists after build completes
+4. **Use atomic swap** — move old build away before new one, restore on failure
+5. **Capture build logs** — full npm output on failure for debugging
+
+**VPS deployment checklist (before pushing to main):**
+- [ ] Backend health check passes: `curl http://127.0.0.1:3001/api/v1/health`
+- [ ] `INTERNAL_API_BASE_URL=http://127.0.0.1:3001/api/v1` is set in `.env.production.local`
+- [ ] `.next` directory has proper permissions: `ls -la .next/BUILD_ID` succeeds
+- [ ] PM2 process registered: `pm2 describe raghava-organics-frontend` shows status online
+- [ ] Disk space available: `df -h` shows >5GB free in `/var/www`
+- [ ] No npm processes stuck: `ps aux | grep npm` shows clean output
+
+**Reference:** `scripts/vps-frontend-deploy.sh` (lines 98–160) for full build/verify/rollback logic.
+
+---
+
 ## Backend Provider Confirmation (confirm before Tier 3 mutations)
 
 | Provider | Backend `.env` key set? | Dry-run status | Dry-run date |

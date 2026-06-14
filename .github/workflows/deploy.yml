@@ -152,10 +152,64 @@ jobs:
             echo "Monorepo root in sync at $ACTUAL_SHA"
           fi
 
-      - name: Deploy frontend (git sync + npm build + pm2 reload)
+      - name: Deploy frontend (git sync + clean build + pm2 reload)
         env:
           VPS_CLIENT_PATH: ${{ secrets.VPS_CLIENT_PATH }}
           VPS_FRONTEND_PATH: ${{ secrets.VPS_FRONTEND_PATH }}
           COMMIT_SHA: ${{ github.event.workflow_run.head_sha || inputs.commit_sha || github.sha }}
         run: |
+          set -euo pipefail
+          echo "=== Pre-deploy checks ==="
+          # Verify Node.js and npm are available
+          node --version
+          npm --version
+          # Verify frontend path exists and is accessible
+          if [ ! -d "$VPS_FRONTEND_PATH" ]; then
+            echo "::error::VPS_FRONTEND_PATH does not exist: $VPS_FRONTEND_PATH"
+            exit 1
+          fi
+          if [ ! -f "$VPS_FRONTEND_PATH/package.json" ]; then
+            echo "::error::No package.json at $VPS_FRONTEND_PATH"
+            exit 1
+          fi
+          echo "✓ Pre-deploy checks passed"
+          echo ""
+          echo "=== Running deployment ==="
           bash "$VPS_CLIENT_PATH/scripts/vps-frontend-deploy.sh" "$VPS_FRONTEND_PATH" "$COMMIT_SHA"
+
+      - name: Frontend deployment result
+        if: always()
+        env:
+          VPS_FRONTEND_PATH: ${{ secrets.VPS_FRONTEND_PATH }}
+        run: |
+          CLIENT_ID=""
+          for env_file in .env.local .env.production.local .env.production; do
+            if [ -f "$VPS_FRONTEND_PATH/$env_file" ]; then
+              CLIENT_ID=$(grep -E '^CLIENT_ID=' "$VPS_FRONTEND_PATH/$env_file" | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'" | xargs || true)
+              if [ -n "$CLIENT_ID" ]; then
+                break
+              fi
+            fi
+          done
+          if [ -z "$CLIENT_ID" ]; then
+            CLIENT_ID=$(basename "$(dirname "$VPS_FRONTEND_PATH")")
+          fi
+          PM2_NAME="${CLIENT_ID}-frontend"
+
+          if [ "${{ job.status }}" = "success" ]; then
+            echo "✅ Frontend deployment succeeded"
+            echo ""
+            echo "=== Deployment Info ==="
+            echo "PM2 Process: $PM2_NAME"
+            echo "Commit SHA:  ${{ github.event.workflow_run.head_sha || inputs.commit_sha || github.sha }}"
+            echo "Timestamp:   $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+            pm2 describe "$PM2_NAME" 2>/dev/null || echo "PM2 process details unavailable"
+          else
+            echo "❌ Frontend deployment failed"
+            echo ""
+            echo "=== Troubleshooting ==="
+            echo "1. Check VPS_FRONTEND_PATH: $VPS_FRONTEND_PATH"
+            echo "2. Check disk space: df -h $VPS_FRONTEND_PATH"
+            echo "3. Check PM2 logs: pm2 logs $PM2_NAME --lines 50"
+            echo "4. Check npm errors in build output above"
+          fi
