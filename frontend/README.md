@@ -105,3 +105,13 @@ When `FEATURE_REVIEWS_ENABLED=true` in backend `.env`:
 Reviews appear on the storefront only after admin approval. Shared helpers: `lib/reviews-api.ts`, `lib/storefront-reviews.ts`, `lib/review-display.ts`.
 
 Integration docs: `backend/docs/NEXTJS_FRONTEND_INTEGRATION_GUIDE.md`.
+
+## Third-party integrations & Content Security Policy
+
+When adding external services (payment gateways, analytics, CAPTCHA, etc.), CSP headers in `next.config.ts` must be updated to allow them. **Silent CSP violations block integrations without error messages.**
+
+- **Quick start:** `docs/CSP_QUICK_REFERENCE.md` — 5-step checklist
+- **Full guide:** `docs/CSP_AND_THIRD_PARTY_INTEGRATION_GUIDE.md` — incident analysis, debugging, current services
+- **CLAUDE.md §4.5:** Security rules and CSP enforcement
+
+See incident report (June 14, 2026): entire site was broken due to CSP blocking React hydration scripts. Proper testing and documentation now prevent regressions.

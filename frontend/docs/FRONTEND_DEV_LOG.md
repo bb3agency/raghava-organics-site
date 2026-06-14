@@ -82,6 +82,43 @@
 
 ---
 
+## Content Security Policy & Third-Party Integrations (2026-06-14)
+
+**Incident:** Entire frontend appeared broken on production VPS after successful build — Add to Cart buttons unresponsive, admin/ops pages stuck forever, only static pages worked.
+
+**Root cause:** CSP `script-src` directive was missing `'unsafe-inline'`, blocking **all Next.js/Turbopack inline scripts**. React Server Component (RSC) payload is carried to the browser in inline `<script>` tags — without them, React never hydrates → no event handlers, no effects, no API calls.
+
+**Discovery:** Browser DevTools Console showed 18+ CSP violation messages; Network tab showed zero fetch/XHR requests (confirming React didn't hydrate).
+
+**Fix:** Updated `next.config.ts` to allow:
+- `'unsafe-inline'` in `script-src` (required for Next.js RSC hydration)
+- `https://cdn.razorpay.com` in `script-src` (Razorpay risk detection)
+- `https://api.razorpay.com` in `frame-src` (payment iframe)
+- `https://challenges.cloudflare.com` in `script-src` + `frame-src` (Turnstile CAPTCHA)
+- `https://cloudflareinsights.com` in `connect-src` (analytics)
+
+**Documentation:** To prevent future regressions and guide future integrations:
+- **Quick reference:** `docs/CSP_QUICK_REFERENCE.md` — 5-step checklist for adding new services
+- **Full guide:** `docs/CSP_AND_THIRD_PARTY_INTEGRATION_GUIDE.md` — incident analysis, debugging, current services
+- **CLAUDE.md §4.5:** Security rules, CSP configuration, how to add integrations safely
+
+**Testing before go-live:**
+1. Open in incognito mode (fresh cache)
+2. DevTools Console → zero CSP violations
+3. Network tab → all service requests successful
+4. Feature works end-to-end (Add to Cart, checkout, etc.)
+
+**VPS deployment checklist (CSP changes):**
+- [ ] `next.config.ts` updated with new domains
+- [ ] `npm run build` completes successfully
+- [ ] PM2 restart: `pm2 restart raghava-organics-frontend --update-env`
+- [ ] Production DevTools Console: zero CSP violations
+- [ ] Production Network tab: service requests successful
+
+**Reference:** Commits `de131f2`, `cd67cc6`, `df70777` for CSP fixes; `6e6df3d` for documentation.
+
+---
+
 ## Backend Provider Confirmation (confirm before Tier 3 mutations)
 
 | Provider | Backend `.env` key set? | Dry-run status | Dry-run date |

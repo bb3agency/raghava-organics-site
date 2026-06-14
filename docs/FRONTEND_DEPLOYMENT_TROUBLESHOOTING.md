@@ -349,6 +349,82 @@ echo "✅ Full redeploy complete!"
 
 ---
 
+### ❌ "Site appears broken after deployment" (CSP violations)
+
+**Symptom:** Frontend loads but nothing works — Add to Cart buttons unresponsive, admin login stuck, payment modal doesn't open. Browser appears to hang.
+
+**Root cause:** Content Security Policy (CSP) headers in `next.config.ts` are blocking required scripts, iframes, or API calls from third-party services (Razorpay, Turnstile, analytics).
+
+**How to diagnose:**
+```bash
+# 1. SSH to VPS and check backend first (rule out backend issue)
+ssh d_user@raghavaorganics.com
+curl -s http://127.0.0.1:3001/api/v1/health | jq .
+
+# 2. Open production in browser incognito mode
+# - Right-click → Inspect → Console tab
+# - Look for messages containing "violates the following Content Security Policy directive"
+# - Note which domains are being blocked (razorpay, cloudflare, etc.)
+
+# 3. Check Network tab for failed requests
+# - Filter by "Fetch/XHR" to see API calls
+# - If there are ZERO fetch calls, React didn't hydrate (CSP blocked inline scripts)
+```
+
+**Common CSP Violations:**
+- `script-src` blocked → React can't hydrate → nothing works
+- `frame-src` blocked → Payment/CAPTCHA iframes don't load
+- `connect-src` blocked → Analytics/API calls fail silently
+
+**Fix (in next.config.ts):**
+```typescript
+// Location: frontend/next.config.ts, function buildSecurityHeaders() line ~111
+
+// Step 1: Identify which domains are being blocked (from browser console)
+// Step 2: Add them to the appropriate CSP directive
+
+const csp = [
+  "default-src 'self'",
+  `connect-src 'self' https://api.razorpay.com https://lumberjack.razorpay.com https://cloudflareinsights.com`,
+  "script-src 'self' 'unsafe-inline' https://checkout.razorpay.com https://cdn.razorpay.com https://static.cloudflareinsights.com https://challenges.cloudflare.com",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' https: data: blob:",
+  "font-src 'self' data:",
+  "frame-src 'self' https://checkout.razorpay.com https://api.razorpay.com https://challenges.cloudflare.com",
+  // ... other directives
+].join("; ");
+```
+
+**Then redeploy:**
+```bash
+cd /var/www/raghava-organics/frontend
+
+# Commit and push the fix
+git add next.config.ts
+git commit -m "fix(csp): allow [blocked-domain] for [feature]"
+git push origin main
+
+# GitHub Actions will auto-deploy, or manually redeploy:
+npm run build
+pm2 restart raghava-organics-frontend
+sleep 5
+curl http://127.0.0.1:3101/
+```
+
+**Verification:**
+```bash
+# Open browser DevTools on production:
+# - Console: Zero CSP violation messages ✅
+# - Network tab (Fetch/XHR): Service requests successful ✅
+# - Click Add to Cart: Works ✅
+# - Open checkout: Razorpay modal loads ✅
+```
+
+**Complete CSP Documentation:**
+When adding ANY new third-party service, follow the checklist in `frontend/docs/CSP_QUICK_REFERENCE.md`. Detailed troubleshooting and service-by-service guide: `frontend/docs/CSP_AND_THIRD_PARTY_INTEGRATION_GUIDE.md`.
+
+---
+
 ## Prevention Checklist
 
 Before pushing to main/merging PR:
@@ -358,7 +434,9 @@ Before pushing to main/merging PR:
 - [ ] Run `npm run build` locally — successful build with no warnings
 - [ ] Check `.next/BUILD_ID` exists after local build
 - [ ] Test on localhost:3101 — no console errors
+- [ ] Test on localhost:3101 in incognito — **zero CSP violations in Console**
 - [ ] Backend is running locally and health check passes
+- [ ] If adding third-party integration: update CSP in `next.config.ts` BEFORE pushing
 - [ ] Git status clean (no uncommitted changes)
 - [ ] Commit message references the issue/feature
 
@@ -369,3 +447,5 @@ On VPS after GitHub Actions deployment completes:
 - [ ] PM2 status: `pm2 describe raghava-organics-frontend`
 - [ ] Build verified: `ls .next/BUILD_ID`
 - [ ] No errors in logs: `pm2 logs raghava-organics-frontend --lines 20`
+- [ ] **CSP check:** Open production in browser incognito, DevTools Console — zero CSP violations
+- [ ] **Feature test:** Test Add to Cart, checkout, admin login, ops login on production

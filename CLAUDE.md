@@ -399,6 +399,17 @@ Always check the **Network** tab (for failed resource loads) and **Console** tab
 - ✅ Keep domains specific and minimal
 - ✅ Always test locally AND on VPS before assuming "it works"
 
+**Comprehensive CSP Documentation (June 2026):**
+After a production incident where CSP blocking React hydration scripts made the entire site appear broken, detailed documentation was created:
+
+| Document | Purpose | Audience |
+|----------|---------|----------|
+| `frontend/docs/CSP_QUICK_REFERENCE.md` | 5-step checklist for adding new integrations | Quick lookup for developers |
+| `frontend/docs/CSP_AND_THIRD_PARTY_INTEGRATION_GUIDE.md` | Full technical guide: incident analysis, debugging, current services, nonce patterns | Complete reference |
+| `frontend/docs/FRONTEND_DEV_LOG.md` §CSP | Development log entry with VPS testing checklist | Session startup |
+
+**When adding a new third-party service:** Start with `frontend/docs/CSP_QUICK_REFERENCE.md`. If you hit CSP violations, refer to the full guide's debugging section.
+
 ### XSS Prevention When Rendering Backend Content
 - **ALWAYS sanitize** user-generated content (reviews, product descriptions) before rendering
 - Use `dangerouslySetInnerHTML` ONLY with DOMPurify or similar sanitization
