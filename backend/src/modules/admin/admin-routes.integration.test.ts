@@ -17,7 +17,13 @@ interface MockError {
   message?: string;
 }
 
-function createApp() {
+interface CreateAppOpts {
+  permissions?: string[];
+  sub?: string;
+  role?: Role;
+}
+
+function createApp(opts?: CreateAppOpts) {
   const app = Fastify();
   app.setErrorHandler((err, _request, reply) => {
     const error = err as MockError;
@@ -35,7 +41,11 @@ function createApp() {
   });
   app.decorateRequest('jwtVerify', async function () {
     const req = this as unknown as { user?: unknown };
-    req.user = { sub: 'admin-1', role: Role.ADMIN, permissions: ['*'] };
+    req.user = {
+      sub: opts?.sub ?? 'admin-1',
+      role: opts?.role ?? Role.ADMIN,
+      permissions: opts?.permissions ?? ['*'],
+    };
   });
   return app;
 }
@@ -212,12 +222,8 @@ describe('admin routes integration', () => {
   });
 
   it('POST /admin/shipments/:id/sync requires orders:write — rejects with 403 for shipments:read-only user', async () => {
-    const app = createApp();
-    app.decorateRequest('jwtVerify', async function () {
-      const req = this as unknown as { user?: unknown };
-      // User has shipments:read but NOT orders:write
-      req.user = { sub: 'admin-2', role: Role.ADMIN, permissions: ['shipments:read'] };
-    });
+    // User has shipments:read but NOT orders:write
+    const app = createApp({ sub: 'admin-2', permissions: ['shipments:read'] });
     const prisma = {
       $connect: vi.fn(),
       $disconnect: vi.fn(),
@@ -227,7 +233,6 @@ describe('admin routes integration', () => {
     app.decorate('prisma', prisma as any);
     app.decorate('redis', { get: vi.fn(), set: vi.fn(), del: vi.fn() } as any);
     app.decorate('queues', { analytics: { add: vi.fn() }, shipping: { add: vi.fn() }, orderProcessing: { add: vi.fn() }, refunds: { add: vi.fn() }, notifications: { add: vi.fn() } } as any);
-    app.decorate('log', { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() } as any);
     app.decorate('checkoutRisk', { evaluate: vi.fn() } as any);
     process.env.ADMIN_SCOPE_ENFORCEMENT = 'true';
     await registerOrdersRoutes(app);
@@ -239,7 +244,7 @@ describe('admin routes integration', () => {
   });
 
   it('POST /admin/shipments/:id/sync allows user with orders:write', async () => {
-    const app = createApp();
+    const app = createApp({ sub: 'admin-3', permissions: ['orders:write'] });
     vi.spyOn(OrdersService.prototype, 'adminSyncShipmentStatus').mockResolvedValue({
       id: 'ship-123',
       status: 'IN_TRANSIT',
@@ -256,7 +261,6 @@ describe('admin routes integration', () => {
     app.decorate('prisma', prisma as any);
     app.decorate('redis', { get: vi.fn(), set: vi.fn(), del: vi.fn() } as any);
     app.decorate('queues', { analytics: { add: vi.fn() }, shipping: { add: vi.fn() }, orderProcessing: { add: vi.fn() }, refunds: { add: vi.fn() }, notifications: { add: vi.fn() } } as any);
-    app.decorate('log', { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() } as any);
     app.decorate('checkoutRisk', { evaluate: vi.fn() } as any);
     await registerOrdersRoutes(app);
 
@@ -268,24 +272,18 @@ describe('admin routes integration', () => {
   });
 
   it('POST /api/v1/analytics/event ignores body userId when request is authenticated', async () => {
-    const app = createApp();
-    // Decorate with authenticated user
-    app.decorateRequest('jwtVerify', async function () {
-      const req = this as unknown as { user?: unknown };
-      req.user = { sub: 'real-user-999', role: Role.CUSTOMER, permissions: [] };
-    });
+    const app = createApp({ sub: 'real-user-999', role: Role.CUSTOMER, permissions: [] });
     vi.spyOn(AnalyticsService.prototype, 'recordEvent').mockResolvedValue({ id: 'evt-1' } as never);
     const prisma = { $connect: vi.fn(), $disconnect: vi.fn(), analyticsEvent: { create: vi.fn() } };
     app.decorate('prisma', prisma as any);
     app.decorate('redis', { get: vi.fn(), set: vi.fn(), del: vi.fn() } as any);
     app.decorate('queues', { analytics: { add: vi.fn() }, shipping: { add: vi.fn() }, orderProcessing: { add: vi.fn() }, refunds: { add: vi.fn() }, notifications: { add: vi.fn() } } as any);
-    app.decorate('log', { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() } as any);
     await registerAnalyticsRoutes(app);
 
     await app.inject({
       method: 'POST',
       url: '/api/v1/analytics/event',
-      payload: { eventType: 'product_view', sessionId: 'sess-abc', userId: 'spoofed-user-999' }
+      payload: { eventType: 'PRODUCT_VIEW', sessionId: 'sess-abc', userId: 'spoofed-user-999' }
     });
 
     expect(AnalyticsService.prototype.recordEvent).toHaveBeenCalledWith(
