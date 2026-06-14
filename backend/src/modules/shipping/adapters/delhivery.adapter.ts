@@ -297,25 +297,22 @@ export default class DelhiveryAdapter implements ShippingProviderAdapter {
     // Note: Delhivery's rate endpoint uses /api/kinko (not under /api prefix that would double)
     const payload = await this.request(`/api/kinko/v1/invoice/charges/.json?${query.toString()}`);
 
-    // charge_with_tax is Delhivery's primary field for the total charge inclusive of GST.
-    // total_amount is kept as a fallback for older API versions or staging responses.
+    // Delhivery /api/kinko/v1/invoice/charges/.json returns a flat JSON object.
+    // Primary field: total_amount (includes GST). Fallbacks: freight_charge, gross_amount.
+    // charge_with_tax is a B2B/LTL API field — it does NOT appear in express rate responses.
     const chargeRupees = this.pickNumber(payload, [
-      ['charge_with_tax'],
       ['total_amount'],
-      ['totalAmount'],
       ['freight_charge'],
-      ['charges', 'total_amount'],
-      ['data', 'charge_with_tax'],
-      ['data', 'total_amount']
+      ['gross_amount'],
+      ['totalAmount']
     ]);
 
+    // estimated_delivery_days is not guaranteed in the kinko rate response; default to 4.
     const estimatedDaysRaw = this.pickNumber(payload, [
       ['estimated_delivery_days'],
-      ['estimatedDays'],
       ['tat_days'],
       ['delivery_days'],
-      ['data', 'estimated_delivery_days'],
-      ['data', 0, 'estimated_delivery_days']
+      ['estimatedDays']
     ]);
 
     const shippingChargePaise =

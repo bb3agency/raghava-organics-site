@@ -39,7 +39,8 @@ type ShiprocketCourierCompany = {
   courier_name: string;
   rate: number;
   etd?: string;
-  estimated_delivery_days?: number;
+  // Shiprocket returns this as a string ("2" or "2-3") despite the API docs showing number
+  estimated_delivery_days?: number | string;
 };
 
 type ShiprocketServiceabilityResponse = {
@@ -265,13 +266,13 @@ export default class ShiprocketAdapter implements ShippingProviderAdapter {
       courierCompanyId: c.courier_company_id,
       courierName: c.courier_name,
       shippingChargePaise: Math.round((c.rate ?? 0) * 100),
-      estimatedDays: this.normalizeEstimatedDays(c.estimated_delivery_days ?? 4),
+      estimatedDays: this.normalizeEstimatedDays(this.parseEstimatedDays(c.estimated_delivery_days)),
       ...(c.etd != null ? { estimatedDeliveryDate: c.etd } : {})
     }));
 
     return {
       shippingChargePaise: Math.round((cheapest.rate ?? 0) * 100),
-      estimatedDays: this.normalizeEstimatedDays(cheapest.estimated_delivery_days ?? 4),
+      estimatedDays: this.normalizeEstimatedDays(this.parseEstimatedDays(cheapest.estimated_delivery_days)),
       courierName: cheapest.courier_name,
       courierCompanyId: cheapest.courier_company_id,
       ...(cheapest.etd != null ? { estimatedDeliveryDate: cheapest.etd } : {}),
@@ -351,7 +352,7 @@ export default class ShiprocketAdapter implements ShippingProviderAdapter {
       billing_phone: billingPhone,
       shipping_is_billing: true,
       order_items: orderItems,
-      payment_method: input.paymentMode,
+      payment_method: input.paymentMode === 'COD' ? 'COD' : 'Prepaid',
       shipping_charges: shippingChargeRupees.toFixed(2),
       giftwrap_charges: 0,
       transaction_charges: 0,
@@ -543,6 +544,14 @@ export default class ShiprocketAdapter implements ShippingProviderAdapter {
     if (days < 1) return 1;
     if (days > 30) return 30;
     return days;
+  }
+
+  // Shiprocket returns estimated_delivery_days as a string ("2" or "2-3") in practice.
+  // Parse the first integer from the value; fall back to 4 if absent or unparseable.
+  private parseEstimatedDays(value: number | string | undefined): number {
+    if (value == null) return 4;
+    const first = parseInt(String(value), 10);
+    return Number.isFinite(first) && first > 0 ? first : 4;
   }
 
   private resolveShipmentIdPayload(shiprocketShipmentId: string): number | string {

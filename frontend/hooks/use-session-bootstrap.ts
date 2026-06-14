@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { restoreAuthSessionFromCookie } from "@/lib/restore-auth-session";
 import { mergeGuestCartAfterAuth } from "@/lib/post-auth-cart-merge";
 import { useAuthStore } from "@/stores/auth";
+import { isAccessTokenUsable } from "@/lib/jwt-utils";
 
 /** Single storefront bootstrap — shared across Header, MainNav, MobileNav. */
 let storefrontBootstrapInFlight: Promise<void> | null = null;
@@ -12,10 +13,11 @@ async function runStorefrontSessionBootstrap(): Promise<void> {
   const { accessToken, setSession, clearSession, setStorefrontSessionStatus } =
     useAuthStore.getState();
 
-  if (accessToken) {
+  if (accessToken && isAccessTokenUsable(accessToken)) {
     setStorefrontSessionStatus("authenticated");
     return;
   }
+  // Token is absent or expired — fall through to refresh
 
   setStorefrontSessionStatus("checking");
   const result = await restoreAuthSessionFromCookie();
@@ -52,7 +54,7 @@ export function useSessionBootstrap() {
   const sessionRestoreNonce = useAuthStore((s) => s.sessionRestoreNonce);
 
   useEffect(() => {
-    if (accessToken) {
+    if (accessToken && isAccessTokenUsable(accessToken)) {
       useAuthStore.getState().setStorefrontSessionStatus("authenticated");
       return;
     }

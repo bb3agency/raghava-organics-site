@@ -177,7 +177,7 @@ describe('DelhiveryAdapter', () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
-      text: async () => JSON.stringify({ charge_with_tax: 50, estimated_delivery_days: 3 })
+      text: async () => JSON.stringify({ total_amount: 50, estimated_delivery_days: 3 })
     });
     vi.stubGlobal('fetch', fetchMock);
 
@@ -243,6 +243,28 @@ describe('DelhiveryAdapter', () => {
 
     [url] = fetchMock.mock.calls[0] as [string];
     expect(url).toContain('cgm=1234');
+  });
+
+  it('extracts total_amount from flat Delhivery kinko rate response', async () => {
+    // Delhivery /api/kinko/v1/invoice/charges/.json returns a flat object — NOT a data array.
+    // total_amount is the primary charge field (includes GST). charge_with_tax is B2B/LTL only.
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ total_amount: 75.5, estimated_delivery_days: 3 })
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new DelhiveryAdapter({ apiKey: 'test_key' });
+    const result = await adapter.calculateDeliveryRate({
+      destinationPincode: '560001',
+      originPincode: '110001',
+      totalWeightGrams: 500,
+      paymentMode: 'PREPAID'
+    });
+
+    expect(result.shippingChargePaise).toBe(7550);
+    expect(result.estimatedDays).toBe(3);
   });
 
   it('rate API correctly defaults paymentMode when not provided', async () => {

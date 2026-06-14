@@ -14,11 +14,12 @@ import { ApiError } from "@/lib/api";
 import { createIdempotencyKey } from "@/lib/idempotency";
 import { useAuthStore } from "@/stores/auth";
 import { useCartStore } from "@/stores/cart";
-import { createMyAddress, getMyAddresses, type UserAddress } from "@/lib/users-api";
+import { createMyAddress, type UserAddress } from "@/lib/users-api";
 import { createOrder, prepareCheckout, confirmPrepaid } from "@/lib/orders-api";
 import { formatPrice } from "@/lib/format-price";
 import { CartLineProductDetails } from "@/components/cart/CartLineProductDetails";
 import { useCartSync } from "@/hooks/use-cart-sync";
+import { useAuthenticatedApi } from "@/hooks/use-authenticated-api";
 import { getCartLineImageAlt, getCartLineImageUrl } from "@/lib/cart-line-display";
 import { useStoreConfig } from "@/components/providers/StoreConfigProvider";
 import { formatAppliedCouponLabel, isFreeShippingCoupon } from "@/lib/coupon-display";
@@ -79,7 +80,9 @@ export function CheckoutForm() {
   const [couponError, setCouponError] = useState<string | null>(null);
   const { couponsEnabled, isCodEnabled, minOrderValuePaise, configAvailable } = useStoreConfig();
   useCartSync({ resyncKey: couponsEnabled });
+  const api = useAuthenticatedApi();
   const accessToken = useAuthStore((s) => s.accessToken);
+  const storefrontSessionStatus = useAuthStore((s) => s.storefrontSessionStatus);
   const user = useAuthStore((s) => s.user);
   const cart = useCartStore((s) => s.cart);
   const setCart = useCartStore((s) => s.setCart);
@@ -96,9 +99,10 @@ export function CheckoutForm() {
   });
 
   useEffect(() => {
-    if (!accessToken) return;
-    getMyAddresses(accessToken)
-      .then((addrs) => {
+    if (!accessToken || storefrontSessionStatus === "checking") return;
+    void api<unknown>("/users/me/addresses")
+      .then((raw) => {
+        const addrs = Array.isArray(raw) ? (raw as UserAddress[]) : [];
         setSavedAddresses(addrs);
         const defaultAddr = addrs.find((a) => a.isDefault) ?? addrs[0];
         if (defaultAddr) {
@@ -111,9 +115,9 @@ export function CheckoutForm() {
           }
         }
       })
-      .catch(() => { /* non-fatal */ });
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- load once per token
-  }, [accessToken]);
+      .catch(() => { /* non-fatal — user can enter address manually */ });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- load once per token+status
+  }, [accessToken, storefrontSessionStatus]);
 
   const pincode = useWatch({ control: form.control, name: "pincode" });
   const paymentMode = useWatch({ control: form.control, name: "paymentMode" });
@@ -210,6 +214,19 @@ export function CheckoutForm() {
       setCouponLoading(false);
     }
   };
+
+  if (storefrontSessionStatus === "checking") {
+    return (
+      <div className="rounded-[20px] bg-white p-8 shadow-sm" aria-busy="true">
+        <div className="animate-pulse space-y-4">
+          <div className="h-6 w-1/3 rounded bg-gray-200" />
+          <div className="h-12 rounded bg-gray-100" />
+          <div className="h-12 rounded bg-gray-100" />
+          <div className="h-12 w-2/3 rounded bg-gray-100" />
+        </div>
+      </div>
+    );
+  }
 
   if (!accessToken) {
     return (

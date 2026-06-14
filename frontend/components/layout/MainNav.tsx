@@ -2,9 +2,8 @@
 
 import Link from "next/link";
 import { useRouter, usePathname } from "next/navigation";
-import { User, LogOut, LayoutDashboard, ShoppingCart } from "lucide-react";
+import { User, LogOut, ShoppingCart } from "lucide-react";
 import { useAuthStore } from "@/stores/auth";
-import { canAccessAdmin } from "@/lib/permissions";
 import { logoutSession } from "@/lib/auth-api";
 import { useCartStore } from "@/stores/cart";
 import { useCartSync } from "@/hooks/use-cart-sync";
@@ -30,7 +29,6 @@ export function MainNav() {
 
   const isSignedIn = Boolean(accessToken);
   const isCheckingSession = sessionStatus === "checking" && !accessToken;
-  const showAdmin = canAccessAdmin(user);
 
   const onSignOut = async () => {
     try {
@@ -74,11 +72,6 @@ export function MainNav() {
         {/* Dropdown Menu */}
         <div className="absolute right-0 top-full pt-4 opacity-0 invisible transition-all group-hover:opacity-100 group-hover:visible z-50">
           <div className="flex w-48 flex-col overflow-hidden rounded-xl border border-[#efe8e4] bg-white shadow-xl">
-            {showAdmin && (
-              <Link href="/admin" className="flex items-center gap-3 px-5 py-3 text-sm font-bold text-[#23403d] hover:bg-[#faf3ef] hover:text-[#ec6e55]">
-                <LayoutDashboard className="size-4" /> Admin Panel
-              </Link>
-            )}
             {isCheckingSession ? (
               <div className="px-5 py-3 text-sm text-[#767676]">Checking session…</div>
             ) : isSignedIn ? (
