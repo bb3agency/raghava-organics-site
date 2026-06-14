@@ -114,6 +114,7 @@ function buildSecurityHeaders(): Array<{ key: string; value: string }> {
     apiPublicOrigin || "'self'",
     "https://api.razorpay.com",
     "https://lumberjack.razorpay.com",
+    "https://cloudflareinsights.com",
   ]
     .filter(Boolean)
     .join(" ");
@@ -121,7 +122,7 @@ function buildSecurityHeaders(): Array<{ key: string; value: string }> {
   const csp = [
     "default-src 'self'",
     `connect-src ${connectSrc}`,
-    "script-src 'self' https://checkout.razorpay.com",
+    "script-src 'self' 'unsafe-inline' https://checkout.razorpay.com https://static.cloudflareinsights.com https://challenges.cloudflare.com",
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' https: data: blob:",
     "font-src 'self' data:",
