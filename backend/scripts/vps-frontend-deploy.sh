@@ -115,27 +115,12 @@ else
     rm -f next.config.js
   fi
 
-  # Clean build artifacts and cache before starting
-  # NOTE: Do NOT delete node_modules or .next entirely — npm needs them to exist during build
-  # Instead, let npm ci handle node_modules, and only clean caches
-  echo "Cleaning build cache…"
-  rm -rf .next.old node_modules/.cache .turbo 2>/dev/null || true
-
-  # Atomic swap: move current .next away before building (NOT node_modules)
-  # node_modules must exist during build — npm ci will update it in-place
-  if [ -d "$FRONTEND_PATH/.next" ]; then
-    mv "$FRONTEND_PATH/.next" "$FRONTEND_PATH/.next.old" || true
-  fi
-
-  # Clean install with offline cache (updates existing node_modules safely)
+  # Clean install (npm ci is safe — it doesn't break concurrent builds)
+  # Do NOT aggressively delete .next or node_modules — let npm/next handle it
+  # Aggressive deletion causes race conditions with Turbopack/build process
   echo "Running npm ci (clean install)…"
   if ! npm ci --prefer-offline --no-audit 2>&1; then
-    echo "::error::npm ci failed. Rolling back…"
-    if [ -d "$FRONTEND_PATH/.next.old" ]; then
-      rm -rf "$FRONTEND_PATH/.next" 2>/dev/null || true
-      mv "$FRONTEND_PATH/.next.old" "$FRONTEND_PATH/.next"
-      echo "Rolled back to previous .next build."
-    fi
+    echo "::error::npm ci failed."
     exit 1
   fi
 

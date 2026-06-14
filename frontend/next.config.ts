@@ -163,16 +163,8 @@ function buildSecurityHeaders(): Array<{ key: string; value: string }> {
 
 const nextConfig: NextConfig = {
   allowedDevOrigins,
-  // Disable Turbopack due to production build corruption (Next.js 16 bug)
-  // Use SWC compiler instead (stable, proven, no asset hashing issues)
-  // Turbopack causes: "chunk_path requires an asset with file content when content hashing is enabled"
-  // See: https://github.com/vercel/next.js/issues/66976
-  experimental: {
-    turbo: false,
-  },
-  swcMinify: true,
-  typescript: {
-    tsconfigPath: "./tsconfig.json",
+  turbopack: {
+    root: frontendRoot,
   },
   async rewrites() {
     return [
