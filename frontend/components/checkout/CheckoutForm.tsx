@@ -14,7 +14,7 @@ import { ApiError } from "@/lib/api";
 import { createIdempotencyKey } from "@/lib/idempotency";
 import { useAuthStore } from "@/stores/auth";
 import { useCartStore } from "@/stores/cart";
-import { createMyAddress, type UserAddress } from "@/lib/users-api";
+import { createMyAddress, getMyAddresses, type UserAddress } from "@/lib/users-api";
 import { createOrder, prepareCheckout, confirmPrepaid } from "@/lib/orders-api";
 import { formatPrice } from "@/lib/format-price";
 import { CartLineProductDetails } from "@/components/cart/CartLineProductDetails";
@@ -94,29 +94,56 @@ export function CheckoutForm() {
     defaultValues: {
       paymentMode: "PREPAID",
       fullName: user?.firstName ? `${user.firstName} ${user.lastName ?? ""}`.trim() : "",
+      phone: "",
+      line1: "",
+      line2: "",
+      city: "",
+      state: "",
+      pincode: "",
       saveAddress: false,
     },
   });
 
+  // Load and auto-fill default saved address on mount (authenticated customers only)
   useEffect(() => {
     if (!accessToken || storefrontSessionStatus === "checking") return;
-    void api<unknown>("/users/me/addresses")
-      .then((raw) => {
-        const addrs = Array.isArray(raw) ? (raw as UserAddress[]) : [];
+
+    let cancelled = false;
+
+    void getMyAddresses(accessToken)
+      .then((addrs) => {
+        if (cancelled) return;
+
         setSavedAddresses(addrs);
+
+        // Auto-select default address (or first if no default)
         const defaultAddr = addrs.find((a) => a.isDefault) ?? addrs[0];
         if (defaultAddr) {
           setSelectedAddressId(defaultAddr.id);
+
+          // Auto-fill form fields with default address
           const patch = addressToFormValues(defaultAddr);
-          for (const [key, value] of Object.entries(patch)) {
+          Object.entries(patch).forEach(([key, value]) => {
             if (value !== undefined) {
-              form.setValue(key as keyof CheckoutValues, value as string);
+              form.setValue(key as keyof CheckoutValues, value as string, {
+                shouldValidate: false,
+                shouldDirty: false,
+              });
             }
-          }
+          });
         }
       })
-      .catch(() => { /* non-fatal — user can enter address manually */ });
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- load once per token+status
+      .catch(() => {
+        // Non-fatal: user can enter address manually
+        if (!cancelled) {
+          setSavedAddresses([]);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- load once per token+status change
   }, [accessToken, storefrontSessionStatus]);
 
   const pincode = useWatch({ control: form.control, name: "pincode" });
