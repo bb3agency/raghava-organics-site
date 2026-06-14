@@ -65,7 +65,9 @@ export function AdminOrderFulfillmentPanel({
   const api = useAuthenticatedApi();
   const accessToken = useAuthStore((s) => s.accessToken);
   const user = useAuthStore((s) => s.user);
+  const canWrite = hasAdminPermission(user, ADMIN_PERMISSIONS.ordersWrite);
   const canRefund = hasAdminPermission(user, ADMIN_PERMISSIONS.ordersRefund);
+  const canNotify = hasAdminPermission(user, ADMIN_PERMISSIONS.ordersNotify);
 
   const [orders, setOrders] = useState<AdminOrdersListResponse["items"]>([]);
   const [selectedOrderId, setSelectedOrderId] = useState(initialOrderId ?? "");
@@ -512,7 +514,7 @@ export function AdminOrderFulfillmentPanel({
             sublabel="Book AWB"
             icon={<Truck className="h-4 w-4" />}
             busy={busyAction === "ship"}
-            disabled={!canShip || busyAction !== null}
+            disabled={!canWrite || !canShip || busyAction !== null}
             onClick={() => runAction("ship", "/admin/orders/:id/ship")}
             primary
           />
@@ -522,7 +524,7 @@ export function AdminOrderFulfillmentPanel({
             sublabel="Request courier"
             icon={<Calendar className="h-4 w-4" />}
             busy={busyAction === "schedule-pickup"}
-            disabled={!canSchedulePickup || busyAction !== null}
+            disabled={!canWrite || !canSchedulePickup || busyAction !== null}
             onClick={runSchedulePickup}
             title={canSchedulePickup ? undefined : "Requires Shiprocket ID after booking"}
           />
@@ -566,27 +568,31 @@ export function AdminOrderFulfillmentPanel({
                 }
               />
             ) : null}
-            <SecondaryButton
-              icon={<Ban className="h-3.5 w-3.5" />}
-              label="Cancel order"
-              disabled={busyAction !== null}
-              variant="warning"
-              onClick={() =>
-                runAction("cancel", "/admin/orders/:id/cancel", {
-                  body: { reason: "Cancelled by admin fulfillment panel" },
-                })
-              }
-            />
-            <SecondaryButton
-              icon={<Mail className="h-3.5 w-3.5" />}
-              label="Retrigger email"
-              disabled={busyAction !== null}
-              onClick={() =>
-                runAction("retrigger", "/admin/orders/:id/notifications/retrigger", {
-                  body: { template: "OrderConfirmed", channels: ["EMAIL"] },
-                })
-              }
-            />
+            {canWrite ? (
+              <SecondaryButton
+                icon={<Ban className="h-3.5 w-3.5" />}
+                label="Cancel order"
+                disabled={busyAction !== null}
+                variant="warning"
+                onClick={() =>
+                  runAction("cancel", "/admin/orders/:id/cancel", {
+                    body: { reason: "Cancelled by admin fulfillment panel" },
+                  })
+                }
+              />
+            ) : null}
+            {canNotify ? (
+              <SecondaryButton
+                icon={<Mail className="h-3.5 w-3.5" />}
+                label="Retrigger email"
+                disabled={busyAction !== null}
+                onClick={() =>
+                  runAction("retrigger", "/admin/orders/:id/notifications/retrigger", {
+                    body: { template: "OrderConfirmed", channels: ["EMAIL"] },
+                  })
+                }
+              />
+            ) : null}
             {detail?.invoice?.hasPdf ? (
               <SecondaryButton
                 icon={<FileDown className="h-3.5 w-3.5" />}

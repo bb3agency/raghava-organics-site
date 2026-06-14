@@ -217,7 +217,7 @@ describe('DelhiveryAdapter', () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
-      text: async () => JSON.stringify({ charge_with_tax: 50, estimated_delivery_days: 2 })
+      text: async () => JSON.stringify({ total_amount: 50, estimated_delivery_days: 2 })
     });
     vi.stubGlobal('fetch', fetchMock);
 
@@ -271,7 +271,7 @@ describe('DelhiveryAdapter', () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
-      text: async () => JSON.stringify({ charge_with_tax: 50, estimated_delivery_days: 2 })
+      text: async () => JSON.stringify({ total_amount: 50, estimated_delivery_days: 2 })
     });
     vi.stubGlobal('fetch', fetchMock);
 
@@ -288,5 +288,46 @@ describe('DelhiveryAdapter', () => {
     const [url] = fetchMock.mock.calls[0] as [string];
     expect(url).toContain('pt=Pre-paid');
     expect(url).toContain('cod=0');
+  });
+
+  it('extracts total_amount from top-level array wrapped by parsePayload', async () => {
+    // Some Delhivery account plans return the rate as a top-level JSON array.
+    // parsePayload wraps this as { _array: [...] } — charge must be found at _array[0].total_amount.
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify([{ total_amount: 60.0, estimated_delivery_days: 2 }])
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new DelhiveryAdapter({ apiKey: 'test_key' });
+    const result = await adapter.calculateDeliveryRate({
+      destinationPincode: '560001',
+      originPincode: '110001',
+      totalWeightGrams: 500,
+      paymentMode: 'PREPAID'
+    });
+
+    expect(result.shippingChargePaise).toBe(6000);
+    expect(result.estimatedDays).toBe(2);
+  });
+
+  it('throws 502 when Delhivery rate response has no recognisable charge field', async () => {
+    // Prevents silently returning shippingCharge:0 ("Free") when the API returns unexpected JSON.
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ some_unknown_field: 100 })
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new DelhiveryAdapter({ apiKey: 'test_key' });
+    await expect(
+      adapter.calculateDeliveryRate({
+        destinationPincode: '560001',
+        originPincode: '110001',
+        totalWeightGrams: 500
+      })
+    ).rejects.toMatchObject({ statusCode: 502 });
   });
 });

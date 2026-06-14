@@ -319,7 +319,9 @@ export function resolveShippingProviderRuntime(runtimeConfig: NodeJS.ProcessEnv 
 
 export function createShippingProvider(runtimeConfig: NodeJS.ProcessEnv = process.env): ShippingProviderAdapter | null {
   const runtime = resolveShippingProviderRuntime(runtimeConfig);
-  if (runtime.provider === 'noop') {
+  // noop and unconfigured adapters throw deterministically — wrapping them in a circuit breaker
+  // would trip the breaker on config errors, causing misleading "temporarily unavailable" errors.
+  if (runtime.provider === 'noop' || runtime.provider === 'unconfigured') {
     return runtime.adapter as ShippingProviderAdapter;
   }
   const failureThreshold = Number(runtimeConfig.SHIPPING_CB_FAILURE_THRESHOLD ?? 5);

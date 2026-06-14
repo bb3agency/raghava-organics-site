@@ -74,6 +74,13 @@ export default class DelhiveryAdapter implements ShippingProviderAdapter {
     const weightKg = Number((input.totalWeightGrams / 1000).toFixed(3));
     const isCod = input.paymentMode === 'COD';
     const returnPin = this.pickupPincode || input.originPincode;
+    if (!returnPin) {
+      throw new AppError(
+        ERROR_CODES.CONFIG_NOT_READY,
+        'Delhivery createShipment requires a return pincode — set DELHIVERY_PICKUP_PINCODE or pass originPincode',
+        503
+      );
+    }
     const productsDesc =
       input.items && input.items.length > 0
         ? input.items.map((i) => i.name).join(', ').slice(0, 255)
@@ -214,15 +221,13 @@ export default class DelhiveryAdapter implements ShippingProviderAdapter {
           const evtOccurredRaw =
             typeof d.StatusDateTime === 'string' ? d.StatusDateTime :
             typeof d.ScanDateTime === 'string' ? d.ScanDateTime : '';
-          const evtOccurredAt = evtOccurredRaw
-            ? new Date(evtOccurredRaw).toISOString()
-            : new Date().toISOString();
+          const evtOccurredAt = evtOccurredRaw ? this.normalizeEventDateTime(evtOccurredRaw) : undefined;
 
           events.push({
             status: evtStatus,
             description: evtDescription,
             ...(evtLocation ? { location: evtLocation } : {}),
-            occurredAt: evtOccurredAt
+            ...(evtOccurredAt != null ? { occurredAt: evtOccurredAt } : {})
           });
         }
       }
@@ -240,9 +245,11 @@ export default class DelhiveryAdapter implements ShippingProviderAdapter {
     const statusText = (
       this.pickString(payload, [['status'], ['remark'], ['message']]) ?? ''
     ).toLowerCase();
+    // Match only positive cancellation signals — "Cancellation not accepted" must NOT match.
     const cancelled =
-      statusText.includes('cancel') ||
-      statusText.includes('success') ||
+      /\bcancell?ed\b/.test(statusText) ||
+      /cancell?ation\s+accepted/.test(statusText) ||
+      statusText === 'success' ||
       this.pickString(payload, [['waybill']]) === awbNumber;
 
     if (!cancelled) {
@@ -297,28 +304,54 @@ export default class DelhiveryAdapter implements ShippingProviderAdapter {
     // Note: Delhivery's rate endpoint uses /api/kinko (not under /api prefix that would double)
     const payload = await this.request(`/api/kinko/v1/invoice/charges/.json?${query.toString()}`);
 
-    // Delhivery /api/kinko/v1/invoice/charges/.json returns a flat JSON object.
-    // Primary field: total_amount (includes GST). Fallbacks: freight_charge, gross_amount.
-    // charge_with_tax is a B2B/LTL API field — it does NOT appear in express rate responses.
+    // Delhivery /api/kinko/v1/invoice/charges/.json response shapes observed in the wild:
+    //   1. Flat object:               { total_amount: 88.5, ... }
+    //   2. Top-level array (wrapped): payload becomes { _array: [{ total_amount: 88.5 }] }
+    //      because parsePayload wraps top-level arrays as { _array: [...] }
+    //   3. Nested under data key:     { data: { total_amount: 88.5 } }
+    //   4. Nested data array:         { data: [{ total_amount: 88.5 }] }
+    // charge_with_tax is a B2B/LTL API field — absent from express rate responses.
     const chargeRupees = this.pickNumber(payload, [
+      // Shape 1: flat object (most common per official docs)
       ['total_amount'],
       ['freight_charge'],
       ['gross_amount'],
-      ['totalAmount']
+      ['totalAmount'],
+      // Shape 2: top-level array wrapped by parsePayload
+      ['_array', 0, 'total_amount'],
+      ['_array', 0, 'freight_charge'],
+      ['_array', 0, 'gross_amount'],
+      // Shape 3: nested under data key
+      ['data', 'total_amount'],
+      ['data', 'freight_charge'],
+      // Shape 4: nested data array
+      ['data', 0, 'total_amount'],
+      ['data', 0, 'freight_charge']
     ]);
+
+    // If no charge field matched, throw — never silently return 0 (would show "Free" to user).
+    if (chargeRupees === null) {
+      throw new AppError(
+        ERROR_CODES.INTERNAL_ERROR,
+        `Delhivery rate response missing charge field. Keys received: ${Object.keys(payload).join(', ')}`,
+        502
+      );
+    }
 
     // estimated_delivery_days is not guaranteed in the kinko rate response; default to 4.
     const estimatedDaysRaw = this.pickNumber(payload, [
       ['estimated_delivery_days'],
       ['tat_days'],
       ['delivery_days'],
-      ['estimatedDays']
+      ['estimatedDays'],
+      ['_array', 0, 'estimated_delivery_days'],
+      ['_array', 0, 'tat_days'],
+      ['data', 'estimated_delivery_days'],
+      ['data', 0, 'estimated_delivery_days']
     ]);
 
-    const shippingChargePaise =
-      chargeRupees !== null ? Math.max(0, Math.round(chargeRupees * 100)) : 0;
-    const estimatedDays =
-      estimatedDaysRaw !== null ? this.normalizeEstimatedDays(estimatedDaysRaw) : 4;
+    const shippingChargePaise = Math.max(0, Math.round(chargeRupees * 100));
+    const estimatedDays = estimatedDaysRaw !== null ? this.normalizeEstimatedDays(estimatedDaysRaw) : 4;
 
     return { shippingChargePaise, estimatedDays, providerPayload: payload };
   }
@@ -428,5 +461,18 @@ export default class DelhiveryAdapter implements ShippingProviderAdapter {
     if (integerDays < 1) return 1;
     if (integerDays > 30) return 30;
     return integerDays;
+  }
+
+  // Delhivery scan timestamps are in IST: "2024-06-14 15:30:00" (space-separated, no TZ marker).
+  // new Date("2024-06-14 15:30:00") parses as UTC in Node.js, producing timestamps 5h30m too early.
+  private normalizeEventDateTime(raw: string): string {
+    const isoLike = raw.match(/^(\d{4})-(\d{2})-(\d{2})\s(\d{2}):(\d{2}):(\d{2})$/);
+    if (isoLike) {
+      const [, year, month, day, hour, minute, second] = isoLike;
+      const parsed = new Date(`${year}-${month}-${day}T${hour}:${minute}:${second}+05:30`);
+      if (!Number.isNaN(parsed.getTime())) return parsed.toISOString();
+    }
+    const fallback = new Date(raw);
+    return Number.isNaN(fallback.getTime()) ? raw : fallback.toISOString();
   }
 }

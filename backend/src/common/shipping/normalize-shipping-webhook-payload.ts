@@ -79,10 +79,8 @@ function normalizeOccurredAt(raw: string | null): string | undefined {
   if (!raw) {
     return undefined;
   }
-  const parsed = new Date(raw);
-  if (!Number.isNaN(parsed.getTime())) {
-    return parsed.toISOString();
-  }
+  // Check IST-specific formats FIRST. new Date("YYYY-MM-DD HH:MM:SS") parses as UTC in
+  // Node.js, making timestamps 5h30m too early for Delhivery/Shiprocket IST dates.
   const isoLike = raw.match(/^(\d{4})-(\d{2})-(\d{2})\s(\d{2}):(\d{2}):(\d{2})$/);
   if (isoLike) {
     const [, year, month, day, hour, minute, second] = isoLike;
@@ -98,6 +96,11 @@ function normalizeOccurredAt(raw: string | null): string | undefined {
     if (!Number.isNaN(isoCandidate.getTime())) {
       return isoCandidate.toISOString();
     }
+  }
+  // Only fall back to raw Date parsing for true ISO 8601 strings that carry TZ info.
+  const parsed = new Date(raw);
+  if (!Number.isNaN(parsed.getTime())) {
+    return parsed.toISOString();
   }
   return undefined;
 }

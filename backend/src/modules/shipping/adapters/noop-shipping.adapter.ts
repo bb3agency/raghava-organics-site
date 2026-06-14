@@ -22,7 +22,7 @@ export class NoopShippingAdapter implements ShippingProviderAdapter {
   }
 
   async cancelShipment(_awbNumber: string): Promise<{ cancelled: boolean; providerPayload: Record<string, unknown> }> {
-    return { cancelled: false, providerPayload: { reason: NOOP_MSG } };
+    throw new AppError(ERROR_CODES.INTERNAL_ERROR, NOOP_MSG, 503);
   }
 
   async checkServiceability(pincode: string, _originPincode?: string): Promise<ServiceabilityResult> {

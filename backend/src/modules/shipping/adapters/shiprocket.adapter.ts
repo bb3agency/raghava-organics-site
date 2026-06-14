@@ -216,7 +216,14 @@ export default class ShiprocketAdapter implements ShippingProviderAdapter {
   }
 
   async checkServiceability(pincode: string, originPincode?: string): Promise<ServiceabilityResult> {
-    const pickupPincode = originPincode ?? process.env.SHIPROCKET_PICKUP_PINCODE ?? '';
+    const pickupPincode = originPincode?.trim() || process.env.SHIPROCKET_PICKUP_PINCODE?.trim() || '';
+    if (!pickupPincode) {
+      throw new AppError(
+        ERROR_CODES.CONFIG_NOT_READY,
+        'Shiprocket pickup pincode is not configured — set SHIPROCKET_PICKUP_PINCODE or pass originPincode',
+        503
+      );
+    }
     const query = new URLSearchParams({
       pickup_postcode: pickupPincode,
       delivery_postcode: pincode,
@@ -237,6 +244,13 @@ export default class ShiprocketAdapter implements ShippingProviderAdapter {
   }
 
   async calculateDeliveryRate(input: DeliveryRateInput): Promise<DeliveryRateResult> {
+    if (!input.originPincode?.trim()) {
+      throw new AppError(
+        ERROR_CODES.CONFIG_NOT_READY,
+        'Shiprocket delivery rate requires originPincode — set SHIPROCKET_PICKUP_PINCODE or configure pickup pincode in store settings',
+        503
+      );
+    }
     const weightKg = Math.max(0.001, input.totalWeightGrams / 1000);
     const isCod = input.paymentMode === 'COD';
     const query = new URLSearchParams({
@@ -401,10 +415,21 @@ export default class ShiprocketAdapter implements ShippingProviderAdapter {
     let awbNumber = awbData.response?.data?.awb_code ?? '';
     if (awbData.awb_assign_status !== 1) {
       const assignError = awbData.response?.data?.awb_assign_error ?? '';
-      // Idempotency: Shiprocket returns status=0 if AWB was already assigned in a prior attempt
-      const alreadyAssignedMatch = assignError.match(/AWB is already assigned with awb\s*-\s*(\S+)/i);
-      if (alreadyAssignedMatch) {
-        awbNumber = alreadyAssignedMatch[1] ?? '';
+      // Idempotency: Shiprocket returns status=0 if AWB was already assigned in a prior attempt.
+      // The exact wording varies — match multiple patterns.
+      const awbIdempotencyPatterns = [
+        /AWB is already assigned with awb\s*[-:]\s*(\S+)/i,
+        /already assigned.*?awb[:\s-]+(\S+)/i,
+        /awb[:\s-]+(\S+)\s+(?:is\s+)?already assigned/i,
+        /duplicate.*?awb[:\s-]+(\S+)/i
+      ];
+      let extractedAwb: string | null = null;
+      for (const pattern of awbIdempotencyPatterns) {
+        const m = assignError.match(pattern);
+        if (m?.[1]) { extractedAwb = m[1]; break; }
+      }
+      if (extractedAwb) {
+        awbNumber = extractedAwb;
       } else {
         const reason = assignError || awbData.message || JSON.stringify(awbData);
         throw new AppError(
@@ -466,12 +491,15 @@ export default class ShiprocketAdapter implements ShippingProviderAdapter {
       activities[0]?.status ||
       'UNKNOWN';
 
-    const events = activities.map((a) => ({
-      status: a.status ?? 'UNKNOWN',
-      ...(a.location != null ? { location: a.location } : {}),
-      description: a.activity ?? a.status ?? '',
-      occurredAt: a.date ?? new Date().toISOString()
-    }));
+    const events = activities.map((a) => {
+      const occurredAt = a.date ? this.normalizeShiprocketDate(a.date) : undefined;
+      return {
+        status: a.status ?? 'UNKNOWN',
+        ...(a.location != null ? { location: a.location } : {}),
+        description: a.activity ?? a.status ?? '',
+        ...(occurredAt != null ? { occurredAt } : {})
+      };
+    });
 
     return {
       status: latestStatus,
@@ -481,23 +509,23 @@ export default class ShiprocketAdapter implements ShippingProviderAdapter {
   }
 
   async cancelShipment(awbNumber: string): Promise<{ cancelled: boolean; providerPayload: Record<string, unknown> }> {
-    try {
-      const payload = await this.request<Record<string, unknown>>(
-        '/orders/cancel',
-        {
-          method: 'POST',
-          body: JSON.stringify({ ids: [awbNumber] })
-        }
+    const payload = await this.request<Record<string, unknown>>(
+      '/orders/cancel',
+      {
+        method: 'POST',
+        body: JSON.stringify({ ids: [awbNumber] })
+      }
+    );
+    const message = typeof payload.message === 'string' ? payload.message.toLowerCase() : '';
+    const cancelled = message.includes('cancel') || message.includes('success');
+    if (!cancelled) {
+      throw new AppError(
+        ERROR_CODES.INTERNAL_ERROR,
+        `Shiprocket did not confirm cancellation for AWB ${awbNumber}: ${message || JSON.stringify(payload).slice(0, 200)}`,
+        502
       );
-      const cancelled =
-        typeof payload.message === 'string' && payload.message.toLowerCase().includes('cancel');
-      return { cancelled, providerPayload: payload };
-    } catch {
-      return {
-        cancelled: false,
-        providerPayload: { reason: 'Shiprocket cancel API call failed' }
-      };
     }
+    return { cancelled: true, providerPayload: payload };
   }
 
   async schedulePickup(shiprocketShipmentId: string): Promise<SchedulePickupResult> {
@@ -537,6 +565,19 @@ export default class ShiprocketAdapter implements ShippingProviderAdapter {
       labelUrl,
       providerPayload: payload as Record<string, unknown>
     };
+  }
+
+  // Shiprocket activity dates are in IST: "2024-06-14 15:30:00" (space-separated, no TZ marker).
+  // new Date("2024-06-14 15:30:00") parses as UTC, producing timestamps 5h30m too early.
+  private normalizeShiprocketDate(raw: string): string {
+    const isoLike = raw.match(/^(\d{4})-(\d{2})-(\d{2})\s(\d{2}):(\d{2}):(\d{2})$/);
+    if (isoLike) {
+      const [, year, month, day, hour, minute, second] = isoLike;
+      const parsed = new Date(`${year}-${month}-${day}T${hour}:${minute}:${second}+05:30`);
+      if (!Number.isNaN(parsed.getTime())) return parsed.toISOString();
+    }
+    const fallback = new Date(raw);
+    return Number.isNaN(fallback.getTime()) ? raw : fallback.toISOString();
   }
 
   private normalizeEstimatedDays(value: number): number {

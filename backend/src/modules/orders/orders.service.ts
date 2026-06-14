@@ -486,7 +486,9 @@ export class OrdersService {
       if (!pickupPincode) {
         throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Shipping provider is not configured', 503);
       }
-      const selectedProviderKey = input.selectedShippingProvider?.toLowerCase() as 'delhivery' | 'shiprocket' | undefined;
+      const rawProviderKey = input.selectedShippingProvider?.toLowerCase();
+      const selectedProviderKey: 'delhivery' | 'shiprocket' | undefined =
+        rawProviderKey === 'delhivery' || rawProviderKey === 'shiprocket' ? rawProviderKey : undefined;
       const providerOverride =
         selectedProviderKey && !usingNoop
           ? (createShippingAdapterForProvider(selectedProviderKey) ?? undefined)
@@ -1180,7 +1182,11 @@ export class OrdersService {
       throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Shipping provider is not configured', 503);
     }
 
-    const selectedProviderKeyForCheckout = input.selectedShippingProvider?.toLowerCase() as 'delhivery' | 'shiprocket' | undefined;
+    const rawProviderKeyForCheckout = input.selectedShippingProvider?.toLowerCase();
+    const selectedProviderKeyForCheckout: 'delhivery' | 'shiprocket' | undefined =
+      rawProviderKeyForCheckout === 'delhivery' || rawProviderKeyForCheckout === 'shiprocket'
+        ? rawProviderKeyForCheckout
+        : undefined;
     const providerOverrideForCheckout =
       selectedProviderKeyForCheckout && !usingNoop
         ? (createShippingAdapterForProvider(selectedProviderKeyForCheckout) ?? undefined)
@@ -1980,7 +1986,7 @@ export class OrdersService {
           status: parsed.status,
           description: parsed.description,
           location: parsed.location ?? null,
-          occurredAt: parsed.occurredAt ?? new Date().toISOString(),
+          occurredAt: parsed.occurredAt ?? null,
           ...(parsed.shiprocketShipmentId ? { shiprocketShipmentId: parsed.shiprocketShipmentId } : {}),
           payloadMetadata: {
             source: `${shippingProviderKey}-webhook`,
@@ -3791,6 +3797,7 @@ export class OrdersService {
 
   async adminListReturnRequests(query: {
     status?: ReturnRequestStatus;
+    orderId?: string;
     page?: number;
     limit?: number;
   }) {
@@ -3798,7 +3805,9 @@ export class OrdersService {
     const limit = Math.min(100, Math.max(1, query.limit ?? 20));
     const skip = (page - 1) * limit;
 
-    const where = query.status ? { status: query.status } : {};
+    const where: Record<string, unknown> = {};
+    if (query.status) where.status = query.status;
+    if (query.orderId) where.orderId = query.orderId;
     const [items, total] = await Promise.all([
       this.fastify.prisma.returnRequest.findMany({
         where,
@@ -4560,7 +4569,7 @@ export class OrdersService {
             status: event.status,
             description: event.description,
             location: event.location ?? null,
-            occurredAt: new Date(event.occurredAt)
+            occurredAt: event.occurredAt ? new Date(event.occurredAt) : new Date()
           })),
           skipDuplicates: false
         });

@@ -569,7 +569,7 @@ export async function registerOrdersRoutes(fastify: FastifyInstance): Promise<vo
       }
     },
     async (request) => {
-      const query = request.query as { status?: ReturnRequestStatus; page?: number; limit?: number };
+      const query = request.query as { status?: ReturnRequestStatus; orderId?: string; page?: number; limit?: number };
       return ordersService.adminListReturnRequests(query);
     }
   );

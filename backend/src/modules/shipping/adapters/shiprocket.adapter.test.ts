@@ -8,6 +8,7 @@ describe('ShiprocketAdapter', () => {
   });
 
   it('authenticates and caches token on first request', async () => {
+    vi.stubEnv('SHIPROCKET_PICKUP_PINCODE', '110001');
     const fetchMock = vi.fn().mockResolvedValueOnce({
       ok: true,
       status: 200,
@@ -392,6 +393,7 @@ describe('ShiprocketAdapter', () => {
   });
 
   it('checks serviceability and returns true when couriers exist', async () => {
+    vi.stubEnv('SHIPROCKET_PICKUP_PINCODE', '110001');
     const fetchMock = vi.fn()
       .mockResolvedValueOnce({
         ok: true,
@@ -544,6 +546,7 @@ describe('ShiprocketAdapter', () => {
       });
     vi.stubGlobal('fetch', fetchMock);
 
+    vi.stubEnv('SHIPROCKET_PICKUP_PINCODE', '110001');
     const adapter = new ShiprocketAdapter({ email: 'test@example.com', password: 'secret' });
     await adapter.checkServiceability('560001');
 
@@ -552,6 +555,7 @@ describe('ShiprocketAdapter', () => {
   });
 
   it('throws when Shiprocket returns invalid JSON on success response', async () => {
+    vi.stubEnv('SHIPROCKET_PICKUP_PINCODE', '110001');
     const fetchMock = vi.fn().mockResolvedValueOnce({
       ok: true,
       status: 200,

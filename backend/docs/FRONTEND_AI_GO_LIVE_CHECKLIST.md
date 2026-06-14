@@ -36,10 +36,26 @@ Pair this with `docs/BACKEND_GO_LIVE_CHECKLIST.md` for final go-live sign-off. T
 - [ ] `Strict-Transport-Security: max-age=31536000`
 - [ ] `Referrer-Policy: strict-origin-when-cross-origin`
 
+**Frontend `next.config.ts` Security Headers (added 2026-06-14):**
+- [ ] `async headers()` export in `next.config.ts` emits full CSP, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy, HSTS (production only), COOP, CORP on every route.
+- [ ] CSP `frame-src` includes `https://checkout.razorpay.com` (required for Razorpay iframe).
+- [ ] CSP `script-src` includes `https://checkout.razorpay.com` (required for Razorpay checkout.js).
+- [ ] CSP `connect-src` includes `NEXT_PUBLIC_API_BASE_URL` origin + Razorpay API domains.
+- [ ] `Cross-Origin-Opener-Policy: same-origin-allow-popups` (required for Razorpay popup flow).
+- [ ] Static assets have `Cache-Control: public, max-age=31536000, immutable` header on `/_next/static/`.
+- [ ] `lib/config-validation.ts::validateProductionEnv()` is called in `next.config.ts` — throws if required prod env vars missing.
+- [ ] Run `securityheaders.com` scan on production URL post-deploy and confirm A+ rating.
+
 **Frontend Requirements:**
 - [ ] All styles in external CSS files (no inline styles)
 - [ ] All scripts in external JS files (no inline scripts)
 - [ ] User-generated content properly escaped (XSS prevention)
+
+### 1.2) Idempotency Key Quality
+
+- [ ] `createIdempotencyKey()` (`lib/idempotency.ts`) uses `crypto.randomUUID()` with RFC 4122 v4 UUID fallback (not a simple timestamp-random string). Verify the fallback branch generates a valid `xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx` format.
+- [ ] Mutations that use idempotency keys send a **new** key per user action, **reuse** the same key on retry of the same action.
+- [ ] Backend idempotency keys are opaque strings accepted up to 255 chars — UUID4 is the correct format.
 
 ## 2) Response Contract Compliance
 
@@ -55,6 +71,28 @@ Pair this with `docs/BACKEND_GO_LIVE_CHECKLIST.md` for final go-live sign-off. T
 - [ ] Refresh token remains backend-controlled (HTTP-only cookie flow).
 - [ ] Access token handling is ephemeral (memory/state), not long-term browser storage.
 - [ ] 401 flow is implemented: refresh -> retry original request -> logout if refresh fails.
+
+### 3.0a) Storefront Session Bootstrap (Critical — 2026-06-14)
+
+`useSessionBootstrap()` is mounted in the `<Header>` (storefront layout). It must be hardened:
+
+- [ ] **Expired token detection:** `runStorefrontSessionBootstrap()` checks `isAccessTokenUsable(token)` (from `lib/jwt-utils.ts`), NOT `!!token`. A non-null but expired access token must trigger a refresh, not be accepted as authenticated.
+- [ ] **`useEffect` mirrors the same check:** `if (accessToken && isAccessTokenUsable(accessToken))` before calling `bootstrapStorefrontSessionOnce()`.
+- [ ] **`storefrontSessionStatus` is threaded through auth store:** values are `"checking" | "authenticated" | "guest"`. Starts as `"checking"`.
+- [ ] **New-tab restore works without visible "Please sign in" flash:** When the user opens a second tab (Session 2), Zustand starts empty, bootstrap runs asynchronously, and the checkout form shows a loading skeleton — not a "Please sign in" prompt that could redirect them to `/login`.
+
+**Protected UI components (e.g. `CheckoutForm`) must:**
+- [ ] Subscribe to `storefrontSessionStatus` from auth store.
+- [ ] Render a skeleton/loading state when `storefrontSessionStatus === "checking"` (before showing any "Please sign in" copy or redirecting to login).
+- [ ] Only show "Please sign in" when `!accessToken && storefrontSessionStatus !== "checking"`.
+
+**Authenticated fetches in client components must use `useAuthenticatedApi()`:**
+- [ ] `CheckoutForm` (and any other client component) fetches addresses, profile, orders via `useAuthenticatedApi()` — NOT via `getMyAddresses(accessToken)` or bare `apiClient`. The bare client has no 401→refresh→retry; `createAuthenticatedApiClient` does.
+- [ ] Address fetch effect skips when `storefrontSessionStatus === "checking"` to avoid firing before session is resolved.
+
+> Reference: `NEXTJS_FRONTEND_INTEGRATION_GUIDE.md` §10.2 — "Storefront session bootstrap critical invariants"
+
+---
 
 ### 3.0) Admin Session Lifecycle (Critical)
 
@@ -239,6 +277,9 @@ Pair this with `docs/BACKEND_GO_LIVE_CHECKLIST.md` for final go-live sign-off. T
 - [ ] Product create/edit form maps `VALIDATION_ERROR.details.fields` to highlighted inputs (`data-admin-field`), inline errors, and scroll-to-first-error. Create flow includes required **Category** and **URL Slug** fields. Generic "check highlighted fields" banner also lists field-specific messages.
 - [ ] Global shipment list (`GET /api/v1/admin/shipments`) and global payment list (`GET /api/v1/admin/payments`) are loaded via their dedicated endpoints, not by aggregating per-order requests. Requires `shipments:read` and `payments:read` respectively.
 - [ ] Return request detail (`GET /api/v1/admin/return-requests/:id`) is accessible from the return request queue. Requires `orders:read`.
+- [ ] Return requests for a specific order are shown in the order detail view via `AdminOrderReturnRequestsPanel` — calls `GET /api/v1/admin/return-requests?orderId=<id>`. Requires `orders:read`. The global returns list also supports `?orderId=` filter (added 2026-06-14).
+- [ ] **Admin permission guard coverage** (added 2026-06-14 audit): all admin mutation buttons in `AdminOrderFulfillmentPanel` are gated — Ship (`orders:write`), Cancel (`orders:write`), Schedule Pickup (`orders:write`), Retrigger Email (`orders:notify`), Refund (`orders:refund`). Verify `hasAdminPermission(user, ADMIN_PERMISSIONS.xxx)` guard wraps every destructive or write action in the fulfillment panel.
+- [ ] `AdminPaymentsList` detail drawer shows both `refundedAmountPaise` and `refundPendingAmountPaise` (conditional on > 0) so operators can see in-progress refunds.
 - [ ] Review hard-delete (`DELETE /api/v1/admin/reviews/:id`) requires `reviews:moderate`. UI shows a destructive confirmation modal — this is permanent, not a soft-delete.
 - [ ] Storefront homepage testimonials (`TestimonialsSection`) load from `GET /api/v1/reviews/recent?limit=3` when **`FEATURE_REVIEWS_ENABLED=true`**. Section is hidden when the API returns no approved reviews with written body. PDP reviews use `GET /api/v1/reviews/product/:slug` via `ProductReviewsSection`. Admin moderation (`PATCH /api/v1/admin/reviews/:id/moderate`) is the gate for both surfaces.
 

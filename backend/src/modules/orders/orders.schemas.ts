@@ -97,6 +97,7 @@ export const adminListReturnRequestsSchema = {
     additionalProperties: false,
     properties: {
       status: { type: 'string', enum: returnRequestStatusEnum, maxLength: 30 },
+      orderId: { type: 'string', maxLength: 36 },
       page: { type: 'integer', minimum: 1, default: 1 },
       limit: { type: 'integer', minimum: 1, maximum: 100, default: 20 }
     }

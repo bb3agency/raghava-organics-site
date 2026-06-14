@@ -55,7 +55,7 @@ export type TrackShipmentResult = {
     status: string;
     location?: string;
     description: string;
-    occurredAt: string;
+    occurredAt?: string;
   }>;
   providerPayload: Record<string, unknown>;
 };

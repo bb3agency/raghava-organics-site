@@ -639,8 +639,16 @@ export class CartService {
     delhiveryAdapter: ShippingProviderAdapter | null;
     shiprocketAdapter: ShippingProviderAdapter | null;
   }) {
+    const DEFAULT_VARIANT_WEIGHT_GRAMS = 500;
     const totalWeightGrams = input.cart.items.reduce((sum, item) => {
-      return sum + Math.max(item.variant.weight ?? 1, 1) * item.quantity;
+      const unitWeight = item.variant.weight ?? 0;
+      if (unitWeight <= 0) {
+        this.fastify.log?.warn(
+          { variantId: item.variant.id },
+          `cart: variant has no weight configured — using ${DEFAULT_VARIANT_WEIGHT_GRAMS}g default for shipping rate`
+        );
+      }
+      return sum + Math.max(unitWeight > 0 ? unitWeight : DEFAULT_VARIANT_WEIGHT_GRAMS, 1) * item.quantity;
     }, 0);
 
     const activeAdapters: Array<{ key: 'DELHIVERY' | 'SHIPROCKET'; adapter: ShippingProviderAdapter }> = [];

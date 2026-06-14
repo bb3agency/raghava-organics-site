@@ -71,11 +71,12 @@ NEXT_PUBLIC_RAZORPAY_KEY_ID=
 | Project scaffold (Next.js 15, Tailwind, shadcn/ui, Zustand, RHF+Zod) | [ ] | |
 | Shared API client (dual-envelope parser, error.code mapper, auth injection) | [ ] | |
 | Auth Zustand store (accessToken in memory, refresh-on-401, force-login) | [ ] | |
+| `useSessionBootstrap` (storefront) with expired-token detection | [ ] | Must check `isAccessTokenUsable(token)` not just `!!token`. See §10.2 of integration guide. |
 | Cart Zustand store (guest-safe, merge-on-login aware) | [ ] | |
 | Permission-aware nav scaffold | [ ] | |
 | Global error code → UI copy mapping | [ ] | |
 
-**Tier 1 done when:** All slices `[x]`. Auth OTP flow produces session. 401 refresh loop works. Both envelope shapes parse. Permission-gated nav renders correctly.
+**Tier 1 done when:** All slices `[x]`. Auth OTP flow produces session. 401 refresh loop works. Both envelope shapes parse. Permission-gated nav renders correctly. New-tab session restore succeeds without "Please sign in" flash.
 
 ---
 
@@ -153,8 +154,8 @@ NEXT_PUBLIC_RAZORPAY_KEY_ID=
 | Product detail page | [ ] | |
 | Cart: guest session + item CRUD + coupon + pincode | [ ] | |
 | Cart merge on login (`POST /cart/merge`) | [ ] | |
-| PREPAID checkout (full Razorpay flow) | [ ] | Resend email dry-run here |
-| COD checkout | [ ] | |
+| PREPAID checkout (full Razorpay flow) | [ ] | Resend email dry-run here; address load via `useAuthenticatedApi()` |
+| COD checkout | [ ] | `CheckoutForm`: `storefrontSessionStatus` skeleton gate before "Please sign in" |
 | Order history + detail | [ ] | |
 | Return request creation | [ ] | |
 | Shipment tracking | [ ] | `GET /shipping/track/:awb` |

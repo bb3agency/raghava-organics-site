@@ -6,6 +6,7 @@ import { useState } from "react";
 import { AdminOrderDetailPanel } from "@/components/admin/AdminOrderDetailPanel";
 import { AdminOrderFulfillmentPanel } from "@/components/admin/AdminOrderFulfillmentPanel";
 import { AdminOrderItemsPanel } from "@/components/admin/AdminOrderItemsPanel";
+import { AdminOrderReturnRequestsPanel } from "@/components/admin/AdminOrderReturnRequestsPanel";
 import { AdminOrderTimelinePanel } from "@/components/admin/AdminOrderTimelinePanel";
 
 export function AdminOrderDetailPageClient({ orderId }: { orderId: string }) {
@@ -31,6 +32,7 @@ export function AdminOrderDetailPageClient({ orderId }: { orderId: string }) {
         <div className="grid gap-6 lg:col-span-2">
           <AdminOrderItemsPanel orderId={orderId} onUpdated={bumpRefresh} />
           <AdminOrderFulfillmentPanel initialOrderId={orderId} hideOrderPicker />
+          <AdminOrderReturnRequestsPanel orderId={orderId} />
         </div>
         <div>
           <AdminOrderTimelinePanel key={`timeline-${refreshKey}`} orderId={orderId} />

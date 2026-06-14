@@ -3,6 +3,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { validateProductionEnv } from "./lib/config-validation";
+
+// Fail fast on missing required production env vars before the server starts
+validateProductionEnv();
 
 /** Keep Turbopack scoped to `frontend/` (avoids watching the whole monorepo). */
 const frontendRoot = path.dirname(fileURLToPath(import.meta.url));
@@ -81,6 +85,82 @@ function getAllowedDevOrigins(): string[] {
 
 const allowedDevOrigins = getAllowedDevOrigins();
 
+const isProd = process.env.NODE_ENV === "production";
+
+/**
+ * Production API origin used in CSP connect-src.
+ * Falls back to same-origin proxy pattern when not set.
+ */
+const apiPublicOrigin = process.env.NEXT_PUBLIC_API_BASE_URL
+  ? new URL(process.env.NEXT_PUBLIC_API_BASE_URL).origin
+  : "";
+
+/**
+ * Security headers applied to every route in production.
+ *
+ * CSP policy:
+ *  - No unsafe-eval (blocks code injection via eval)
+ *  - script-src: self + Razorpay checkout script
+ *  - frame-src: self + Razorpay checkout iframe
+ *  - connect-src: self + API origin + Razorpay
+ *  - img-src: self + https (CDN images) + data: (base64 previews) + blob: (canvas/object URLs)
+ *  - style-src: self + unsafe-inline (required by Tailwind runtime in some configs)
+ *
+ * Adjust connect-src when adding analytics or other third-party APIs.
+ */
+function buildSecurityHeaders(): Array<{ key: string; value: string }> {
+  const connectSrc = [
+    "'self'",
+    apiPublicOrigin || "'self'",
+    "https://api.razorpay.com",
+    "https://lumberjack.razorpay.com",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  const csp = [
+    "default-src 'self'",
+    `connect-src ${connectSrc}`,
+    "script-src 'self' https://checkout.razorpay.com",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' https: data: blob:",
+    "font-src 'self' data:",
+    "frame-src 'self' https://checkout.razorpay.com",
+    "worker-src 'self' blob:",
+    "manifest-src 'self'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "upgrade-insecure-requests",
+  ].join("; ");
+
+  return [
+    { key: "Content-Security-Policy", value: csp },
+    // Prevent clickjacking
+    { key: "X-Frame-Options", value: "DENY" },
+    // Prevent MIME-type sniffing
+    { key: "X-Content-Type-Options", value: "nosniff" },
+    // Control referrer information
+    { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+    // Limit browser feature access
+    {
+      key: "Permissions-Policy",
+      value: "camera=(), microphone=(), geolocation=(), payment=(self https://checkout.razorpay.com)",
+    },
+    // HSTS — only in production; 1 year + includeSubDomains
+    ...(isProd
+      ? [
+          {
+            key: "Strict-Transport-Security",
+            value: "max-age=31536000; includeSubDomains",
+          },
+        ]
+      : []),
+    // Cross-origin isolation (required for SharedArrayBuffer, improves isolation)
+    { key: "Cross-Origin-Opener-Policy", value: "same-origin-allow-popups" },
+    { key: "Cross-Origin-Resource-Policy", value: "same-origin" },
+  ];
+}
+
 const nextConfig: NextConfig = {
   allowedDevOrigins,
   turbopack: {
@@ -91,6 +171,23 @@ const nextConfig: NextConfig = {
       {
         source: "/api/v1/:path*",
         destination: `${backendProxyOrigin}/api/v1/:path*`,
+      },
+    ];
+  },
+  async headers() {
+    const securityHeaders = buildSecurityHeaders();
+    return [
+      {
+        // Apply to all routes
+        source: "/(.*)",
+        headers: securityHeaders,
+      },
+      {
+        // Static assets: allow cross-origin reads (fonts, scripts, CSS)
+        source: "/_next/static/(.*)",
+        headers: [
+          { key: "Cache-Control", value: "public, max-age=31536000, immutable" },
+        ],
       },
     ];
   },

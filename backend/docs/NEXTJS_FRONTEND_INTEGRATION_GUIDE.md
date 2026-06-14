@@ -723,7 +723,8 @@ Prefix all paths with **`/api/v1/admin`**. All require **ADMIN JWT** + permissio
 | **Create shipment** | `POST .../orders/:id/ship` | Triggers shipment via active provider — **AC‑08** |
 | **Cancel + refund** | `POST .../orders/:id/cancel` | Paid path refund orchestration — **AC‑10** |
 | **COD collection** | `POST .../orders/:id/cod-collected` | Mark COD cash collected; body: `{ collectionNote? }` — only valid for COD orders |
-| **Return requests** | `GET .../return-requests` | List with status/pagination filters |
+| **Return requests** | `GET .../return-requests` | List with `status`, `orderId`, and pagination filters. Use `?orderId=<id>` in the order detail page to show only that order's return requests (implemented in `AdminOrderReturnRequestsPanel`). |
+| **Return request detail** | `GET .../return-requests/:id` | Full detail including items, customer, order snapshot |
 | **Return request action** | `PATCH .../return-requests/:id` | Approve / reject / update with `adminNote` |
 | **Customer comms** | `POST .../orders/:id/notifications/retrigger` | Channel pick **`EMAIL` / `SMS` / `WHATSAPP`** |
 | **Reporting export** | `GET .../orders/export` | CSV for period + filters |
@@ -837,6 +838,78 @@ Analytics/chart implementation should match TRD expectations (Recharts primitive
 - Refresh happens automatically via httpOnly cookie
 - For ops UI: cookie handling is automatic, no manual token management needed
 
+**Storefront session bootstrap (`useSessionBootstrap`) — critical invariants (2026-06-14):**
+
+The storefront uses a distinct bootstrap path from the admin. `useSessionBootstrap()` runs inside the `<Header>` component (which is in every storefront layout). It is a singleton per page load — deduplicated via a module-level `storefrontBootstrapInFlight` promise.
+
+| Invariant | Rule |
+|-----------|------|
+| **Token expiry detection** | MUST check `isAccessTokenUsable(accessToken)`, NOT just `!!accessToken`. A non-null but expired token must trigger a refresh, not be accepted as "authenticated". |
+| **`storefrontSessionStatus`** | Zustand field: `"checking" \| "authenticated" \| "guest"`. Starts as `"checking"`. Set to `"authenticated"` only after a valid + usable token is confirmed. Set to `"guest"` after refresh fails. |
+| **Multi-tab behaviour** | A new tab starts with no Zustand state (memory-only), so `accessToken = null`. Bootstrap runs, finds the valid refresh cookie, gets a new token, and calls `setSession()`. Do NOT expose "Please sign in" to the user during this window — it causes premature redirects to `/login` even though they are authenticated in Session 1. |
+| **Session status gating in UI** | Any component that shows "Please sign in" or redirects to login MUST check `storefrontSessionStatus === "checking"` first and render a skeleton instead, not the login prompt. |
+
+**Correct `useSessionBootstrap` logic:**
+```typescript
+import { isAccessTokenUsable } from "@/lib/jwt-utils";
+
+async function runStorefrontSessionBootstrap() {
+  const { accessToken, ... } = useAuthStore.getState();
+
+  // CRITICAL: expired tokens must not short-circuit the bootstrap
+  if (accessToken && isAccessTokenUsable(accessToken)) {
+    setStorefrontSessionStatus("authenticated");
+    return;
+  }
+
+  setStorefrontSessionStatus("checking");
+  const result = await restoreAuthSessionFromCookie();
+  if (!result.ok) { clearSession(); return; }
+  setSession(result.accessToken, result.user);
+  await mergeGuestCartAfterAuth(result.accessToken);
+}
+
+// In useEffect deps:
+if (accessToken && isAccessTokenUsable(accessToken)) {
+  setStorefrontSessionStatus("authenticated");
+  return;
+}
+void bootstrapStorefrontSessionOnce();
+// Effect deps: [accessToken, sessionRestoreNonce]
+```
+
+**Anti-pattern — silent "Please sign in" on session restore:**
+```tsx
+// ❌ WRONG — shows "Please sign in" while bootstrap is running in a new tab
+if (!accessToken) {
+  return <div>Please sign in...</div>;
+}
+
+// ✅ CORRECT — wait for bootstrap to resolve before showing login prompt
+if (storefrontSessionStatus === "checking") {
+  return <LoadingSkeleton />;        // bootstrap still running
+}
+if (!accessToken) {
+  return <div>Please sign in...</div>;  // bootstrap done, genuinely a guest
+}
+```
+
+**Authenticated API calls in storefront components:**
+
+Use `useAuthenticatedApi()` (from `hooks/use-authenticated-api.ts`) for any client component that makes authenticated fetch calls. The bare `apiClient` from `lib/api.ts` does NOT have 401→refresh→retry. The authenticated wrapper handles token expiry transparently: on 401, it calls `refreshAccessToken()`, updates the token in Zustand, and retries the original request once before calling `onAuthFailure()`.
+
+```tsx
+// ❌ WRONG — bare apiClient, no retry on expired token
+const addresses = await getMyAddresses(accessToken);  // silent 401 if token expired
+
+// ✅ CORRECT — authenticated client with 401→refresh→retry
+const api = useAuthenticatedApi();
+const raw = await api<unknown>("/users/me/addresses");
+const addresses = Array.isArray(raw) ? (raw as UserAddress[]) : [];
+```
+
+This pattern applies to **all** authenticated client-component fetches: addresses, user profile, order history, coupon application, cart operations, etc.
+
 **Admin session lifecycle (required implementation — `frontend` as of 2026-06-03):**
 
 ```
@@ -917,15 +990,171 @@ await api.post('/ops/system/restart', {
 - `429 RATE_LIMIT_EXCEEDED` → Backoff and retry
 - `503 ops_audit_chain_lock_timeout` → Retry after 1-2 seconds
 
-### 10.4 Security headers (backend-enforced)
+### 10.4 Security headers — backend-enforced AND frontend `next.config.ts`
 
-| Header | Value | Purpose |
-|--------|-------|---------|
-| `Content-Security-Policy` | `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:` | XSS protection |
-| `X-Content-Type-Options` | `nosniff` | MIME sniffing protection |
-| `X-Frame-Options` | `DENY` | Clickjacking protection |
-| `Strict-Transport-Security` | `max-age=31536000; includeSubDomains` | HTTPS enforcement |
-| `Referrer-Policy` | `strict-origin-when-cross-origin` | Privacy protection |
+Two layers of security headers are required:
+
+1. **Nginx layer** (backend-enforced): HSTS, X-Frame-Options, X-Content-Type-Options, Referrer-Policy
+2. **Next.js layer** (`frontend/next.config.ts`): Full CSP, COOP, CORP, Permissions-Policy, static asset caching
+
+| Header | Value | Layer |
+|--------|-------|-------|
+| `Content-Security-Policy` | See §10.4.1 below | Next.js `headers()` |
+| `X-Content-Type-Options` | `nosniff` | Nginx + Next.js |
+| `X-Frame-Options` | `DENY` | Nginx + Next.js |
+| `Strict-Transport-Security` | `max-age=31536000; includeSubDomains` | Nginx (production only) + Next.js (production only) |
+| `Referrer-Policy` | `strict-origin-when-cross-origin` | Next.js |
+| `Permissions-Policy` | `camera=(), microphone=(), geolocation=(), payment=(self https://checkout.razorpay.com)` | Next.js |
+| `Cross-Origin-Opener-Policy` | `same-origin-allow-popups` | Next.js (required for Razorpay popup) |
+| `Cross-Origin-Resource-Policy` | `same-origin` | Next.js |
+
+#### 10.4.1 Frontend CSP — `buildSecurityHeaders()` pattern
+
+The `async headers()` export in `frontend/next.config.ts` must call a `buildSecurityHeaders()` function. Full working implementation:
+
+```typescript
+// frontend/next.config.ts
+const isProd = process.env.NODE_ENV === "production";
+const apiPublicOrigin = process.env.NEXT_PUBLIC_API_BASE_URL
+  ? new URL(process.env.NEXT_PUBLIC_API_BASE_URL).origin
+  : "";
+
+function buildSecurityHeaders(): Array<{ key: string; value: string }> {
+  const connectSrc = [
+    "'self'",
+    apiPublicOrigin || "'self'",
+    "https://api.razorpay.com",
+    "https://lumberjack.razorpay.com",
+  ].filter(Boolean).join(" ");
+
+  const csp = [
+    "default-src 'self'",
+    `connect-src ${connectSrc}`,
+    "script-src 'self' https://checkout.razorpay.com",  // Razorpay script
+    "style-src 'self' 'unsafe-inline'",                 // Tailwind runtime requires unsafe-inline
+    "img-src 'self' https: data: blob:",                // CDN images, base64, canvas
+    "font-src 'self' data:",
+    "frame-src 'self' https://checkout.razorpay.com",  // Razorpay iframe
+    "worker-src 'self' blob:",
+    "manifest-src 'self'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "upgrade-insecure-requests",
+  ].join("; ");
+
+  return [
+    { key: "Content-Security-Policy", value: csp },
+    { key: "X-Frame-Options", value: "DENY" },
+    { key: "X-Content-Type-Options", value: "nosniff" },
+    { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+    { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=(), payment=(self https://checkout.razorpay.com)" },
+    ...(isProd ? [{ key: "Strict-Transport-Security", value: "max-age=31536000; includeSubDomains" }] : []),
+    { key: "Cross-Origin-Opener-Policy", value: "same-origin-allow-popups" }, // Required for Razorpay popup flow
+    { key: "Cross-Origin-Resource-Policy", value: "same-origin" },
+  ];
+}
+
+// In NextConfig:
+async headers() {
+  const securityHeaders = buildSecurityHeaders();
+  return [
+    { source: "/(.*)", headers: securityHeaders },
+    { source: "/_next/static/(.*)", headers: [{ key: "Cache-Control", value: "public, max-age=31536000, immutable" }] },
+  ];
+},
+```
+
+**Key Razorpay requirements:**
+- `frame-src` MUST include `https://checkout.razorpay.com` — Razorpay modal renders inside an iframe
+- `script-src` MUST include `https://checkout.razorpay.com` — checkout.js loads from there
+- `connect-src` MUST include `https://api.razorpay.com` and `https://lumberjack.razorpay.com` — API calls + telemetry
+- `Cross-Origin-Opener-Policy: same-origin-allow-popups` — needed so Razorpay popup can message back to the opener
+
+**HSTS note:** Only emit HSTS in `NODE_ENV === "production"`. Including it in dev will lock the local HTTPS cert for a year and break HTTP dev URLs.
+
+#### 10.4.2 Production env validation — `lib/config-validation.ts`
+
+Create `frontend/lib/config-validation.ts` and call it from `next.config.ts` at module level so missing env vars fail fast at build/start rather than silently at runtime:
+
+```typescript
+// frontend/lib/config-validation.ts
+interface EnvSpec {
+  key: string;
+  description: string;
+  public?: boolean;
+  validate?: (v: string) => boolean;
+}
+
+const REQUIRED_PROD_ENV: EnvSpec[] = [
+  {
+    key: "NEXT_PUBLIC_API_BASE_URL",
+    description: "Backend API URL (must include /api/v1)",
+    public: true,
+    validate: (v) => v.includes("/api/v1"),
+  },
+  {
+    key: "NEXT_PUBLIC_STOREFRONT_URL",
+    description: "Canonical storefront URL",
+    public: true,
+    validate: (v) => v.startsWith("http"),
+  },
+  {
+    key: "NEXT_PUBLIC_RAZORPAY_KEY_ID",
+    description: "Razorpay public key",
+    public: true,
+    validate: (v) => v.startsWith("rzp_"),
+  },
+  {
+    key: "INTERNAL_API_BASE_URL",
+    description: "Internal backend URL for server-side calls (must include /api/v1)",
+    validate: (v) => v.includes("/api/v1"),
+  },
+];
+
+export function validateProductionEnv(): void {
+  if (typeof window !== "undefined") return; // Browser — skip
+  if (process.env.NODE_ENV !== "production") return; // Dev/test — skip
+
+  const errors: string[] = [];
+  for (const spec of REQUIRED_PROD_ENV) {
+    const value = process.env[spec.key];
+    if (!value) {
+      errors.push(`  ${spec.key}: ${spec.description} (MISSING)`);
+    } else if (spec.validate && !spec.validate(value)) {
+      errors.push(`  ${spec.key}: ${spec.description} (INVALID: "${value}")`);
+    }
+  }
+  if (errors.length > 0) {
+    throw new Error(`\nProduction env validation failed:\n${errors.join("\n")}\n`);
+  }
+}
+```
+
+```typescript
+// frontend/next.config.ts — top of file
+import { validateProductionEnv } from "./lib/config-validation";
+validateProductionEnv();
+```
+
+This throws immediately if `NEXT_PUBLIC_API_BASE_URL` is missing or doesn't include `/api/v1`, preventing a successful production build or server start with a broken config.
+
+#### 10.4.3 Idempotency key quality (RFC 4122 v4)
+
+`frontend/lib/idempotency.ts` must generate RFC 4122 v4 UUIDs. The backend accepts any opaque string, but UUID4 is the contract-documented format. The fallback for environments without `crypto.randomUUID` must also produce valid UUID4, not a `Date.now()` timestamp string:
+
+```typescript
+export function createIdempotencyKey(): string {
+  if (typeof crypto !== "undefined" && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+  // RFC 4122 v4 fallback — version bits set to 0100, variant bits to 10xx
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === "x" ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+```
 
 ### 10.5 Common security anti-patterns to avoid
 

@@ -1296,6 +1296,45 @@ Documented in §2026-06-03; still required: sign in on the **network URL** from 
 
 ---
 
+## 2026-06-14 — Cross-session address loading bug fix + session bootstrap hardening
+
+**Scope:** Fix checkout addresses not loading when a user opens a new tab (Session 2) hours after logging in (Session 1), and fix silent authentication failures when access tokens expire mid-session.
+
+### Root Cause (3 gaps)
+
+**Gap 1 — `useSessionBootstrap` trusted expired tokens.**
+The bootstrap checked `if (accessToken)` (non-null check). An expired token passed this check and the bootstrap returned `"authenticated"` without refreshing. The expired token stayed in Zustand forever. Any API call made with it got a silent 401.
+
+**Gap 2 — `CheckoutForm` showed "Please sign in" during session restore.**
+In a new tab, Zustand starts empty (`accessToken = null`). `useSessionBootstrap` runs asynchronously. Before it completes, `CheckoutForm` saw `accessToken = null` and rendered "Please sign in to place an order" with a link to `/login?redirect=/checkout`. Users clicked the link thinking they needed to re-login, when their session was being restored.
+
+**Gap 3 — Address fetch used the bare `apiClient` (no 401→refresh→retry).**
+`getMyAddresses(accessToken)` calls `apiClient` directly. The `apiClient` does not have 401 interception. When the token expired mid-session, the fetch returned 401 which was silently swallowed by `.catch(() => {})`. Addresses never loaded.
+
+### Files Changed
+
+**`frontend/hooks/use-session-bootstrap.ts`**
+- Imported `isAccessTokenUsable` from `lib/jwt-utils`
+- Changed both the inner `runStorefrontSessionBootstrap()` check and the `useEffect` check from `if (accessToken)` → `if (accessToken && isAccessTokenUsable(accessToken))`
+- Expired tokens now trigger a refresh, not a silent "authenticated" status
+
+**`frontend/components/checkout/CheckoutForm.tsx`**
+- Added `storefrontSessionStatus` subscription from Zustand auth store
+- Added skeleton loading state when `storefrontSessionStatus === "checking"` (renders before the "Please sign in" guard)
+- Added `useAuthenticatedApi()` hook — authenticated client with 401→refresh→retry
+- Replaced `getMyAddresses(accessToken)` with `api<unknown>("/users/me/addresses")` via the authenticated client
+- Address effect now also skips when `storefrontSessionStatus === "checking"` (waits for restore to complete before fetching)
+- Removed `getMyAddresses` import (no longer used)
+
+### Pattern Established
+
+1. **Always use `isAccessTokenUsable()` before trusting a stored token** — non-null alone is not sufficient
+2. **Gate "Please sign in" UI on `storefrontSessionStatus !== "checking"`** — prevents false redirects during restore
+3. **Use `useAuthenticatedApi()` for all client-component authenticated fetches** — auto-retry on 401, transparent refresh
+4. **Canonical reference:** `backend/docs/NEXTJS_FRONTEND_INTEGRATION_GUIDE.md` §10.2
+
+---
+
 ## 2026-06-14 — Dual shipping provider + provider analytics
 
 **Scope:** Support both Delhivery and Shiprocket simultaneously. Provider detection is now credential-based (not env-var). `SHIPPING_PROVIDER` env var is dead and ignored. Analytics endpoint added for provider breakdown.

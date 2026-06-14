@@ -383,6 +383,9 @@ export function AdminPaymentsList({ from, to }: AdminPaymentsListProps = {}) {
             <DetailRow label="Provider order ID" value={detail.providerOrderId ?? "—"} />
             <DetailRow label="Captured" value={detail.capturedAt ? formatAdminDate(detail.capturedAt) : "—"} />
             <DetailRow label="Refunded" value={formatPaise(detail.refundedAmountPaise ?? 0)} />
+            {(detail.refundPendingAmountPaise ?? 0) > 0 ? (
+              <DetailRow label="Refund pending" value={formatPaise(detail.refundPendingAmountPaise ?? 0)} />
+            ) : null}
             <DetailRow label="Created" value={formatAdminDate(detail.createdAt)} />
             <DetailRow label="Updated" value={formatAdminDate(detail.updatedAt)} />
             <Link

@@ -693,7 +693,7 @@ export function createShippingWorker(
                     status: event.status,
                     description: event.description,
                     location: event.location ?? null,
-                    occurredAt: new Date(event.occurredAt)
+                    occurredAt: event.occurredAt ? new Date(event.occurredAt) : new Date()
                   })),
                   skipDuplicates: true
                 });
