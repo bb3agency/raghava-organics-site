@@ -122,11 +122,11 @@ function buildSecurityHeaders(): Array<{ key: string; value: string }> {
   const csp = [
     "default-src 'self'",
     `connect-src ${connectSrc}`,
-    "script-src 'self' 'unsafe-inline' https://checkout.razorpay.com https://static.cloudflareinsights.com https://challenges.cloudflare.com",
+    "script-src 'self' 'unsafe-inline' https://checkout.razorpay.com https://cdn.razorpay.com https://static.cloudflareinsights.com https://challenges.cloudflare.com",
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' https: data: blob:",
     "font-src 'self' data:",
-    "frame-src 'self' https://checkout.razorpay.com https://challenges.cloudflare.com",
+    "frame-src 'self' https://checkout.razorpay.com https://api.razorpay.com https://challenges.cloudflare.com",
     "worker-src 'self' blob:",
     "manifest-src 'self'",
     "base-uri 'self'",
