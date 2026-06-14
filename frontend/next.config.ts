@@ -126,7 +126,7 @@ function buildSecurityHeaders(): Array<{ key: string; value: string }> {
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' https: data: blob:",
     "font-src 'self' data:",
-    "frame-src 'self' https://checkout.razorpay.com",
+    "frame-src 'self' https://checkout.razorpay.com https://challenges.cloudflare.com",
     "worker-src 'self' blob:",
     "manifest-src 'self'",
     "base-uri 'self'",
