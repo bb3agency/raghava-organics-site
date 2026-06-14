@@ -108,16 +108,26 @@ if [ "$SKIP_BUILD" = "true" ]; then
 else
   cd "$FRONTEND_PATH"
 
-  # Clean build artifacts and cache before starting
-  echo "Cleaning stale build artifacts and cache…"
-  rm -rf .next .next.old node_modules/.cache 2>/dev/null || true
+  # Verify no stale config files exist (should only have next.config.ts from git)
+  echo "Verifying config integrity…"
+  if [ -f "next.config.js" ]; then
+    echo "::warning::Found stale next.config.js (not tracked in git). Removing…"
+    rm -f next.config.js
+  fi
 
-  # Atomic swap: move current .next away before building
+  # Clean build artifacts and cache before starting
+  # NOTE: Do NOT delete node_modules or .next entirely — npm needs them to exist during build
+  # Instead, let npm ci handle node_modules, and only clean caches
+  echo "Cleaning build cache…"
+  rm -rf .next.old node_modules/.cache .turbo 2>/dev/null || true
+
+  # Atomic swap: move current .next away before building (NOT node_modules)
+  # node_modules must exist during build — npm ci will update it in-place
   if [ -d "$FRONTEND_PATH/.next" ]; then
     mv "$FRONTEND_PATH/.next" "$FRONTEND_PATH/.next.old" || true
   fi
 
-  # Clean install with offline cache
+  # Clean install with offline cache (updates existing node_modules safely)
   echo "Running npm ci (clean install)…"
   if ! npm ci --prefer-offline --no-audit 2>&1; then
     echo "::error::npm ci failed. Rolling back…"
