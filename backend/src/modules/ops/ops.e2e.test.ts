@@ -8,7 +8,6 @@
  * Run with: npm run test:ops:e2e
  */
 
-import crypto from 'crypto';
 import { describe, expect, it } from 'vitest';
 import { nanoid } from 'nanoid';
 import { testDataFactory } from './__fixtures__/ops-test-data';
@@ -22,11 +21,11 @@ describe('Ops Module E2E Workflow Tests', () => {
     it('OTP challenge structure supports login flow', () => {
       // STEP 1: Request login OTP
       const loginChallenge = testDataFactory.opsOtpChallenge({
-        action: 'login',
+        action: 'config-save',
         status: 'PENDING'
       });
 
-      expect(loginChallenge).toHaveProperty('challengeId');
+      expect(loginChallenge).toHaveProperty('id');
       expect(loginChallenge).toHaveProperty('expiresAt');
       expect(loginChallenge).toHaveProperty('_testCode');
       expect(loginChallenge.status).toBe('PENDING');
@@ -41,7 +40,7 @@ describe('Ops Module E2E Workflow Tests', () => {
         status: 'PENDING'
       });
 
-      expect(configChallenge.challengeId).not.toBe(loginChallenge.challengeId);
+      expect(configChallenge.id).not.toBe(loginChallenge.id);
       expect(configChallenge.action).toBe('config-save');
 
       // STEP 4: Audit log is created with chain hash
