@@ -591,6 +591,76 @@ describe('CartService dual-provider delivery rates', () => {
     expect(result?.courierCompanyId).toBe(12);
   });
 
+  it('with FREE_SHIPPING coupon, still locks the cheapest provider (Delhivery) not the fastest (Shiprocket)', async () => {
+    // Regression: a FREE_SHIPPING coupon zeroed BOTH providers' charges before comparison, so they
+    // tied at ₹0 and the "fastest" tiebreaker locked Shiprocket (3d, Blue Dart Air ₹475) over
+    // Delhivery (4d, ₹130). Customer paid ₹0 shipping but the merchant's Shiprocket wallet was
+    // billed ₹475. Fix: compare on TRUE cost; free shipping only zeroes the customer-facing charge.
+    vi.stubEnv('DELHIVERY_API_KEY', 'delhivery_key');
+    vi.stubEnv('DELHIVERY_BASE_URL', DELHIVERY_TEST_BASE_URL);
+    vi.stubEnv('DELHIVERY_PICKUP_PINCODE', '110001');
+    vi.stubEnv('SHIPROCKET_EMAIL', 'sr@example.com');
+    vi.stubEnv('SHIPROCKET_PASSWORD', 'srpass');
+
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (typeof url === 'string' && url.includes('delhivery')) {
+        if (url.includes('pin-codes')) {
+          return Promise.resolve({ ok: true, status: 200, text: async () => JSON.stringify({ delivery_codes: [{ postal_code: { pin: '500001' } }] }) });
+        }
+        if (url.includes('kinko')) {
+          // Delhivery ₹130, slower (4 days)
+          return Promise.resolve({ ok: true, status: 200, text: async () => JSON.stringify({ total_amount: 130, estimated_delivery_days: 4 }) });
+        }
+      }
+      if (typeof url === 'string' && url.includes('shiprocket')) {
+        if (url.includes('auth')) {
+          return Promise.resolve({ ok: true, status: 200, text: async () => JSON.stringify({ token: 'sr-token' }) });
+        }
+        if (url.includes('courier/serviceability')) {
+          // Shiprocket ₹475 Blue Dart Air, faster (3 days) — must NOT win despite being faster.
+          return Promise.resolve({
+            ok: true, status: 200,
+            text: async () => JSON.stringify({
+              status: 200,
+              data: { available_courier_companies: [{ courier_company_id: 1, courier_name: 'Blue Dart Air', rate: 475, estimated_delivery_days: 3 }] }
+            })
+          });
+        }
+      }
+      return Promise.resolve({ ok: false, status: 404, text: async () => '', json: async () => ({}) });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const fastify = {
+      log: { warn: vi.fn() },
+      prisma: {
+        storeSettings: {
+          findUnique: vi.fn().mockImplementation(({ select }: { select?: Record<string, boolean> }) => {
+            if (select?.couponsEnabled) return Promise.resolve({ couponsEnabled: true });
+            if (select?.boxPresets) return Promise.resolve({ boxPresets: [] });
+            if (select?.pickupPincode) return Promise.resolve({ pickupPincode: '110001' });
+            return Promise.resolve(null);
+          })
+        }
+      }
+    } as unknown as FastifyInstance;
+
+    const service = new CartService(fastify);
+    const result = await service.getCheapestProviderQuoteForCart({
+      cart: {
+        coupon: { type: 'FREE_SHIPPING' } as unknown as NonNullable<Parameters<CartService['getCheapestProviderQuoteForCart']>[0]['cart']['coupon']>,
+        items: [{ quantity: 1, variant: { id: 'v1', weight: 500 } }]
+      },
+      destinationPincode: '500001',
+      pickupPincode: '110001',
+      paymentMode: 'PREPAID'
+    });
+
+    // Customer pays ₹0 (free shipping), but the order locks the genuinely cheapest provider.
+    expect(result?.provider).toBe('DELHIVERY');
+    expect(result?.shippingChargePaise).toBe(0);
+  });
+
   it('rejects when both providers say pincode is unserviceable in dual mode', async () => {
     vi.stubEnv('DELHIVERY_API_KEY', 'delhivery_key');
     vi.stubEnv('DELHIVERY_BASE_URL', DELHIVERY_TEST_BASE_URL);

@@ -716,6 +716,7 @@ export class CartService {
 
     type CandidateRate = {
       provider: 'DELHIVERY' | 'SHIPROCKET';
+      /** TRUE provider cost (what the courier bills the merchant). Always used for provider comparison. */
       shippingChargePaise: number;
       estimatedDays: number;
       /** Courier company ID — Shiprocket only. Must be passed back to createShipment so AWB assignment locks the quoted courier. */
@@ -727,14 +728,20 @@ export class CartService {
       const result = rateResults[i];
       const provider = serviceableAdapters[i]!.key;
       if (result?.status === 'fulfilled') {
-        const charge = isFreeShipping ? 0 : result.value.shippingChargePaise;
+        // Always compare on the TRUE provider cost — never the free-shipping-discounted value.
+        // A FREE_SHIPPING coupon hides the cost from the customer, but the merchant still pays the
+        // courier, so the genuinely cheapest provider must win. Zeroing the charge before comparison
+        // makes every provider tie at ₹0, and the tiebreaker (fastest) then locks the most expensive
+        // courier (e.g. Shiprocket → Blue Dart Air) — the merchant silently eats the difference.
         candidates.push({
           provider,
-          shippingChargePaise: charge,
+          shippingChargePaise: result.value.shippingChargePaise,
           estimatedDays: result.value.estimatedDays,
           ...(result.value.courierCompanyId != null ? { courierCompanyId: result.value.courierCompanyId } : {})
         });
-        console.log(`[DELIVERY RATES] ${provider} SUCCESS: ₹${charge / 100} (${result.value.estimatedDays}d)`);
+        console.log(
+          `[DELIVERY RATES] ${provider} SUCCESS: ₹${result.value.shippingChargePaise / 100} (${result.value.estimatedDays}d)`
+        );
       } else {
         console.log(
           `[DELIVERY RATES] ${provider} FAILED:`,
@@ -747,7 +754,7 @@ export class CartService {
       throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Unable to fetch delivery rates from any provider', 503);
     }
 
-    // Sort by cheapest, then fastest as tiebreaker
+    // Pick the genuinely cheapest provider (by true cost), then fastest as tiebreaker.
     candidates.sort((a, b) =>
       a.shippingChargePaise !== b.shippingChargePaise
         ? a.shippingChargePaise - b.shippingChargePaise
@@ -756,9 +763,13 @@ export class CartService {
 
     const winner = candidates[0]!;
 
+    // Free-shipping discount applies ONLY to the customer-facing charge, after the cheapest provider
+    // has been selected on true cost. Provider/courier lock still points at the cheapest real option.
+    const customerFacingChargePaise = isFreeShipping ? 0 : winner.shippingChargePaise;
+
     return {
       pincode: input.pincode,
-      shippingCharge: winner.shippingChargePaise,
+      shippingCharge: customerFacingChargePaise,
       estimatedDays: winner.estimatedDays,
       selectedShippingProvider: winner.provider,
       ...(winner.courierCompanyId != null ? { courierCompanyId: winner.courierCompanyId } : {})
