@@ -148,7 +148,30 @@ export default class DelhiveryAdapter implements ShippingProviderAdapter {
 
     const body = new URLSearchParams({ format: 'json', data });
 
+    // DEBUG: dump the exact payload sent to Delhivery (pickup location, origin pin, seller GST, etc.)
+    console.log(
+      '[DELHIVERY CREATE DEBUG] pickup_location:',
+      this.pickupLocationName,
+      '| origin_pin:',
+      input.originPincode,
+      '| return_pin:',
+      returnPin,
+      '| seller_gst_tin:',
+      input.sellerGstTin,
+      '| dest_pin:',
+      input.destinationPincode,
+      '| weight_kg:',
+      weightKg,
+      '| payment_mode:',
+      delhiveryPaymentMode,
+      '| total_amount:',
+      input.amountRupees
+    );
+
     const payload = await this.request('/api/cmu/create.json', { method: 'POST', body });
+
+    // DEBUG: dump the full Delhivery response so the real (hidden) rejection reason is visible.
+    console.log('[DELHIVERY CREATE DEBUG] response:', JSON.stringify(payload));
 
     // Per Delhivery API docs, successful response must have:
     // 1. success === true at root level

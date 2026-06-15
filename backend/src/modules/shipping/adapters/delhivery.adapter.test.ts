@@ -1,9 +1,15 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import DelhiveryAdapter from './delhivery.adapter';
 
 describe('DelhiveryAdapter', () => {
+  beforeEach(() => {
+    // Suppress debug logging during tests
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   it('creates shipment using token auth and multipart data mapping', async () => {
