@@ -548,8 +548,8 @@ export class OrdersService {
           ...(input.selectedShippingProvider
             ? ({ selectedShippingProvider: input.selectedShippingProvider } as Record<string, unknown>)
             : {}),
-          ...(input.courierCompanyId != null
-            ? ({ courierCompanyId: input.courierCompanyId } as Record<string, unknown>)
+          ...((input.courierCompanyId ?? shippingQuote.courierCompanyId) != null
+            ? ({ courierCompanyId: input.courierCompanyId ?? shippingQuote.courierCompanyId } as Record<string, unknown>)
             : {}),
           shippingAddress: {
             fullName: shippingAddress.fullName,
@@ -1290,7 +1290,7 @@ export class OrdersService {
       couponId: effectiveCoupon?.id ?? null,
       razorpayOrderId: razorpayOrder.providerOrderId,
       selectedShippingProvider: input.selectedShippingProvider ?? null,
-      courierCompanyId: input.courierCompanyId ?? null,
+      courierCompanyId: input.courierCompanyId ?? shippingQuote.courierCompanyId ?? null,
       items: cart.items.map((item) => ({
         variantId: item.variantId,
         productName: item.variant.product.name,

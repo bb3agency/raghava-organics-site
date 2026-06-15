@@ -266,7 +266,8 @@ export const deliveryRatesSchema = {
           type: 'string',
           enum: ['DELHIVERY', 'SHIPROCKET'],
           maxLength: 20
-        }
+        },
+        courierCompanyId: { type: 'integer', minimum: 1 }
       }
     },
     ...standardErrorResponses

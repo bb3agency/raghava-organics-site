@@ -744,6 +744,8 @@ export class CartService {
   }): Promise<{
     shippingChargePaise: number;
     estimatedDays: number;
+    /** Shiprocket courier company ID for the cheapest courier — used to lock AWB to the quoted courier. */
+    courierCompanyId?: number;
     availableCouriers?: DeliveryRateResult['availableCouriers'];
   }> {
     const usingNoop = input.usingNoop ?? !resolveDualShippingRuntime().hasAny;
@@ -779,6 +781,7 @@ export class CartService {
     return {
       shippingChargePaise,
       estimatedDays: rate.estimatedDays,
+      ...(rate.courierCompanyId != null ? { courierCompanyId: rate.courierCompanyId } : {}),
       ...(rate.availableCouriers ? { availableCouriers: rate.availableCouriers } : {})
     };
   }
