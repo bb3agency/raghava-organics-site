@@ -502,16 +502,22 @@ export class OrdersService {
       const recomputedCharge = shippingQuote.shippingChargePaise;
 
       // Use the rate the customer saw (passed from getDeliveryRates) if within ±30% tolerance.
+      // If the provider re-computed 0 (API anomaly), trust the client rate.
       let shippingCharge = recomputedCharge;
       if (input.shippingChargePaise != null && !usingNoop) {
         const clientRate = input.shippingChargePaise;
-        const tolerance = Math.ceil(recomputedCharge * 0.30);
-        const withinTolerance =
-          recomputedCharge === 0
-            ? clientRate === 0
-            : Math.abs(clientRate - recomputedCharge) <= tolerance;
-        if (withinTolerance) {
+        if (recomputedCharge === 0 && clientRate > 0) {
           shippingCharge = clientRate;
+          this.fastify.log?.warn(
+            { clientRate, recomputedCharge },
+            'createOrder: provider re-computed 0 but client saw positive rate — using client rate'
+          );
+        } else {
+          const tolerance = Math.ceil(recomputedCharge * 0.30);
+          const withinTolerance = Math.abs(clientRate - recomputedCharge) <= tolerance;
+          if (withinTolerance) {
+            shippingCharge = clientRate;
+          }
         }
       }
 
@@ -1218,21 +1224,30 @@ export class OrdersService {
     // If the frontend passes the rate it showed the customer (from getDeliveryRates),
     // use it — the customer must be charged exactly what they saw. We validate it's
     // within ±30% of our re-computed value to prevent tampering.
+    // Special case: if recomputedCharge === 0 from a REAL provider (not noop), this indicates
+    // a provider API anomaly (e.g. Shiprocket returning a 0-rate courier that slipped through).
+    // In that case, trust the client rate — it was returned from our own API seconds earlier.
     let shippingCharge = recomputedCharge;
     if (input.shippingChargePaise != null && !usingNoop) {
       const clientRate = input.shippingChargePaise;
-      const tolerance = Math.ceil(recomputedCharge * 0.30);
-      const withinTolerance =
-        recomputedCharge === 0
-          ? clientRate === 0
-          : Math.abs(clientRate - recomputedCharge) <= tolerance;
-      if (withinTolerance) {
+      if (recomputedCharge === 0 && clientRate > 0) {
+        // Provider returned 0 (API anomaly) but client saw a positive rate — trust client rate.
         shippingCharge = clientRate;
-      } else {
         this.fastify.log?.warn(
-          { clientRate, recomputedCharge, diff: Math.abs(clientRate - recomputedCharge), tolerance },
-          'prepareCheckout: client shippingChargePaise outside ±30% tolerance — using re-computed rate'
+          { clientRate, recomputedCharge },
+          'prepareCheckout: provider re-computed 0 but client saw positive rate — using client rate'
         );
+      } else {
+        const tolerance = Math.ceil(recomputedCharge * 0.30);
+        const withinTolerance = Math.abs(clientRate - recomputedCharge) <= tolerance;
+        if (withinTolerance) {
+          shippingCharge = clientRate;
+        } else {
+          this.fastify.log?.warn(
+            { clientRate, recomputedCharge, diff: Math.abs(clientRate - recomputedCharge), tolerance },
+            'prepareCheckout: client shippingChargePaise outside ±30% tolerance — using re-computed rate'
+          );
+        }
       }
     }
 

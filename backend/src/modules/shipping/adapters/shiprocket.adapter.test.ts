@@ -472,6 +472,72 @@ describe('ShiprocketAdapter', () => {
     expect(result.availableCouriers).toHaveLength(2);
   });
 
+  it('filters out zero and null rate couriers before picking cheapest', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ token: 'sr-token-123' })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({
+          data: {
+            available_courier_companies: [
+              { courier_company_id: 1, courier_name: 'ZeroRate', rate: 0, estimated_delivery_days: 1 },
+              { courier_company_id: 2, courier_name: 'NullRate', rate: null, estimated_delivery_days: 1 },
+              { courier_company_id: 3, courier_name: 'ValidCourier', rate: 130, estimated_delivery_days: 3 }
+            ]
+          }
+        })
+      });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new ShiprocketAdapter({ email: 'test@example.com', password: 'secret' });
+    const result = await adapter.calculateDeliveryRate({
+      destinationPincode: '560001',
+      originPincode: '110001',
+      totalWeightGrams: 500
+    });
+
+    // Must pick ValidCourier (₹130), not ZeroRate or NullRate
+    expect(result.shippingChargePaise).toBe(13000);
+    expect(result.courierName).toBe('ValidCourier');
+    expect(result.availableCouriers).toHaveLength(1); // Only valid courier
+  });
+
+  it('throws PINCODE_NOT_SERVICEABLE when all couriers have zero/null rates', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ token: 'sr-token-123' })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({
+          data: {
+            available_courier_companies: [
+              { courier_company_id: 1, courier_name: 'ZeroOnly', rate: 0, estimated_delivery_days: 1 },
+              { courier_company_id: 2, courier_name: 'NullOnly', rate: null, estimated_delivery_days: 1 }
+            ]
+          }
+        })
+      });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new ShiprocketAdapter({ email: 'test@example.com', password: 'secret' });
+    await expect(
+      adapter.calculateDeliveryRate({
+        destinationPincode: '999999',
+        originPincode: '110001',
+        totalWeightGrams: 500
+      })
+    ).rejects.toMatchObject({ code: 'PINCODE_NOT_SERVICEABLE' });
+  });
+
   it('schedules pickup successfully', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce({

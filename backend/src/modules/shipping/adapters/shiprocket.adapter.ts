@@ -264,7 +264,12 @@ export default class ShiprocketAdapter implements ShippingProviderAdapter {
       `/courier/serviceability/?${query.toString()}`
     );
 
-    const couriers: ShiprocketCourierCompany[] = payload.data?.available_courier_companies ?? [];
+    const allCouriers: ShiprocketCourierCompany[] = payload.data?.available_courier_companies ?? [];
+
+    // Filter out couriers with null/undefined/zero rates — these are typically COD-only
+    // couriers that appear in prepaid responses with rate=0 or rate=null. Including them
+    // causes the cheapest sort to pick a 0-rate courier, resulting in free shipping silently.
+    const couriers = allCouriers.filter((c) => typeof c.rate === 'number' && c.rate > 0);
 
     if (couriers.length === 0) {
       throw new AppError(ERROR_CODES.PINCODE_NOT_SERVICEABLE, 'No couriers available for this pincode', 422);
