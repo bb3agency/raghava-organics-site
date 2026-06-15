@@ -571,18 +571,18 @@ export function AdminOrderFulfillmentPanel({
           <ActionButton
             step={2}
             label="Schedule pickup"
-            sublabel="Request courier"
+            sublabel="Courier visit"
             icon={<Calendar className="h-4 w-4" />}
             busy={busyAction === "schedule-pickup"}
             disabled={!canWrite || !canSchedulePickup || busyAction !== null}
             onClick={runSchedulePickup}
             title={
               canSchedulePickup
-                ? undefined
+                ? "Requests a courier pickup for your warehouse. One pickup collects every ready shipment — safe to schedule on each order."
                 : !hasShipment
                   ? "Book the shipment (AWB) first"
                   : pickupScheduled || pickupWasScheduled
-                    ? "Pickup already scheduled"
+                    ? "Pickup already scheduled — this shipment is covered"
                     : "Pickup unavailable for this order"
             }
           />
@@ -597,6 +597,17 @@ export function AdminOrderFulfillmentPanel({
             title={canPrintLabel ? undefined : "Book shipment first"}
           />
         </div>
+
+        {hasShipment ? (
+          <p className="-mt-1 flex items-start gap-1.5 text-xs text-muted-foreground">
+            <Calendar className="mt-0.5 h-3 w-3 shrink-0" aria-hidden="true" />
+            <span>
+              Pickup is arranged per warehouse, not per order — one courier visit
+              collects every ready shipment. Scheduling pickup again on another
+              order just confirms it&apos;s covered by the same visit.
+            </span>
+          </p>
+        ) : null}
 
         {/* Secondary actions */}
         <div className="border-t border-border pt-4">
