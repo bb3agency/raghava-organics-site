@@ -167,7 +167,7 @@ describe('OrdersService createOrder serviceability enforcement', () => {
 
     const transactionSpy = vi
       .fn()
-      .mockImplementation(async (fn: (tx: typeof tx) => Promise<unknown>) => fn(tx));
+      .mockImplementation(async (fn) => fn(tx));
 
     const fastify = {
       prisma: {
