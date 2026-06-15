@@ -43,6 +43,8 @@ export type CreateOrderInput = {
   selectedShippingProvider?: 'DELHIVERY' | 'SHIPROCKET';
   /** Rate shown to the customer by getDeliveryRates (paise). Used as-is if within ±30% of re-computed rate. */
   shippingChargePaise?: number;
+  /** Shiprocket courier company ID from the rate quote — stored on order and passed to AWB assignment. */
+  courierCompanyId?: number;
 };
 
 export type RetryPaymentInput = {
@@ -88,6 +90,8 @@ export type PrepareCheckoutInput = {
   selectedShippingProvider?: 'DELHIVERY' | 'SHIPROCKET';
   /** Rate shown to the customer by getDeliveryRates (paise). Used as-is if within ±30% of re-computed rate. */
   shippingChargePaise?: number;
+  /** Shiprocket courier company ID from the rate quote — stored on order and passed to AWB assignment. */
+  courierCompanyId?: number;
 };
 
 export type ConfirmPrepaidInput = {

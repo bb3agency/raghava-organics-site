@@ -23,6 +23,8 @@ export interface CreateOrderInput {
   selectedShippingProvider?: "DELHIVERY" | "SHIPROCKET";
   /** Rate shown to the customer by getDeliveryRates (paise). Ensures customer is charged exactly what was shown. */
   shippingChargePaise?: number;
+  /** Shiprocket courier company ID from the quoted rate — ensures AWB uses the same courier that was priced. */
+  courierCompanyId?: number;
 }
 
 export interface OrderLineItem {
@@ -128,6 +130,8 @@ export interface PrepareCheckoutInput {
   selectedShippingProvider?: "DELHIVERY" | "SHIPROCKET";
   /** Rate shown to the customer by getDeliveryRates (paise). Ensures customer is charged exactly what was shown. */
   shippingChargePaise?: number;
+  /** Shiprocket courier company ID from the quoted rate — ensures AWB uses the same courier that was priced. */
+  courierCompanyId?: number;
 }
 
 export interface PrepareCheckoutResponse {

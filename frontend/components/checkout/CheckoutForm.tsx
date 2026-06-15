@@ -72,7 +72,7 @@ export function CheckoutForm() {
   const [submitting, setSubmitting] = useState(false);
   const [savedAddresses, setSavedAddresses] = useState<UserAddress[]>([]);
   const [selectedAddressId, setSelectedAddressId] = useState<string | null>(null);
-  const [shippingQuote, setShippingQuote] = useState<{ shippingCharge: number; estimatedDays: number; selectedShippingProvider?: "DELHIVERY" | "SHIPROCKET" } | null>(null);
+  const [shippingQuote, setShippingQuote] = useState<{ shippingCharge: number; estimatedDays: number; selectedShippingProvider?: "DELHIVERY" | "SHIPROCKET"; courierCompanyId?: number } | null>(null);
   const [shippingQuoteLoading, setShippingQuoteLoading] = useState(false);
   const [shippingQuoteError, setShippingQuoteError] = useState<string | null>(null);
   const [couponCode, setCouponCode] = useState("");
@@ -165,6 +165,7 @@ export function CheckoutForm() {
             shippingCharge: rates.shippingCharge,
             estimatedDays: rates.estimatedDays,
             selectedShippingProvider: rates.selectedShippingProvider,
+            courierCompanyId: rates.courierCompanyId,
           });
           setShippingQuoteError(null);
         }
@@ -351,6 +352,7 @@ export function CheckoutForm() {
                 notes: values.notes,
                 selectedShippingProvider: shippingQuote?.selectedShippingProvider,
                 shippingChargePaise: shippingQuote?.shippingCharge,
+                courierCompanyId: shippingQuote?.courierCompanyId,
               }
             : {
                 paymentMode: "COD",
@@ -366,6 +368,7 @@ export function CheckoutForm() {
                 notes: values.notes,
                 selectedShippingProvider: shippingQuote?.selectedShippingProvider,
                 shippingChargePaise: shippingQuote?.shippingCharge,
+                courierCompanyId: shippingQuote?.courierCompanyId,
               },
           accessToken,
           orderIdempotencyKey,
@@ -397,6 +400,7 @@ export function CheckoutForm() {
               notes: values.notes,
               selectedShippingProvider: shippingQuote?.selectedShippingProvider,
               shippingChargePaise: shippingQuote?.shippingCharge,
+              courierCompanyId: shippingQuote?.courierCompanyId,
             }
           : {
               shippingAddress: {
@@ -411,6 +415,7 @@ export function CheckoutForm() {
               notes: values.notes,
               selectedShippingProvider: shippingQuote?.selectedShippingProvider,
               shippingChargePaise: shippingQuote?.shippingCharge,
+              courierCompanyId: shippingQuote?.courierCompanyId,
             },
         accessToken,
         prepareKey,

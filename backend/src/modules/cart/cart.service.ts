@@ -689,6 +689,8 @@ export class CartService {
       provider: 'DELHIVERY' | 'SHIPROCKET';
       shippingChargePaise: number;
       estimatedDays: number;
+      /** Courier company ID — Shiprocket only. Must be passed back to createShipment so AWB assignment locks the quoted courier. */
+      courierCompanyId?: number;
     };
 
     const candidates: CandidateRate[] = [];
@@ -698,7 +700,8 @@ export class CartService {
         candidates.push({
           provider: serviceableAdapters[i]!.key,
           shippingChargePaise: isFreeShipping ? 0 : result.value.shippingChargePaise,
-          estimatedDays: result.value.estimatedDays
+          estimatedDays: result.value.estimatedDays,
+          ...(result.value.courierCompanyId != null ? { courierCompanyId: result.value.courierCompanyId } : {})
         });
       }
     }
@@ -720,7 +723,8 @@ export class CartService {
       pincode: input.pincode,
       shippingCharge: winner.shippingChargePaise,
       estimatedDays: winner.estimatedDays,
-      selectedShippingProvider: winner.provider
+      selectedShippingProvider: winner.provider,
+      ...(winner.courierCompanyId != null ? { courierCompanyId: winner.courierCompanyId } : {})
     };
   }
 

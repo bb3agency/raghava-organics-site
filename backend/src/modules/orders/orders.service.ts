@@ -548,6 +548,9 @@ export class OrdersService {
           ...(input.selectedShippingProvider
             ? ({ selectedShippingProvider: input.selectedShippingProvider } as Record<string, unknown>)
             : {}),
+          ...(input.courierCompanyId != null
+            ? ({ courierCompanyId: input.courierCompanyId } as Record<string, unknown>)
+            : {}),
           shippingAddress: {
             fullName: shippingAddress.fullName,
             phone: shippingAddress.phone,
@@ -1287,6 +1290,7 @@ export class OrdersService {
       couponId: effectiveCoupon?.id ?? null,
       razorpayOrderId: razorpayOrder.providerOrderId,
       selectedShippingProvider: input.selectedShippingProvider ?? null,
+      courierCompanyId: input.courierCompanyId ?? null,
       items: cart.items.map((item) => ({
         variantId: item.variantId,
         productName: item.variant.product.name,
@@ -1330,6 +1334,7 @@ export class OrdersService {
       couponId: string | null;
       razorpayOrderId: string;
       selectedShippingProvider?: string | null;
+      courierCompanyId?: number | null;
       items: Array<{ variantId: string; productName: string; variantName: string; sku: string; quantity: number; unitPrice: number; totalPrice: number }>;
     };
 
@@ -1388,6 +1393,9 @@ export class OrdersService {
             paymentMode: 'PREPAID',
             ...(session.selectedShippingProvider
               ? ({ selectedShippingProvider: session.selectedShippingProvider } as Record<string, unknown>)
+              : {}),
+            ...(session.courierCompanyId != null
+              ? ({ courierCompanyId: session.courierCompanyId } as Record<string, unknown>)
               : {}),
             shippingAddress: {
               fullName: session.shippingAddress.fullName,
