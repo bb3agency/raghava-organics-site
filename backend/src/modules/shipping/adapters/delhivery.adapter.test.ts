@@ -403,4 +403,26 @@ describe('DelhiveryAdapter', () => {
     const adapter = new DelhiveryAdapter({ apiKey: 'test_key', pickupLocationName: 'Home' });
     await expect(adapter.schedulePickup('AWB123')).rejects.toMatchObject({ statusCode: 502 });
   });
+
+  it('schedulePickup returns a clean 502 (not a hang) when the response body stalls/aborts', async () => {
+    // Delhivery's /fm/ endpoint can send headers (200) then stall the body read.
+    // The timeout must cover response.text() too, so the backend never hangs
+    // until Nginx returns an opaque 502. Simulate the body read aborting.
+    const abortError = new Error('The operation was aborted');
+    abortError.name = 'AbortError';
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => {
+        throw abortError;
+      }
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new DelhiveryAdapter({ apiKey: 'test_key', pickupLocationName: 'Home' });
+    await expect(adapter.schedulePickup('AWB123')).rejects.toMatchObject({
+      statusCode: 502,
+      message: expect.stringContaining('did not respond within 8s')
+    });
+  });
 });

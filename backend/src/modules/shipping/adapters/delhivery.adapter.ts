@@ -540,17 +540,17 @@ export default class DelhiveryAdapter implements ShippingProviderAdapter {
   }
 
   private async request(path: string, init?: RequestInit): Promise<Record<string, unknown>> {
-    // Hard timeout via an explicit controller — more reliable across Node/undici
-    // versions than AbortSignal.timeout, which has not consistently aborted a
-    // stalled body read. Without this, a hung Delhivery endpoint keeps the
-    // backend waiting until Nginx gives up and returns an opaque 502 to the
-    // operator instead of a clean, actionable error.
+    // Hard timeout via an explicit controller that stays armed through BOTH the
+    // fetch AND the body read. Delhivery's /fm/ pickup endpoint can send headers
+    // (200) and then stall the response body; if the timer is cleared right after
+    // fetch() resolves, response.text() hangs forever and Nginx returns an opaque
+    // 502 to the operator. Keeping the whole operation inside one try + one timer
+    // guarantees we always abort within 8s and surface a clean, actionable error.
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 8_000);
 
-    let response: Response;
     try {
-      response = await fetch(`${this.baseUrl}${path}`, {
+      const response = await fetch(`${this.baseUrl}${path}`, {
         ...init,
         headers: {
           Authorization: `Token ${this.apiKey}`,
@@ -558,35 +558,39 @@ export default class DelhiveryAdapter implements ShippingProviderAdapter {
         },
         signal: controller.signal
       });
+
+      const responseText = await response.text();
+      const parsed = this.parsePayload(responseText);
+      if (!response.ok) {
+        // Include Delhivery's error detail (often in 'message', 'error', or 'rmk') for diagnostics
+        const detail =
+          typeof parsed.message === 'string' ? parsed.message :
+          typeof parsed.error === 'string' ? parsed.error :
+          typeof parsed.rmk === 'string' ? parsed.rmk :
+          responseText.slice(0, 200);
+        throw new AppError(
+          ERROR_CODES.INTERNAL_ERROR,
+          `Delhivery API error ${response.status}: ${detail}`,
+          502
+        );
+      }
+      return parsed;
     } catch (err) {
-      const aborted = err instanceof Error && err.name === 'AbortError';
+      // Re-throw our own AppErrors (non-OK response / invalid JSON) unchanged.
+      if (err instanceof AppError) {
+        throw err;
+      }
+      const aborted = err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError');
       throw new AppError(
         ERROR_CODES.INTERNAL_ERROR,
         aborted
-          ? `Delhivery did not respond within 8s for ${path} — the provider endpoint may be unreachable or overloaded. Try again shortly.`
+          ? `Delhivery did not respond within 8s for ${path} — the provider endpoint may be unreachable or stalled (Shiprocket is unaffected). Try again shortly; if it persists, the VPS may be blocked from reaching track.delhivery.com.`
           : `Delhivery request to ${path} failed: ${err instanceof Error ? err.message : 'network error'}`,
         502
       );
     } finally {
       clearTimeout(timeout);
     }
-
-    const responseText = await response.text();
-    const parsed = this.parsePayload(responseText);
-    if (!response.ok) {
-      // Include Delhivery's error detail (often in 'message', 'error', or 'rmk') for diagnostics
-      const detail =
-        typeof parsed.message === 'string' ? parsed.message :
-        typeof parsed.error === 'string' ? parsed.error :
-        typeof parsed.rmk === 'string' ? parsed.rmk :
-        responseText.slice(0, 200);
-      throw new AppError(
-        ERROR_CODES.INTERNAL_ERROR,
-        `Delhivery API error ${response.status}: ${detail}`,
-        502
-      );
-    }
-    return parsed;
   }
 
   private parsePayload(text: string): Record<string, unknown> {
