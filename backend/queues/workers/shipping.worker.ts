@@ -611,15 +611,24 @@ export function createShippingWorker(
 
         // Look up which provider created this shipment so we cancel with the same one.
         // In dual-shipping mode the global shippingProvider may be wrong (env-based).
+        // For Shiprocket we need the shipmentId (not AWB); for Delhivery we use AWB.
         const existingShipment = await prisma.shipment.findFirst({
           where: { orderId: data.orderId },
-          select: { provider: true }
+          select: {
+            provider: true,
+            shiprocketShipmentId: true,
+            awbNumber: true
+          }
         });
 
+        if (!existingShipment) {
+          return; // No shipment to cancel.
+        }
+
         const cancelAdapterKey: 'delhivery' | 'shiprocket' | null =
-          existingShipment?.provider === ShippingProvider.SHIPROCKET
+          existingShipment.provider === ShippingProvider.SHIPROCKET
             ? 'shiprocket'
-            : existingShipment?.provider === ShippingProvider.DELHIVERY
+            : existingShipment.provider === ShippingProvider.DELHIVERY
               ? 'delhivery'
               : null;
 
@@ -637,7 +646,7 @@ export function createShippingWorker(
           const adapter = shippingAdapterFactory('shiprocket');
           if (!adapter) {
             throw new Error(
-              `Cannot cancel AWB ${data.awbNumber}: shipment belongs to SHIPROCKET but the Shiprocket adapter is not configured.`
+              `Cannot cancel shipment ${data.awbNumber}: shipment belongs to SHIPROCKET but the Shiprocket adapter is not configured.`
             );
           }
           cancelAdapter = adapter;
@@ -647,7 +656,15 @@ export function createShippingWorker(
           cancelAdapter = shippingProvider;
         }
 
-        await cancelAdapter.cancelShipment(data.awbNumber);
+        // For Shiprocket, use the shipmentId (if available); for Delhivery use AWB.
+        // Shiprocket's cancel endpoint expects shipment IDs; Delhivery's expects AWBs.
+        const cancelIdentifier =
+          cancelAdapterKey === 'shiprocket' && existingShipment.shiprocketShipmentId
+            ? existingShipment.shiprocketShipmentId
+            : data.awbNumber;
+
+        await cancelAdapter.cancelShipment(cancelIdentifier);
+
         await prisma.shipment.updateMany({
           where: {
             orderId: data.orderId,

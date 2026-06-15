@@ -158,7 +158,21 @@ export class OrdersService {
     pickupPincodeConfigured?: boolean;
   }): { canShipNow: boolean; shipBlockReason: string | null } {
     if (input.status !== OrderStatus.CONFIRMED && input.status !== OrderStatus.PROCESSING) {
-      return { canShipNow: false, shipBlockReason: 'Order is not in a shippable state.' };
+      // Give a status-specific reason so the admin sees an accurate state instead of a
+      // generic "not shippable" message once the order has progressed past booking.
+      const reasonByStatus: Partial<Record<OrderStatus, string>> = {
+        [OrderStatus.SHIPPED]: 'Order is already shipped.',
+        [OrderStatus.OUT_FOR_DELIVERY]: 'Order is out for delivery.',
+        [OrderStatus.DELIVERED]: 'Order has been delivered.',
+        [OrderStatus.CANCELLED]: 'Order is cancelled.',
+        [OrderStatus.REFUNDED]: 'Order has been refunded.',
+        [OrderStatus.PENDING_PAYMENT]: 'Order is awaiting payment.',
+        [OrderStatus.PAYMENT_FAILED]: 'Order payment failed.'
+      };
+      return {
+        canShipNow: false,
+        shipBlockReason: reasonByStatus[input.status] ?? 'Order is not in a shippable state.'
+      };
     }
     if (input.awbNumber || input.shipmentStatus) {
       return { canShipNow: false, shipBlockReason: 'Shipment is already booked for this order.' };
@@ -2962,9 +2976,14 @@ export class OrdersService {
         throw new AppError(ERROR_CODES.NOT_FOUND, 'Order not found', 404);
       }
 
+      // Admin may cancel up to and including SHIPPED (in transit). Once the parcel is
+      // OUT_FOR_DELIVERY it can no longer be recalled, so cancellation stops there.
+      // For SHIPPED orders, enqueueShipmentCancellation cancels the AWB with the carrier
+      // (Delhivery/Shiprocket initiate RTO server-side when the parcel is already picked up).
       const cancellableStatuses: ReadonlyArray<OrderStatus> = [
         OrderStatus.CONFIRMED,
-        OrderStatus.PROCESSING
+        OrderStatus.PROCESSING,
+        OrderStatus.SHIPPED
       ];
       if (!cancellableStatuses.includes(existing.status)) {
         throw new AppError(

@@ -739,14 +739,6 @@ export class CartService {
           estimatedDays: result.value.estimatedDays,
           ...(result.value.courierCompanyId != null ? { courierCompanyId: result.value.courierCompanyId } : {})
         });
-        console.log(
-          `[DELIVERY RATES] ${provider} SUCCESS: ₹${result.value.shippingChargePaise / 100} (${result.value.estimatedDays}d)`
-        );
-      } else {
-        console.log(
-          `[DELIVERY RATES] ${provider} FAILED:`,
-          result?.status === 'rejected' ? result.reason?.message || String(result.reason) : 'unknown'
-        );
       }
     }
 

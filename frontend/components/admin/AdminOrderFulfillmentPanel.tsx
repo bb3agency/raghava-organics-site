@@ -309,12 +309,19 @@ export function AdminOrderFulfillmentPanel({
 
   const shipment = detail?.shipment;
   const hasShipment = Boolean(shipment?.awb);
-  const hasShiprocketId = Boolean(shipment?.shiprocketShipmentId);
   const pickupScheduled = Boolean(shipment?.pickupScheduledDate);
+  // Admin can cancel up to and including SHIPPED (in transit). Once OUT_FOR_DELIVERY /
+  // DELIVERED / terminal, cancellation is no longer possible — mirrors the backend guard.
+  const cancellableStatuses = ["CONFIRMED", "PROCESSING", "SHIPPED"];
+  const canCancel = Boolean(detail) && cancellableStatuses.includes(detail?.status ?? "");
   const labelUrl = shipment?.shipmentLabelUrl ?? shipment?.labelUrl ?? null;
 
+  // Pickup can be scheduled once an AWB is booked, regardless of provider.
+  // Shiprocket exposes a shiprocketShipmentId; Delhivery does not, but its adapter
+  // schedules pickup by warehouse location — so gate on a booked shipment, not a
+  // Shiprocket-specific id (which would permanently disable the button for Delhivery).
   const canSchedulePickup =
-    hasShiprocketId && !pickupScheduled && !pickupWasScheduled && detail?.status !== "DELIVERED";
+    hasShipment && !pickupScheduled && !pickupWasScheduled && detail?.status !== "DELIVERED";
   const canPrintLabel = hasShipment;
   const canShip = detail?.canShipNow === true;
   const canSync =
@@ -554,7 +561,15 @@ export function AdminOrderFulfillmentPanel({
             busy={busyAction === "schedule-pickup"}
             disabled={!canWrite || !canSchedulePickup || busyAction !== null}
             onClick={runSchedulePickup}
-            title={canSchedulePickup ? undefined : "Requires Shiprocket ID after booking"}
+            title={
+              canSchedulePickup
+                ? undefined
+                : !hasShipment
+                  ? "Book the shipment (AWB) first"
+                  : pickupScheduled || pickupWasScheduled
+                    ? "Pickup already scheduled"
+                    : "Pickup unavailable for this order"
+            }
           />
           <ActionButton
             step={3}
@@ -600,7 +615,12 @@ export function AdminOrderFulfillmentPanel({
               <SecondaryButton
                 icon={<Ban className="h-3.5 w-3.5" />}
                 label="Cancel order"
-                disabled={busyAction !== null}
+                disabled={busyAction !== null || !canCancel}
+                title={
+                  canCancel
+                    ? "Cancels the order, recalls the shipment (RTO if in transit), restocks items, and auto-refunds prepaid payments"
+                    : "Order can no longer be cancelled at this stage"
+                }
                 variant="warning"
                 onClick={() =>
                   runAction("cancel", "/admin/orders/:id/cancel", {
@@ -728,12 +748,14 @@ function SecondaryButton({
   disabled,
   onClick,
   variant,
+  title,
 }: {
   icon: React.ReactNode;
   label: string;
   disabled: boolean;
   onClick: () => void;
   variant?: "danger" | "warning";
+  title?: string;
 }) {
   const variantClass =
     variant === "danger"
@@ -747,7 +769,8 @@ function SecondaryButton({
       type="button"
       disabled={disabled}
       onClick={onClick}
-      className={`flex h-9 items-center gap-1.5 rounded-lg border px-3 text-sm transition-colors disabled:opacity-50 ${variantClass}`}
+      title={title}
+      className={`flex h-9 items-center gap-1.5 rounded-lg border px-3 text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${variantClass}`}
     >
       {icon}
       {label}
