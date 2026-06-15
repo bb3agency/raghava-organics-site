@@ -20,7 +20,7 @@ import { getBrowserApiBaseUrl } from "@/lib/api-base";
 import { ApiError } from "@/lib/api";
 import { createIdempotencyKey } from "@/lib/idempotency";
 import { notifyAdminDataChanged } from "@/lib/admin-data-refresh";
-import { getApiErrorMessageWithHint } from "@/lib/error-messages";
+import { getApiErrorMessageWithHint, getOpsErrorDetail } from "@/lib/error-messages";
 import { shippingProviderLabel } from "@/lib/shipping-provider-labels";
 import { ADMIN_PERMISSIONS, hasAdminPermission } from "@/lib/permissions";
 import { useAuthStore } from "@/stores/auth";
@@ -263,7 +263,14 @@ export function AdminOrderFulfillmentPanel({
       await loadDetail(selectedOrderId);
       notifyAdminDataChanged(["orders", "shipments", "dashboard"]);
     } catch (err) {
-      setError(getApiErrorMessageWithHint(err));
+      // Surface the provider's real reason (e.g. Delhivery pickup-window
+      // rejection) to the operator instead of the generic retry copy.
+      const detail = getOpsErrorDetail(err);
+      setError(
+        detail
+          ? `${getApiErrorMessageWithHint(err)} ${detail}`
+          : getApiErrorMessageWithHint(err),
+      );
     } finally {
       setBusyAction(null);
     }

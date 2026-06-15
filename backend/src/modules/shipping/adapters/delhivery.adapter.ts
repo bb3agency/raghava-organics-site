@@ -373,9 +373,28 @@ export default class DelhiveryAdapter implements ShippingProviderAdapter {
       );
     }
 
-    // Schedule for today at 11:00 AM IST. Delhivery requires date as YYYY-MM-DD.
-    const todayIST = new Date(Date.now() + 5.5 * 60 * 60 * 1000).toISOString().slice(0, 10);
-    const pickupTime = '11:00:00';
+    // Delhivery rejects a pickup whose date+time is already in the past, so the
+    // requested slot must always be in the future. We shift "now" into IST and
+    // pick a slot within Delhivery's pickup window (~10:00–18:00 IST):
+    //   - early enough in the day → schedule today, at least 2h out (min 11:00)
+    //   - too late today → schedule tomorrow morning at 11:00
+    // Delhivery requires date as YYYY-MM-DD (IST calendar day).
+    const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+    const istNow = new Date(Date.now() + IST_OFFSET_MS);
+    const istHour = istNow.getUTCHours(); // istNow is already shifted, so UTC getters give IST wall-clock
+
+    let pickupDateObj = istNow;
+    let pickupHour: number;
+    if (istHour < 15) {
+      // Enough lead time today: schedule ~2h out, never before 11:00.
+      pickupHour = Math.max(istHour + 2, 11);
+    } else {
+      // Past the same-day cutoff — schedule tomorrow morning.
+      pickupDateObj = new Date(istNow.getTime() + 24 * 60 * 60 * 1000);
+      pickupHour = 11;
+    }
+    const pickupDate = pickupDateObj.toISOString().slice(0, 10);
+    const pickupTime = `${String(pickupHour).padStart(2, '0')}:00:00`;
 
     const payload = await this.request('/fm/request/new/', {
       method: 'POST',
@@ -383,7 +402,7 @@ export default class DelhiveryAdapter implements ShippingProviderAdapter {
       body: JSON.stringify({
         pickup_location: this.pickupLocationName,
         pickup_time: pickupTime,
-        pickup_date: todayIST,
+        pickup_date: pickupDate,
         expected_package_count: 1
       })
     });
@@ -393,7 +412,7 @@ export default class DelhiveryAdapter implements ShippingProviderAdapter {
 
     return {
       scheduled: pickupId !== null || payload.success === true,
-      pickupScheduledDate: `${todayIST}T${pickupTime}+05:30`,
+      pickupScheduledDate: `${pickupDate}T${pickupTime}+05:30`,
       ...(pickupId ? { pickupTokenNumber: pickupId } : {}),
       providerPayload: payload
     };
