@@ -66,5 +66,11 @@ export interface AdminPrintLabelResponse {
 }
 
 export interface AdminSchedulePickupResponse {
+  scheduled?: boolean;
+  /**
+   * True when the courier pickup was already arranged for this warehouse and now
+   * also covers this shipment — the action succeeded without creating a new slot.
+   */
+  alreadyScheduled?: boolean;
   pickupScheduledDate?: string;
 }

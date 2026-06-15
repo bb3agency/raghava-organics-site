@@ -1154,6 +1154,7 @@ export const adminSchedulePickupSchema = {
       required: ['scheduled'],
       properties: {
         scheduled: { type: 'boolean' },
+        alreadyScheduled: { type: 'boolean' },
         pickupScheduledDate: { type: 'string', maxLength: 64 },
         pickupTokenNumber: { type: 'string', maxLength: 64 }
       }

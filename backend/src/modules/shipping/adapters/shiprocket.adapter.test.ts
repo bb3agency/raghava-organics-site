@@ -568,6 +568,70 @@ describe('ShiprocketAdapter', () => {
     expect(result.scheduled).toBe(true);
     expect(result.pickupScheduledDate).toBe('2026-05-06');
     expect(result.pickupTokenNumber).toBe('PKP123');
+    expect(result.alreadyScheduled).toBeUndefined();
+  });
+
+  it('treats "Already in Pickup Queue" (HTTP 400) as a successful, already-scheduled pickup', async () => {
+    // When a warehouse pickup is already arranged, Shiprocket rejects further
+    // pickup requests for the same shipment/warehouse. The shipment is covered,
+    // so the operator must not see a failure when scheduling later same-day orders.
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ token: 'sr-token-123' })
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 400,
+        text: async () => JSON.stringify({ message: 'Already in Pickup Queue.' })
+      });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new ShiprocketAdapter({ email: 'test@example.com', password: 'secret' });
+    const result = await adapter.schedulePickup('SHIP202');
+
+    expect(result.scheduled).toBe(true);
+    expect(result.alreadyScheduled).toBe(true);
+  });
+
+  it('treats an existing pickup reported with HTTP 200 + message as already-scheduled', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ token: 'sr-token-123' })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ status: 0, message: 'Pickup already scheduled' })
+      });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new ShiprocketAdapter({ email: 'test@example.com', password: 'secret' });
+    const result = await adapter.schedulePickup('SHIP202');
+
+    expect(result.scheduled).toBe(true);
+    expect(result.alreadyScheduled).toBe(true);
+  });
+
+  it('still surfaces a genuine pickup failure', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ token: 'sr-token-123' })
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 422,
+        text: async () => JSON.stringify({ message: 'Invalid shipment id' })
+      });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new ShiprocketAdapter({ email: 'test@example.com', password: 'secret' });
+    await expect(adapter.schedulePickup('SHIP202')).rejects.toMatchObject({ statusCode: 502 });
   });
 
   it('generates label and returns URL', async () => {

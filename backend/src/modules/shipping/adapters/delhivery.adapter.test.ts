@@ -336,4 +336,71 @@ describe('DelhiveryAdapter', () => {
       })
     ).rejects.toMatchObject({ statusCode: 502 });
   });
+
+  it('schedulePickup books a pickup with a future IST slot', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ pickup_id: 987654, success: true })
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new DelhiveryAdapter({ apiKey: 'test_key', pickupLocationName: 'Home' });
+    const result = await adapter.schedulePickup('AWB123');
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain('/fm/request/new/');
+    const body = JSON.parse(init.body as string) as { pickup_location: string; pickup_date: string; pickup_time: string };
+    expect(body.pickup_location).toBe('Home');
+    expect(body.pickup_date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(result.scheduled).toBe(true);
+    expect(result.alreadyScheduled).toBeUndefined();
+    expect(result.pickupTokenNumber).toBe('987654');
+  });
+
+  it('schedulePickup treats an existing open pickup (HTTP 400) as success, not failure', async () => {
+    // A merchant with many same-day orders clicks "Schedule pickup" on each; only
+    // the first creates a request. Delhivery rejects the rest while the prior
+    // warehouse pickup is still open — that visit already covers this AWB.
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 400,
+      text: async () => JSON.stringify({ error: 'Pickup request already exists for this warehouse' })
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new DelhiveryAdapter({ apiKey: 'test_key', pickupLocationName: 'Home' });
+    const result = await adapter.schedulePickup('AWB123');
+
+    expect(result.scheduled).toBe(true);
+    expect(result.alreadyScheduled).toBe(true);
+    expect(result.pickupScheduledDate).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  });
+
+  it('schedulePickup treats an existing pickup reported with HTTP 200 + error flag as success', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ success: false, error: 'open pickup request pending' })
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new DelhiveryAdapter({ apiKey: 'test_key', pickupLocationName: 'Home' });
+    const result = await adapter.schedulePickup('AWB123');
+
+    expect(result.scheduled).toBe(true);
+    expect(result.alreadyScheduled).toBe(true);
+  });
+
+  it('schedulePickup still surfaces a genuine non-pickup error', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 400,
+      text: async () => JSON.stringify({ error: 'ClientWarehouse matching query does not exist' })
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new DelhiveryAdapter({ apiKey: 'test_key', pickupLocationName: 'Home' });
+    await expect(adapter.schedulePickup('AWB123')).rejects.toMatchObject({ statusCode: 502 });
+  });
 });

@@ -255,11 +255,19 @@ export function AdminOrderFulfillmentPanel({
         { method: "POST", idempotencyKey: createIdempotencyKey(), body: JSON.stringify({}) },
       );
       setPickupWasScheduled(true);
-      setSuccess(
-        result.pickupScheduledDate
-          ? `Pickup scheduled for ${result.pickupScheduledDate}.`
-          : "Pickup scheduled.",
-      );
+      if (result.alreadyScheduled) {
+        // A pickup was already arranged for this warehouse — the courier visit
+        // covers this shipment too, so no new slot was created.
+        setSuccess(
+          "Pickup already arranged for your warehouse — this shipment will be collected in that visit.",
+        );
+      } else {
+        setSuccess(
+          result.pickupScheduledDate
+            ? `Pickup scheduled for ${result.pickupScheduledDate}.`
+            : "Pickup scheduled.",
+        );
+      }
       await loadDetail(selectedOrderId);
       notifyAdminDataChanged(["orders", "shipments", "dashboard"]);
     } catch (err) {

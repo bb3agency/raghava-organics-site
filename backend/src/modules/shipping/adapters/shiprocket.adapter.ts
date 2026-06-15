@@ -20,6 +20,7 @@ import {
   normalizeIndianShippingPhone,
   resolveShiprocketCustomerEmail
 } from '@common/shipping/shiprocket-payload';
+import { isExistingPickupMessage, payloadIndicatesExistingPickup } from '@common/shipping/pickup-detection';
 
 const SHIPROCKET_BASE_URL = 'https://apiv2.shiprocket.in/v1/external';
 const DEFAULT_PICKUP_LOCATION = 'Primary';
@@ -535,13 +536,39 @@ export default class ShiprocketAdapter implements ShippingProviderAdapter {
 
   async schedulePickup(shiprocketShipmentId: string): Promise<SchedulePickupResult> {
     const shipmentId = this.resolveShipmentIdPayload(shiprocketShipmentId);
-    const payload = await this.request<ShiprocketPickupResponse>(
-      '/courier/generate/pickup',
-      {
-        method: 'POST',
-        body: JSON.stringify({ shipment_id: [shipmentId] })
+
+    let payload: ShiprocketPickupResponse;
+    try {
+      payload = await this.request<ShiprocketPickupResponse>(
+        '/courier/generate/pickup',
+        {
+          method: 'POST',
+          body: JSON.stringify({ shipment_id: [shipmentId] })
+        }
+      );
+    } catch (err) {
+      // Shiprocket returns HTTP 400 "Already in Pickup Queue" when a pickup for
+      // this shipment/warehouse is already arranged. The shipment is covered, so
+      // treat it as a successful (already-scheduled) pickup rather than an error.
+      if (err instanceof AppError && isExistingPickupMessage(err.message)) {
+        return {
+          scheduled: true,
+          alreadyScheduled: true,
+          providerPayload: { note: 'already_in_pickup_queue', detail: err.message }
+        };
       }
-    );
+      throw err;
+    }
+
+    // Shiprocket can also report an existing pickup as HTTP 200 with a message.
+    if (payloadIndicatesExistingPickup(payload as Record<string, unknown>)) {
+      return {
+        scheduled: true,
+        alreadyScheduled: true,
+        ...(payload.pickup_scheduled_date != null ? { pickupScheduledDate: payload.pickup_scheduled_date } : {}),
+        providerPayload: payload as Record<string, unknown>
+      };
+    }
 
     return {
       scheduled: (payload.status ?? 0) === 1,

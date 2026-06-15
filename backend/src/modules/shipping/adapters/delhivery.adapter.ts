@@ -12,6 +12,7 @@ import {
 import { AppError } from '@common/errors/app-error';
 import { ERROR_CODES } from '@common/errors/error-codes';
 import { resolveShippingHsnCode } from '@common/shipping/resolve-shipping-hsn';
+import { isExistingPickupMessage, payloadIndicatesExistingPickup } from '@common/shipping/pickup-detection';
 
 type DelhiveryAdapterOptions = {
   apiKey: string;
@@ -396,16 +397,43 @@ export default class DelhiveryAdapter implements ShippingProviderAdapter {
     const pickupDate = pickupDateObj.toISOString().slice(0, 10);
     const pickupTime = `${String(pickupHour).padStart(2, '0')}:00:00`;
 
-    const payload = await this.request('/fm/request/new/', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        pickup_location: this.pickupLocationName,
-        pickup_time: pickupTime,
-        pickup_date: pickupDate,
-        expected_package_count: 1
-      })
-    });
+    let payload: Record<string, unknown>;
+    try {
+      payload = await this.request('/fm/request/new/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pickup_location: this.pickupLocationName,
+          pickup_time: pickupTime,
+          pickup_date: pickupDate,
+          expected_package_count: 1
+        })
+      });
+    } catch (err) {
+      // Delhivery rejects a second pickup request for the warehouse while an
+      // earlier one is still open/uncollected. That courier visit already
+      // covers this AWB, so treat it as a successful (already-arranged) pickup
+      // instead of blocking the operator from "scheduling" later orders.
+      if (err instanceof AppError && isExistingPickupMessage(err.message)) {
+        return {
+          scheduled: true,
+          alreadyScheduled: true,
+          pickupScheduledDate: `${pickupDate}T${pickupTime}+05:30`,
+          providerPayload: { note: 'existing_open_pickup_request', detail: err.message }
+        };
+      }
+      throw err;
+    }
+
+    // Some Delhivery responses return HTTP 200 with an error flag for duplicates.
+    if (payloadIndicatesExistingPickup(payload)) {
+      return {
+        scheduled: true,
+        alreadyScheduled: true,
+        pickupScheduledDate: `${pickupDate}T${pickupTime}+05:30`,
+        providerPayload: payload
+      };
+    }
 
     const pickupId =
       payload.pickup_id != null ? String(payload.pickup_id) : null;
@@ -512,14 +540,36 @@ export default class DelhiveryAdapter implements ShippingProviderAdapter {
   }
 
   private async request(path: string, init?: RequestInit): Promise<Record<string, unknown>> {
-    const response = await fetch(`${this.baseUrl}${path}`, {
-      ...init,
-      headers: {
-        Authorization: `Token ${this.apiKey}`,
-        ...(init?.headers ?? {})
-      },
-      signal: AbortSignal.timeout(10_000)
-    });
+    // Hard timeout via an explicit controller — more reliable across Node/undici
+    // versions than AbortSignal.timeout, which has not consistently aborted a
+    // stalled body read. Without this, a hung Delhivery endpoint keeps the
+    // backend waiting until Nginx gives up and returns an opaque 502 to the
+    // operator instead of a clean, actionable error.
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8_000);
+
+    let response: Response;
+    try {
+      response = await fetch(`${this.baseUrl}${path}`, {
+        ...init,
+        headers: {
+          Authorization: `Token ${this.apiKey}`,
+          ...(init?.headers ?? {})
+        },
+        signal: controller.signal
+      });
+    } catch (err) {
+      const aborted = err instanceof Error && err.name === 'AbortError';
+      throw new AppError(
+        ERROR_CODES.INTERNAL_ERROR,
+        aborted
+          ? `Delhivery did not respond within 8s for ${path} — the provider endpoint may be unreachable or overloaded. Try again shortly.`
+          : `Delhivery request to ${path} failed: ${err instanceof Error ? err.message : 'network error'}`,
+        502
+      );
+    } finally {
+      clearTimeout(timeout);
+    }
 
     const responseText = await response.text();
     const parsed = this.parsePayload(responseText);
