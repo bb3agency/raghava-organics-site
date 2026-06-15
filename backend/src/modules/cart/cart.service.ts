@@ -725,13 +725,21 @@ export class CartService {
     const candidates: CandidateRate[] = [];
     for (let i = 0; i < serviceableAdapters.length; i++) {
       const result = rateResults[i];
+      const provider = serviceableAdapters[i]!.key;
       if (result?.status === 'fulfilled') {
+        const charge = isFreeShipping ? 0 : result.value.shippingChargePaise;
         candidates.push({
-          provider: serviceableAdapters[i]!.key,
-          shippingChargePaise: isFreeShipping ? 0 : result.value.shippingChargePaise,
+          provider,
+          shippingChargePaise: charge,
           estimatedDays: result.value.estimatedDays,
           ...(result.value.courierCompanyId != null ? { courierCompanyId: result.value.courierCompanyId } : {})
         });
+        console.log(`[DELIVERY RATES] ${provider} SUCCESS: ₹${charge / 100} (${result.value.estimatedDays}d)`);
+      } else {
+        console.log(
+          `[DELIVERY RATES] ${provider} FAILED:`,
+          result?.status === 'rejected' ? result.reason?.message || String(result.reason) : 'unknown'
+        );
       }
     }
 
