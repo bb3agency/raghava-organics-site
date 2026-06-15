@@ -41,6 +41,8 @@ export type CreateOrderInput = {
   notes?: string;
   paymentMode?: 'PREPAID' | 'COD';
   selectedShippingProvider?: 'DELHIVERY' | 'SHIPROCKET';
+  /** Rate shown to the customer by getDeliveryRates (paise). Used as-is if within ±30% of re-computed rate. */
+  shippingChargePaise?: number;
 };
 
 export type RetryPaymentInput = {
@@ -84,6 +86,8 @@ export type PrepareCheckoutInput = {
   };
   notes?: string;
   selectedShippingProvider?: 'DELHIVERY' | 'SHIPROCKET';
+  /** Rate shown to the customer by getDeliveryRates (paise). Used as-is if within ±30% of re-computed rate. */
+  shippingChargePaise?: number;
 };
 
 export type ConfirmPrepaidInput = {

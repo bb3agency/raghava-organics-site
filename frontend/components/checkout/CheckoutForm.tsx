@@ -345,7 +345,13 @@ export function CheckoutForm() {
         const orderIdempotencyKey = createIdempotencyKey();
         const order = await createOrder(
           addressId
-            ? { addressId, paymentMode: "COD", notes: values.notes, selectedShippingProvider: shippingQuote?.selectedShippingProvider }
+            ? {
+                addressId,
+                paymentMode: "COD",
+                notes: values.notes,
+                selectedShippingProvider: shippingQuote?.selectedShippingProvider,
+                shippingChargePaise: shippingQuote?.shippingCharge,
+              }
             : {
                 paymentMode: "COD",
                 shippingAddress: {
@@ -359,6 +365,7 @@ export function CheckoutForm() {
                 },
                 notes: values.notes,
                 selectedShippingProvider: shippingQuote?.selectedShippingProvider,
+                shippingChargePaise: shippingQuote?.shippingCharge,
               },
           accessToken,
           orderIdempotencyKey,
@@ -385,7 +392,12 @@ export function CheckoutForm() {
       const prepareKey = createIdempotencyKey();
       const checkout = await prepareCheckout(
         addressId
-          ? { addressId, notes: values.notes, selectedShippingProvider: shippingQuote?.selectedShippingProvider }
+          ? {
+              addressId,
+              notes: values.notes,
+              selectedShippingProvider: shippingQuote?.selectedShippingProvider,
+              shippingChargePaise: shippingQuote?.shippingCharge,
+            }
           : {
               shippingAddress: {
                 fullName: values.fullName,
@@ -398,6 +410,7 @@ export function CheckoutForm() {
               },
               notes: values.notes,
               selectedShippingProvider: shippingQuote?.selectedShippingProvider,
+              shippingChargePaise: shippingQuote?.shippingCharge,
             },
         accessToken,
         prepareKey,

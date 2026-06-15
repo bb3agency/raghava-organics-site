@@ -804,7 +804,8 @@ export const createOrderSchema = {
       },
       notes: { type: 'string', maxLength: 2000 },
       paymentMode: { type: 'string', enum: ['PREPAID', 'COD'], maxLength: 10 },
-      selectedShippingProvider: { type: 'string', enum: ['DELHIVERY', 'SHIPROCKET'], maxLength: 20 }
+      selectedShippingProvider: { type: 'string', enum: ['DELHIVERY', 'SHIPROCKET'], maxLength: 20 },
+      shippingChargePaise: { type: 'integer', minimum: 0, maximum: 10000000 }
     },
     anyOf: [{ required: ['addressId'] }, { required: ['shippingAddress'] }]
   },
@@ -949,7 +950,8 @@ export const prepareCheckoutSchema = {
         }
       },
       notes: { type: 'string', maxLength: 2000 },
-      selectedShippingProvider: { type: 'string', enum: ['DELHIVERY', 'SHIPROCKET'], maxLength: 20 }
+      selectedShippingProvider: { type: 'string', enum: ['DELHIVERY', 'SHIPROCKET'], maxLength: 20 },
+      shippingChargePaise: { type: 'integer', minimum: 0, maximum: 10000000 }
     },
     anyOf: [{ required: ['addressId'] }, { required: ['shippingAddress'] }]
   },

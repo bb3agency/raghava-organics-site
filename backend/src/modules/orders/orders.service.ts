@@ -499,7 +499,22 @@ export class OrdersService {
         paymentMode: requestedPaymentMode === 'COD' ? 'COD' : 'PREPAID',
         ...(providerOverride ? { provider: providerOverride } : {})
       });
-      const shippingCharge = shippingQuote.shippingChargePaise;
+      const recomputedCharge = shippingQuote.shippingChargePaise;
+
+      // Use the rate the customer saw (passed from getDeliveryRates) if within ±30% tolerance.
+      let shippingCharge = recomputedCharge;
+      if (input.shippingChargePaise != null && !usingNoop) {
+        const clientRate = input.shippingChargePaise;
+        const tolerance = Math.ceil(recomputedCharge * 0.30);
+        const withinTolerance =
+          recomputedCharge === 0
+            ? clientRate === 0
+            : Math.abs(clientRate - recomputedCharge) <= tolerance;
+        if (withinTolerance) {
+          shippingCharge = clientRate;
+        }
+      }
+
       const total = Math.max(subtotal + shippingCharge - discountAmount, 0);
 
       if (requestedPaymentMode === 'COD') {
@@ -1198,7 +1213,29 @@ export class OrdersService {
       paymentMode: 'PREPAID',
       ...(providerOverrideForCheckout ? { provider: providerOverrideForCheckout } : {})
     });
-    const shippingCharge = shippingQuote.shippingChargePaise;
+    const recomputedCharge = shippingQuote.shippingChargePaise;
+
+    // If the frontend passes the rate it showed the customer (from getDeliveryRates),
+    // use it — the customer must be charged exactly what they saw. We validate it's
+    // within ±30% of our re-computed value to prevent tampering.
+    let shippingCharge = recomputedCharge;
+    if (input.shippingChargePaise != null && !usingNoop) {
+      const clientRate = input.shippingChargePaise;
+      const tolerance = Math.ceil(recomputedCharge * 0.30);
+      const withinTolerance =
+        recomputedCharge === 0
+          ? clientRate === 0
+          : Math.abs(clientRate - recomputedCharge) <= tolerance;
+      if (withinTolerance) {
+        shippingCharge = clientRate;
+      } else {
+        this.fastify.log?.warn(
+          { clientRate, recomputedCharge, diff: Math.abs(clientRate - recomputedCharge), tolerance },
+          'prepareCheckout: client shippingChargePaise outside ±30% tolerance — using re-computed rate'
+        );
+      }
+    }
+
     const total = Math.max(subtotal + shippingCharge - discountAmount, 0);
 
     await this.checkoutRisk.assertInitiatePaymentAllowed({

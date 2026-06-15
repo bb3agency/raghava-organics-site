@@ -21,6 +21,8 @@ export interface CreateOrderInput {
   paymentMode?: CheckoutPaymentMode;
   /** Backend-selected cheapest shipping provider from delivery rates response. */
   selectedShippingProvider?: "DELHIVERY" | "SHIPROCKET";
+  /** Rate shown to the customer by getDeliveryRates (paise). Ensures customer is charged exactly what was shown. */
+  shippingChargePaise?: number;
 }
 
 export interface OrderLineItem {
@@ -124,6 +126,8 @@ export interface PrepareCheckoutInput {
   shippingAddress?: CheckoutShippingAddressInput;
   notes?: string;
   selectedShippingProvider?: "DELHIVERY" | "SHIPROCKET";
+  /** Rate shown to the customer by getDeliveryRates (paise). Ensures customer is charged exactly what was shown. */
+  shippingChargePaise?: number;
 }
 
 export interface PrepareCheckoutResponse {

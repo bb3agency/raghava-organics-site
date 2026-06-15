@@ -748,16 +748,16 @@ export class CartService {
     }
     const effectiveProvider = input.provider ?? new NoopShippingAdapter();
 
+    const DEFAULT_WEIGHT_GRAMS = 500;
     const totalWeightGrams = input.cart.items.reduce((sum, item) => {
       const unitWeight = item.variant.weight ?? 0;
       if (unitWeight <= 0 && !usingNoop) {
-        throw new AppError(
-          ERROR_CODES.VALIDATION_ERROR,
-          `Missing or invalid variant weight for variant ${item.variant.id}`,
-          422
+        this.fastify.log?.warn(
+          { variantId: item.variant.id },
+          `computeShippingChargeForCart: variant has no weight configured — using ${DEFAULT_WEIGHT_GRAMS}g default`
         );
       }
-      return sum + Math.max(unitWeight, 1) * item.quantity;
+      return sum + Math.max(unitWeight > 0 ? unitWeight : DEFAULT_WEIGHT_GRAMS, 1) * item.quantity;
     }, 0);
 
     const rate = await effectiveProvider.calculateDeliveryRate({
