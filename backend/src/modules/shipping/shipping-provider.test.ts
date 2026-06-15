@@ -61,12 +61,12 @@ describe('shipping provider runtime', () => {
     expect(runtime.adapter).not.toBeNull();
   });
 
-  it('delhivery adapter has supportsSchedulePickup=false', () => {
+  it('delhivery adapter reports schedulePickup and generateLabel as supported', () => {
     vi.stubEnv('SHIPPING_PROVIDER', 'delhivery');
     vi.stubEnv('DELHIVERY_API_KEY', 'test-key');
     const runtime = resolveShippingProviderRuntime();
-    expect(runtime.capabilities.supportsSchedulePickup).toBe(false);
-    expect(runtime.capabilities.supportsGenerateLabel).toBe(false);
+    expect(runtime.capabilities.supportsSchedulePickup).toBe(true);
+    expect(runtime.capabilities.supportsGenerateLabel).toBe(true);
   });
 });
 

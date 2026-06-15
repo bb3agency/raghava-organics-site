@@ -310,8 +310,10 @@ export function resolveShippingProviderRuntime(runtimeConfig: NodeJS.ProcessEnv 
       supportsCreateShipment: true,
       supportsTracking: true,
       supportsRateCalculation: true,
-      supportsSchedulePickup: false,
-      supportsGenerateLabel: false
+      // Delhivery implements schedulePickup via /fm/request/new/ (warehouse-level
+      // pickup). Keep this in sync with the adapter so capability reporting is honest.
+      supportsSchedulePickup: true,
+      supportsGenerateLabel: true
     },
     adapter
   };
