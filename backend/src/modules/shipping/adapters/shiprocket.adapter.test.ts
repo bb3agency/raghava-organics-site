@@ -1,10 +1,16 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ShiprocketAdapter from './shiprocket.adapter';
 
 describe('ShiprocketAdapter', () => {
+  beforeEach(() => {
+    // Suppress debug logging during tests
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
+    vi.restoreAllMocks();
   });
 
   it('authenticates and caches token on first request', async () => {
