@@ -266,6 +266,21 @@ export default class ShiprocketAdapter implements ShippingProviderAdapter {
 
     const allCouriers: ShiprocketCourierCompany[] = payload.data?.available_courier_companies ?? [];
 
+    // DEBUG: Log all couriers returned by Shiprocket
+    console.log(
+      `[SHIPROCKET QUOTE DEBUG] Pincode: ${input.destinationPincode}, Weight: ${weightKg}kg, COD: ${isCod}`,
+      JSON.stringify(
+        allCouriers.map((c) => ({
+          id: c.courier_company_id,
+          name: c.courier_name,
+          rate: c.rate,
+          estimatedDays: c.estimated_delivery_days
+        })),
+        null,
+        2
+      )
+    );
+
     // Filter out couriers with null/undefined/zero rates — these are typically COD-only
     // couriers that appear in prepaid responses with rate=0 or rate=null. Including them
     // causes the cheapest sort to pick a 0-rate courier, resulting in free shipping silently.
