@@ -15,6 +15,8 @@ import {
 } from '@common/coupons/coupons-feature';
 import { NoopShippingAdapter } from '@modules/shipping/adapters/noop-shipping.adapter';
 import { resolveDualShippingRuntime } from '@modules/shipping/shipping-provider';
+import { computeChargeableWeightGrams } from '@common/shipping/chargeable-weight';
+import { parseBoxPresets, type BoxPreset } from '@common/shipping/select-box-preset';
 import { sendTechnicalFailureAlert } from '@modules/notifications/notification-failure-alert';
 import { AddCartItemInput, ApplyCouponInput, UpdateCartItemInput } from './cart.types';
 
@@ -602,7 +604,7 @@ export class CartService {
       if (!pickupPincode) {
         throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Pickup pincode is not configured', 503);
       }
-      return this.getDeliveryRatesMultiProvider({
+      const result = await this.getDeliveryRatesMultiProvider({
         cart,
         pincode,
         pickupPincode,
@@ -610,6 +612,17 @@ export class CartService {
         delhiveryAdapter: providerRuntime.delhivery?.adapter ?? null,
         shiprocketAdapter: providerRuntime.shiprocket?.adapter ?? null
       });
+      // Persist the exact winning quote so checkout reuses it verbatim — no re-computation.
+      // Shiprocket's serviceability API is non-deterministic (different courier/rate per call),
+      // so re-computing at checkout can diverge from what the customer was shown. Storing the
+      // quote here guarantees: shown rate == charged rate == locked courier.
+      await this.persistShippingQuote(userId, sessionToken, cart.id, pincode, paymentMode, {
+        provider: result.selectedShippingProvider,
+        shippingChargePaise: result.shippingCharge,
+        estimatedDays: result.estimatedDays,
+        ...(result.courierCompanyId != null ? { courierCompanyId: result.courierCompanyId } : {})
+      });
+      return result;
     }
 
     // Noop fallback — no providers configured at all
@@ -635,24 +648,40 @@ export class CartService {
   }
 
   private async getDeliveryRatesMultiProvider(input: {
-    cart: { coupon: Coupon | null; items: Array<{ quantity: number; variant: { id: string; weight?: number | null } }> };
+    cart: {
+      coupon: Coupon | null;
+      items: Array<{
+        quantity: number;
+        variant: {
+          id: string;
+          weight?: number | null;
+          packageLengthCm?: number | null;
+          packageWidthCm?: number | null;
+          packageHeightCm?: number | null;
+        };
+      }>;
+    };
     pincode: string;
     pickupPincode: string;
     paymentMode: 'COD' | 'PREPAID';
     delhiveryAdapter: ShippingProviderAdapter | null;
     shiprocketAdapter: ShippingProviderAdapter | null;
   }) {
-    const DEFAULT_VARIANT_WEIGHT_GRAMS = 500;
-    const totalWeightGrams = input.cart.items.reduce((sum, item) => {
-      const unitWeight = item.variant.weight ?? 0;
-      if (unitWeight <= 0) {
-        this.fastify.log?.warn(
-          { variantId: item.variant.id },
-          `cart: variant has no weight configured — using ${DEFAULT_VARIANT_WEIGHT_GRAMS}g default for shipping rate`
-        );
-      }
-      return sum + Math.max(unitWeight > 0 ? unitWeight : DEFAULT_VARIANT_WEIGHT_GRAMS, 1) * item.quantity;
-    }, 0);
+    // Quote on the chargeable weight the courier will actually bill — max(dead weight, volumetric
+    // weight of the box). Quoting on dead weight alone underprices bulky parcels: the quote looks
+    // cheap, but Shiprocket later bills on the volumetric weight derived from the box dimensions
+    // the AWB sends, charging far more than was shown.
+    const boxPresets = await this.loadBoxPresets();
+    const totalWeightGrams = computeChargeableWeightGrams({
+      boxPresets,
+      items: input.cart.items.map((item) => ({
+        quantity: item.quantity,
+        weightGrams: item.variant.weight ?? null,
+        lengthCm: item.variant.packageLengthCm ?? null,
+        widthCm: item.variant.packageWidthCm ?? null,
+        heightCm: item.variant.packageHeightCm ?? null
+      }))
+    });
 
     const activeAdapters: Array<{ key: 'DELHIVERY' | 'SHIPROCKET'; adapter: ShippingProviderAdapter }> = [];
     if (input.delhiveryAdapter) activeAdapters.push({ key: 'DELHIVERY', adapter: input.delhiveryAdapter });
@@ -728,12 +757,167 @@ export class CartService {
     };
   }
 
+  /**
+   * Loads the merchant's configured parcel box presets from store settings. Used to replicate the
+   * worker's box selection at quote time so volumetric weight (and thus the quoted rate) matches
+   * what the courier bills at AWB. Returns [] on any error — chargeable weight then falls back to
+   * the adapter's default box, which is still correct.
+   */
+  private async loadBoxPresets(): Promise<BoxPreset[]> {
+    try {
+      const settings = await this.fastify.prisma.storeSettings.findUnique({
+        where: { singletonKey: 'default' },
+        select: { boxPresets: true }
+      });
+      return parseBoxPresets((settings as { boxPresets?: unknown } | null)?.boxPresets);
+    } catch (error) {
+      this.fastify.log?.warn({ err: error }, 'loadBoxPresets: failed to load box presets — using default box');
+      return [];
+    }
+  }
+
+  private buildShippingQuoteKey(
+    userId: string | undefined,
+    sessionToken: string | undefined,
+    pincode: string,
+    paymentMode: 'COD' | 'PREPAID'
+  ): string | null {
+    const owner = userId ?? sessionToken;
+    if (!owner) return null;
+    return `shipping:quote:${owner}:${pincode}:${paymentMode}`;
+  }
+
+  private async persistShippingQuote(
+    userId: string | undefined,
+    sessionToken: string | undefined,
+    cartId: string,
+    pincode: string,
+    paymentMode: 'COD' | 'PREPAID',
+    quote: {
+      provider: 'DELHIVERY' | 'SHIPROCKET';
+      shippingChargePaise: number;
+      estimatedDays: number;
+      courierCompanyId?: number;
+    }
+  ): Promise<void> {
+    const key = this.buildShippingQuoteKey(userId, sessionToken, pincode, paymentMode);
+    if (!key) return;
+    try {
+      await this.fastify.redis.set(key, JSON.stringify({ cartId, ...quote }), 'EX', 1800);
+    } catch (error) {
+      // Non-fatal — checkout falls back to re-computation if the quote is unavailable.
+      this.fastify.log?.warn({ err: error, key }, 'persistShippingQuote: failed to cache delivery quote');
+    }
+  }
+
+  /**
+   * Returns the exact quote shown to the customer at getDeliveryRates, if still valid for this
+   * cart + pincode + paymentMode. Checkout uses this to charge/lock the same rate and courier the
+   * customer saw, avoiding divergence from Shiprocket's non-deterministic serviceability API.
+   * Returns null when no matching quote is cached — caller must fall back to re-computation.
+   */
+  async getStoredShippingQuote(
+    userId: string | undefined,
+    sessionToken: string | undefined,
+    cartId: string,
+    pincode: string,
+    paymentMode: 'COD' | 'PREPAID'
+  ): Promise<{
+    provider: 'DELHIVERY' | 'SHIPROCKET';
+    shippingChargePaise: number;
+    estimatedDays: number;
+    courierCompanyId?: number;
+  } | null> {
+    const key = this.buildShippingQuoteKey(userId, sessionToken, pincode, paymentMode);
+    if (!key) return null;
+    let raw: string | null;
+    try {
+      raw = await this.fastify.redis.get(key);
+    } catch (error) {
+      this.fastify.log?.warn({ err: error, key }, 'getStoredShippingQuote: failed to read cached delivery quote');
+      return null;
+    }
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw) as {
+        cartId: string;
+        provider: 'DELHIVERY' | 'SHIPROCKET';
+        shippingChargePaise: number;
+        estimatedDays: number;
+        courierCompanyId?: number;
+      };
+      if (parsed.cartId !== cartId) return null;
+      return {
+        provider: parsed.provider,
+        shippingChargePaise: parsed.shippingChargePaise,
+        estimatedDays: parsed.estimatedDays,
+        ...(parsed.courierCompanyId != null ? { courierCompanyId: parsed.courierCompanyId } : {})
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Authoritative cheapest-provider quote for checkout. Re-runs the SAME cross-provider comparison
+   * as getDeliveryRates (Delhivery vs Shiprocket, on chargeable weight), so the order is always
+   * assigned to the genuinely cheapest serviceable provider — independent of what the client sent.
+   * Used as the fallback when no cached quote exists. Returns null in noop/single-provider mode so
+   * the caller falls back to single-provider computation.
+   */
+  async getCheapestProviderQuoteForCart(input: {
+    cart: {
+      coupon: Coupon | null;
+      items: Array<{
+        quantity: number;
+        variant: {
+          id: string;
+          weight?: number | null;
+          packageLengthCm?: number | null;
+          packageWidthCm?: number | null;
+          packageHeightCm?: number | null;
+        };
+      }>;
+    };
+    destinationPincode: string;
+    pickupPincode: string;
+    paymentMode: 'COD' | 'PREPAID';
+  }): Promise<{
+    provider: 'DELHIVERY' | 'SHIPROCKET';
+    shippingChargePaise: number;
+    estimatedDays: number;
+    courierCompanyId?: number;
+  } | null> {
+    const providerRuntime = resolveDualShippingRuntime();
+    if (!providerRuntime.hasAny) return null;
+    const result = await this.getDeliveryRatesMultiProvider({
+      cart: input.cart,
+      pincode: input.destinationPincode,
+      pickupPincode: input.pickupPincode,
+      paymentMode: input.paymentMode,
+      delhiveryAdapter: providerRuntime.delhivery?.adapter ?? null,
+      shiprocketAdapter: providerRuntime.shiprocket?.adapter ?? null
+    });
+    return {
+      provider: result.selectedShippingProvider,
+      shippingChargePaise: result.shippingCharge,
+      estimatedDays: result.estimatedDays,
+      ...(result.courierCompanyId != null ? { courierCompanyId: result.courierCompanyId } : {})
+    };
+  }
+
   async computeShippingChargeForCart(input: {
     cart: {
       coupon: Coupon | null;
       items: Array<{
         quantity: number;
-        variant: { id: string; weight?: number | null };
+        variant: {
+          id: string;
+          weight?: number | null;
+          packageLengthCm?: number | null;
+          packageWidthCm?: number | null;
+          packageHeightCm?: number | null;
+        };
       }>;
     };
     destinationPincode: string;
@@ -754,17 +938,19 @@ export class CartService {
     }
     const effectiveProvider = input.provider ?? new NoopShippingAdapter();
 
-    const DEFAULT_WEIGHT_GRAMS = 500;
-    const totalWeightGrams = input.cart.items.reduce((sum, item) => {
-      const unitWeight = item.variant.weight ?? 0;
-      if (unitWeight <= 0 && !usingNoop) {
-        this.fastify.log?.warn(
-          { variantId: item.variant.id },
-          `computeShippingChargeForCart: variant has no weight configured — using ${DEFAULT_WEIGHT_GRAMS}g default`
-        );
-      }
-      return sum + Math.max(unitWeight > 0 ? unitWeight : DEFAULT_WEIGHT_GRAMS, 1) * item.quantity;
-    }, 0);
+    // Charge on the courier's chargeable weight (max of dead and volumetric) so the quoted rate
+    // matches what the provider bills at AWB. See computeChargeableWeightGrams.
+    const boxPresets = usingNoop ? [] : await this.loadBoxPresets();
+    const totalWeightGrams = computeChargeableWeightGrams({
+      boxPresets,
+      items: input.cart.items.map((item) => ({
+        quantity: item.quantity,
+        weightGrams: item.variant.weight ?? null,
+        lengthCm: item.variant.packageLengthCm ?? null,
+        widthCm: item.variant.packageWidthCm ?? null,
+        heightCm: item.variant.packageHeightCm ?? null
+      }))
+    });
 
     const rate = await effectiveProvider.calculateDeliveryRate({
       destinationPincode: input.destinationPincode,

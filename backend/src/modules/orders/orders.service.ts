@@ -491,34 +491,46 @@ export class OrdersService {
         selectedProviderKey && !usingNoop
           ? (createShippingAdapterForProvider(selectedProviderKey) ?? undefined)
           : undefined;
-      const shippingQuote = await cartService.computeShippingChargeForCart({
-        cart,
-        destinationPincode: shippingAddress.pincode,
-        originPincode: pickupPincode,
-        usingNoop,
-        paymentMode: requestedPaymentMode === 'COD' ? 'COD' : 'PREPAID',
-        ...(providerOverride ? { provider: providerOverride } : {})
-      });
-      const recomputedCharge = shippingQuote.shippingChargePaise;
+      const paymentModeForQuote: 'COD' | 'PREPAID' = requestedPaymentMode === 'COD' ? 'COD' : 'PREPAID';
 
-      // Use the rate the customer saw (passed from getDeliveryRates) if within ±30% tolerance.
-      // If the provider re-computed 0 (API anomaly), trust the client rate.
-      let shippingCharge = recomputedCharge;
-      if (input.shippingChargePaise != null && !usingNoop) {
-        const clientRate = input.shippingChargePaise;
-        if (recomputedCharge === 0 && clientRate > 0) {
-          shippingCharge = clientRate;
-          this.fastify.log?.warn(
-            { clientRate, recomputedCharge },
-            'createOrder: provider re-computed 0 but client saw positive rate — using client rate'
-          );
-        } else {
-          const tolerance = Math.ceil(recomputedCharge * 0.30);
-          const withinTolerance = Math.abs(clientRate - recomputedCharge) <= tolerance;
-          if (withinTolerance) {
-            shippingCharge = clientRate;
-          }
-        }
+      // Determine the authoritative shipping quote. The provider is ALWAYS chosen server-side as the
+      // cheapest serviceable option — never trusted from the client. Priority:
+      //   1. The exact quote the customer saw (cached at getDeliveryRates) → guarantees shown == charged.
+      //   2. A fresh cross-provider comparison (Delhivery vs Shiprocket on chargeable weight) → always
+      //      assigns the genuinely cheapest provider, even if the cache expired.
+      //   3. Noop/single-provider fallback for dev/unconfigured environments.
+      let authoritativeQuote = usingNoop
+        ? null
+        : await cartService.getStoredShippingQuote(userId, undefined, cart.id, shippingAddress.pincode, paymentModeForQuote);
+      if (!authoritativeQuote && !usingNoop) {
+        authoritativeQuote = await cartService.getCheapestProviderQuoteForCart({
+          cart,
+          destinationPincode: shippingAddress.pincode,
+          pickupPincode,
+          paymentMode: paymentModeForQuote
+        });
+      }
+
+      let shippingCharge: number;
+      let lockedProvider: 'DELHIVERY' | 'SHIPROCKET' | undefined;
+      let lockedCourierCompanyId: number | undefined;
+      if (authoritativeQuote) {
+        shippingCharge = authoritativeQuote.shippingChargePaise;
+        lockedProvider = authoritativeQuote.provider;
+        lockedCourierCompanyId = authoritativeQuote.courierCompanyId;
+      } else {
+        // Noop / single-provider mode: compute via the (possibly overridden) provider.
+        const noopQuote = await cartService.computeShippingChargeForCart({
+          cart,
+          destinationPincode: shippingAddress.pincode,
+          originPincode: pickupPincode,
+          usingNoop,
+          paymentMode: paymentModeForQuote,
+          ...(providerOverride ? { provider: providerOverride } : {})
+        });
+        shippingCharge = noopQuote.shippingChargePaise;
+        lockedProvider = input.selectedShippingProvider;
+        lockedCourierCompanyId = input.courierCompanyId ?? noopQuote.courierCompanyId;
       }
 
       const total = Math.max(subtotal + shippingCharge - discountAmount, 0);
@@ -545,11 +557,11 @@ export class OrdersService {
           userId,
           status: orderStatus,
           ...({ paymentMode: requestedPaymentMode } as Record<string, unknown>),
-          ...(input.selectedShippingProvider
-            ? ({ selectedShippingProvider: input.selectedShippingProvider } as Record<string, unknown>)
+          ...(lockedProvider
+            ? ({ selectedShippingProvider: lockedProvider } as Record<string, unknown>)
             : {}),
-          ...((input.courierCompanyId ?? shippingQuote.courierCompanyId) != null
-            ? ({ courierCompanyId: input.courierCompanyId ?? shippingQuote.courierCompanyId } as Record<string, unknown>)
+          ...(lockedCourierCompanyId != null
+            ? ({ courierCompanyId: lockedCourierCompanyId } as Record<string, unknown>)
             : {}),
           shippingAddress: {
             fullName: shippingAddress.fullName,
@@ -1214,44 +1226,44 @@ export class OrdersService {
       selectedProviderKeyForCheckout && !usingNoop
         ? (createShippingAdapterForProvider(selectedProviderKeyForCheckout) ?? undefined)
         : undefined;
-    const shippingQuote = await cartService.computeShippingChargeForCart({
-      cart,
-      destinationPincode: shippingAddress.pincode,
-      originPincode: pickupPincode,
-      usingNoop,
-      paymentMode: 'PREPAID',
-      ...(providerOverrideForCheckout ? { provider: providerOverrideForCheckout } : {})
-    });
-    const recomputedCharge = shippingQuote.shippingChargePaise;
 
-    // If the frontend passes the rate it showed the customer (from getDeliveryRates),
-    // use it — the customer must be charged exactly what they saw. We validate it's
-    // within ±30% of our re-computed value to prevent tampering.
-    // Special case: if recomputedCharge === 0 from a REAL provider (not noop), this indicates
-    // a provider API anomaly (e.g. Shiprocket returning a 0-rate courier that slipped through).
-    // In that case, trust the client rate — it was returned from our own API seconds earlier.
-    let shippingCharge = recomputedCharge;
-    if (input.shippingChargePaise != null && !usingNoop) {
-      const clientRate = input.shippingChargePaise;
-      if (recomputedCharge === 0 && clientRate > 0) {
-        // Provider returned 0 (API anomaly) but client saw a positive rate — trust client rate.
-        shippingCharge = clientRate;
-        this.fastify.log?.warn(
-          { clientRate, recomputedCharge },
-          'prepareCheckout: provider re-computed 0 but client saw positive rate — using client rate'
-        );
-      } else {
-        const tolerance = Math.ceil(recomputedCharge * 0.30);
-        const withinTolerance = Math.abs(clientRate - recomputedCharge) <= tolerance;
-        if (withinTolerance) {
-          shippingCharge = clientRate;
-        } else {
-          this.fastify.log?.warn(
-            { clientRate, recomputedCharge, diff: Math.abs(clientRate - recomputedCharge), tolerance },
-            'prepareCheckout: client shippingChargePaise outside ±30% tolerance — using re-computed rate'
-          );
-        }
-      }
+    // Determine the authoritative shipping quote. The provider is ALWAYS chosen server-side as the
+    // cheapest serviceable option — never trusted from the client. Priority:
+    //   1. The exact quote the customer saw (cached at getDeliveryRates) → guarantees shown == charged.
+    //   2. A fresh cross-provider comparison (Delhivery vs Shiprocket on chargeable weight) → always
+    //      assigns the genuinely cheapest provider, even if the cache expired.
+    //   3. Noop/single-provider fallback for dev/unconfigured environments.
+    let authoritativeQuote = usingNoop
+      ? null
+      : await cartService.getStoredShippingQuote(userId, undefined, cart.id, shippingAddress.pincode, 'PREPAID');
+    if (!authoritativeQuote && !usingNoop) {
+      authoritativeQuote = await cartService.getCheapestProviderQuoteForCart({
+        cart,
+        destinationPincode: shippingAddress.pincode,
+        pickupPincode,
+        paymentMode: 'PREPAID'
+      });
+    }
+
+    let shippingCharge: number;
+    let lockedProvider: 'DELHIVERY' | 'SHIPROCKET' | null;
+    let lockedCourierCompanyId: number | null;
+    if (authoritativeQuote) {
+      shippingCharge = authoritativeQuote.shippingChargePaise;
+      lockedProvider = authoritativeQuote.provider;
+      lockedCourierCompanyId = authoritativeQuote.courierCompanyId ?? null;
+    } else {
+      const noopQuote = await cartService.computeShippingChargeForCart({
+        cart,
+        destinationPincode: shippingAddress.pincode,
+        originPincode: pickupPincode,
+        usingNoop,
+        paymentMode: 'PREPAID',
+        ...(providerOverrideForCheckout ? { provider: providerOverrideForCheckout } : {})
+      });
+      shippingCharge = noopQuote.shippingChargePaise;
+      lockedProvider = input.selectedShippingProvider ?? null;
+      lockedCourierCompanyId = input.courierCompanyId ?? noopQuote.courierCompanyId ?? null;
     }
 
     const total = Math.max(subtotal + shippingCharge - discountAmount, 0);
@@ -1289,8 +1301,8 @@ export class OrdersService {
       total,
       couponId: effectiveCoupon?.id ?? null,
       razorpayOrderId: razorpayOrder.providerOrderId,
-      selectedShippingProvider: input.selectedShippingProvider ?? null,
-      courierCompanyId: input.courierCompanyId ?? shippingQuote.courierCompanyId ?? null,
+      selectedShippingProvider: lockedProvider,
+      courierCompanyId: lockedCourierCompanyId,
       items: cart.items.map((item) => ({
         variantId: item.variantId,
         productName: item.variant.product.name,
