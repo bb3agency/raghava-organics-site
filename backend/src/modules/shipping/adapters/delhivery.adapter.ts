@@ -244,25 +244,44 @@ export default class DelhiveryAdapter implements ShippingProviderAdapter {
   }
 
   async cancelShipment(awbNumber: string): Promise<{ cancelled: boolean; providerPayload: Record<string, unknown> }> {
-    const data = JSON.stringify({ waybill: awbNumber, cancellation: true });
-    const body = new URLSearchParams({ format: 'json', data });
+    // Delhivery's Cancel/Edit API (POST /api/p/edit) expects a RAW JSON body with
+    // `cancellation` as the STRING "true" — NOT the `format=json&data=` form
+    // wrapper used by create.json, and NOT a boolean. Sending the wrong shape is
+    // silently ignored by Delhivery, so the order never cancels in their dashboard.
+    const payload = await this.request('/api/p/edit/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ waybill: awbNumber, cancellation: 'true' })
+    });
 
-    const payload = await this.request('/api/p/edit/', { method: 'POST', body });
-
+    // Success shape is `{ "status": true, ... }`. Treat an explicit boolean
+    // status/success, or a clear "cancelled / cancellation accepted" text, as
+    // success. An `error`/`false` (e.g. "Cancellation not accepted") must fail
+    // loudly so the operator/worker knows Delhivery did not cancel it.
     const statusText = (
-      this.pickString(payload, [['status'], ['remark'], ['message']]) ?? ''
+      this.pickString(payload, [['status'], ['remark'], ['message'], ['error']]) ?? ''
     ).toLowerCase();
-    // Match only positive cancellation signals — "Cancellation not accepted" must NOT match.
-    const cancelled =
+    // Explicit failure first — these must override any positive signal so a
+    // rejected cancellation never reports success.
+    const explicitFailure =
+      payload.status === false ||
+      payload.success === false ||
+      /not\s+(cancell?ed|accepted|allowed)/.test(statusText) ||
+      /\berror\b/.test(statusText);
+    const positiveSignal =
+      payload.status === true ||
+      payload.success === true ||
       /\bcancell?ed\b/.test(statusText) ||
       /cancell?ation\s+accepted/.test(statusText) ||
-      statusText === 'success' ||
+      /\bsuccess(ful)?\b/.test(statusText) ||
       this.pickString(payload, [['waybill']]) === awbNumber;
+
+    const cancelled = positiveSignal && !explicitFailure;
 
     if (!cancelled) {
       throw new AppError(
         ERROR_CODES.INTERNAL_ERROR,
-        `Delhivery did not confirm cancellation for AWB ${awbNumber}`,
+        `Delhivery did not confirm cancellation for AWB ${awbNumber}${statusText ? `: ${statusText}` : ''}`,
         422
       );
     }

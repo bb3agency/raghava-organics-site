@@ -447,4 +447,37 @@ describe('DelhiveryAdapter', () => {
       vi.useRealTimers();
     }
   });
+
+  it('cancelShipment posts raw JSON with cancellation:"true" to /api/p/edit', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ status: true, remark: 'cancelled' })
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new DelhiveryAdapter({ apiKey: 'test_key' });
+    const result = await adapter.cancelShipment('56555510000140');
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain('/api/p/edit/');
+    // Must be a raw JSON body (not the format=json&data= form wrapper) with a string "true".
+    expect((init.headers as Record<string, string>)['Content-Type']).toBe('application/json');
+    expect(typeof init.body).toBe('string');
+    const body = JSON.parse(init.body as string) as { waybill: string; cancellation: unknown };
+    expect(body).toEqual({ waybill: '56555510000140', cancellation: 'true' });
+    expect(result.cancelled).toBe(true);
+  });
+
+  it('cancelShipment fails loudly when Delhivery rejects the cancellation', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ status: false, error: 'Cancellation not accepted' })
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new DelhiveryAdapter({ apiKey: 'test_key' });
+    await expect(adapter.cancelShipment('56555510000140')).rejects.toMatchObject({ statusCode: 422 });
+  });
 });
