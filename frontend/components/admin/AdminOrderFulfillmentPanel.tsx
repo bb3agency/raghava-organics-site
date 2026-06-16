@@ -255,15 +255,17 @@ export function AdminOrderFulfillmentPanel({
         { method: "POST", idempotencyKey: createIdempotencyKey(), body: JSON.stringify({}) },
       );
       setPickupWasScheduled(true);
+      const isDelhivery = shipment?.provider === "DELHIVERY";
+      const providerName = isDelhivery ? "Delhivery" : "Shiprocket";
       const pickupRef = result.pickupTokenNumber
-        ? ` (Delhivery pickup #${result.pickupTokenNumber})`
+        ? ` (${providerName} pickup #${result.pickupTokenNumber})`
         : "";
       if (result.alreadyScheduled) {
-        // A pickup is already arranged for this warehouse — the courier visit
-        // covers this shipment too, so no new slot was created. Delhivery keeps
-        // the order in "Ready to Ship" until the courier physically collects it.
+        // A pickup is already arranged — the courier visit covers this shipment
+        // too, so no new slot was created. The order stays in the provider's
+        // pre-pickup queue until the courier physically scans the label.
         setSuccess(
-          `Pickup already arranged for your warehouse${pickupRef} — every ready shipment is collected in that visit. It stays in "Ready to Ship" on Delhivery until the courier scans it.`,
+          `Pickup already arranged${pickupRef} — every ready shipment at this pickup location is collected in that visit. It stays in "Ready to Ship" on ${providerName} until the courier scans the label.`,
         );
       } else {
         setSuccess(
@@ -606,9 +608,22 @@ export function AdminOrderFulfillmentPanel({
           <p className="-mt-1 flex items-start gap-1.5 text-xs text-muted-foreground">
             <Calendar className="mt-0.5 h-3 w-3 shrink-0" aria-hidden="true" />
             <span>
-              Pickup is arranged per warehouse, not per order — one courier visit
-              collects every ready shipment. Scheduling pickup again on another
-              order just confirms it&apos;s covered by the same visit.
+              {shipment?.provider === "DELHIVERY" ? (
+                <>
+                  Delhivery pickup is arranged per warehouse, not per order — one
+                  courier visit collects every ready shipment. Scheduling again on
+                  another order just confirms it&apos;s covered by the same visit.
+                  The order stays in &quot;Ready to Ship&quot; on Delhivery until
+                  the courier scans the label, so print and attach every label.
+                </>
+              ) : (
+                <>
+                  This adds the shipment to your pickup queue. One courier visit
+                  per pickup location collects all queued shipments — schedule it
+                  on each order (or use the provider&apos;s &quot;Add all to
+                  pickup&quot;), and print and attach every label before handover.
+                </>
+              )}
             </span>
           </p>
         ) : null}
