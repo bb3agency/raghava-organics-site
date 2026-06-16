@@ -412,41 +412,37 @@ export default class DelhiveryAdapter implements ShippingProviderAdapter {
         body: JSON.stringify(pickupRequestBody)
       });
     } catch (err) {
-      // TEMP DIAGNOSTIC — remove after pickup is confirmed working.
-      console.error('[DELHIVERY PICKUP] request threw', JSON.stringify({
-        request: pickupRequestBody,
-        errorMessage: err instanceof Error ? err.message : String(err),
-        matchedExisting: err instanceof AppError && isExistingPickupMessage(err.message)
-      }));
       // Delhivery rejects a second pickup request for the warehouse while an
       // earlier one is still open/uncollected. That courier visit already
       // covers this AWB, so treat it as a successful (already-arranged) pickup
       // instead of blocking the operator from "scheduling" later orders.
       if (err instanceof AppError && isExistingPickupMessage(err.message)) {
+        const existingId = this.extractPickupId(err.message);
         return {
           scheduled: true,
           alreadyScheduled: true,
           pickupScheduledDate: `${pickupDate}T${pickupTime}+05:30`,
+          ...(existingId ? { pickupTokenNumber: existingId } : {}),
           providerPayload: { note: 'existing_open_pickup_request', detail: err.message }
         };
       }
       throw err;
     }
 
-    // TEMP DIAGNOSTIC — remove after pickup is confirmed working.
-    console.error('[DELHIVERY PICKUP] response', JSON.stringify({
-      request: pickupRequestBody,
-      response: payload,
-      matchedExisting: payloadIndicatesExistingPickup(payload),
-      pickupId: payload.pickup_id ?? null
-    }));
-
-    // Some Delhivery responses return HTTP 200 with an error flag for duplicates.
+    // Delhivery commonly returns HTTP 200 with `pr_exist: true`, a real
+    // `pickup_id`, and a message like "...Already Exist for 16 Jun in slot
+    // 18:00 - 21:00" when a warehouse pickup is already scheduled. That pickup
+    // covers this AWB too (pickup is warehouse-level), so surface its real id.
     if (payloadIndicatesExistingPickup(payload)) {
+      const existingId =
+        payload.pickup_id != null
+          ? String(payload.pickup_id)
+          : this.extractPickupId(JSON.stringify(payload));
       return {
         scheduled: true,
         alreadyScheduled: true,
         pickupScheduledDate: `${pickupDate}T${pickupTime}+05:30`,
+        ...(existingId ? { pickupTokenNumber: existingId } : {}),
         providerPayload: payload
       };
     }
@@ -460,6 +456,12 @@ export default class DelhiveryAdapter implements ShippingProviderAdapter {
       ...(pickupId ? { pickupTokenNumber: pickupId } : {}),
       providerPayload: payload
     };
+  }
+
+  /** Pulls the numeric Delhivery pickup id out of a "Pickup Request <id> ..." message. */
+  private extractPickupId(text: string): string | null {
+    const match = text.match(/pickup request\s+(\d+)/i);
+    return match?.[1] ?? null;
   }
 
   // Delhivery packing slip returns JSON for client rendering, not a PDF URL.

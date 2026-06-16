@@ -255,17 +255,21 @@ export function AdminOrderFulfillmentPanel({
         { method: "POST", idempotencyKey: createIdempotencyKey(), body: JSON.stringify({}) },
       );
       setPickupWasScheduled(true);
+      const pickupRef = result.pickupTokenNumber
+        ? ` (Delhivery pickup #${result.pickupTokenNumber})`
+        : "";
       if (result.alreadyScheduled) {
-        // A pickup was already arranged for this warehouse — the courier visit
-        // covers this shipment too, so no new slot was created.
+        // A pickup is already arranged for this warehouse — the courier visit
+        // covers this shipment too, so no new slot was created. Delhivery keeps
+        // the order in "Ready to Ship" until the courier physically collects it.
         setSuccess(
-          "Pickup already arranged for your warehouse — this shipment will be collected in that visit.",
+          `Pickup already arranged for your warehouse${pickupRef} — every ready shipment is collected in that visit. It stays in "Ready to Ship" on Delhivery until the courier scans it.`,
         );
       } else {
         setSuccess(
           result.pickupScheduledDate
-            ? `Pickup scheduled for ${result.pickupScheduledDate}.`
-            : "Pickup scheduled.",
+            ? `Pickup scheduled for ${result.pickupScheduledDate}${pickupRef}.`
+            : `Pickup scheduled${pickupRef}.`,
         );
       }
       await loadDetail(selectedOrderId);

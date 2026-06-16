@@ -73,4 +73,6 @@ export interface AdminSchedulePickupResponse {
    */
   alreadyScheduled?: boolean;
   pickupScheduledDate?: string;
+  /** Provider pickup reference (Delhivery pickup_id / Shiprocket pickup token). */
+  pickupTokenNumber?: string;
 }
