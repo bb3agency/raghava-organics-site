@@ -631,7 +631,7 @@ describe('ShiprocketAdapter', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const adapter = new ShiprocketAdapter({ email: 'test@example.com', password: 'secret' });
-    await expect(adapter.schedulePickup('SHIP202')).rejects.toMatchObject({ statusCode: 502 });
+    await expect(adapter.schedulePickup('SHIP202')).rejects.toMatchObject({ statusCode: 422 });
   });
 
   it('generates label and returns URL', async () => {
@@ -705,7 +705,7 @@ describe('ShiprocketAdapter', () => {
 
     const adapter = new ShiprocketAdapter({ email: 'test@example.com', password: 'secret' });
     await expect(adapter.checkServiceability('560001')).rejects.toMatchObject({
-      statusCode: 502,
+      statusCode: 422,
       message: 'Shiprocket returned invalid JSON'
     });
   });

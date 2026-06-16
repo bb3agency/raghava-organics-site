@@ -168,7 +168,7 @@ export default class DelhiveryAdapter implements ShippingProviderAdapter {
       throw new AppError(
         ERROR_CODES.INTERNAL_ERROR,
         `Delhivery shipment creation failed${remarks ? `: ${remarks}` : ''}`,
-        502
+        422
       );
     }
 
@@ -183,7 +183,7 @@ export default class DelhiveryAdapter implements ShippingProviderAdapter {
       throw new AppError(
         ERROR_CODES.INTERNAL_ERROR,
         `Unable to extract AWB from Delhivery response${remarks ? `: ${remarks}` : ''}`,
-        502
+        422
       );
     }
 
@@ -263,7 +263,7 @@ export default class DelhiveryAdapter implements ShippingProviderAdapter {
       throw new AppError(
         ERROR_CODES.INTERNAL_ERROR,
         `Delhivery did not confirm cancellation for AWB ${awbNumber}`,
-        502
+        422
       );
     }
     return { cancelled: true, providerPayload: payload };
@@ -341,7 +341,7 @@ export default class DelhiveryAdapter implements ShippingProviderAdapter {
       throw new AppError(
         ERROR_CODES.INTERNAL_ERROR,
         `Delhivery rate response missing charge field. Keys received: ${Object.keys(payload).join(', ')}`,
-        502
+        422
       );
     }
 
@@ -558,7 +558,7 @@ export default class DelhiveryAdapter implements ShippingProviderAdapter {
           new AppError(
             ERROR_CODES.INTERNAL_ERROR,
             `Delhivery did not respond within ${DELHIVERY_TIMEOUT_MS / 1000}s for ${path} — the provider endpoint stalled (Shiprocket is unaffected). Retry shortly; if it persists, the account's pickup/manifest API may not be enabled or the VPS cannot reach track.delhivery.com.`,
-            502
+            422
           )
         );
       }, DELHIVERY_TIMEOUT_MS);
@@ -586,7 +586,7 @@ export default class DelhiveryAdapter implements ShippingProviderAdapter {
         throw new AppError(
           ERROR_CODES.INTERNAL_ERROR,
           `Delhivery API error ${response.status}: ${detail}`,
-          502
+          422
         );
       }
       return parsed;
@@ -608,7 +608,7 @@ export default class DelhiveryAdapter implements ShippingProviderAdapter {
       throw new AppError(
         ERROR_CODES.INTERNAL_ERROR,
         `Delhivery request to ${path} failed: ${err instanceof Error ? err.message : 'network error'}`,
-        502
+        422
       );
     } finally {
       if (timer) {
@@ -626,7 +626,7 @@ export default class DelhiveryAdapter implements ShippingProviderAdapter {
       }
       return parsed as Record<string, unknown>;
     } catch {
-      throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Delhivery returned invalid JSON', 502);
+      throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Delhivery returned invalid JSON', 422);
     }
   }
 

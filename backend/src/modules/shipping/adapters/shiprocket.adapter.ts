@@ -140,18 +140,18 @@ export default class ShiprocketAdapter implements ShippingProviderAdapter {
     } catch (error) {
       clearTimeout(timer);
       const message = error instanceof Error ? error.message : 'Network error';
-      throw new AppError(ERROR_CODES.INTERNAL_ERROR, `Shiprocket auth failed: ${message}`, 502);
+      throw new AppError(ERROR_CODES.INTERNAL_ERROR, `Shiprocket auth failed: ${message}`, 422);
     }
     clearTimeout(timer);
 
     if (!res.ok) {
-      throw new AppError(ERROR_CODES.INTERNAL_ERROR, `Shiprocket auth HTTP ${res.status}`, 502);
+      throw new AppError(ERROR_CODES.INTERNAL_ERROR, `Shiprocket auth HTTP ${res.status}`, 422);
     }
 
     const data = await this.parseJson(res);
     const token = typeof data.token === 'string' ? data.token : null;
     if (!token) {
-      throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Shiprocket auth did not return a token', 502);
+      throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Shiprocket auth did not return a token', 422);
     }
 
     this.token = token;
@@ -186,7 +186,7 @@ export default class ShiprocketAdapter implements ShippingProviderAdapter {
     } catch (error) {
       clearTimeout(timer);
       const message = error instanceof Error ? error.message : 'Network error';
-      throw new AppError(ERROR_CODES.INTERNAL_ERROR, `Shiprocket API request failed: ${message}`, 502);
+      throw new AppError(ERROR_CODES.INTERNAL_ERROR, `Shiprocket API request failed: ${message}`, 422);
     }
     clearTimeout(timer);
 
@@ -200,7 +200,7 @@ export default class ShiprocketAdapter implements ShippingProviderAdapter {
       throw new AppError(
         ERROR_CODES.INTERNAL_ERROR,
         `Shiprocket API HTTP ${res.status}: ${errBody.slice(0, 200)}`,
-        502
+        422
       );
     }
 
@@ -212,7 +212,7 @@ export default class ShiprocketAdapter implements ShippingProviderAdapter {
     try {
       return JSON.parse(text) as Record<string, unknown>;
     } catch {
-      throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Shiprocket returned invalid JSON', 502);
+      throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Shiprocket returned invalid JSON', 422);
     }
   }
 
@@ -402,7 +402,7 @@ export default class ShiprocketAdapter implements ShippingProviderAdapter {
       throw new AppError(
         ERROR_CODES.INTERNAL_ERROR,
         'Shiprocket order created but no shipment_id returned',
-        502
+        422
       );
     }
 
@@ -441,13 +441,13 @@ export default class ShiprocketAdapter implements ShippingProviderAdapter {
         throw new AppError(
           ERROR_CODES.INTERNAL_ERROR,
           `Shiprocket AWB assignment failed: ${reason}`,
-          502
+          422
         );
       }
     }
 
     if (!awbNumber) {
-      throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Shiprocket AWB code missing from assign response', 502);
+      throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Shiprocket AWB code missing from assign response', 422);
     }
 
     // Fetch estimated delivery days by checking serviceability for the assigned route.
@@ -534,7 +534,7 @@ export default class ShiprocketAdapter implements ShippingProviderAdapter {
       throw new AppError(
         ERROR_CODES.INTERNAL_ERROR,
         `Shiprocket did not confirm cancellation for order ${orderId}: ${message || JSON.stringify(payload).slice(0, 200)}`,
-        502
+        422
       );
     }
     return { cancelled: true, providerPayload: payload };
@@ -596,7 +596,7 @@ export default class ShiprocketAdapter implements ShippingProviderAdapter {
 
     const labelUrl = payload.label_url ?? '';
     if (!labelUrl) {
-      throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Shiprocket label generation did not return a URL', 502);
+      throw new AppError(ERROR_CODES.INTERNAL_ERROR, 'Shiprocket label generation did not return a URL', 422);
     }
 
     return {

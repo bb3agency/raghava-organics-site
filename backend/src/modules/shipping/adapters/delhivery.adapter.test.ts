@@ -174,7 +174,7 @@ describe('DelhiveryAdapter', () => {
 
     const adapter = new DelhiveryAdapter({ apiKey: 'delhivery_key', baseUrl: 'https://track.delhivery.com' });
     await expect(adapter.checkServiceability('560001')).rejects.toMatchObject({
-      statusCode: 502,
+      statusCode: 422,
       message: 'Delhivery returned invalid JSON'
     });
   });
@@ -334,7 +334,7 @@ describe('DelhiveryAdapter', () => {
         originPincode: '110001',
         totalWeightGrams: 500
       })
-    ).rejects.toMatchObject({ statusCode: 502 });
+    ).rejects.toMatchObject({ statusCode: 422 });
   });
 
   it('schedulePickup books a pickup with a future IST slot', async () => {
@@ -401,7 +401,7 @@ describe('DelhiveryAdapter', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const adapter = new DelhiveryAdapter({ apiKey: 'test_key', pickupLocationName: 'Home' });
-    await expect(adapter.schedulePickup('AWB123')).rejects.toMatchObject({ statusCode: 502 });
+    await expect(adapter.schedulePickup('AWB123')).rejects.toMatchObject({ statusCode: 422 });
   });
 
   it('schedulePickup returns a clean 502 (not a hang) when the response body read rejects', async () => {
@@ -419,7 +419,7 @@ describe('DelhiveryAdapter', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const adapter = new DelhiveryAdapter({ apiKey: 'test_key', pickupLocationName: 'Home' });
-    await expect(adapter.schedulePickup('AWB123')).rejects.toMatchObject({ statusCode: 502 });
+    await expect(adapter.schedulePickup('AWB123')).rejects.toMatchObject({ statusCode: 422 });
   });
 
   it('schedulePickup times out cleanly (no hang) when the response body never resolves', async () => {
@@ -438,7 +438,7 @@ describe('DelhiveryAdapter', () => {
       const adapter = new DelhiveryAdapter({ apiKey: 'test_key', pickupLocationName: 'Home' });
       const pending = adapter.schedulePickup('AWB123');
       const assertion = expect(pending).rejects.toMatchObject({
-        statusCode: 502,
+        statusCode: 422,
         message: expect.stringContaining('did not respond within 12s')
       });
       await vi.advanceTimersByTimeAsync(12_000);
