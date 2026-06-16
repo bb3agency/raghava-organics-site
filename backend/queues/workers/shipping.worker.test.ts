@@ -1002,9 +1002,16 @@ describe('shipping worker error and retry behavior', () => {
     );
   });
 
-  it('cancel-shipment routes to Shiprocket adapter when shipment.provider is SHIPROCKET', async () => {
+  it('cancel-shipment routes to Shiprocket adapter and cancels by Shiprocket ORDER id', async () => {
+    // Shiprocket /orders/cancel keys off the order id (stored on the Order), not
+    // the AWB or shipment id — otherwise the cancel never reflects in their dashboard.
     boot();
-    state.shipment.findFirst.mockResolvedValue({ provider: 'SHIPROCKET' });
+    state.shipment.findFirst.mockResolvedValue({
+      provider: 'SHIPROCKET',
+      shiprocketShipmentId: '67890',
+      awbNumber: 'SR-AWB-002',
+      order: { shiprocketOrderId: '123456' }
+    });
     state.shipment.updateMany.mockResolvedValue({ count: 1 });
     state.cancelShipmentShiprocket.mockResolvedValue(undefined);
 
@@ -1013,8 +1020,27 @@ describe('shipping worker error and retry behavior', () => {
       data: { orderId: 'order_sr', awbNumber: 'SR-AWB-002' }
     });
 
-    expect(state.cancelShipmentShiprocket).toHaveBeenCalledWith('SR-AWB-002');
+    expect(state.cancelShipmentShiprocket).toHaveBeenCalledWith('123456');
     expect(state.cancelShipmentDelhivery).not.toHaveBeenCalled();
+  });
+
+  it('cancel-shipment falls back to shipment id / AWB when no Shiprocket order id is stored', async () => {
+    boot();
+    state.shipment.findFirst.mockResolvedValue({
+      provider: 'SHIPROCKET',
+      shiprocketShipmentId: '67890',
+      awbNumber: 'SR-AWB-002',
+      order: { shiprocketOrderId: null }
+    });
+    state.shipment.updateMany.mockResolvedValue({ count: 1 });
+    state.cancelShipmentShiprocket.mockResolvedValue(undefined);
+
+    await state.processor?.({
+      name: 'cancel-shipment',
+      data: { orderId: 'order_sr', awbNumber: 'SR-AWB-002' }
+    });
+
+    expect(state.cancelShipmentShiprocket).toHaveBeenCalledWith('67890');
   });
 
   it('create-shipment compensating cancel uses the same adapter that created the AWB', async () => {

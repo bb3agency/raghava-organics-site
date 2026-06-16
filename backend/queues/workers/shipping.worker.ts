@@ -611,13 +611,18 @@ export function createShippingWorker(
 
         // Look up which provider created this shipment so we cancel with the same one.
         // In dual-shipping mode the global shippingProvider may be wrong (env-based).
-        // For Shiprocket we need the shipmentId (not AWB); for Delhivery we use AWB.
+        // For Shiprocket /orders/cancel we need the Shiprocket ORDER id (stored on
+        // the Order, not the Shipment) — not the shipment id and not the AWB; for
+        // Delhivery we use the AWB.
         const existingShipment = await prisma.shipment.findFirst({
           where: { orderId: data.orderId },
           select: {
             provider: true,
             shiprocketShipmentId: true,
-            awbNumber: true
+            awbNumber: true,
+            order: {
+              select: { shiprocketOrderId: true }
+            }
           }
         });
 
@@ -656,11 +661,15 @@ export function createShippingWorker(
           cancelAdapter = shippingProvider;
         }
 
-        // For Shiprocket, use the shipmentId (if available); for Delhivery use AWB.
-        // Shiprocket's cancel endpoint expects shipment IDs; Delhivery's expects AWBs.
+        // Shiprocket's /orders/cancel expects the Shiprocket ORDER id — passing the
+        // shipment id or AWB cancels nothing in their dashboard. Prefer the stored
+        // order id, then the shipment id (legacy rows), then the AWB as a last
+        // resort. Delhivery cancels by AWB via /api/p/edit/.
         const cancelIdentifier =
-          cancelAdapterKey === 'shiprocket' && existingShipment.shiprocketShipmentId
-            ? existingShipment.shiprocketShipmentId
+          cancelAdapterKey === 'shiprocket'
+            ? (existingShipment.order?.shiprocketOrderId ??
+               existingShipment.shiprocketShipmentId ??
+               data.awbNumber)
             : data.awbNumber;
 
         await cancelAdapter.cancelShipment(cancelIdentifier);

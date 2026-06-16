@@ -404,10 +404,9 @@ describe('DelhiveryAdapter', () => {
     await expect(adapter.schedulePickup('AWB123')).rejects.toMatchObject({ statusCode: 502 });
   });
 
-  it('schedulePickup returns a clean 502 (not a hang) when the response body stalls/aborts', async () => {
-    // Delhivery's /fm/ endpoint can send headers (200) then stall the body read.
-    // The timeout must cover response.text() too, so the backend never hangs
-    // until Nginx returns an opaque 502. Simulate the body read aborting.
+  it('schedulePickup returns a clean 502 (not a hang) when the response body read rejects', async () => {
+    // Delhivery's /fm/ endpoint can send headers (200) then break the body read.
+    // The operation must surface a clean AppError(502), never hang to an Nginx 502.
     const abortError = new Error('The operation was aborted');
     abortError.name = 'AbortError';
     const fetchMock = vi.fn().mockResolvedValue({
@@ -420,9 +419,32 @@ describe('DelhiveryAdapter', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const adapter = new DelhiveryAdapter({ apiKey: 'test_key', pickupLocationName: 'Home' });
-    await expect(adapter.schedulePickup('AWB123')).rejects.toMatchObject({
-      statusCode: 502,
-      message: expect.stringContaining('did not respond within 8s')
-    });
+    await expect(adapter.schedulePickup('AWB123')).rejects.toMatchObject({ statusCode: 502 });
+  });
+
+  it('schedulePickup times out cleanly (no hang) when the response body never resolves', async () => {
+    // The decisive guard: even if AbortController never interrupts a stalled body
+    // read, the wall-clock Promise.race must reject within 12s so the backend
+    // never hangs long enough for Nginx to return an opaque 502.
+    vi.useFakeTimers();
+    try {
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        text: () => new Promise<string>(() => {}) // never resolves — simulates a stalled body
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      const adapter = new DelhiveryAdapter({ apiKey: 'test_key', pickupLocationName: 'Home' });
+      const pending = adapter.schedulePickup('AWB123');
+      const assertion = expect(pending).rejects.toMatchObject({
+        statusCode: 502,
+        message: expect.stringContaining('did not respond within 12s')
+      });
+      await vi.advanceTimersByTimeAsync(12_000);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

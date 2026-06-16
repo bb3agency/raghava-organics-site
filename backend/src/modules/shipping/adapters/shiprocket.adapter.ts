@@ -514,12 +514,18 @@ export default class ShiprocketAdapter implements ShippingProviderAdapter {
     };
   }
 
-  async cancelShipment(awbNumber: string): Promise<{ cancelled: boolean; providerPayload: Record<string, unknown> }> {
+  // NOTE: `orderId` must be the Shiprocket ORDER id (the order_id returned at
+  // creation), NOT the shipment id or AWB. Shiprocket's /orders/cancel keys off
+  // the order id; passing anything else silently cancels nothing in the dashboard.
+  async cancelShipment(orderId: string): Promise<{ cancelled: boolean; providerPayload: Record<string, unknown> }> {
+    // Shiprocket order ids are numeric — send a number when possible so the
+    // cancel reliably matches the order in their system.
+    const cancelId = this.resolveShipmentIdPayload(orderId);
     const payload = await this.request<Record<string, unknown>>(
       '/orders/cancel',
       {
         method: 'POST',
-        body: JSON.stringify({ ids: [awbNumber] })
+        body: JSON.stringify({ ids: [cancelId] })
       }
     );
     const message = typeof payload.message === 'string' ? payload.message.toLowerCase() : '';
@@ -527,7 +533,7 @@ export default class ShiprocketAdapter implements ShippingProviderAdapter {
     if (!cancelled) {
       throw new AppError(
         ERROR_CODES.INTERNAL_ERROR,
-        `Shiprocket did not confirm cancellation for AWB ${awbNumber}: ${message || JSON.stringify(payload).slice(0, 200)}`,
+        `Shiprocket did not confirm cancellation for order ${orderId}: ${message || JSON.stringify(payload).slice(0, 200)}`,
         502
       );
     }

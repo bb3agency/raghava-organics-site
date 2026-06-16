@@ -540,16 +540,31 @@ export default class DelhiveryAdapter implements ShippingProviderAdapter {
   }
 
   private async request(path: string, init?: RequestInit): Promise<Record<string, unknown>> {
-    // Hard timeout via an explicit controller that stays armed through BOTH the
-    // fetch AND the body read. Delhivery's /fm/ pickup endpoint can send headers
-    // (200) and then stall the response body; if the timer is cleared right after
-    // fetch() resolves, response.text() hangs forever and Nginx returns an opaque
-    // 502 to the operator. Keeping the whole operation inside one try + one timer
-    // guarantees we always abort within 8s and surface a clean, actionable error.
+    // Bulletproof timeout: we do NOT rely on AbortController/undici actually
+    // interrupting a stalled body read (in some Node/undici versions a response
+    // whose headers arrived but whose body stalls is never aborted by the signal,
+    // so response.text() hangs forever and Nginx returns an opaque 502). Instead
+    // we race the whole fetch+read against a hard wall-clock timer, guaranteeing
+    // this method always settles within DELHIVERY_TIMEOUT_MS and the backend
+    // always returns clean JSON — never an Nginx 502 — for this provider path.
+    const DELHIVERY_TIMEOUT_MS = 12_000;
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8_000);
+    let timer: ReturnType<typeof setTimeout> | undefined;
 
-    try {
+    const timeoutPromise = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        controller.abort(); // best-effort cancel of the underlying socket
+        reject(
+          new AppError(
+            ERROR_CODES.INTERNAL_ERROR,
+            `Delhivery did not respond within ${DELHIVERY_TIMEOUT_MS / 1000}s for ${path} — the provider endpoint stalled (Shiprocket is unaffected). Retry shortly; if it persists, the account's pickup/manifest API may not be enabled or the VPS cannot reach track.delhivery.com.`,
+            502
+          )
+        );
+      }, DELHIVERY_TIMEOUT_MS);
+    });
+
+    const operation = (async (): Promise<Record<string, unknown>> => {
       const response = await fetch(`${this.baseUrl}${path}`, {
         ...init,
         headers: {
@@ -575,21 +590,30 @@ export default class DelhiveryAdapter implements ShippingProviderAdapter {
         );
       }
       return parsed;
+    })();
+
+    // If the timeout wins the race, `operation` keeps running and may reject
+    // later with no awaiter — an unhandled rejection that can crash the Node
+    // process (itself a source of Nginx 502s). Attach a no-op handler so any
+    // late settlement is always considered handled.
+    operation.catch(() => undefined);
+
+    try {
+      return await Promise.race([operation, timeoutPromise]);
     } catch (err) {
-      // Re-throw our own AppErrors (non-OK response / invalid JSON) unchanged.
+      // Re-throw our own AppErrors (timeout / non-OK response / invalid JSON) unchanged.
       if (err instanceof AppError) {
         throw err;
       }
-      const aborted = err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError');
       throw new AppError(
         ERROR_CODES.INTERNAL_ERROR,
-        aborted
-          ? `Delhivery did not respond within 8s for ${path} — the provider endpoint may be unreachable or stalled (Shiprocket is unaffected). Try again shortly; if it persists, the VPS may be blocked from reaching track.delhivery.com.`
-          : `Delhivery request to ${path} failed: ${err instanceof Error ? err.message : 'network error'}`,
+        `Delhivery request to ${path} failed: ${err instanceof Error ? err.message : 'network error'}`,
         502
       );
     } finally {
-      clearTimeout(timeout);
+      if (timer) {
+        clearTimeout(timer);
+      }
     }
   }
 
