@@ -397,19 +397,27 @@ export default class DelhiveryAdapter implements ShippingProviderAdapter {
     const pickupDate = pickupDateObj.toISOString().slice(0, 10);
     const pickupTime = `${String(pickupHour).padStart(2, '0')}:00:00`;
 
+    const pickupRequestBody = {
+      pickup_location: this.pickupLocationName,
+      pickup_time: pickupTime,
+      pickup_date: pickupDate,
+      expected_package_count: 1
+    };
+
     let payload: Record<string, unknown>;
     try {
       payload = await this.request('/fm/request/new/', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          pickup_location: this.pickupLocationName,
-          pickup_time: pickupTime,
-          pickup_date: pickupDate,
-          expected_package_count: 1
-        })
+        body: JSON.stringify(pickupRequestBody)
       });
     } catch (err) {
+      // TEMP DIAGNOSTIC — remove after pickup is confirmed working.
+      console.error('[DELHIVERY PICKUP] request threw', JSON.stringify({
+        request: pickupRequestBody,
+        errorMessage: err instanceof Error ? err.message : String(err),
+        matchedExisting: err instanceof AppError && isExistingPickupMessage(err.message)
+      }));
       // Delhivery rejects a second pickup request for the warehouse while an
       // earlier one is still open/uncollected. That courier visit already
       // covers this AWB, so treat it as a successful (already-arranged) pickup
@@ -424,6 +432,14 @@ export default class DelhiveryAdapter implements ShippingProviderAdapter {
       }
       throw err;
     }
+
+    // TEMP DIAGNOSTIC — remove after pickup is confirmed working.
+    console.error('[DELHIVERY PICKUP] response', JSON.stringify({
+      request: pickupRequestBody,
+      response: payload,
+      matchedExisting: payloadIndicatesExistingPickup(payload),
+      pickupId: payload.pickup_id ?? null
+    }));
 
     // Some Delhivery responses return HTTP 200 with an error flag for duplicates.
     if (payloadIndicatesExistingPickup(payload)) {
