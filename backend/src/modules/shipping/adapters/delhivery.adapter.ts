@@ -494,6 +494,10 @@ export default class DelhiveryAdapter implements ShippingProviderAdapter {
       `/api/p/packing_slip?wbns=${encodeURIComponent(awbNumber)}`
     );
 
+    // TEMP DIAGNOSTIC — capture the real packing-slip JSON shape (sort code, nesting,
+    // pdf link) to verify the label matches Delhivery's expected format. Remove after.
+    console.error('[DELHIVERY LABEL] packing_slip', JSON.stringify({ awb: awbNumber, payload }).slice(0, 4000));
+
     // Render a self-contained HTML shipping label from the Delhivery packing slip JSON.
     // The JSON structure varies; we pull known fields and fall back gracefully.
     const labelHtml = this.renderPackingSlipHtml(awbNumber, payload);
