@@ -226,14 +226,25 @@ export function AdminOrderFulfillmentPanel({
       if (result.labelUrl) {
         window.open(result.labelUrl, "_blank", "noopener,noreferrer");
       } else if (result.labelHtml) {
-        // Delhivery returns rendered HTML. Open it as a Blob URL in a new tab —
-        // window.open("", ..., "noopener") returns null (so document.write never
-        // runs → blank tab), and a Blob document has no parent CSP so the inline
-        // base64 barcode and Delhivery logo render correctly.
+        // Delhivery returns rendered HTML. Open it as a Blob URL in a new tab
+        // (the label page is mobile-responsive and has Print / Download buttons).
+        // A Blob document has no parent CSP, so the inline base64 barcode and
+        // logo render. `noopener` is omitted so we can detect a blocked popup
+        // (common on mobile) and fall back to a direct download.
         const blob = new Blob([result.labelHtml], { type: "text/html" });
         const blobUrl = URL.createObjectURL(blob);
-        window.open(blobUrl, "_blank", "noopener,noreferrer");
-        // Revoke after the tab has had time to load the document.
+        const awbForName = detail?.shipment?.awb ?? selectedOrderId;
+        const win = window.open(blobUrl, "_blank");
+        if (!win) {
+          // Popup blocked (typical on mobile) — download the label so it can be
+          // opened, printed, and stuck on the package.
+          const anchor = document.createElement("a");
+          anchor.href = blobUrl;
+          anchor.download = `delhivery-label-${awbForName}.html`;
+          document.body.appendChild(anchor);
+          anchor.click();
+          anchor.remove();
+        }
         setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
       }
       setSuccess("Label ready.");

@@ -569,8 +569,12 @@ export default class DelhiveryAdapter implements ShippingProviderAdapter {
 <title>Delhivery Label — ${esc(awb)}</title>
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:Arial,Helvetica,sans-serif;font-size:11px;background:#fff;color:#000;padding:8px}
-  .label{width:100mm;border:2px solid #000;padding:8px;page-break-inside:avoid}
+  body{font-family:Arial,Helvetica,sans-serif;font-size:11px;background:#f3f4f6;color:#000;padding:8px}
+  .toolbar{display:flex;gap:8px;max-width:100mm;margin:0 auto 10px;position:sticky;top:8px}
+  .toolbar button{flex:1;min-height:44px;font-size:14px;font-weight:bold;border:none;border-radius:8px;cursor:pointer;padding:0 10px}
+  .toolbar .print{background:#111827;color:#fff}
+  .toolbar .dl{background:#fff;color:#111827;border:2px solid #111827}
+  .label{width:100mm;max-width:100%;margin:0 auto;background:#fff;border:2px solid #000;padding:8px;page-break-inside:avoid}
   .header{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #000;padding-bottom:6px;margin-bottom:6px}
   .header img{height:22px}
   .header .brand{font-size:16px;font-weight:bold;letter-spacing:1px}
@@ -585,10 +589,14 @@ export default class DelhiveryAdapter implements ShippingProviderAdapter {
   td{padding:2px 3px;vertical-align:top;border-top:1px solid #ddd}
   .k{font-weight:bold;width:34%;white-space:nowrap}
   .ship-to{font-size:12px;font-weight:bold;margin-top:6px}
-  @media print{body{padding:0}button{display:none}}
+  @media print{body{padding:0;background:#fff}.toolbar{display:none}.label{border-width:2px}}
 </style>
 </head>
 <body>
+<div class="toolbar">
+  <button class="print" type="button" onclick="window.print()">&#128424; Print / Save as PDF</button>
+  <button class="dl" type="button" id="dlBtn">&#11015; Download</button>
+</div>
 <div class="label">
   <div class="header">
     ${logo ? `<img src="${esc(logo)}" alt="Delhivery">` : '<span class="brand">DELHIVERY</span>'}
@@ -616,8 +624,20 @@ export default class DelhiveryAdapter implements ShippingProviderAdapter {
     ${sellerName || returnAddress ? `<tr><td class="k">Return</td><td>${esc(sellerName)}${returnAddress ? `, ${esc(returnAddress)}` : ''}${returnCity ? `, ${esc(returnCity)}` : ''}${returnState ? `, ${esc(returnState)}` : ''}${returnPin ? ` - ${esc(returnPin)}` : ''}</td></tr>` : ''}
   </table>
 </div>
-<br>
-<button onclick="window.print()">&#128424; Print Label</button>
+<script>
+  // Download a self-contained copy of this label (works offline; can be reprinted).
+  document.getElementById('dlBtn').addEventListener('click', function () {
+    var html = '<!DOCTYPE html>' + document.documentElement.outerHTML;
+    var blob = new Blob([html], { type: 'text/html' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = 'delhivery-label-${esc(awb)}.html';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(function () { URL.revokeObjectURL(url); a.remove(); }, 1000);
+  });
+</script>
 </body>
 </html>`;
   }
