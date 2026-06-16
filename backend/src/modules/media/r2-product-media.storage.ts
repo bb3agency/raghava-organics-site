@@ -52,6 +52,32 @@ export function createR2ProductMediaStorage(options: R2ProductMediaStorageOption
     return `${clientId}/${entity}/${safeEntityId}/${safeImageId}.${ext}`;
   }
 
+  // R2/S3 errors otherwise surface as an opaque 500 (and log as an empty `{}`),
+  // and the CDN edge strips 5xx bodies — so the operator just sees "500" with no
+  // cause. Translate them into a clear, pass-through (422) AppError naming the
+  // real reason (InvalidAccessKeyId / SignatureDoesNotMatch / NoSuchBucket / DNS),
+  // so the misconfiguration is actionable from the admin UI.
+  async function sendS3(command: PutObjectCommand | DeleteObjectCommand, action: string): Promise<void> {
+    try {
+      await s3.send(command as PutObjectCommand);
+    } catch (err) {
+      const e = err as {
+        name?: string;
+        Code?: string;
+        message?: string;
+        $metadata?: { httpStatusCode?: number };
+      };
+      const code = e.name || e.Code || 'R2Error';
+      const httpStatus = e.$metadata?.httpStatusCode;
+      throw new AppError(
+        ERROR_CODES.INTERNAL_ERROR,
+        `Cloudflare R2 ${action} failed (${code}${httpStatus ? ` ${httpStatus}` : ''}): ${e.message || 'unknown error'}. ` +
+          `Verify R2 credentials, bucket "${options.bucketName}", and endpoint "${endpoint}" in Ops → Product Media.`,
+        422
+      );
+    }
+  }
+
   function buildPublicUrl(objectKey: string): string {
     const encodedKey = objectKey
       .split('/')
@@ -93,7 +119,7 @@ export function createR2ProductMediaStorage(options: R2ProductMediaStorageOption
       const storageReference = buildObjectKey('products', input.productId, input.imageId, input.mime);
       const filename = storageReference.split('/').pop() ?? storageReference;
 
-      await s3.send(
+      await sendS3(
         new PutObjectCommand({
           Bucket: options.bucketName,
           Key: storageReference,
@@ -101,7 +127,8 @@ export function createR2ProductMediaStorage(options: R2ProductMediaStorageOption
           ContentType: input.mime,
           ContentLength: input.content.length,
           CacheControl: 'public, max-age=31536000, immutable'
-        })
+        }),
+        'upload'
       );
 
       return {
@@ -115,7 +142,7 @@ export function createR2ProductMediaStorage(options: R2ProductMediaStorageOption
       const storageReference = buildObjectKey('categories', input.categoryId, input.imageId, input.mime);
       const filename = storageReference.split('/').pop() ?? storageReference;
 
-      await s3.send(
+      await sendS3(
         new PutObjectCommand({
           Bucket: options.bucketName,
           Key: storageReference,
@@ -123,7 +150,8 @@ export function createR2ProductMediaStorage(options: R2ProductMediaStorageOption
           ContentType: input.mime,
           ContentLength: input.content.length,
           CacheControl: 'public, max-age=31536000, immutable'
-        })
+        }),
+        'upload'
       );
 
       return {
@@ -134,11 +162,12 @@ export function createR2ProductMediaStorage(options: R2ProductMediaStorageOption
     },
 
     async deleteProductImage(storageReference: string): Promise<void> {
-      await s3.send(
+      await sendS3(
         new DeleteObjectCommand({
           Bucket: options.bucketName,
           Key: storageReference
-        })
+        }),
+        'delete'
       );
     },
 
