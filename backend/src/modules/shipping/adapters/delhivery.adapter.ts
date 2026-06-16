@@ -494,10 +494,6 @@ export default class DelhiveryAdapter implements ShippingProviderAdapter {
       `/api/p/packing_slip?wbns=${encodeURIComponent(awbNumber)}`
     );
 
-    // TEMP DIAGNOSTIC — capture the real packing-slip JSON shape (sort code, nesting,
-    // pdf link) to verify the label matches Delhivery's expected format. Remove after.
-    console.error('[DELHIVERY LABEL] packing_slip', JSON.stringify({ awb: awbNumber, payload }).slice(0, 4000));
-
     // Render a self-contained HTML shipping label from the Delhivery packing slip JSON.
     // The JSON structure varies; we pull known fields and fall back gracefully.
     const labelHtml = this.renderPackingSlipHtml(awbNumber, payload);
@@ -506,76 +502,122 @@ export default class DelhiveryAdapter implements ShippingProviderAdapter {
   }
 
   private renderPackingSlipHtml(awbNumber: string, data: Record<string, unknown>): string {
-    // Delhivery packing slip JSON field names observed in production:
-    // wbn/waybill, cname, cadd, cpn/cphone, cpin, origin, pm (payment mode), cod, order, wt
-    const getString = (keys: string[]): string => {
+    // Delhivery's /api/p/packing_slip nests the shipment under `packages[0]`.
+    // It also returns its OWN routing barcode as a base64 PNG (`barcode`) and the
+    // sort routing (`origin` → `destination` facility codes) — couriers and the
+    // sortation hubs read those, so we must render Delhivery's official barcode
+    // (NOT a self-generated one) and the routing, all inline (no external script,
+    // which is why the old label rendered blank in the popup).
+    const pkgs = data.packages;
+    const pkg: Record<string, unknown> =
+      Array.isArray(pkgs) && pkgs.length > 0 && typeof pkgs[0] === 'object' && pkgs[0] !== null
+        ? (pkgs[0] as Record<string, unknown>)
+        : data;
+
+    const esc = (value: unknown): string => {
+      if (value === null || value === undefined) return '';
+      return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    };
+    const get = (keys: string[]): string => {
       for (const k of keys) {
-        const v = data[k];
+        const v = pkg[k];
         if (typeof v === 'string' && v.trim()) return v.trim();
+        if (typeof v === 'number' && Number.isFinite(v)) return String(v);
       }
       return '';
     };
-    const customerName = getString(['cname', 'customer_name', 'name']);
-    const customerAddress = getString(['cadd', 'customer_address', 'add']);
-    const customerPhone = getString(['cpn', 'cphone', 'phone']);
-    const customerPin = getString(['cpin', 'pincode', 'pin']);
-    const originName = getString(['origin', 'org', 'pickup_location']);
-    const paymentMode = getString(['pm', 'payment_mode']);
-    const orderRef = getString(['order', 'order_id', 'ref_id']);
-    const weight = getString(['wt', 'weight']);
-    const codAmount = getString(['cod', 'cod_amount']);
+
+    const awb = get(['wbn', 'waybill']) || awbNumber;
+    const consigneeName = get(['name', 'cname', 'customer_name']);
+    const consigneeAddress = get(['address', 'cadd', 'add']);
+    const consigneePin = get(['pin', 'cpin', 'pincode']);
+    const consigneeCity = get(['destination_city', 'customer_city']);
+    const consigneeState = get(['st', 'customer_state']);
+    const consigneePhone = get(['contact', 'cnph', 'cphone', 'phone']);
+    const originFacility = get(['origin']);
+    const destinationFacility = get(['destination']);
+    const sellerName = get(['snm', 'cl']);
+    const returnAddress = get(['radd', 'sadd']);
+    const returnCity = get(['rcty']);
+    const returnPin = get(['rpin']);
+    const returnState = get(['rst']);
+    const orderRef = get(['oid', 'order', 'order_id']);
+    const product = get(['prd', 'products_desc']);
+    const qty = get(['qty', 'quantity']);
+    const weight = get(['weight', 'wt']);
+    const hsn = get(['hsn_code']);
+    const sellerGst = get(['seller_gst_tin', 'client_gst_tin']);
+    const paymentMode = get(['pt', 'pm', 'payment_mode']);
+    const codValue = get(['cod', 'cod_amount']);
+    const isCod = paymentMode.toUpperCase().includes('COD') || (codValue !== '' && Number(codValue) > 0);
+    const logo = get(['delhivery_logo']);
+    // Delhivery's official routing barcode (base64 data URI). Render it as an
+    // image — it encodes the AWB + sort routing the hubs scan.
+    const barcodeRaw = pkg.barcode;
+    const barcode = typeof barcodeRaw === 'string' && barcodeRaw.startsWith('data:image') ? barcodeRaw : '';
 
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Delhivery Label — ${awbNumber}</title>
-<script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"><\/script>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Delhivery Label — ${esc(awb)}</title>
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:Arial,sans-serif;font-size:11px;background:#fff;color:#000}
-  .label{width:100mm;border:2px solid #000;padding:6px;page-break-inside:avoid}
-  .header{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #000;padding-bottom:4px;margin-bottom:4px}
-  .header h1{font-size:14px;font-weight:bold}
+  body{font-family:Arial,Helvetica,sans-serif;font-size:11px;background:#fff;color:#000;padding:8px}
+  .label{width:100mm;border:2px solid #000;padding:8px;page-break-inside:avoid}
+  .header{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #000;padding-bottom:6px;margin-bottom:6px}
+  .header img{height:22px}
+  .header .brand{font-size:16px;font-weight:bold;letter-spacing:1px}
+  .pay{font-size:13px;font-weight:bold;border:1px solid #000;padding:2px 8px}
+  .pay.cod{background:#000;color:#fff}
+  .routing{display:flex;justify-content:space-between;font-size:10px;font-weight:bold;margin:4px 0}
+  .dest{font-size:15px;font-weight:bold;text-align:center;border:1px solid #000;padding:4px;margin:4px 0}
   .barcode-wrap{text-align:center;margin:6px 0}
-  .awb{font-size:13px;font-weight:bold;letter-spacing:1px;text-align:center}
-  table{width:100%;border-collapse:collapse;margin-top:4px}
-  td{padding:2px 3px;vertical-align:top}
-  .label-cell{font-weight:bold;width:36%;white-space:nowrap}
-  .section{border-top:1px solid #ccc;margin-top:6px;padding-top:4px}
-  .cod-badge{background:#000;color:#fff;padding:2px 6px;font-size:11px;font-weight:bold;display:inline-block;margin-top:4px}
-  @media print{body{margin:0}button{display:none}}
+  .barcode-wrap img{max-width:100%;height:64px}
+  .awb{font-size:14px;font-weight:bold;letter-spacing:2px;text-align:center;margin-top:2px}
+  table{width:100%;border-collapse:collapse;margin-top:6px}
+  td{padding:2px 3px;vertical-align:top;border-top:1px solid #ddd}
+  .k{font-weight:bold;width:34%;white-space:nowrap}
+  .ship-to{font-size:12px;font-weight:bold;margin-top:6px}
+  @media print{body{padding:0}button{display:none}}
 </style>
 </head>
 <body>
-<div class="label" id="label">
+<div class="label">
   <div class="header">
-    <h1>DELHIVERY</h1>
-    <span>${paymentMode === 'COD' ? `<span class="cod-badge">COD ₹${codAmount}</span>` : '<strong>PREPAID</strong>'}</span>
+    ${logo ? `<img src="${esc(logo)}" alt="Delhivery">` : '<span class="brand">DELHIVERY</span>'}
+    <span class="pay ${isCod ? 'cod' : ''}">${isCod ? `COD ₹${esc(codValue)}` : 'PREPAID'}</span>
   </div>
-  <div class="barcode-wrap">
-    <svg id="barcode"></svg>
-  </div>
-  <div class="awb">${awbNumber}</div>
-  <div class="section">
-    <table>
-      <tr><td class="label-cell">To:</td><td>${customerName}${customerAddress ? `, ${customerAddress}` : ''}${customerPhone ? ` | Ph: ${customerPhone}` : ''}${customerPin ? ` — ${customerPin}` : ''}</td></tr>
-      ${originName ? `<tr><td class="label-cell">From:</td><td>${originName}</td></tr>` : ''}
-      ${orderRef ? `<tr><td class="label-cell">Order:</td><td>${orderRef}</td></tr>` : ''}
-      ${weight ? `<tr><td class="label-cell">Weight:</td><td>${weight} kg</td></tr>` : ''}
-    </table>
-  </div>
+
+  ${destinationFacility || originFacility ? `<div class="routing"><span>${esc(originFacility)}</span><span>&#8594; ${esc(destinationFacility)}</span></div>` : ''}
+  ${consigneeCity || consigneeState ? `<div class="dest">${esc(consigneeCity)}${consigneeState ? `, ${esc(consigneeState)}` : ''} ${esc(consigneePin)}</div>` : ''}
+
+  ${barcode
+    ? `<div class="barcode-wrap"><img src="${barcode}" alt="AWB ${esc(awb)}"></div>`
+    : ''}
+  <div class="awb">${esc(awb)}</div>
+
+  <div class="ship-to">Ship to:</div>
+  <table>
+    <tr><td class="k">Name</td><td>${esc(consigneeName)}</td></tr>
+    <tr><td class="k">Address</td><td>${esc(consigneeAddress)}${consigneeCity ? `, ${esc(consigneeCity)}` : ''}${consigneePin ? ` - ${esc(consigneePin)}` : ''}</td></tr>
+    ${consigneePhone ? `<tr><td class="k">Phone</td><td>${esc(consigneePhone)}</td></tr>` : ''}
+    ${orderRef ? `<tr><td class="k">Order</td><td>${esc(orderRef)}</td></tr>` : ''}
+    ${product ? `<tr><td class="k">Product</td><td>${esc(product)}${qty ? ` (Qty ${esc(qty)})` : ''}</td></tr>` : ''}
+    ${weight ? `<tr><td class="k">Weight</td><td>${esc(weight)} kg</td></tr>` : ''}
+    ${hsn ? `<tr><td class="k">HSN</td><td>${esc(hsn)}</td></tr>` : ''}
+    ${sellerGst ? `<tr><td class="k">Seller GST</td><td>${esc(sellerGst)}</td></tr>` : ''}
+    ${sellerName || returnAddress ? `<tr><td class="k">Return</td><td>${esc(sellerName)}${returnAddress ? `, ${esc(returnAddress)}` : ''}${returnCity ? `, ${esc(returnCity)}` : ''}${returnState ? `, ${esc(returnState)}` : ''}${returnPin ? ` - ${esc(returnPin)}` : ''}</td></tr>` : ''}
+  </table>
 </div>
 <br>
-<button onclick="window.print()">🖨 Print Label</button>
-<script>
-  JsBarcode('#barcode', '${awbNumber.replace(/'/g, "\\'")}', {
-    format: 'CODE128',
-    width: 2,
-    height: 60,
-    displayValue: false
-  });
-<\/script>
+<button onclick="window.print()">&#128424; Print Label</button>
 </body>
 </html>`;
   }

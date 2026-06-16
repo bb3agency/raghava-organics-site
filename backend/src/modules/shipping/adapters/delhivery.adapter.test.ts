@@ -469,6 +469,48 @@ describe('DelhiveryAdapter', () => {
     expect(result.cancelled).toBe(true);
   });
 
+  it('generateLabel renders Delhivery official barcode + nested packages[0] fields (no blank label)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({
+        packages: [{
+          wbn: '56555510000162',
+          oid: 'ORD-2026-00032',
+          name: 'Umesh J',
+          address: 'Kukatpally',
+          pin: 500072,
+          destination: 'Hyderabad_Kailashhills_D (Telangana)',
+          origin: 'Guntur_Vinayaknagar_D (Andhra Pradesh)',
+          destination_city: 'Hyderabad',
+          st: 'Telangana',
+          pt: 'Pre-paid',
+          prd: 'test-product',
+          weight: 2,
+          barcode: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=='
+        }]
+      })
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const adapter = new DelhiveryAdapter({ apiKey: 'test_key' });
+    const result = await adapter.generateLabel('56555510000162');
+
+    const [url] = fetchMock.mock.calls[0] as [string];
+    expect(url).toContain('/api/p/packing_slip?wbns=56555510000162');
+    const html = result.labelHtml ?? '';
+    // Uses Delhivery's official base64 barcode image, NOT a self-generated one.
+    expect(html).toContain('data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==');
+    expect(html).not.toContain('JsBarcode');
+    expect(html).not.toContain('cdn.jsdelivr.net');
+    // Reads nested packages[0] fields — label is not blank.
+    expect(html).toContain('Umesh J');
+    expect(html).toContain('Kukatpally');
+    expect(html).toContain('Hyderabad');
+    expect(html).toContain('ORD-2026-00032');
+    expect(html).toContain('PREPAID');
+  });
+
   it('cancelShipment fails loudly when Delhivery rejects the cancellation', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,

@@ -226,13 +226,15 @@ export function AdminOrderFulfillmentPanel({
       if (result.labelUrl) {
         window.open(result.labelUrl, "_blank", "noopener,noreferrer");
       } else if (result.labelHtml) {
-        // Delhivery: label is rendered HTML — open in a new tab via document.write
-        const win = window.open("", "_blank", "noopener,noreferrer");
-        if (win) {
-          win.document.open();
-          win.document.write(result.labelHtml);
-          win.document.close();
-        }
+        // Delhivery returns rendered HTML. Open it as a Blob URL in a new tab —
+        // window.open("", ..., "noopener") returns null (so document.write never
+        // runs → blank tab), and a Blob document has no parent CSP so the inline
+        // base64 barcode and Delhivery logo render correctly.
+        const blob = new Blob([result.labelHtml], { type: "text/html" });
+        const blobUrl = URL.createObjectURL(blob);
+        window.open(blobUrl, "_blank", "noopener,noreferrer");
+        // Revoke after the tab has had time to load the document.
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
       }
       setSuccess("Label ready.");
       await loadDetail(selectedOrderId);
