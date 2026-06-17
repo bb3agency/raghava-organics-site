@@ -36,10 +36,14 @@ function assertR2Config(): void {
   if (!resolvePublicBaseUrl()) missing.push('R2_PUBLIC_BASE_URL or MEDIA_CDN_BASE_URL');
 
   if (missing.length > 0) {
+    // Must be 4xx, not 5xx: the Cloudflare/Nginx edge strips 5xx response bodies,
+    // so a 500 here reaches the admin UI as an opaque "500" with no cause. A 422
+    // passes the body through so the operator sees exactly which keys are missing.
+    // (Mirrors the R2 send-error wrapper in r2-product-media.storage.ts.)
     throw new AppError(
-      ERROR_CODES.INTERNAL_ERROR,
-      `MEDIA_STORAGE_PROVIDER=r2 requires (configure in Ops panel → Product Media): ${missing.join(', ')}`,
-      500
+      ERROR_CODES.VALIDATION_ERROR,
+      `Product image storage is misconfigured. MEDIA_STORAGE_PROVIDER=r2 requires (configure in Ops panel → Product Media): ${missing.join(', ')}`,
+      422
     );
   }
 }
