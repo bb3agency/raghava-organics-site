@@ -39,7 +39,8 @@ export async function registerUsersRoutes(fastify: FastifyInstance): Promise<voi
     '/api/v1/users/me',
     {
       schema: getMeSchema,
-      preHandler: customerGuard,
+      preHandler: [jwtAuthGuard],
+
       config: {
         rateLimit: routeRateLimitProfiles.cartOps
       }
@@ -54,7 +55,7 @@ export async function registerUsersRoutes(fastify: FastifyInstance): Promise<voi
     '/api/v1/users/me',
     {
       schema: patchMeSchema,
-      preHandler: customerGuard,
+      preHandler: [jwtAuthGuard],
       config: {
         rateLimit: routeRateLimitProfiles.cartOps
       }
