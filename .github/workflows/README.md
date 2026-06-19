@@ -6,6 +6,7 @@ GitHub only executes workflows from **this directory** (repository root).
 |----------|---------|---------|
 | `reliability-ci.yml` | `ubuntu-latest` | CI gates on every PR/push |
 | `deploy.yml` | Self-hosted runner on client VPS | Auto-deploy after CI passes on `main` |
+| `release-train.yml` | `ubuntu-latest` | **Opt-in, inert by default.** On a `backend-core-v*` / `frontend-core-v*` tag push, fans out core-sync PRs to client repos. Enable with repo Variable `RELEASE_TRAIN_ENABLED=true` + `CLIENT_REPOS` + secret `CROSS_REPO_PAT`. See `backend/docs/PLATFORM_VERSIONING_AND_SYNC_GUIDE.md` §9. |
 
 ## Per-client runner model (canonical)
 

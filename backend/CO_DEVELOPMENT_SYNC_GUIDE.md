@@ -2,6 +2,8 @@
 
 This guide defines safe, repeatable ways to upstream reusable backend changes discovered during client development.
 
+> **For the versioning + changelog + design-isolation + drift-enforcement layer on top of these git mechanics, see `docs/PLATFORM_VERSIONING_AND_SYNC_GUIDE.md`.** That guide covers semver'd `backend-core`/`frontend-core`, the changelog-as-propagation-recipe format, per-client `PLATFORM_VERSION` pinning, `FEATURE_*`-flag-based feature differences, the `merge=ours` design layer, and the `check-core-drift.sh` / `check-token-contract.sh` CI gates. This guide is *how to move a change upstream*; that guide is *how the fleet stays versioned and in sync without losing per-client design/features*.
+
 ---
 
 ## 1) Core Rule

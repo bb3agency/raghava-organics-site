@@ -1458,7 +1458,7 @@ npx lighthouse-ci       # Core Web Vitals pass (if configured)
 
 ### Co-Development with Backend Template (mandatory)
 
-Canonical source: `CO_DEVELOPMENT_SYNC_GUIDE.md`.
+Canonical source: `CO_DEVELOPMENT_SYNC_GUIDE.md` (git mechanics) + `backend/docs/PLATFORM_VERSIONING_AND_SYNC_GUIDE.md` (the versioning + changelog + design-isolation + drift-enforcement layer: semver'd `backend-core`/`frontend-core`, `CHANGELOG.md` propagation blocks, `FEATURE_*`-flag feature differences, the `merge=ours` design layer, and the `check-core-drift` / `check-token-contract` gates).
 
 When frontend implementation reveals a backend bug/improvement:
 - Classify change as **template-worthy** or **client-specific**.

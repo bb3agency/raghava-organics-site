@@ -500,7 +500,7 @@ If diff output is non-empty, commit the updated `.agents/rules/dev-rules.md` in 
 
 ### 3.2.2 Co-development backend upstream SOP (manual commands)
 
-Canonical source: `CO_DEVELOPMENT_SYNC_GUIDE.md`.
+Canonical source: `CO_DEVELOPMENT_SYNC_GUIDE.md` (git mechanics) + `docs/PLATFORM_VERSIONING_AND_SYNC_GUIDE.md` (semver'd `backend-core`/`frontend-core`, changelog-as-propagation-recipe, design-isolation, and the `check-core-drift` / `check-token-contract` gates).
 
 Use that guide for:
 - Flow A (`frontend/` + `backend/` in one repo) subtree sync commands.

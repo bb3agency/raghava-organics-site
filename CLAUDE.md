@@ -1544,7 +1544,9 @@ npx lighthouse-ci       # Core Web Vitals pass (if configured)
 
 ### Co-Development with Backend Template (mandatory)
 
-Canonical source: `CO_DEVELOPMENT_SYNC_GUIDE.md`.
+Canonical source: `CO_DEVELOPMENT_SYNC_GUIDE.md` (git mechanics of upstreaming) + `backend/docs/PLATFORM_VERSIONING_AND_SYNC_GUIDE.md` (the versioning + changelog + design-isolation + drift-enforcement layer on top).
+
+**Platform versioning model (applies to every core change):** shared code is versioned as `backend-core` / `frontend-core` (semver; `backend/package.json` + `frontend/package.json` `version` are the source of truth, surfaced at `/health`). Each core change gets a `CHANGELOG.md` entry with a **Propagation** block (severity · layers · migration · flag · design impact · breaking · rollback) — that entry is what tells every client repo how to apply it. Per-client differences must stay OUT of core code: **design** lives in the token layer (`frontend/app/globals.css`, `lib/fonts.ts`, `lib/constants.ts`, `public/` — protected by `.gitattributes merge=ours`); **feature differences** live in `FEATURE_*` flags (ship new features OFF by default); **true one-offs** live in `src/modules/client/**` / `app/(client)/**`. `core-manifest.json` + `backend/scripts/check-core-drift.sh` forbid silent core forks; `frontend/design-tokens.contract.json` + `backend/scripts/check-token-contract.sh` guarantee new components theme correctly per client. When you change core: update the relevant `CHANGELOG.md`, bump the package.json `version`, and keep `PLATFORM_VERSION` + the tag in sync.
 
 When frontend implementation reveals a backend bug/improvement:
 - Classify change as **template-worthy** or **client-specific**.

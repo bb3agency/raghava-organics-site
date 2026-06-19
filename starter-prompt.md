@@ -210,7 +210,7 @@ If `diff` output shows differences, re-copy and commit `.agents/rules/dev-rules.
 
 ### Co-Development Backend Upstream (manual command protocol)
 
-Canonical source: `CO_DEVELOPMENT_SYNC_GUIDE.md`.
+Canonical source: `CO_DEVELOPMENT_SYNC_GUIDE.md` (git mechanics) + `backend/docs/PLATFORM_VERSIONING_AND_SYNC_GUIDE.md` (versioned core + changelog propagation + design isolation across client sites).
 
 Use that guide for:
 - Flow A (`frontend/` + `backend/` in one repo) and Flow B (separate template clone).

@@ -44,6 +44,8 @@
     "ops:config-contract-drift-check": "node scripts/ops-config-contract-drift-check.js",
     "ops:config-contract-proposal": "node scripts/ops-config-contract-proposal.js",
     "admin:layer-drift-check": "node scripts/admin-layer-drift-check.js",
+    "check:token-contract": "bash scripts/check-token-contract.sh",
+    "check:core-drift": "bash scripts/check-core-drift.sh",
     "route:discipline-check": "node scripts/route-discipline-check.js",
     "serializer:exposure-check": "node scripts/serializer-exposure-check.js",
     "security:sql-injection-guard": "node scripts/sql-injection-guard.js",

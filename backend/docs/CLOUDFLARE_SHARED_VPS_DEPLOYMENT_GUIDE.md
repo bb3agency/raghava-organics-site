@@ -167,6 +167,25 @@ Run top-to-bottom for each new client. Slot N → backend `300N`, storefront `31
 
 ---
 
+## 6.1 GitHub Actions CD runner (one per client)
+
+Push-to-deploy uses a **self-hosted runner per client repo**, each in its own directory with a **unique label**. Never share a runner between clients and never clone a configured runner directory.
+
+- Layout: `/home/<user>/actions-runner` (client 1), `/home/<user>/actions-runner-<client2>` (client 2), …
+- Register against the client repo with a registration token from **GitHub → repo → Settings → Actions → Runners → New self-hosted runner**. Run `config.sh` as a **single unbroken line** with `--unattended` — a broken line-continuation silently drops `--name/--labels/--unattended` and forces interactive prompts:
+  ```bash
+  cd /home/<user>/actions-runner-<client> && ./config.sh \
+    --url https://github.com/<org>/<client>-site --token <TOKEN> \
+    --name <client>-vps --labels <client>-vps --unattended --replace
+  sudo ./svc.sh install <user> && sudo ./svc.sh start
+  sudo systemctl is-active 'actions.runner.<org>-<client>-site.<client>-vps.service'
+  ```
+- **Set the GitHub Variable `VPS_RUNNER_LABEL=<client>-vps`** in each client repo (Settings → Secrets and variables → Actions → Variables). Without it the workflow falls back to the generic `self-hosted` label and may route one client's deploy to another client's runner.
+- **Do NOT clone a configured runner dir** (`cp -r` of an existing runner) — it copies the other client's identity/credentials and `svc.sh` then tries to create the wrong service name. Always download a fresh runner tarball matching the in-use version.
+- **OOM watch:** runner deploy jobs run `next build`, which can peak >2 GB. On a 4 GB box this OOM-kills the runner service mid-deploy (`Active: failed (Result: oom-kill)`). Ensure swap is configured (§6 host prerequisites) before relying on CD; consider capping build memory for very small hosts.
+
+---
+
 ## 7. Pitfalls table (everything we actually hit)
 
 | Symptom | Root cause | Fix |
@@ -181,6 +200,9 @@ Run top-to-bottom for each new client. Slot N → backend `300N`, storefront `31
 | Compose makes orphaned containers | missing `COMPOSE_PROJECT_NAME` | Set it `=<client-id>` in `.env` |
 | Two clients reachable with one leaked password | shared DB/Redis password | Rotate to unique per-client secrets |
 | OOM kills under load with 3+ clients | no swap on a 4 GB box | Add ≥2 GB swap |
+| CD runner service `failed (Result: oom-kill)` mid-deploy | `next build` peaked >2 GB on a 4 GB box | Add swap (§6); cap build memory on tiny hosts |
+| GitHub routes one client's deploy to another's runner | shared/generic runner label | Unique `--labels <client>-vps` + repo Variable `VPS_RUNNER_LABEL` (§6.1) |
+| New runner `svc.sh install` creates the wrong service name | cloned a configured runner dir | Fresh runner tarball + `config.sh` per repo (§6.1) |
 
 ---
 

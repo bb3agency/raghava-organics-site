@@ -4,6 +4,8 @@ This guide is the **deployment runbook** for hosting multiple isolated client st
 
 **Lifecycle:** This is a **Client-Main (Post-Development)** runbook. Use `docs/CLIENT_HANDOFF_INDEX.md` as the primary post-development entrypoint.
 
+> **Putting Cloudflare in front of the VPS? Read `docs/CLOUDFLARE_SHARED_VPS_DEPLOYMENT_GUIDE.md` alongside this one.** It is the battle-tested companion covering the exact Cloudflare TLS posture (`Full (strict)`, never `Flexible`), the certless-`default_server` **525** root cause, stray-`AAAA` pitfalls, origin-IP locking to Cloudflare ranges, the permanent default-server block, and a tightened per-client onboarding checklist. This guide is the base setup; that one is where the real-world Cloudflare gotchas live.
+
 This runbook begins after Phase 5 local gate clears. Frontend Phase 4 must already be completed in the mandatory order documented in `docs/NEXTJS_FRONTEND_INTEGRATION_GUIDE.md` §1.2: Foundation -> Ops control plane -> Admin read -> Admin mutation -> Reliability -> Storefront customer journey.
 
 ---

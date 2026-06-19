@@ -310,7 +310,7 @@ Perform each dry-run as part of the vertical slice that builds the relevant fron
 **Canonical implementation details:**
 - `docs/NEXTJS_FRONTEND_INTEGRATION_GUIDE.md`
 - `docs/FRONTEND_AI_GO_LIVE_CHECKLIST.md`
-- `CO_DEVELOPMENT_SYNC_GUIDE.md` (for template-worthy backend upstreams)
+- `CO_DEVELOPMENT_SYNC_GUIDE.md` (for template-worthy backend upstreams) + `docs/PLATFORM_VERSIONING_AND_SYNC_GUIDE.md` (versioned core + changelog propagation + design isolation across client sites)
 
 **Execution steps (condensed):**
 1. Create frontend repo and sync rules (`frontend-agent-rules.md` -> `.agents/rules/dev-rules.md`).

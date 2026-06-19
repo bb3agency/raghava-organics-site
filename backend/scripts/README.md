@@ -35,6 +35,8 @@ Client-specific VPS bash steps live under `docs/clients/<client-id>/scripts/` (n
 | `otel:readiness-check` | `otel-readiness-check.js` | OTEL exporter config smoke |
 | `ops:config-contract-proposal` | `ops-config-contract-proposal.js` | Propose new Ops config keys |
 | `parity:scorecard` | `parity-scorecard.js` | Reliability artifact scorecard |
+| `check:token-contract` | `check-token-contract.sh` | Fails if `frontend/app/globals.css` is missing any token in `frontend/design-tokens.contract.json` (needs `jq`). See `docs/PLATFORM_VERSIONING_AND_SYNC_GUIDE.md` §5 |
+| `check:core-drift` | `check-core-drift.sh` | Fails if client core files (per root `core-manifest.json`) diverge from the pinned `template` tag (needs `jq` + a `template` git remote). See guide §7 |
 
 ---
 

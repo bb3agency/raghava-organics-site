@@ -143,6 +143,7 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
   const [loading, setLoading] = useState(!isCreate);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [uploadTick, setUploadTick] = useState(false);
   const [saving, setSaving] = useState(false);
   const [gstInvoicingEnabled, setGstInvoicingEnabled] = useState(false);
 
@@ -280,6 +281,13 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
   useEffect(() => {
     void loadCategories().catch((err) => setError(getApiErrorMessage(err)));
   }, [loadCategories]);
+
+  // Ephemeral green-tick confirmation after a successful image upload (auto-hides after 2s).
+  useEffect(() => {
+    if (!uploadTick) return;
+    const timer = setTimeout(() => setUploadTick(false), 2000);
+    return () => clearTimeout(timer);
+  }, [uploadTick]);
 
   useAdminDataRefreshEffect(() => {
     void loadCategories().catch((err) => setError(getApiErrorMessage(err)));
@@ -852,6 +860,7 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
           ? "Image uploaded."
           : `${filesToUpload.length} images uploaded.`,
       );
+      setUploadTick(true);
       notifyAdminDataChanged(["products", "dashboard"]);
     } catch (err) {
       setError(err instanceof Error ? err.message : getApiErrorMessage(err));
@@ -1092,6 +1101,20 @@ export function AdminProductEditor({ productId }: AdminProductEditorProps) {
       {success ? (
         <div className="rounded-xl border border-zinc-300 bg-zinc-100 px-4 py-3 text-sm text-zinc-800 font-semibold flex items-center gap-2">
           <Check className="h-4 w-4" /> {success}
+        </div>
+      ) : null}
+
+      {/* Ephemeral upload-success toast — green tick, auto-dismisses after 2s. */}
+      {uploadTick ? (
+        <div
+          role="status"
+          aria-live="polite"
+          className="fixed bottom-6 right-6 z-50 flex items-center gap-2 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm font-semibold text-green-800 shadow-lg animate-in fade-in slide-in-from-bottom-2"
+        >
+          <span className="flex h-6 w-6 items-center justify-center rounded-full bg-green-600 text-white">
+            <Check className="h-4 w-4" />
+          </span>
+          Image uploaded
         </div>
       ) : null}
 
