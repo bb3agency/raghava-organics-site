@@ -288,7 +288,26 @@ export async function registerProductsRoutes(fastify: FastifyInstance): Promise<
       }));
 
       const items = await productsService.adminUploadProductImages(params.id, uploads);
-      return items.length === 1 ? items[0] : { items };
+      // Map to the response DTO shape. Returning the raw Prisma row (which also
+      // has createdAt/updatedAt) makes fast-json-stringify fail to resolve the
+      // `oneOf` response schema (additionalProperties:false) and throw
+      // "The value of '#' does not match schema definition" → a 500 *after* the
+      // image is already saved to R2 + DB. Stripping to the declared fields fixes it.
+      const toImageDto = (image: {
+        id: string;
+        productId: string;
+        url: string;
+        altText: string;
+        sortOrder: number;
+      }) => ({
+        id: image.id,
+        productId: image.productId,
+        url: image.url,
+        altText: image.altText,
+        sortOrder: image.sortOrder
+      });
+      const dtos = items.map(toImageDto);
+      return dtos.length === 1 ? dtos[0]! : { items: dtos };
     }
   );
 

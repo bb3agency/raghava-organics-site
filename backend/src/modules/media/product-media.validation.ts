@@ -49,11 +49,14 @@ export function assertProductImageUpload(input: {
     );
   }
 
-  const declared = (input.declaredMime ?? '').trim().toLowerCase();
-  if (declared && declared !== detected) {
-    throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Image content does not match declared file type', 400);
-  }
-
+  // The magic-byte `detected` type is authoritative — it is what we store
+  // (R2 ContentType + file extension, see products.service.ts). The
+  // browser/OS-declared MIME is untrustworthy (renamed files, the non-standard
+  // `image/jpg` vs `image/jpeg`, phone exports that mislabel) and must NOT
+  // trigger a rejection: trusting `detected` over `declared` is strictly safer
+  // than the reverse. We therefore intentionally ignore any declared/detected
+  // mismatch instead of 400-ing legitimate images. `declaredMime` is kept on the
+  // input for callers/back-compat but is no longer used for acceptance.
   if (!PRODUCT_IMAGE_ALLOWED_MIME_TYPES.includes(detected)) {
     throw new AppError(ERROR_CODES.VALIDATION_ERROR, 'Unsupported image MIME type', 400);
   }

@@ -17,10 +17,20 @@ describe('product image validation', () => {
     expect(() => assertProductImageUpload({ buffer })).toThrow(AppError);
   });
 
-  it('rejects mismatched declared MIME', () => {
+  it('trusts detected magic bytes over a mismatched declared MIME', () => {
+    // PNG bytes declared (incorrectly) as image/jpeg — detection is authoritative,
+    // so the upload is accepted as image/png rather than rejected. This is the
+    // fix for false "Image content does not match declared file type" 400s on
+    // renamed files, image/jpg vs image/jpeg, and phone exports.
     const buffer = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]);
+    expect(assertProductImageUpload({ buffer, declaredMime: 'image/jpeg' })).toBe('image/png');
+  });
+
+  it('still rejects unrecognized formats regardless of declared MIME', () => {
+    // Security is preserved: only true JPEG/PNG/WebP/GIF magic bytes are accepted.
+    const buffer = Buffer.from([0x00, 0x01, 0x02, 0x03, 0x04, 0x05]);
     expect(() =>
-      assertProductImageUpload({ buffer, declaredMime: 'image/jpeg' })
+      assertProductImageUpload({ buffer, declaredMime: 'image/png' })
     ).toThrow(AppError);
   });
 });

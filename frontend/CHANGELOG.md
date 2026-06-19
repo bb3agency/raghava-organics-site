@@ -12,7 +12,17 @@ Each entry MUST carry the **Propagation** block.
 
 ## [Unreleased]
 
-_Add entries here as core changes land; cut a version + tag on release._
+### Added
+- Admin product editor shows an ephemeral green-tick success toast (`role="status"`, auto-dismisses after 2s) after a successful product image upload, in addition to the persistent success banner.
+
+**Propagation:**
+- Severity: NORMAL
+- Layers: frontend (`components/admin/AdminProductEditor.tsx`)
+- Requires backend-core: >= 0.1.0
+- Flag: n/a
+- Design impact: none (uses existing admin success-color utilities)
+- Breaking: NO
+- Rollback: revert the AdminProductEditor change
 
 ---
 
