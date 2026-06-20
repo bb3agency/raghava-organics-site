@@ -22,7 +22,14 @@
 | Image CDN | `https://cdn.raghavaorganics.com` (Cloudflare R2) |
 | DNS | Cloudflare (nameservers updated at Namecheap) |
 | Phase 5 (local) | 2026-05-23 |
-| Last updated | 2026-06-11 |
+| Last updated | 2026-06-20 |
+
+---
+
+## 2026-06-20 — Progress log
+
+- **Product image upload reliability fix landed** (commit `c0bea7d`): admin image upload had three compounding bugs — a DTO-serialization 500 *after* the image was already saved to R2 + DB, false-positive "declared MIME mismatch" 400s on legitimate images (renamed files, `image/jpg` vs `image/jpeg`, phone exports), and the nginx maintenance `auth_request` gate buffering/breaking larger multipart uploads. All three fixed; see `backend/CHANGELOG.md` / `frontend/CHANGELOG.md` `[Unreleased]` for full propagation notes. **Action:** confirm the updated `nginx/client.conf.template` admin-upload location block has been re-rendered/applied on the live VPS config (`nginx -t && systemctl reload nginx`) — template changes don't auto-apply to an already-deployed `/etc/nginx/sites-available/<domain>` file.
+- Manual `npm run build` should never be run directly on the VPS while PM2 is serving the live process — it races with the live `.next` directory and causes "Failed to load chunk" errors in browsers. Use the CD pipeline (`phase10-frontend-deploy.sh` / GitHub Actions) instead.
 
 ---
 
