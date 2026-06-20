@@ -1,7 +1,7 @@
 # Platform Versioning & Multi-Client Sync Guide
 
 > **Status:** Client-Main (Post-Development) + template engineering practice.
-> **Pairs with:** `CO_DEVELOPMENT_SYNC_GUIDE.md` (the git mechanics of upstreaming backend changes — this guide adds the *versioning, changelog, design-isolation, and drift-enforcement* layer on top, and extends it to the frontend).
+> **Pairs with:** `backend/CO_DEVELOPMENT_SYNC_GUIDE.md` (the git mechanics of upstreaming backend changes — this guide adds the *versioning, changelog, design-isolation, and drift-enforcement* layer on top, and extends it to the frontend).
 > **Goal:** Keep every client site (raghava-organics, sbgs, future clients) on an up-to-date, **versioned shared core** while each keeps its **own design** and its **own enabled feature set** — with no silent drift and nothing left behind.
 
 ---
@@ -44,7 +44,7 @@ Migrations must be **expand-contract / additive-first** so a MINOR never breaks 
 ## 3. The release flow (in the template/core repo)
 
 1. Build the change (dogfood it in a reference client first — see §8).
-2. Classify per `CO_DEVELOPMENT_SYNC_GUIDE.md` (template-worthy vs client-specific).
+2. Classify per `backend/CO_DEVELOPMENT_SYNC_GUIDE.md` (template-worthy vs client-specific).
 3. Add a `CHANGELOG.md` entry with the full **Propagation** block (severity · layers · migration · flag · design impact · breaking · rollback).
 4. Bump the **single source of truth — `backend/package.json` `version` (and/or `frontend/package.json`)** — mirror the same value into `PLATFORM_VERSION`, then tag: `git tag backend-core-vX.Y.Z` (and/or `frontend-core-vX.Y.Z`). The package.json `version` is what `/health` reports at runtime, so these three (package.json · PLATFORM_VERSION · tag) must always match.
 5. Propagate to clients (§4).
@@ -141,8 +141,8 @@ A core component only auto-adopts a client's look if that client defines every t
 
 | Client | backend-core | frontend-core | Enabled flags (non-default) | Design notes |
 | --- | --- | --- | --- | --- |
-| raghava-organics | 0.1.0 | 0.1.0 | _baseline_ | Tasty-Daily palette (forest green / peach), Inter |
-| sbgs (srisaibabasweets) | 0.1.0 | 0.1.0 | _baseline_ | own palette |
+| raghava-organics | 0.1.1 | 0.1.1 | _baseline_ | Tasty-Daily palette (forest green / peach), Inter |
+| sbgs (srisaibabasweets) | 0.1.1 | 0.1.1 | _baseline_ | own palette |
 
 Update this table on every client sync — it is the at-a-glance "who is up to date."
 

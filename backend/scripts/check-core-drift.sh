@@ -17,13 +17,21 @@ cd "$ROOT"
 MANIFEST="core-manifest.json"
 TEMPLATE_REMOTE="${TEMPLATE_REMOTE:-template}"
 
-command -v jq >/dev/null || { echo "ERROR: jq is required"; exit 2; }
+command -v jq >/dev/null || { echo "ℹ️  jq not installed — skipping core-drift check (install jq to enable)."; exit 0; }
 [ -f "$MANIFEST" ] || { echo "ERROR: $MANIFEST not found"; exit 2; }
 
 # Resolve the pinned core versions -> template tags to diff against.
 be_ver="$(awk -F': ' '/^backend-core:/  {print $2}' PLATFORM_VERSION | tr -d ' \r')"
 fe_ver="$(awk -F': ' '/^frontend-core:/ {print $2}' PLATFORM_VERSION | tr -d ' \r')"
 echo "Pinned: backend-core=$be_ver  frontend-core=$fe_ver"
+
+# No template remote yet (e.g. existing clients before the template repo exists,
+# or CI without the remote wired) → nothing to diff against. Skip cleanly rather
+# than failing the build; the check activates automatically once `template` is added.
+if ! git remote get-url "$TEMPLATE_REMOTE" >/dev/null 2>&1; then
+  echo "ℹ️  No '$TEMPLATE_REMOTE' remote configured — skipping core-drift check (wire the template remote to enable)."
+  exit 0
+fi
 
 git fetch -q "$TEMPLATE_REMOTE" --tags || { echo "ERROR: cannot fetch remote '$TEMPLATE_REMOTE'"; exit 2; }
 

@@ -20,25 +20,10 @@ import {
   updateCartItemSchema
 } from './cart.schemas';
 import { CartService } from './cart.service';
-
-const CART_COOKIE_NAME = 'cart_session';
-const CART_COOKIE_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
+import { buildCartSessionSetCookieHeader, parseCartSessionToken } from './cart-cookies';
 
 function parseSessionToken(cookieHeader?: string): string | undefined {
-  if (!cookieHeader) {
-    return undefined;
-  }
-
-  const tokenPart = cookieHeader
-    .split(';')
-    .map((part) => part.trim())
-    .find((part) => part.startsWith(`${CART_COOKIE_NAME}=`));
-
-  if (!tokenPart) {
-    return undefined;
-  }
-
-  return decodeURIComponent(tokenPart.replace(`${CART_COOKIE_NAME}=`, ''));
+  return parseCartSessionToken(cookieHeader);
 }
 
 function setSessionCookie(reply: { header: (name: string, value: string) => unknown }, sessionToken: string | null): void {
@@ -46,15 +31,7 @@ function setSessionCookie(reply: { header: (name: string, value: string) => unkn
     return;
   }
 
-  const cookie = [
-    `${CART_COOKIE_NAME}=${encodeURIComponent(sessionToken)}`,
-    'HttpOnly',
-    'Secure',
-    'SameSite=Strict',
-    'Path=/',
-    `Max-Age=${CART_COOKIE_MAX_AGE_SECONDS}`
-  ].join('; ');
-  reply.header('Set-Cookie', cookie);
+  reply.header('Set-Cookie', buildCartSessionSetCookieHeader(sessionToken));
 }
 
 function resolveSessionToken(userId: string | undefined, sessionToken: string | undefined): string | undefined {
@@ -103,6 +80,11 @@ async function getOptionalUserId(
 export async function registerCartRoutes(fastify: FastifyInstance): Promise<void> {
   const cartService = new CartService(fastify);
   fastify.addHook('onSend', async (request, reply, payload) => {
+    // Cart responses are per-session (guest cart_session cookie / per-user) and
+    // carry Set-Cookie. They must never be cached by an edge/CDN (e.g. Cloudflare),
+    // which would otherwise serve a stale cart to all guests and strip Set-Cookie —
+    // silently dropping the guest session. Force no-store on every cart route.
+    reply.header('Cache-Control', 'no-store');
     await idempotencyOnSend(request, reply, payload);
     return payload;
   });
