@@ -7,20 +7,21 @@
       "backend/prisma/schema.prisma",
       "backend/prisma/migrations/**",
       "backend/scripts/**",
-      "backend/tsconfig.json"
+      "backend/tsconfig.json",
+      "core-manifest.json",
+      "core-purity-denylist.txt"
     ],
     "exclude": [
       "backend/.env",
       "backend/.env.*",
       "backend/docs/clients/**",
-      "backend/src/modules/client/**"
+      "backend/src/modules/client/**",
+      "backend/src/modules/notifications/templates/**"
     ]
   },
   "frontendCore": {
     "include": [
-      "frontend/lib/api.ts",
-      "frontend/lib/utils.ts",
-      "frontend/lib/validators.ts",
+      "frontend/lib/**",
       "frontend/actions/**",
       "frontend/components/ui/**",
       "frontend/components/product/**",
@@ -41,7 +42,14 @@
       "frontend/lib/constants.ts",
       "frontend/public/**",
       "frontend/components/marketing/**",
+      "frontend/components/storefront/home/**",
+      "frontend/components/layout/Footer.tsx",
       "frontend/app/(client)/**",
+      "frontend/app/(storefront)/about/**",
+      "frontend/app/(storefront)/privacy/**",
+      "frontend/app/(storefront)/terms/**",
+      "frontend/app/(storefront)/returns/**",
+      "frontend/app/(storefront)/shipping/**",
       "frontend/.env*"
     ]
   },

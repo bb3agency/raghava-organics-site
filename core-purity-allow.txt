@@ -1,0 +1,5 @@
+# This client's own identifiers — allowed in core (only OTHER clients leaking in is contamination).
+raghava-organics
+Raghava Organics
+raghavaorganics
+Raghava Ops

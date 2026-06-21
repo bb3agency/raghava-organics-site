@@ -27,6 +27,22 @@
 
 **Why this makes one version number meaningful:** because divergence is forced into config/flags/extension folders, the *core* stays byte-identical across clients — so "raghava is on backend-core 2.3.1" is a true, enforceable statement.
 
+### 1.1 Industry alignment — customization is configuration (data), not forked code
+
+The two rules the white-label/multi-client industry converges on, and that this platform now enforces:
+
+> **"The right answer is a configuration-driven architecture where customization is *data, not code*."** · **"The most common architectural mistake is *forking code for customization*."**
+> — multi-tenant / white-label SaaS architecture guidance (clockwise.software, HiringThing, developex)
+
+We run **separately-deployed** client sites (per-client repo + VPS), not one shared deployment — so we keep per-client repos. But the same rule governs *what may differ*:
+
+- **All client identity is DATA in the design layer**, never hardcoded in core: brand name / logo / storage prefix / contact / domains → `frontend/lib/constants.ts` (the client config); palette → `globals.css` tokens; assets → `public/`; behaviour → `FEATURE_*` flags + Ops/env config. Core reads identity from there and hardcodes none.
+- **Core is byte-identical across clients — enforced, not hoped:** `check-core-purity` (CI) fails on any client identifier in core; `core-manifest.json` declares core vs client; the design layer is `merge=ours`-protected.
+- **The governance config must itself propagate.** Incident lesson (2026-06-21): a sync re-contaminated a client because `core-manifest.json` wasn't synced, so it used stale excludes. Fix: `core-manifest.json` + `core-purity-denylist.txt` are now in the core include — every client enforces the *same* rules. **Rule: anything that governs the sync must itself be synced.**
+- **Sync model mirrors the .NET VMR** ([devblogs.microsoft.com](https://devblogs.microsoft.com/dotnet/how-we-synchronize-dotnets-virtual-monorepo/)): clean upstream (template) → automated downstream sync, with per-client divergence confined to **declared, time-boxed** `approved-divergence` patches — never silent forks. Tests and per-client content (legal/marketing/Footer/email) are excluded from core because they are *content/data*, not shared logic.
+
+If you're ever tempted to branch a core file for one client, that's the anti-pattern: parameterize it via config, gate it behind a flag, or move it to the extension layer (`src/modules/client/**` / `app/(client)/**`).
+
 ---
 
 ## 2. Semver policy
@@ -102,6 +118,15 @@ A core component only auto-adopts a client's look if that client defines every t
 - `core-manifest.json` declares core-owned vs client paths. `check-core-drift.sh` diffs the client's core files against the pinned template tag and **fails on any unsanctioned divergence** — forcing the change upstream (becomes core) or into the extension folder.
 - Rare, legitimate one-offs go in `PLATFORM_VERSION` → `approved-divergence` as a **time-boxed** entry (`path — justification — owner — expires`). The check warns (doesn't fail) until expiry, then it must be resolved.
 - Add `CODEOWNERS` on core paths so edits to shared files require platform-team review (nudges changes upstream).
+
+### 7.1 Core purity — no client identity in core files (the anti-contamination guard)
+
+Because `sync-core.mjs` checks out the **entire** core pathspec, any client-specific value baked into a core file gets copied to every client on the next sync — overwriting their brand/keys with another client's (this bit us: a sync turned `sbgs-cart` into `raghava-cart`). To make that impossible:
+
+- **Client identity never lives in core code.** Brand name → `APP_NAME`; logo → `BRAND_LOGO_SRC`; storage keys → `STORAGE_PREFIX`; provider/contact values → env or Ops config — all in the **design layer** (`frontend/lib/constants.ts`, excluded from sync). Per-client **content** (legal/about/marketing pages, `Footer`, email templates) is excluded from core in `core-manifest.json`.
+- **`check-core-purity.mjs` (`npm run check:core-purity`)** greps every core file (per `core-manifest.json`) for the patterns in `core-purity-denylist.txt` (client brand names, domains, slugs) and **fails the build** on any hit. It's wired into `ci:reliability-gates`. This is the guard that prevents the whole contamination class — a hardcoded "Raghava Organics" in a core file can no longer reach CI green.
+- **Onboarding a new client:** add their brand/domain/slug to `core-purity-denylist.txt` so their identity can never leak into core either.
+- **Fixing a violation:** move the value to the design layer (parameterize with `APP_NAME`/`STORAGE_PREFIX`/env), or — if the file is genuinely per-client content — exclude it in `core-manifest.json`.
 
 ---
 
