@@ -1,7 +1,6 @@
 import { getBrowserApiBaseUrl } from "@/lib/api-base";
-import { STORAGE_PREFIX } from "@/lib/constants";
 
-const SESSION_KEY = `${STORAGE_PREFIX}_analytics_sid`;
+const SESSION_KEY = "ro_analytics_sid";
 
 function getSessionId(): string {
   if (typeof window === "undefined") return "ssr";
