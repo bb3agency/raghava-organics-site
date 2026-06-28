@@ -1,13 +1,24 @@
+"use client";
+
 import Link from "next/link";
 import { Leaf, MapPin, Phone, Mail } from "lucide-react";
 import { APP_NAME } from "@/lib/constants";
 import type { CategoryWithMeta } from "@/lib/categories";
+import { useStoreConfig } from "@/components/providers/StoreConfigProvider";
 
 interface FooterProps {
   categories: CategoryWithMeta[];
 }
 
 export function Footer({ categories }: FooterProps) {
+  // Merchant-managed store identity/contact (Admin → Settings → Store), synced via
+  // GET /store/config. Falls back to sensible defaults if not yet configured.
+  const config = useStoreConfig();
+  const displayAddress =
+    config.storeAddress?.trim() || "Raghava Organics, Hyderabad, Telangana, India";
+  const contactPhone = config.contactPhone?.trim() || "+91 94404 45006";
+  const contactEmail = config.contactEmail?.trim() || "hello@raghavaorganics.com";
+  const telHref = `tel:${contactPhone.replace(/[^\d+]/g, "")}`;
   return (
     <footer className="border-t border-[#efe8e4] bg-[#faf3ef] text-[#23403d]">
       <div className="mx-auto w-full max-w-[1440px] px-4 py-10 sm:py-16 lg:px-8">
@@ -101,18 +112,18 @@ export function Footer({ categories }: FooterProps) {
             <ul className="space-y-4 text-sm font-bold text-[#767676]">
               <li className="flex items-start gap-3">
                 <MapPin className="mt-0.5 size-5 shrink-0 text-[#ec6e55]" aria-hidden />
-                <span>Raghava Organics, Hyderabad, Telangana, India</span>
+                <span>{displayAddress}</span>
               </li>
               <li className="flex items-center gap-3">
                 <Phone className="size-5 shrink-0 text-[#ec6e55]" aria-hidden />
-                <a href="tel:+919440445006" className="transition-colors hover:text-[#ec6e55]">
-                  +91 94404 45006
+                <a href={telHref} className="transition-colors hover:text-[#ec6e55]">
+                  {contactPhone}
                 </a>
               </li>
               <li className="flex items-center gap-3">
                 <Mail className="size-5 shrink-0 text-[#ec6e55]" aria-hidden />
-                <a href="mailto:hello@raghavaorganics.com" className="transition-colors hover:text-[#ec6e55]">
-                  hello@raghavaorganics.com
+                <a href={`mailto:${contactEmail}`} className="transition-colors hover:text-[#ec6e55]">
+                  {contactEmail}
                 </a>
               </li>
             </ul>
