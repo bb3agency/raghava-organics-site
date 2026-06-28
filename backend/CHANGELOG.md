@@ -12,6 +12,48 @@ Each entry MUST carry the **Propagation** block (layers · migration · flag · 
 
 ## [Unreleased]
 
+## [0.1.11] — 2026-06-22
+
+### Removed
+- **Dead `selectBestFitBox`** (volume-only box picker) deleted from `common/shipping/select-box-preset.ts` — superseded by the 3D `cartonize` engine (0.1.9). `parseBoxPresets` + the `BoxPreset` type remain (used by cart/worker/settings). Its volume-only tests were dropped; 3D box selection is covered by `cartonize.test.ts`.
+
+### Changed
+- **`shiprocket.adapter.ts`**: clarified the `15×15×10` dimension fallback is a last-resort guard only (the AWB worker always passes cartonized dimensions now).
+- **Docs**: integration guide §6.0 documents shipping cartonization (variant dims → box presets / bounding box → volumetric billing; quote == billed).
+
+**Propagation:**
+- Severity: LOW (dead-code removal + comments/docs; no behavior change) · Layers: backend (`common/shipping/select-box-preset.ts`, `modules/shipping/adapters/shiprocket.adapter.ts`)
+- Migration: NO · Flag: n/a · Design impact: none · Breaking: NO (no remaining callers of `selectBestFitBox`)
+- Rollback: restore the function
+
+## [0.1.10] — 2026-06-22
+
+### Added
+- **`core-manifest.json`**: `backend/queues/**` added to `backendCore.include`. The BullMQ workers/queues are shared core but were never core-synced — so the 0.1.9 cartonization wiring in `queues/workers/shipping.worker.ts` could not propagate. Now they're in scope (clients verified identical to template before enabling, zero drift). This + the 0.1.9 `components/admin/**` inclusion close the two remaining "core code that wasn't core-synced" gaps.
+
+**Propagation:**
+- Severity: NORMAL (manifest scope only) · Layers: `core-manifest.json` + `backend/queues/**` now in scope
+- Migration: NO · Flag: n/a · Design impact: none · Breaking: NO
+- Rollback: revert the manifest include line
+- Ops note: because `queues/**` and `components/admin/**` were newly added to scope, the 0.1.9→0.1.10 worker + admin-editor files were delivered to existing clients by a one-time deterministic `git checkout <tag> -- <file>` (version-delta sync can't retroactively pull files for a path that wasn't in the client's manifest when the change shipped). Future changes in these paths propagate normally.
+
+## [0.1.9] — 2026-06-22
+
+### Added
+- **Multi-item box cartonization** (`src/common/shipping/cartonize.ts`) — computes the ACTUAL shipping box for an order so the dimensions sent to Shiprocket/Delhivery match the parcel couriers bill on (volumetric weight = L×W×H ÷ 5000). A conservative 3D Extreme-Point first-fit-decreasing packer (never undersizes): uses the smallest Ops **catalog box** the items physically fit into, else a **computed bounding box**, then adds +2 cm safety padding. Returns L×W×H + total weight.
+- **`core-manifest.json`**: `frontend/components/admin/**` added to `frontendCore.include` so the admin console is now core-synced (it was the only admin path missing — `app/(admin)` pages, `actions/`, `hooks/` were already core). Verified both clients' admin was already identical to template (zero divergence) before enabling.
+
+### Changed
+- **AWB worker** (`queues/workers/shipping.worker.ts`) now sends cartonized dimensions on every shipment (was: volume-only best-fit that only set dims when presets existed, else the adapter's `15×15×10` default).
+- **`chargeable-weight.ts`** routes through the same `cartonize` engine, so the cart rate quote's volumetric weight equals what the courier later bills (quote == billed).
+
+**Propagation:**
+- Severity: NORMAL (shipping accuracy + manifest scope; no breaking API change)
+- Layers: backend (`common/shipping/cartonize.ts` [new], `chargeable-weight.ts`, `queues/workers/shipping.worker.ts`), `core-manifest.json`
+- Migration: NO · Flag: n/a · Design impact: none · Breaking: NO
+- Rollback: revert the three shipping files + the manifest include line
+- Ops note: per-variant box dimensions (length/width/height) drive accuracy — ensure variants have them set (now fully editable in the admin product editor, frontend-core 0.1.5). Optional: configure standard carton sizes as box presets in Ops to switch to catalog cartonization.
+
 ## [0.1.8] — 2026-06-22
 
 ### Added
