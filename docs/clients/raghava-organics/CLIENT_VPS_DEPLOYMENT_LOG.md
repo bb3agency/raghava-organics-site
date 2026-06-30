@@ -111,3 +111,19 @@
 ## Phase 5 / 12 — Evidence
 
 - [ ] [PHASE5_EVIDENCE_CHECKLIST.md](./PHASE5_EVIDENCE_CHECKLIST.md)
+
+---
+
+## Post-go-live core updates
+
+Synced from `ecom-platform-template` and auto-deployed via GitHub CD on push to `main`.
+
+| Core version | Date | Change | Operator action |
+|--------------|------|--------|-----------------|
+| backend-core 0.1.17 / frontend-core 0.1.12 | 2026-06-30 | Drag-and-drop variant ordering (`ProductVariant.sortOrder` + reorder endpoint; admin order now drives storefront order) | migration auto-applied on deploy |
+| backend-core 0.1.18 | 2026-06-30 | Register variant-reorder route in admin policy registry (CI gate fix) | none |
+| backend-core 0.1.19 | 2026-06-30 | WhatsApp template registry (match approved Meta templates) | Meta WhatsApp configured — see [VPS_INPUTS.md](./VPS_INPUTS.md) §Meta WhatsApp; set `primaryChannels` per template to route over WhatsApp |
+| backend-core 0.1.20 | 2026-07-01 | **Guest cart persistence fix** — guest carts were minting a new empty cart each request; now keyed to the `cart_session` cookie token. Guest cart + merge-on-login work. Verified live. | none |
+| backend-core 0.1.21 | 2026-07-01 | Guest cart: normalize blank `cart_session` token (was storable as `''`, colliding blank-cookie guests onto one shared cart) | none |
+
+**Meta WhatsApp (2026-06-30):** webhook verified at `https://raghavaorganics.com/api/v1/notifications/webhook/meta-whatsapp` (apex, not `api.`); 6 UTILITY templates created (`order_confirmed`/`order_shipped`/`out_for_delivery` approved first; `order_delivered`/`order_cancelled`/`payment_failed` submitted — confirm Approved). Credentials in [VPS_INPUTS.md](./VPS_INPUTS.md). Template bodies: `backend/docs/WHATSAPP_TEMPLATE_REGISTRY.md`.

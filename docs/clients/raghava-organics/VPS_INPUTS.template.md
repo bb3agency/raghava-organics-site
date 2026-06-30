@@ -43,3 +43,20 @@ Runbook: [RAZORPAY_PAYMENTS_SETUP.md](./RAZORPAY_PAYMENTS_SETUP.md). Store `RAZO
 | `SHIPROCKET_PICKUP_LOCATION` | pickup nickname in Shiprocket dashboard (default `Primary`) |
 | `SHIPROCKET_WEBHOOK_TOKEN` | |
 | Webhook URL | `https://<domain>/api/v1/shipping/webhook` |
+
+## Meta WhatsApp Business (Ops UI — Notifications)
+
+Cloud API. Store `META_WHATSAPP_ACCESS_TOKEN` and `META_WHATSAPP_APP_SECRET` only in the filled `VPS_INPUTS.md` vault — never commit. All keys go in Ops UI → Config (DB overlay, `requiresRestart`), NOT `backend/.env`. Restart API + workers after save. Optional — leave `NOTIFY_WHATSAPP_ENABLED=false` if WhatsApp is not used.
+
+| Field | Value |
+|-------|-------|
+| `NOTIFY_WHATSAPP_ENABLED` | `true` |
+| `META_WHATSAPP_ACCESS_TOKEN` | System User permanent token |
+| `META_WHATSAPP_PHONE_NUMBER_ID` | |
+| `META_WHATSAPP_APP_SECRET` | |
+| `META_WHATSAPP_WEBHOOK_VERIFY_TOKEN` | random; same in Meta webhook config + Ops UI |
+| `META_WHATSAPP_API_VERSION` | `v21.0` |
+| Webhook URL | `https://<domain>/api/v1/notifications/webhook/meta-whatsapp` (apex domain, not an `api.` subdomain) |
+| Webhook field | subscribe `messages` (status updates arrive nested; there is no separate `message_status` field) |
+
+Templates: create the 6 UTILITY templates (`order_confirmed`, `order_shipped`, `out_for_delivery`, `order_delivered`, `order_cancelled`, `payment_failed`) in WhatsApp Manager per `backend/docs/WHATSAPP_TEMPLATE_REGISTRY.md`. Route a notification over WhatsApp by setting its `primaryChannels` entry to `WHATSAPP`.
