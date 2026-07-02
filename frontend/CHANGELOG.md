@@ -12,6 +12,82 @@ Each entry MUST carry the **Propagation** block.
 
 ## [Unreleased]
 
+## [0.1.15] — 2026-07-02
+
+### Added
+- **WhatsApp OTP cost card on Ops → Config.** `OpsConfigPagePanel` now fetches `GET /ops/notifications/whatsapp-otp-cost` (new `getWhatsappOtpCostClient` + `WhatsappOtpCostEstimate` type in `lib/ops-client-api.ts`) and renders a small read-only card showing estimated WhatsApp-OTP spend for the current billing cycle and all-time, plus the per-message rate. Best-effort — if the endpoint fails the card is hidden and the config page is unaffected. Shown regardless of whether OTP-over-WhatsApp is enabled (it reports historical sends).
+
+**Propagation:**
+- Severity: NORMAL (feature) · Layers: frontend (`lib/ops-client-api.ts`, `components/ops/OpsConfigPagePanel.tsx`)
+- Migration: NO · Flag: n/a (read-only display) · Design impact: none (token-styled `OpsCard`/`OpsBadge`) · Breaking: NO
+- Rollback: revert the two files
+- Pairs with backend-core 0.1.26 (the endpoint + `OTP_WHATSAPP_ENABLED`/`WHATSAPP_OTP_COST_PAISE` keys).
+
+## [0.1.14] — 2026-07-01
+
+### Added
+- **"Enable Customer Reviews" toggle in the admin settings panel.** `CodSettingsPanel` (Admin → Settings → COD & Sign-up) gains a Storefront Features card with a reviews on/off switch, wired to `GET`/`PATCH /admin/settings/cod` (`reviewsEnabled`). Replaces the build-time `FEATURE_REVIEWS_ENABLED` env flag — merchants turn reviews on/off themselves; the storefront (`reviewsEnabled` from `/store/config`) reflects it without a redeploy.
+
+**Propagation:**
+- Severity: NORMAL · Layers: frontend (`components/admin/CodSettingsPanel.tsx`)
+- Migration: NO · Flag: n/a (this IS the toggle UI) · Design impact: none (existing tokens) · Breaking: NO
+- Rollback: revert the file
+- Requires backend-core 0.1.23 (`StoreSettings.reviewsEnabled` + `/admin/settings/cod` field).
+
+## [0.1.13] — 2026-07-01
+
+### Added
+- **Reviews visible on product cards + customer write-review UI.** `ProductCard` now renders the star `Rating` (avg + count) under the product name when `reviewsEnabled` and the product has approved reviews (the PDP header + `ProductReviewsSection` already showed reviews). New `OrderReviewPrompt` on the account order-detail page: for a **DELIVERED** order it fetches the reviewable products (`GET /reviews/eligible`) and renders a per-product star input + optional comment that submits via `POST /reviews`, with already-reviewed and pending-approval states. `reviews-api.ts` gains `getReviewableProducts` + `ReviewableProduct`. Consumes the new `rating`/`reviewCount` fields on the product list/detail responses.
+
+**Propagation:**
+- Severity: NORMAL (new feature) · Layers: frontend (`components/product/ProductCard.tsx`, `components/product/OrderReviewPrompt.tsx` [new], `lib/reviews-api.ts`, `app/(account)/orders/[id]/page.tsx`)
+- Migration: NO · Flag: gated on `reviewsEnabled` from `GET /store/config` (driven by backend `FEATURE_REVIEWS_ENABLED`) · Design impact: none (uses existing `Rating` + tokens) · Breaking: NO
+- Rollback: revert the listed files
+- Requires backend-core 0.1.22 (rating aggregates + `/reviews/eligible`).
+
+## [0.1.12] — 2026-06-30
+
+### Added
+- **Drag-and-drop variant ordering in the admin product editor.** The "Manage All Product Variants" table has a grip handle per row; dragging reorders variants (native HTML5 DnD, no new dependency), persists via `PATCH /admin/products/:id/variants/reorder` (optimistic, reverts on failure), and that order is what the storefront shows on the product page and product cards. `AdminProductVariant` carries `sortOrder`.
+
+**Propagation:**
+- Severity: NORMAL · Layers: frontend (`lib/admin-api.ts`, `components/admin/AdminProductEditor.tsx`)
+- Migration: NO · Flag: n/a · Design impact: none (uses existing tokens + Lucide `GripVertical`) · Breaking: NO
+- Rollback: revert the two files · Requires backend-core 0.1.17.
+- Note: storefront needed no change — adapters/selector already render variants in API order, which is now `sortOrder`.
+
+## [0.1.11] — 2026-06-30
+
+### Fixed
+- **Compare-at price field no longer shows/sends a stale `0`.** `formatVariantCompareAtPriceInput` and the variant-table draft seeding now treat `compareAtPrice <= 0` as empty (legacy `0` data from the old backend bug), and `buildPrimaryVariantPricePatch` sends `null` for a blank/`0` field. Combined with backend-core 0.1.15 this stops the spurious "Compare-at price must be greater than the price" error on save and cleans the bad value.
+
+**Propagation:**
+- Severity: NORMAL · Layers: frontend (`lib/admin-product-pricing.ts`, `components/admin/AdminProductEditor.tsx`)
+- Migration: NO · Flag: n/a · Design impact: none · Breaking: NO
+- Rollback: revert the two files · Requires backend-core 0.1.15.
+
+## [0.1.10] — 2026-06-30
+
+### Fixed
+- **Admin product editor — "Manage All Product Variants" table no longer cramped on desktop.** The 11-column variant edit table was constrained to `min-w-[600px]` (~54px/column), squishing every input to an unusable box with truncated values. Widened the table to `min-w-[1180px]` and gave each editable cell a sensible min-width (SKU 110, Name 140, Price/Compare 104, Weight 84, L/W/H 68px), so fields are fully readable; the table continues to scroll horizontally within `AdminTableScroll`.
+
+**Propagation:**
+- Severity: LOW (admin CSS/layout only) · Layers: frontend (`components/admin/AdminProductEditor.tsx`)
+- Migration: NO · Flag: n/a · Design impact: none (Tailwind width utilities only) · Breaking: NO
+- Rollback: revert the component
+
+## [0.1.9] — 2026-06-29
+
+### Fixed
+- **Admin product editor — add-variant `weight` bug + Compare-at-Price clarity.** `addVariant` sent `weightGrams` (rejected by the backend schema's `additionalProperties:false`, so adding a variant *with a weight* failed); now sends `weight`. Compare-at-Price is labelled **(optional)** with a clearer tooltip, and the description character counter shows the correct `/5000` limit. The inline add/edit variant handlers now surface backend `VALIDATION_ERROR` field details (via `handleSubmitError`) instead of a generic message, so the admin sees exactly which field was wrong.
+- **Store address is now always editable in Admin → Settings → Store (was hidden unless GST invoicing was on).** `StoreSettingsPanel` was rendering the entire seller section — including the storefront-footer **Store Address** — only when `gstInvoicingEnabled`. The Store Details card (legal name, address, operating state) is now always shown/saved; only GSTIN/FSSAI remain gated behind GST invoicing. Save button/labels reworded to "Store Settings".
+
+**Propagation:**
+- Severity: NORMAL (admin UX bug fixes) · Layers: frontend (`components/admin/AdminProductEditor.tsx`, `components/admin/StoreSettingsPanel.tsx`)
+- Migration: NO · Flag: n/a · Design impact: none · Breaking: NO
+- Rollback: revert the two components
+- Note: requires backend-core 0.1.14 (`compareAtPrice` null handling). Address persistence already supported by `updateStoreProfile` (no backend change needed for the address itself).
+
 ## [0.1.8] — 2026-06-28
 
 ### Added
