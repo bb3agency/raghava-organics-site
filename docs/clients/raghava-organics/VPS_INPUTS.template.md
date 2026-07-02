@@ -59,15 +59,17 @@ Cloud API. Store `META_WHATSAPP_ACCESS_TOKEN` and `META_WHATSAPP_APP_SECRET` onl
 | `META_WHATSAPP_APP_ID` | reference only |
 | `META_WHATSAPP_WABA_ID` | reference only |
 | System User ID | reference only |
+| `OTP_WHATSAPP_ENABLED` | `false` → `true` only after `otp_verify` Approved + app Live (else WhatsApp OTP rejected; email OTP still works) |
+| `WHATSAPP_OTP_COST_PAISE` | `14` (Ops cost-estimate rate) |
 | Webhook URL | `https://<domain>/api/v1/notifications/webhook/meta-whatsapp` (apex domain, not an `api.` subdomain) |
 | Webhook field | subscribe `messages` (status updates arrive nested; there is no separate `message_status` field) |
 
-Templates: create the 6 UTILITY templates (`order_confirmed`, `order_shipped`, `out_for_delivery`, `order_delivered`, `order_cancelled`, `payment_failed`) in WhatsApp Manager per `backend/docs/WHATSAPP_TEMPLATE_REGISTRY.md`. Route a notification over WhatsApp by setting its `primaryChannels` entry to `WHATSAPP`.
+Templates: 6 UTILITY (`order_confirmed`, `order_shipped`, `out_for_delivery`, `order_delivered`, `order_cancelled`, `payment_failed`) + 1 AUTHENTICATION OTP template named `otp_verify` (Copy-code button) — per `backend/docs/WHATSAPP_TEMPLATE_REGISTRY.md`. Full onboarding: `backend/docs/META_WHATSAPP_SETUP_GUIDE.md`. Route a notification over WhatsApp by setting its `primaryChannels` entry to `WHATSAPP`.
 
 **Go-live gates for WhatsApp:**
 - [ ] **Publish the app** (App Review → App icon 1024×1024 + Privacy Policy URL + Category → toggle Live). Until published, only tester numbers receive messages — real customers get nothing.
-- [ ] All 6 templates show **Approved** in WhatsApp Manager.
+- [ ] All 6 utility templates **Approved** + the `otp_verify` Authentication template **Active**.
 - [ ] Payment method added to the WhatsApp Business Account (utility/auth messages are billed per message; see cost note below).
-- [ ] (OTP over WhatsApp only) create a separate **AUTHENTICATION**-category template — utility templates cannot carry an OTP code.
+- [ ] (OTP over WhatsApp) `otp_verify` must be **AUTHENTICATION** category — utility cannot carry an OTP code; then set `OTP_WHATSAPP_ENABLED=true`.
 
 **Cost note:** WhatsApp Cloud API is not free per message. India rates (Jan 2026): utility ≈ ₹0.115/msg, authentication (OTP) ≈ ₹0.115/msg, marketing ≈ ₹0.86/msg, all + 18% GST. Replies inside a customer-opened 24h service window are free.
