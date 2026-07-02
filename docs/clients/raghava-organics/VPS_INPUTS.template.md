@@ -51,12 +51,23 @@ Cloud API. Store `META_WHATSAPP_ACCESS_TOKEN` and `META_WHATSAPP_APP_SECRET` onl
 | Field | Value |
 |-------|-------|
 | `NOTIFY_WHATSAPP_ENABLED` | `true` |
-| `META_WHATSAPP_ACCESS_TOKEN` | System User permanent token |
+| `META_WHATSAPP_ACCESS_TOKEN` | System User token — prefer **"never expires"**; a 60-day token must be rotated before expiry or sends 401 |
 | `META_WHATSAPP_PHONE_NUMBER_ID` | |
 | `META_WHATSAPP_APP_SECRET` | |
 | `META_WHATSAPP_WEBHOOK_VERIFY_TOKEN` | random; same in Meta webhook config + Ops UI |
-| `META_WHATSAPP_API_VERSION` | `v21.0` |
+| `META_WHATSAPP_API_VERSION` | `v25.0` |
+| `META_WHATSAPP_APP_ID` | reference only |
+| `META_WHATSAPP_WABA_ID` | reference only |
+| System User ID | reference only |
 | Webhook URL | `https://<domain>/api/v1/notifications/webhook/meta-whatsapp` (apex domain, not an `api.` subdomain) |
 | Webhook field | subscribe `messages` (status updates arrive nested; there is no separate `message_status` field) |
 
 Templates: create the 6 UTILITY templates (`order_confirmed`, `order_shipped`, `out_for_delivery`, `order_delivered`, `order_cancelled`, `payment_failed`) in WhatsApp Manager per `backend/docs/WHATSAPP_TEMPLATE_REGISTRY.md`. Route a notification over WhatsApp by setting its `primaryChannels` entry to `WHATSAPP`.
+
+**Go-live gates for WhatsApp:**
+- [ ] **Publish the app** (App Review → App icon 1024×1024 + Privacy Policy URL + Category → toggle Live). Until published, only tester numbers receive messages — real customers get nothing.
+- [ ] All 6 templates show **Approved** in WhatsApp Manager.
+- [ ] Payment method added to the WhatsApp Business Account (utility/auth messages are billed per message; see cost note below).
+- [ ] (OTP over WhatsApp only) create a separate **AUTHENTICATION**-category template — utility templates cannot carry an OTP code.
+
+**Cost note:** WhatsApp Cloud API is not free per message. India rates (Jan 2026): utility ≈ ₹0.115/msg, authentication (OTP) ≈ ₹0.115/msg, marketing ≈ ₹0.86/msg, all + 18% GST. Replies inside a customer-opened 24h service window are free.
