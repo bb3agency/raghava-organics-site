@@ -12,6 +12,152 @@ Each entry MUST carry the **Propagation** block (layers · migration · flag · 
 
 ## [Unreleased]
 
+## [0.1.26] — 2026-07-02
+
+### Added
+- **OTP-over-WhatsApp (opt-in) + Ops cost meter.** Two new DB-overlay Ops config keys in the `notifications` domain: `OTP_WHATSAPP_ENABLED` (default `false`) and `WHATSAPP_OTP_COST_PAISE` (default `14`). When `OTP_WHATSAPP_ENABLED=true` **and** WhatsApp is deliverable, customer signup/login OTP (`CustomerOtpVerification`) is now sent to WhatsApp **in addition to** the primary channel (usually email) — same OTP, one hash, verified unchanged. New `resolveOtpDeliveryChannels()` (`common/notifications/otp-deliverability.ts`) returns the de-duplicated channel set; `auth.service.sendOtp()` loops over it. Admin login OTP is intentionally unchanged (email-based). New read-only Ops endpoint `GET /api/v1/ops/notifications/whatsapp-otp-cost` (`ops:read`) returns a cost estimate (all-time + current calendar-month cycle) computed from `NotificationLog` WhatsApp OTP sends × the configured per-message rate — surfaced as a small card on the Ops → Config page (frontend-core).
+- Meta Graph API default bumped `v21.0` → **`v25.0`** (`meta-whatsapp.adapter.ts` default + `META_WHATSAPP_API_VERSION` fallback in `notification-provider.ts`).
+
+### Notes
+- **Not yet wired:** actual WhatsApp OTP delivery needs an approved Meta **AUTHENTICATION** template mapped as `CustomerOtpVerification` in `whatsapp-template-registry.ts` (a utility template cannot carry an OTP). Until that lands, turning the toggle on will enqueue a WhatsApp job that Meta rejects (email still sends). Auth-template support + forgot-password-over-WhatsApp are a follow-up.
+
+**Propagation:**
+- Severity: NORMAL (feature, OFF by default) · Layers: backend (`common/notifications/otp-deliverability.ts`, `common/notifications/notification-runtime-config.ts`, `common/notifications/whatsapp-otp-cost.ts` [new], `modules/auth/auth.service.ts`, `modules/ops/{ops-config-contract.ts,ops.routes.ts}`, `common/auth/admin-endpoint-policy-registry.ts`, `scripts/env-runtime-contract.js`, `.env.example`, adapters) + frontend (`lib/ops-client-api.ts`, `components/ops/OpsConfigPagePanel.tsx`)
+- Migration: NO · Flag: `OTP_WHATSAPP_ENABLED` (DB-overlay, default off) · Design impact: none · Breaking: NO
+- Rollback: revert the listed files; the two Ops keys become inert
+- Pairs with frontend-core (Ops cost card). **Operator: create a WhatsApp AUTHENTICATION template before enabling the toggle; set `WHATSAPP_OTP_COST_PAISE` to your BSP's per-message rate for an accurate estimate.**
+
+## [0.1.25] — 2026-07-02
+
+### Fixed
+- **Serial VPS build: list the buildable services explicitly (`backend workers`) instead of `docker compose config --services`.** Refines 0.1.24. `config --services` also returns image-only services (`redis`; `postgres` is profiled out), and `docker compose build redis` on an image-only service could abort the deploy under `set -e`. The two `build:` services are backend + workers, so name them directly — matches exactly what the original parallel `docker compose build` produced, with zero chance of an image-only service failing the loop.
+
+**Propagation:**
+- Severity: NORMAL (deploy reliability) · Layers: backend (`scripts/vps-deploy.sh`)
+- Migration: NO · Flag: n/a · Design impact: none · Breaking: NO
+- Rollback: revert the hunk (returns to 0.1.24 behavior)
+
+## [0.1.24] — 2026-07-02
+
+### Fixed
+- **VPS deploy OOM-killed the Docker build on small/shared hosts (`npm run build` exit 255 ~2-3 min in).** `vps-deploy.sh` ran `docker compose build` with no service arg, which builds every service **in parallel** — so the backend and workers images each ran a memory-heavy `tsc`/esbuild compile at the same time and exhausted RAM (fatal on the shared Hetzner box where two clients also co-build). Now builds services **one at a time** (loop over `docker compose config --services`), roughly halving peak build memory; shared base layers stay cached so the second build is still fast. Image-only services (postgres/redis) are skipped automatically. Same commit built fine in CI and on the uncontended client — this is purely a build-time memory fix.
+
+**Propagation:**
+- Severity: NORMAL (deploy reliability) · Layers: backend (`scripts/vps-deploy.sh`)
+- Migration: NO · Flag: n/a · Design impact: none · Breaking: NO
+- Rollback: revert the one hunk
+- Also recommended (VPS-side, not code): add swap on the host to absorb cross-client build spikes.
+
+## [0.1.23] — 2026-07-01
+
+### Changed
+- **Storefront reviews are now a merchant toggle in the admin UI, not the `FEATURE_REVIEWS_ENABLED` env flag.** New `StoreSettings.reviewsEnabled` column (migration `20260701140000_add_store_settings_reviews_enabled`, additive, default `false`) + `isStorefrontReviewsEnabled(prisma)` helper (`common/reviews/reviews-feature.ts`, mirrors `isStorefrontCouponsEnabled`). All storefront review gating — product rating aggregates, PDP reviews include, `POST /reviews`, `/reviews/product`, `/reviews/recent`, `/reviews/eligible` — now reads the DB toggle instead of `featureFlags.reviews`. Exposed + writable via the existing `GET`/`PATCH /admin/settings/cod` (added `reviewsEnabled`), surfaced in the store config `reviewsEnabled`. Admin moderation endpoints are intentionally NOT gated (moderators work even when the storefront toggle is off). Merchants flip reviews on/off from Admin → Settings with no redeploy.
+
+**Propagation:**
+- Severity: NORMAL · Layers: backend (`prisma/schema.prisma` + migration, `common/reviews/reviews-feature.ts` [new], `modules/products/products.service.ts`, `modules/reviews/reviews.service.ts`, `modules/settings/settings.{service,schemas}.ts`)
+- Migration: **YES** — `prisma migrate deploy` adds `StoreSettings.reviewsEnabled BOOLEAN NOT NULL DEFAULT false`. Run `prisma generate` after. · Flag: replaced by DB toggle (env `FEATURE_REVIEWS_ENABLED` no longer gates storefront reviews) · Design impact: none · Breaking: NO (default off preserves current behavior)
+- Rollback: revert the listed files + drop the column
+- Pairs with frontend-core 0.1.14 (admin toggle). **Operator: enable reviews in Admin → Settings (COD & Sign-up) → "Enable Customer Reviews" — no env change / redeploy needed.**
+
+## [0.1.22] — 2026-07-01
+
+### Added
+- **Product review aggregates + write-review eligibility (full reviews feature).** Storefront product **list and detail** now return `rating` (avg, 1 dp) + `reviewCount` from approved reviews, so product cards and the PDP header can show stars without fetching every review — computed via a single batched `review.groupBy` for the list page (resilient: a review-aggregate error degrades to no-stars, never breaks the catalogue) and from the approved-reviews set on detail. New customer endpoint `GET /api/v1/reviews/eligible?orderId=` returns the distinct, active, not-already-reviewed products from one of the caller's **DELIVERED** orders — drives the storefront "write a review" UI (the existing `POST /reviews` verified-purchase create was already present but had no UI). All gated by the existing `FEATURE_REVIEWS_ENABLED` flag; aggregates are 0/0 and the endpoint returns `[]` when off.
+
+**Propagation:**
+- Severity: NORMAL (new feature) · Layers: backend (`modules/products/products.{service,schemas}.ts`, `modules/reviews/reviews.{service,schemas,routes}.ts`)
+- Migration: NO (uses existing `Review` model) · Flag: `FEATURE_REVIEWS_ENABLED` (OFF by default; set `true` + restart API/workers to activate) · Design impact: none · Breaking: NO
+- Rollback: revert the listed files
+- Pairs with frontend-core 0.1.13 (ProductCard stars + order-page write-review UI). Operator: enable `FEATURE_REVIEWS_ENABLED` per client that wants reviews.
+
+## [0.1.21] — 2026-07-01
+
+### Fixed
+- **Guest cart: blank `cart_session` cookie could collide all guests onto one shared cart.** Follow-up to 0.1.20. `resolveOrCreateCart` guarded the new-cart token with `sessionToken ?? randomUUID()`, but `??` only catches null/undefined — an empty/whitespace token (e.g. an empty `cart_session=` cookie) passed through and was stored as `sessionToken: ''`, so every blank-cookie guest resolved to the same `''` cart row (cross-guest cart bleed). The earlier lookup used a truthy check, so the two branches disagreed on what counts as a token. Now the token is normalized once (`sessionToken?.trim() || undefined`) and that single value is reused for both the `findUnique` lookup and the `upsert` key; blank/whitespace tokens fall back to a fresh UUID instead of `''`.
+
+**Propagation:**
+- Severity: NORMAL (guest cart correctness / isolation) · Layers: backend (`modules/cart/cart.service.ts`)
+- Migration: NO · Flag: n/a · Design impact: none · Breaking: NO
+- Rollback: revert the listed file
+- Pairs with / hardens 0.1.20.
+
+## [0.1.20] — 2026-07-01
+
+### Fixed
+- **Guest carts never persisted (and post-login merge always found nothing).** `CartService.resolveOrCreateCart` created a new guest cart with a **fresh random `sessionToken`** instead of the token the route supplies (the value it writes back to the `cart_session` cookie). So on every first-touch the cookie token never matched any cart row: each request minted a new empty cart, items added as a guest vanished on the next read, the guest cart always appeared empty, and `POST /cart/merge` found no guest cart to merge. Fixed by keying the created cart to the supplied `sessionToken` (`sessionToken ?? randomUUID()`), and switching the create to an `upsert` on `sessionToken` so the first-touch path is race-safe when two concurrent requests share a freshly-issued token. Verified live against prod (same cookie token now returns a stable cart that accumulates items). The merge path was already additive (`existing.quantity + guestItem.quantity`) and deletes the guest cart afterward — it simply never had a guest cart to find before this fix.
+
+**Propagation:**
+- Severity: HIGH (guest cart + guest→account merge were completely non-functional) · Layers: backend (`modules/cart/cart.service.ts`)
+- Migration: NO · Flag: n/a · Design impact: none · Breaking: NO
+- Rollback: revert the one method change
+- Regression test: `modules/cart/cart.service.guest-session.test.ts` (asserts the created guest cart uses the supplied token).
+
+## [0.1.19] — 2026-06-30
+
+### Added
+- **WhatsApp template registry — outbound WhatsApp notifications now actually match approved Meta templates.** Previously the Meta adapter sent the internal PascalCase template name (e.g. `OrderShipped`) straight to the Cloud API and built body parameters by **alphabetically sorting** the data keys. Both are wrong for Meta: template names must be lowercase+underscores (mismatch → Meta error 132001 "template does not exist") and body params are **positional** (`{{1}}..{{n}}`) so order/count must match the approved template (mismatch → error 132000). New `modules/notifications/whatsapp-template-registry.ts` maps each internal template → `{ metaName, language, ordered params }` and the adapter now builds the payload from it; `storeName` is injected at both worker send sites exactly like the SMS path (`WhatsappTemplateRegistry.composeTemplateData`). Mapped templates: `OrderConfirmed→order_confirmed`, `OrderShipped→order_shipped`, `OutForDelivery→out_for_delivery`, `OrderDelivered→order_delivered`, `OrderCancelled→order_cancelled`, `PaymentFailed→payment_failed` (all language `en`, UTILITY category). Unmapped templates fall back to the legacy raw-name behavior (no regression). The merchant must create the matching templates in WhatsApp Manager — canonical bodies + sample values in `docs/WHATSAPP_TEMPLATE_REGISTRY.md`.
+
+**Propagation:**
+- Severity: NORMAL (WhatsApp notifications were non-functional before this) · Layers: backend (`modules/notifications/whatsapp-template-registry.ts` [new], `modules/notifications/adapters/meta-whatsapp.adapter.ts`, `queues/workers/notifications.worker.ts`, `docs/WHATSAPP_TEMPLATE_REGISTRY.md` [new])
+- Migration: NO · Flag: gated by existing `NOTIFY_WHATSAPP_ENABLED` (OFF by default) · Design impact: none · Breaking: NO
+- Rollback: revert the listed files
+- **Operator action required (per client that enables WhatsApp):** create the 6 UTILITY templates in WhatsApp Manager with the exact names/params/language above and wait for Meta approval before routing any template to the WHATSAPP primary channel. To send a template over WhatsApp, set its entry in the notifications `primaryChannels` config to `WHATSAPP`.
+
+## [0.1.18] — 2026-06-30
+
+### Fixed
+- **Register the new variant-reorder endpoint in the admin policy registry.** `admin-endpoint-policy-registry.ts` was missing the mapping for `PATCH /api/v1/admin/products/:id/variants/reorder` (added in 0.1.17), so `assertAdminPolicyRegistryIntegrity()` (and its unit test) failed with *"Missing endpoint policy mapping …"*. Added the entry (`products:write`, layer A). No behavior change — the route was already permission-guarded; this just satisfies the registry-completeness invariant.
+
+**Propagation:**
+- Severity: NORMAL (CI gate / follow-up to 0.1.17) · Layers: backend (`common/auth/admin-endpoint-policy-registry.ts`)
+- Migration: NO · Flag: n/a · Design impact: none · Breaking: NO
+- Rollback: revert the one line
+
+## [0.1.17] — 2026-06-30
+
+### Added
+- **Manual variant ordering (drag-and-drop).** New `ProductVariant.sortOrder` column + `PATCH /admin/products/:id/variants/reorder` (`{ variantIds: [...] }`, `products:write`) which sets each variant's `sortOrder` to its position. All variant reads (admin editor, product detail, product cards / listings) now order by `[{ sortOrder: 'asc' }, { price: 'asc' }]` instead of price only, so the admin-chosen order is what customers see. New variants append to the end; `adminReorderProductVariants` validates the payload lists every variant of the product exactly once.
+
+**Propagation:**
+- Severity: NORMAL (new feature) · Layers: backend (`prisma/schema.prisma`, `modules/products/products.{service,schemas,routes}.ts`)
+- Migration: **YES** — `20260630120000_add_variant_sort_order` adds `sortOrder INT NOT NULL DEFAULT 0` and **backfills each product's variants by current price order** (so existing catalogs look unchanged until reordered) + adds a `(productId, sortOrder)` index. Run `prisma migrate deploy` + `prisma generate`.
+- Flag: n/a (additive; default order = old price order until an admin drags) · Design impact: none · Breaking: NO
+- Rollback: revert the listed files + drop the column/migration
+- Pairs with frontend-core 0.1.12 (drag-and-drop UI).
+
+## [0.1.16] — 2026-06-30
+
+### Fixed
+- **`sync-core.mjs` no longer breaks the core-sync PR on a CHANGELOG conflict.** The 3-way `applyDelta([changelog])` reliably conflicted (clients diverge from the core changelog) and left `backend/CHANGELOG.md` **unmerged in the index**, which failed the workflow's `git checkout -B` with *"you need to resolve your current index first / backend/CHANGELOG.md: needs merge"*. The CHANGELOG is append-only, core-owned documentation, so the sync now takes it **wholesale from the tag** (`git checkout <tag> -- <changelog>`) instead of 3-way-merging it — never conflicts.
+
+**Propagation:**
+- Severity: NORMAL (CI/automation reliability) · Layers: backend (`backend/scripts/sync-core.mjs`)
+- Migration: NO · Flag: n/a · Design impact: none · Breaking: NO
+- Rollback: revert the script change
+- Note: clients pick this up on their next sync; existing failed core-sync runs go green on re-run (downgrade guard no-ops once the client is already at the tag).
+
+## [0.1.15] — 2026-06-30
+
+### Fixed
+- **"Compare-at price must be greater than the price" error when the field is empty (legacy `0` data).** The pre-0.1.14 bug wrote `compareAtPrice = 0` (`Math.floor(null)`) onto variants. After 0.1.14 those stored zeros made every edit-save fail: the form re-sent `0`, and `assertValidCompareAtPrice` rejected it (`0 <= price`). Now `compareAtPrice <= 0` is treated as **"none"** everywhere: `assertValidCompareAtPrice` ignores `<= 0`, and create/update **normalize `<= 0 → null`** so the stale `0` is cleaned on the next save. A genuine positive compare-at price below the selling price is still rejected.
+
+**Propagation:**
+- Severity: NORMAL (unblocks product editing on affected catalogs) · Layers: backend (`modules/products/products.service.ts`)
+- Migration: NO (self-heals — zeros are rewritten to null on save) · Flag: n/a · Design impact: none · Breaking: NO
+- Rollback: revert the service change
+- Pairs with frontend-core 0.1.11 (form shows `0` as empty and never re-sends it).
+
+## [0.1.14] — 2026-06-29
+
+### Fixed
+- **`compareAtPrice` is now truly optional and clearable (was effectively mandatory on edit).** The admin edit form sends `compareAtPrice: null` when the field is blank, but the variant schema only allowed an integer → schema rejected it as "must be integer", and `assertValidCompareAtPrice(price, null)` also threw "must be greater than price" (since `null <= price`). Net effect: you couldn't save a product/variant edit without entering a valid compare-at price. Now: the variant `compareAtPrice` schema accepts `integer | null`; `assertValidCompareAtPrice` ignores `null`/`undefined` and only validates a positive value (`> price`); and the create/update write-sites map `null → null` (clears the column) instead of `Math.floor(null) → 0`. Error message reworded to "Compare-at price must be greater than the price".
+
+**Propagation:**
+- Severity: NORMAL (admin UX bug fix) · Layers: backend (`modules/products/products.schemas.ts`, `products.service.ts`, `products.types.ts`)
+- Migration: NO · Flag: n/a · Design impact: none · Breaking: NO (additive — `null` now accepted where it was rejected)
+- Rollback: revert the three files
+- Pairs with frontend-core 0.1.9 (Compare-at-Price marked optional; `weightGrams→weight` add-variant fix; store-address always editable).
+
 ## [0.1.13] — 2026-06-28
 
 ### Added
