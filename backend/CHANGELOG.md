@@ -12,6 +12,40 @@ Each entry MUST carry the **Propagation** block (layers · migration · flag · 
 
 ## [Unreleased]
 
+## [0.1.35] — 2026-07-02
+
+### Fixed
+- **WhatsApp sends silently used Graph API v21.0 instead of v25.0.** Both `MetaWhatsAppAdapter` instantiations in `notifications.worker.ts` (OTP path + order-notification path) passed `META_WHATSAPP_API_VERSION ?? 'v21.0'` — a stale fallback missed in the v25.0 upgrade. Because the version was passed **explicitly**, it overrode the adapter's own `v25.0` default, so every WhatsApp message hit `/v21.0/` whenever ops hadn't set `META_WHATSAPP_API_VERSION`. Changed both fallbacks to `'v25.0'`. Added an adapter regression test asserting the constructor default is v25.0 when no version is supplied.
+- **Docs: WhatsApp OTP cost default was documented as 12 paise but the code default is 14.** Corrected the `WHATSAPP_OTP_COST_PAISE` note in `ops-config-contract.ts` and the header comment in `whatsapp-otp-cost.ts` to `14 (~₹0.115 + 18% GST)`, matching `DEFAULT_WHATSAPP_OTP_COST_PAISE` and `.env.example`.
+
+**Propagation:**
+- Severity: NORMAL (WhatsApp delivery used an older API version; no outage, but drifting from the pinned v25.0 and any v25-only template behaviour) · Layers: backend (`queues/workers/notifications.worker.ts`, `modules/notifications/adapters/meta-whatsapp.adapter.test.ts`, `common/notifications/whatsapp-otp-cost.ts`, `modules/ops/ops-config-contract.ts`)
+- Migration: NO · Flag: none · Design impact: none · Breaking: NO
+- Rollback: revert the listed files
+- Follow-up to the v25.0 upgrade (0.1.x) and multi-channel work (0.1.30–0.1.34). Operator: optionally set `META_WHATSAPP_API_VERSION` in Ops → Config to pin explicitly; otherwise the default is now v25.0.
+
+## [0.1.34] — 2026-07-02
+
+### Fixed
+- **Type error in the 0.1.33 admin-setup OTP fan-out test.** The new test indexed `mock.calls.map((c) => c[0])` on a `vi.fn()` whose args aren't typed, so `tsc` (which includes `*.test.ts`) failed with `TS2493: Tuple type '[]' … has no element at index '0'` — caught by client `reliability-gates` Typecheck. Replaced with `toHaveBeenCalledWith('send-email' | 'send-whatsapp', …)` assertions like the sibling tests. No runtime/behaviour change; supersedes 0.1.33's sync PRs.
+
+**Propagation:**
+- Severity: LOW (test-only typecheck fix) · Layers: backend (`modules/auth/admin-invites.service.test.ts`)
+- Migration: NO · Flag: none · Design impact: none · Breaking: NO
+- Rollback: n/a (roll up with 0.1.33). Merge this sync PR instead of the 0.1.33 one.
+
+## [0.1.33] — 2026-07-02
+
+### Fixed
+- **Multi-channel notification save was silently rejected with 400 (`VALIDATION_ERROR`).** The 0.1.30 multi-channel change updated the `GET /admin/settings/notifications` *response* schema to accept array-valued `primaryChannels` (`{ OrderConfirmed: ['EMAIL','WHATSAPP'] }`), but the `PATCH` *body* schema was missed — it still only allowed a single string per template. So the Admin → Settings → Notifications panel (which always PATCHes arrays) failed every save with "Please check the highlighted fields and try again", including when merely enabling WhatsApp. Fixed the update body schema to accept string OR array (`anyOf`), matching the response schema. Added route-level regression tests (array save persists as array; legacy single-string still accepted).
+- **Admin setup/signup OTP was never migrated to multi-channel (overseen in 0.1.30).** `AdminInvitesService.sendSetupOtp` still resolved a single channel via the old `resolvePrimaryOtpChannel` path, so an admin completing signup only ever got their OTP on ONE channel — inconsistent with admin *login* OTP, which fans the same OTP to email **and** WhatsApp. Rewrote it to mirror `requestAdminLoginOtp`: `resolveOtpDeliveryChannels({ preferEmail: true })` (email is always a delivery floor), WhatsApp/SMS only when `OTP_WHATSAPP_ENABLED` is on AND the invitee supplied a phone, hard error only if the primary channel needs a phone the invitee lacks. Same OTP, one hash, verified identically. Added a fan-out test.
+
+**Propagation:**
+- Severity: HIGH (multi-channel notification settings were unsaveable end-to-end) · Layers: backend (`modules/settings/settings.schemas.ts`, `modules/auth/admin-invites.service.ts`, `+` tests)
+- Migration: NO · Flag: `OTP_WHATSAPP_ENABLED` still gates OTP-over-WhatsApp · Design impact: none · Breaking: NO (single-string bodies still accepted)
+- Rollback: revert the two source files
+- Follow-up to 0.1.30 (multi-channel routing). No operator action — merchants can now save channel toggles; admin signup OTP now fans out like admin login.
+
 ## [0.1.32] — 2026-07-02
 
 ### Fixed
