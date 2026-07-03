@@ -12,6 +12,37 @@ Each entry MUST carry the **Propagation** block.
 
 ## [Unreleased]
 
+## [0.1.27] — 2026-07-03
+
+### Added
+- **Merchant returns toggle + return-status UX** (pairs with backend-core 0.1.41):
+  - Admin → Settings → Store Policies: new **"Allow Order Returns"** checkbox (`CodSettingsPanel`) saved via the cod-settings PATCH.
+  - `PublicStoreConfig.returnsEnabled` (fail-closed `false`) via `useStoreConfig()`.
+  - Customer order detail: **Return Request status card** (chip + filed date + reason + store note); the "Request a Return / Replacement" CTA renders only when returns are enabled, the order is DELIVERED, and no request is in flight — mirroring the server guards. `OrderSummary.returnRequests` typed.
+  - Admin return detail: the status pills now offer only **valid next transitions** (mirrors the backend guard: `REQUESTED→APPROVED/REJECTED`, `APPROVED→PICKED_UP/REJECTED`, `PICKED_UP→REFUNDED`; terminals immutable) instead of every status.
+- Order numbers are display-only on the frontend — the new random `ORD-XXXX-XXXX` format (backend-core 0.1.41) needs no frontend changes; verified nothing parses the format.
+
+**Propagation:**
+- Severity: NORMAL (additive UI; server enforces everything) · Layers: frontend (`components/admin/{CodSettingsPanel,AdminReturnDetailPanel}.tsx`, `app/(account)/orders/[id]/page.tsx`, `lib/{storefront-settings.ts,orders-api.ts}` + tests)
+- Migration: NO · Flag: merchant toggle (default ON) · Design impact: none · Breaking: NO
+- Rollback: revert the listed files
+
+## [0.1.26] — 2026-07-03
+
+### Changed
+- **Order detail page redesigned as a modern SaaS-style document.** Sectioned cards (shared `DetailCard` shell) in the account palette:
+  - **Header**: order number + colour-mapped status chip + placed date/payment mode; actions (Invoice PDF, Retry Payment, Cancel) grouped right; back-link to orders.
+  - **Items**: each line shows the product image thumbnail (`next/image`, placeholder fallback), name, variant, qty × unit price and line total — and **deep-links to that product & variant on the storefront** (`/products/<slug>?variant=<id>`) when still purchasable (backend-core 0.1.40 enrichment). `ProductVariantSelector` now honours a `?variant=` query param (read from `window.location` on mount — no `useSearchParams`, so the PDP stays statically cacheable with no Suspense requirement).
+  - **Invoice**: proper invoice-style `<table>` (Item / Qty / Unit Price / Amount) with Subtotal, Discount (green, coupon code chip), Shipping ("Free" at 0) and accent Total in the footer; shows invoice number + issue date and a Download PDF action when `invoice.hasPdf`. Mobile: horizontal scroll.
+  - **Tracking**: timeline list with dot markers (latest highlighted); address card; return-request form restyled. All action feedback (cancel, return submit, invoice download) now uses toasts.
+  - Shared status helpers extracted to `lib/order-status-ui.ts` (used by orders list + detail). `OrderLineItem` gains optional `productSlug`/`imageUrl`/`isPurchasable`; `OrderSummary` gains `createdAt`.
+
+**Propagation:**
+- Severity: NORMAL (visual; additive types) · Layers: frontend (`app/(account)/orders/[id]/page.tsx`, `app/(account)/orders/page.tsx`, `components/product/ProductVariantSelector.tsx`, `lib/{orders-api.ts,order-status-ui.ts}`)
+- Migration: NO · Flag: none · Design impact: account palette tokens/hexes · Breaking: NO
+- Rollback: revert the listed files
+- Pairs with backend-core 0.1.40 (order item PDP enrichment).
+
 ## [0.1.25] — 2026-07-03
 
 ### Fixed

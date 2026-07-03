@@ -36,6 +36,12 @@ export interface OrderLineItem {
   quantity: number;
   unitPrice: number;
   totalPrice: number;
+  /** PDP enrichment (customer order detail only) — slug for deep-linking back to the product. */
+  productSlug?: string;
+  /** First product image for the line thumbnail; null when the product has no images. */
+  imageUrl?: string | null;
+  /** True when both variant and product are still active (safe to link to the PDP). */
+  isPurchasable?: boolean;
 }
 
 export interface OrderSummary {
@@ -53,7 +59,17 @@ export interface OrderSummary {
   discountAmount: number;
   couponCode?: string | null;
   total: number;
+  createdAt?: string;
   items?: OrderLineItem[];
+  /** Customer-visible return requests for this order (latest first; admin markers stripped). */
+  returnRequests?: Array<{
+    id: string;
+    status: "REQUESTED" | "APPROVED" | "REJECTED" | "PICKED_UP" | "REFUNDED" | string;
+    reason: string;
+    adminNote: string | null;
+    createdAt: string;
+    updatedAt: string;
+  }>;
   invoice?: { hasPdf: boolean; invoiceNumber: string; issuedAt: string } | null;
   shipment?: {
     id: string;
