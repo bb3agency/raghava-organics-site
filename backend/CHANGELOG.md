@@ -12,6 +12,26 @@ Each entry MUST carry the **Propagation** block (layers · migration · flag · 
 
 ## [Unreleased]
 
+## [0.1.49] — 2026-07-03
+
+### Fixed
+- **0.1.48 failed the ops-config-contract drift gate in client CI** — `SHIPPING_NOTIFICATION_SURCHARGE_PAISE` was added to the ops contract but not to `scripts/env-runtime-contract.js` (requiredEnv + envExampleRequired + compose-parity lists). Added to all three; drift, parity, and guardrail script tests green. Supersedes the 0.1.48 sync PRs.
+
+**Propagation:**
+- Severity: LOW · Layers: backend (`scripts/env-runtime-contract.js`)
+- Migration: NO · Flag: none · Design impact: none · Breaking: NO
+- Rollback: revert with the 0.1.48 contract entry
+
+## [0.1.48] — 2026-07-03
+
+### Added
+- **`SHIPPING_NOTIFICATION_SURCHARGE_PAISE` is now operator-tunable via the Ops config panel** (shipping domain, `mutableViaOps: true`, `requiresRestart: true`, DB-overlay eligible). The Ops UI derives its fields from the backend contract, so the key appears automatically as an editable text field with the explanatory note — no frontend change required. Documented in `docs/ENV_VS_DB_CONFIG_REFERENCE.md` §Shipping.
+
+**Propagation:**
+- Severity: LOW · Layers: backend (`modules/ops/ops-config-contract.ts`, docs)
+- Migration: NO · Flag: none · Design impact: none · Breaking: NO
+- Rollback: revert the contract entry (env var keeps working)
+
 ## [0.1.47] — 2026-07-03
 
 ### Fixed
