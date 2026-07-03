@@ -12,6 +12,32 @@ Each entry MUST carry the **Propagation** block.
 
 ## [Unreleased]
 
+## [0.1.24] — 2026-07-03
+
+### Added
+- **Customer account area redesigned as a modern SaaS-style profile** (all in the existing brand palette):
+  - **`AccountNav`** (new, `components/layout/AccountNav.tsx`): icon nav with active-route highlight; desktop sidebar gets a profile card (avatar initial, name, contact) and a **Sign out** action; mobile keeps a compact horizontal pill bar.
+  - **Addresses** now has its own page (`/addresses`, new): card-grid address book with Default badge, set-default / edit / delete, inline add/edit form (react-hook-form + zod), toast feedback. Moved out of Settings; dashboard quick-link now points at it (was `/settings`).
+  - **Settings** rebuilt: sectioned Profile card (name/email) and a **Mobile Number card — add, change, or remove the login phone** (backend-core 0.1.39). Removal shows a confirm explaining OTP sign-in is lost; server refuses removal when the phone is the only sign-in identifier. Addresses shortcut card links to the new page.
+  - **Order History** restyled: status chips (colour-mapped per status), order date + payment mode, invoice download + View actions as proper buttons, skeletons/empty states in the account palette.
+
+**Propagation:**
+- Severity: NORMAL (visual + additive; API surface unchanged except `phone` on the profile PATCH) · Layers: frontend (`components/layout/AccountNav.tsx` new, `app/(account)/{layout,dashboard/page,orders/page,settings/page}.tsx`, `app/(account)/addresses/page.tsx` new, `lib/users-api.ts`)
+- Migration: NO · Flag: none · Design impact: uses the existing storefront palette tokens/hexes · Breaking: NO
+- Rollback: revert the listed files
+- Pairs with backend-core 0.1.39 (phone add/update/remove on `PATCH /users/me`). NOTE: this tag also delivers 0.1.23 (variant "Deactivate instead?" flow), whose tag was never pushed.
+
+## [0.1.23] — 2026-07-03
+
+### Added
+- **"Deactivate instead?" flow on variant delete.** When deleting a variant returns the 409 (it appears in existing orders and must be preserved for invoices/history), the product editor now offers a confirm dialog explaining the trade-off and — on confirm — PATCHes `isActive: false`. The variant disappears from the storefront and (per backend-core 0.1.38) from live customer carts; already-placed orders keep flowing untouched. Success toast: "Variant deactivated — removed from storefront and customer carts."
+
+**Propagation:**
+- Severity: NORMAL (UX for the 409 path) · Layers: frontend (`components/admin/AdminProductEditor.tsx`)
+- Migration: NO · Flag: none · Design impact: none · Breaking: NO
+- Rollback: revert the file
+- Pairs with backend-core 0.1.38 (deactivation cart purge + checkout inactive-item guard).
+
 ## [0.1.22] — 2026-07-03
 
 ### Fixed
