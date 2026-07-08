@@ -40,7 +40,8 @@
       "frontend/app/**/page.tsx",
       "frontend/app/**/layout.tsx",
       "frontend/next.config.ts",
-      "frontend/middleware.ts"
+      "frontend/middleware.ts",
+      "frontend/design-tokens.contract.json"
     ],
     "exclude": [
       "frontend/app/globals.css",
@@ -68,6 +69,7 @@
       "frontend/app/(storefront)/terms/**",
       "frontend/app/(storefront)/returns/**",
       "frontend/app/(storefront)/shipping/**",
+      "frontend/app/(storefront)/gallery/**",
       "frontend/app/(account)/**",
       "frontend/components/client/**/*.test.ts",
       "frontend/components/client/**/*.test.tsx",
