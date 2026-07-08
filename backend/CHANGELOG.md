@@ -12,6 +12,15 @@ Each entry MUST carry the **Propagation** block (layers · migration · flag · 
 
 ## [Unreleased]
 
+### Changed
+- **`GET /api/v1/wishlist` now returns card-ready products (intended: backend-core 0.1.63, MINOR).** The list response previously exposed only `id/name/slug/description/isFeatured` per product — not enough to render a product card. Each wishlist item's `product` is now the **same storefront product-list-item shape** used by `/products` (ordered `images`, active `variants` with price/compareAtPrice, `category`, derived `inStock`, and approved-review `rating`/`reviewCount` gated by the merchant reviews toggle). Per-variant inventory is stripped so stock counts never leak. `POST /wishlist/items` is unchanged (minimal shape). Implemented by exporting the shared `productListItemSchema` from `products.schemas.ts` and reusing it as the wishlist list-item product schema. Synced from core.
+
+**Propagation:**
+- Severity: NORMAL · Layers: backend (`modules/wishlist/{wishlist.service.ts,wishlist.schemas.ts,wishlist.service.test.ts}`, `modules/products/products.schemas.ts` — `productListItemSchema` now `export`ed) — the client `/wishlist` page + nav live in each client's theme layer (post-0.1.62 split)
+- Migration: NO · Flag: none (gated by existing `wishlistEnabled` toggle) · Design impact: none
+- Breaking: NO (additive) · Rollback: revert the three wishlist files and the `export`
+- Tests: `wishlist.service.test.ts` extended (card-ready shape, no inventory leak, no review query when reviews disabled).
+
 ## [0.1.62] — 2026-07-08
 
 ### Changed
