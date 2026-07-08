@@ -54,7 +54,7 @@ export function Footer({ categories }: FooterProps) {
               {APP_NAME}
             </Link>
             <p className="text-sm font-medium leading-relaxed text-[#767676]">
-              Farm-fresh chemical free produce delivered to your door. Trusted by
+              Farm-fresh, naturally grown produce delivered to your door. Trusted by
               families across India for quality and purity.
             </p>
             {socialLinks.length > 0 ? (
@@ -163,7 +163,7 @@ export function Footer({ categories }: FooterProps) {
         <div className="mt-10 flex flex-col items-center justify-between gap-3 border-t border-[#efe8e4] pt-6 text-xs font-medium text-[#767676] sm:mt-16 sm:flex-row sm:gap-4 sm:pt-8 sm:text-sm">
           <p>&copy; {new Date().getFullYear()} {APP_NAME}. All rights reserved.</p>
           <div className="flex items-center gap-2">
-            <span className="flex items-center gap-1"><Leaf className="size-3 text-[#ec6e55]" /> 100% Chemical Free</span>
+            <span className="flex items-center gap-1"><Leaf className="size-3 text-[#ec6e55]" /> Naturally Grown</span>
             <span className="hidden sm:inline">&bull;</span>
             <span className="hidden sm:flex items-center gap-1">Pesticide Free</span>
             <span className="hidden sm:inline">&bull;</span>

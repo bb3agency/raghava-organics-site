@@ -5,7 +5,7 @@ import { APP_NAME } from "@/lib/constants";
 export const metadata = {
   title: `Return Policy — ${APP_NAME}`,
   description:
-    "How to raise a return request, what qualifies for a return, and how we process refunds for chemical-free produce orders.",
+    "How to raise a return request, what qualifies for a return, and how we process refunds for naturally grown produce orders.",
 };
 
 const SECTIONS = [
@@ -13,7 +13,7 @@ const SECTIONS = [
     icon: Clock,
     title: "1. Return Window",
     content:
-      "Due to the perishable nature of fresh fruits, vegetables, dairy, and other chemical-free produce, return or damage claims must be raised within 24 hours of delivery. Please inspect your order on arrival. Claims raised after 24 hours will not be accepted for perishable items.",
+      "Due to the perishable nature of fresh fruits, vegetables, dairy, and other naturally grown produce, return or damage claims must be raised within 24 hours of delivery. Please inspect your order on arrival. Claims raised after 24 hours will not be accepted for perishable items.",
   },
   {
     icon: Camera,
@@ -31,7 +31,7 @@ const SECTIONS = [
     icon: XCircle,
     title: "4. Non-Eligible Returns",
     content:
-      "We cannot accept returns for: produce that has been stored incorrectly after delivery (non-refrigerated), natural variation in size, shape, or colour (this is expected in chemical-free farming), or items that were delivered in good condition and later damaged by the customer.",
+      "We cannot accept returns for: produce that has been stored incorrectly after delivery (non-refrigerated), natural variation in size, shape, or colour (this is expected with natural farming), or items that were delivered in good condition and later damaged by the customer.",
   },
   {
     icon: CreditCard,

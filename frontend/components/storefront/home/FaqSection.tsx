@@ -17,8 +17,8 @@ interface FaqSectionProps {
 function buildFaqs(isCodEnabled: boolean): Faq[] {
   return [
     {
-      q: 'What does "chemical free" actually mean here?',
-      a: "Our partner farmers don't use synthetic pesticides, herbicides, or fertilizers. Soil is enriched with cow-based manure and crop rotation. Each batch is screened for 300+ pesticide residues by NABL-accredited labs before shipping. We can share the reports on request.",
+      q: 'What does "naturally grown" actually mean here?',
+      a: "Our partner farmers avoid the routine use of synthetic pesticides, herbicides, and chemical fertilizers. Soil is enriched with cow-based manure and crop rotation. Each batch is then screened for 300+ pesticide residues by NABL-accredited labs before shipping — so our claims are backed by lab reports, which we're happy to share on request.",
     },
     {
       q: "Do you offer Cash on Delivery?",

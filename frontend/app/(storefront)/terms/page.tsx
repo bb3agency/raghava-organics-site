@@ -5,7 +5,7 @@ import { APP_NAME } from "@/lib/constants";
 export const metadata = {
   title: `Terms & Conditions — ${APP_NAME}`,
   description:
-    "Terms and conditions governing the use of the Raghava Organics storefront, placing orders, and purchasing chemical-free produce.",
+    "Terms and conditions governing the use of the Raghava Organics storefront, placing orders, and purchasing naturally grown produce.",
 };
 
 const SECTIONS = [
@@ -19,7 +19,7 @@ const SECTIONS = [
     icon: ShoppingBag,
     title: "2. Products & Availability",
     content:
-      "All products listed are subject to availability. We reserve the right to limit quantities, discontinue products, or refuse orders at any time. Product images and descriptions are for illustrative purposes — natural variations in shape, size, and colour are expected in chemical-free, farm-fresh produce and do not constitute defects.",
+      "All products listed are subject to availability. We reserve the right to limit quantities, discontinue products, or refuse orders at any time. Product images and descriptions are for illustrative purposes — natural variations in shape, size, and colour are expected in naturally grown, farm-fresh produce and do not constitute defects.",
   },
   {
     icon: CreditCard,

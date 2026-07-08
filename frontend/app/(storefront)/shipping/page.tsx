@@ -5,7 +5,7 @@ import { APP_NAME } from "@/lib/constants";
 export const metadata = {
   title: `Shipping Policy — ${APP_NAME}`,
   description:
-    "Delivery areas, charges, timelines, and how we handle cold-chain dispatch for your chemical-free produce orders.",
+    "Delivery areas, charges, timelines, and how we handle cold-chain dispatch for your naturally grown produce orders.",
 };
 
 const SECTIONS = [
@@ -13,7 +13,7 @@ const SECTIONS = [
     icon: MapPin,
     title: "1. Delivery Areas",
     content:
-      "We deliver certified farm-fresh, chemical-free produce to serviceable pincodes within Hyderabad and surrounding districts of Telangana, India. Enter your delivery pincode at checkout — we will instantly confirm whether we can reach you. We are actively expanding to new areas.",
+      "We deliver farm-fresh, naturally grown produce to serviceable pincodes within Hyderabad and surrounding districts of Telangana, India. Enter your delivery pincode at checkout — we will instantly confirm whether we can reach you. We are actively expanding to new areas.",
   },
   {
     icon: Truck,

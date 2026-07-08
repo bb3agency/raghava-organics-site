@@ -5,7 +5,7 @@ import { APP_NAME } from "@/lib/constants";
 export const metadata = {
   title: `Privacy Policy — ${APP_NAME}`,
   description:
-    "How Raghava Organics collects, uses, stores, and protects your personal information when you shop for chemical-free produce.",
+    "How Raghava Organics collects, uses, stores, and protects your personal information when you shop for naturally grown produce.",
 };
 
 const SECTIONS = [

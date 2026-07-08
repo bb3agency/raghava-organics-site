@@ -7,13 +7,13 @@ import { APP_NAME } from "@/lib/constants";
 export const metadata = {
   title: `About Us — ${APP_NAME}`,
   description:
-    "We work directly with 120+ certified farmers across Telangana to bring you chemical-free, traceable produce. Every batch is lab-tested for 300+ pesticide residues.",
+    "We work directly with farmers who grow responsibly — without the routine use of synthetic pesticides or chemical fertilisers — to bring you traceable produce. Every harvest is lab-tested for 300+ pesticide residues before it reaches your table.",
 };
 
 const VALUES = [
   {
     icon: Leaf,
-    title: "100% Chemical Free",
+    title: "Naturally Grown",
     description:
       "Every product is grown without synthetic pesticides, herbicides, or chemical fertilisers. We test every batch in certified labs for 300+ pesticide residues before dispatch.",
   },
@@ -94,31 +94,39 @@ export default async function AboutPage() {
                   Who we are
                 </p>
                 <h2 className="mb-4 font-heading text-2xl font-bold text-[#23403d] sm:text-3xl">
-                  Farm-fresh chemical-free produce, direct to your doorstep
+                  Farm-fresh, naturally grown produce, direct to your doorstep
                 </h2>
                 <div className="space-y-4 text-sm font-medium leading-relaxed text-[#767676]">
                   <p>
                     Raghava Organics was founded on a single belief: every family deserves
-                    access to food grown the way nature intended — without chemicals, without
-                    shortcuts, and with full traceability from seed to table.
+                    access to food grown the way nature intended — without synthetic pesticides,
+                    without shortcuts, and with full traceability from seed to table.
                   </p>
                   <p>
-                    We work directly with <strong className="text-[#23403d]">120+ certified farmers</strong> across
-                    Telangana who have committed to chemical-free, native-seed farming. Their
-                    knowledge of the land, often passed down over generations, is irreplaceable.
-                    We give them a market; they give you real food.
+                    We work directly with <strong className="text-[#23403d]">farmers who have
+                    committed to clean farming practices</strong>. Their knowledge of the land,
+                    often passed down over generations, is irreplaceable. We give them a market;
+                    they give you real food.
                   </p>
                   <p>
-                    Every batch is lab-tested for <strong className="text-[#23403d]">300+ pesticide residues</strong> before
-                    it leaves the farm. If it does not pass, it does not ship — period. Orders
-                    are harvested and dispatched within 48 hours for peak freshness.
+                    We partner directly with farmers who are committed to growing food without the
+                    routine use of chemical fertilisers and synthetic pesticides. Many of these
+                    farms may not have formal certifications, but we believe trust should be built
+                    on <strong className="text-[#23403d]">evidence, not labels</strong>. That&rsquo;s
+                    why every harvest is rigorously lab-tested before it reaches your table —
+                    ensuring food that&rsquo;s as clean, safe, and authentic as nature intended.
+                  </p>
+                  <p>
+                    Every batch is screened for <strong className="text-[#23403d]">300+ pesticide
+                    residues</strong> before it leaves the farm. If it does not pass, it does not
+                    ship. Orders are harvested and dispatched within 48 hours for peak freshness.
                   </p>
                 </div>
               </div>
               <div className="relative overflow-hidden rounded-[20px] bg-[#faf3ef]">
                 <Image
                   src="/images/product-placeholder.svg"
-                  alt="Raghava Organics — fresh chemical-free produce"
+                  alt="Raghava Organics — fresh, naturally grown produce"
                   width={600}
                   height={480}
                   className="mx-auto h-64 w-full object-contain p-8 lg:h-80"
@@ -182,7 +190,7 @@ export default async function AboutPage() {
             </h2>
             <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
               {[
-                { icon: Sprout, step: "1", title: "Certified Farming", desc: "Partner farmers grow using native seeds and zero chemicals on certified plots." },
+                { icon: Sprout, step: "1", title: "Responsible Farming", desc: "Partner farmers grow without synthetic pesticides or chemical fertilisers, using natural methods." },
                 { icon: Star, step: "2", title: "Lab Testing", desc: "Every harvest is tested for 300+ pesticide residues before leaving the farm." },
                 { icon: Leaf, step: "3", title: "Fresh Harvest", desc: "We harvest within 48 hours of your order to ensure peak nutrition and freshness." },
                 { icon: Truck, step: "4", title: "Fast Delivery", desc: "Cold-chain delivery to your door — produce arrives as fresh as the morning harvest." },

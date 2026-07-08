@@ -4,7 +4,7 @@ import { ArrowRight, Leaf } from "lucide-react";
 
 const IMPACT = [
   { value: "120+", label: "Partner farmers earning fair wages" },
-  { value: "850", label: "Acres farmed without chemicals" },
+  { value: "850", label: "Acres under natural farming" },
   { value: "10k+", label: "Families fed every week" },
   { value: "300+", label: "Pesticides screened per batch" },
 ];
@@ -19,7 +19,7 @@ export function ImpactStats() {
             <div className="relative aspect-[16/10] lg:col-span-5 lg:aspect-auto">
               <Image
                 src="https://images.unsplash.com/photo-1464226184884-fa280b87c399?w=900&h=1100&fit=crop&q=80"
-                alt="Farmer holding fresh harvest from chemical-free farm"
+                alt="Farmer holding fresh harvest from a naturally cultivated farm"
                 fill
                 sizes="(max-width: 1024px) 100vw, 500px"
                 className="object-cover"
@@ -48,7 +48,7 @@ export function ImpactStats() {
 
                 <p className="mt-4 max-w-xl text-base leading-relaxed text-[#5b6b6a]">
                   We measure success not by units shipped, but by the farmers
-                  we&apos;ve helped transition off chemicals and the families
+                  we&apos;ve helped transition to natural farming and the families
                   we&apos;ve fed with food they can trust.
                 </p>
 

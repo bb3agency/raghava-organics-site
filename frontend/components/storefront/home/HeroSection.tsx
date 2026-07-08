@@ -11,7 +11,7 @@ import {
 const HERO_STATS = [
   {
     value: "100%",
-    label: "Chemical Free",
+    label: "Naturally Grown",
     desc: "Zero synthetic pesticides",
     icon: ShieldCheck,
     iconColor: "text-[#ec6e55]",
@@ -83,8 +83,9 @@ export function HeroSection() {
 
             <p className="mt-5 max-w-xl text-base leading-relaxed text-[#5b6b6a] sm:text-lg">
               Raghava Organics partners with small farms across Telangana to bring
-              you fruits, vegetables, and spices grown without chemicals — and
-              tested independently in certified labs before they reach your kitchen.
+              you fruits, vegetables, and spices grown without synthetic pesticides
+              or chemical fertilisers — and tested independently in certified labs
+              before they reach your kitchen.
             </p>
 
             {/* Chips */}

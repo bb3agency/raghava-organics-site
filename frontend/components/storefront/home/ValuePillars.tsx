@@ -27,7 +27,7 @@ const PILLARS: Pillar[] = [
     icon: HeartHandshake,
     title: "Farmer-first sourcing",
     description:
-      "We pay 30–40% above mandi rates and lock annual contracts so farmers can invest in chemical-free practices.",
+      "We pay 30–40% above mandi rates and lock annual contracts so farmers can invest in responsible farming practices.",
     accent: "bg-[#fff5db] text-[#23403d]",
   },
   {
