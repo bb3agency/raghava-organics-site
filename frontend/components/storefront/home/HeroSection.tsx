@@ -82,10 +82,11 @@ export function HeroSection() {
             </h1>
 
             <p className="mt-5 max-w-xl text-base leading-relaxed text-[#5b6b6a] sm:text-lg">
-              Raghava Organics partners with small farms across Telangana to bring
-              you fruits, vegetables, and spices grown without synthetic pesticides
-              or chemical fertilisers — and tested independently in certified labs
-              before they reach your kitchen.
+              Raghava Organics partners with small farms across India to bring
+              you fruits, vegetables, leafy greens, herbs, spices, pulses, grains,
+              and cold-pressed oils grown without synthetic pesticides or chemical
+              fertilisers — and tested independently in certified labs before they
+              reach your kitchen.
             </p>
 
             {/* Chips */}
@@ -170,25 +171,6 @@ export function HeroSection() {
                   </div>
                 </div>
               </div>
-            </div>
-
-            {/* Floating sticker */}
-            <div className="absolute -left-4 top-8 hidden rotate-[-8deg] rounded-2xl border border-[#23403d]/10 bg-white/95 px-4 py-3 shadow-lg backdrop-blur-sm sm:flex sm:items-center sm:gap-2 md:-left-6">
-              <Sprout className="size-5 text-[#23403d]" />
-              <div>
-                <p className="text-xs font-bold text-[#23403d]">Native seeds</p>
-                <p className="text-[10px] text-[#767676]">No GMO · No hybrids</p>
-              </div>
-            </div>
-
-            {/* Floating discount sticker */}
-            <div className="absolute -right-2 bottom-12 hidden rotate-[6deg] flex-col items-center justify-center rounded-full border-4 border-white bg-[#ec6e55] p-4 text-white shadow-xl sm:flex md:-right-4">
-              <span className="font-heading text-xl font-black leading-none">
-                20%
-              </span>
-              <span className="text-[9px] font-bold uppercase tracking-wider">
-                First order
-              </span>
             </div>
           </div>
         </div>
