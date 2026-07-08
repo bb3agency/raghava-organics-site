@@ -12,11 +12,12 @@ import {
   Search,
   Store,
   ShoppingBag,
+  Images,
   Loader2,
-  Tag,
 } from "lucide-react";
 import { APP_NAME, BRAND_LOGO_SRC } from "@/lib/constants";
 import { useUiStore } from "@/stores/ui";
+import { useStoreConfig } from "@/components/providers/StoreConfigProvider";
 import { useAuthStore } from "@/stores/auth";
 import { logoutSession } from "@/lib/auth-api";
 import { formatPrice } from "@/lib/format-price";
@@ -44,6 +45,7 @@ export function MobileNav({ minOrderValuePaise = 0 }: MobileNavProps) {
 
   const mobileMenuOpen = useUiStore((s) => s.mobileMenuOpen);
   const setMobileMenuOpen = useUiStore((s) => s.setMobileMenuOpen);
+  const galleryEnabled = useStoreConfig().galleryEnabled;
 
   const user = useAuthStore((s) => s.user);
   const accessToken = useAuthStore((s) => s.accessToken);
@@ -223,13 +225,15 @@ export function MobileNav({ minOrderValuePaise = 0 }: MobileNavProps) {
           >
             <ShoppingBag className="size-4" /> All Products
           </Link>
-          <Link
-            href="/products?sort=popularity"
-            onClick={close}
-            className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-bold text-[#23403d] transition-colors hover:bg-[#faf3ef] hover:text-[#ec6e55]"
-          >
-            <Tag className="size-4" /> Special Offers
-          </Link>
+          {galleryEnabled && (
+            <Link
+              href="/gallery"
+              onClick={close}
+              className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-bold text-[#23403d] transition-colors hover:bg-[#faf3ef] hover:text-[#ec6e55]"
+            >
+              <Images className="size-4" /> Gallery
+            </Link>
+          )}
 
           <div className="my-3 h-px w-full bg-[#efe8e4]" />
 

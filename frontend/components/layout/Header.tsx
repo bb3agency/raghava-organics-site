@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import Image from "next/image";
-import { Phone, Menu, Leaf } from "lucide-react";
+import { Phone, Menu } from "lucide-react";
 import { APP_NAME, BRAND_LOGO_SRC } from "@/lib/constants";
 import { STORE_TAGLINE, HEADER_PROMO } from "@/lib/content";
 import { MainNav } from "@/components/layout/MainNav";
@@ -25,7 +25,9 @@ export function Header({ categories, minOrderValuePaise = 0 }: HeaderProps) {
   const setMobileMenuOpen = useUiStore((s) => s.setMobileMenuOpen);
   // Merchant-managed support phone from the public store config (Admin → Settings → Store Profile),
   // same source the Footer uses. Falls back to hidden when the merchant hasn't set one.
-  const contactPhone = useStoreConfig().contactPhone?.trim() || "";
+  const storeConfig = useStoreConfig();
+  const contactPhone = storeConfig.contactPhone?.trim() || "";
+  const galleryEnabled = storeConfig.galleryEnabled;
   const telHref = `tel:${contactPhone.replace(/[^\d+]/g, "")}`;
 
   return (
@@ -102,10 +104,6 @@ export function Header({ categories, minOrderValuePaise = 0 }: HeaderProps) {
       {/* Navigation Row */}
       <div className="hidden border-t border-[#efe8e4] bg-white lg:block">
         <div className="mx-auto flex h-14 max-w-[1440px] items-center gap-8 px-8">
-          <Link href="/products" className="flex h-14 items-center gap-2 bg-[#23403d] px-6 text-sm font-bold text-white transition-colors hover:bg-[#1a302e]">
-            <Menu className="size-4" /> Browse Categories
-          </Link>
-          
           <nav
             className="flex items-center gap-8 text-sm font-bold text-[#23403d]"
             aria-label="Store navigation"
@@ -117,9 +115,9 @@ export function Header({ categories, minOrderValuePaise = 0 }: HeaderProps) {
                 {cat.name}
               </Link>
             ))}
-            <Link href="/products?sort=popularity" className="flex items-center gap-1 text-[#ec6e55] transition-colors hover:text-[#23403d]">
-              Special Offers <Leaf className="size-3" />
-            </Link>
+            {galleryEnabled && (
+              <Link href="/gallery" className="transition-colors hover:text-[#ec6e55]">Gallery</Link>
+            )}
           </nav>
         </div>
       </div>
