@@ -8,7 +8,10 @@ import {
   NotificationDeliveryFailureEmail,
   OtpVerificationEmail,
   OrderCancelledEmail,
+  ReturnRequestUpdateEmail,
   OrderConfirmedEmail,
+  AdminNewOrderEmail,
+  AdminLocalOrderEmail,
   OrderDeliveredEmail,
   OrderShippedEmail,
   OutForDeliveryEmail,
@@ -26,6 +29,9 @@ export const supportedEmailTemplates = [
   'OutForDelivery',
   'OrderDelivered',
   'OrderCancelled',
+  'AdminNewOrder',
+  'AdminLocalOrder',
+  'ReturnRequestUpdate',
   'LowStockAlert',
   'OtpVerification',
   'CustomerOtpVerification',
@@ -83,6 +89,28 @@ export async function renderNotificationEmail(template: string, data: Record<str
         html: await render(OrderShippedEmail(orderRef, shippedOptions))
       };
     }
+    case 'AdminNewOrder': {
+      const customerName = typeof data.customerName === 'string' && data.customerName.trim() ? escapeHtml(data.customerName.trim()) : 'A customer';
+      const amount = typeof data.amount === 'string' ? escapeHtml(data.amount) : '';
+      const paymentMode = typeof data.paymentMode === 'string' ? escapeHtml(data.paymentMode) : '';
+      return {
+        subject: 'New order ' + orderRef + ' — ' + (amount || 'review in admin panel'),
+        html: await render(AdminNewOrderEmail({ orderRef, customerName, amount, paymentMode }))
+      };
+    }
+    case 'AdminLocalOrder': {
+      const customerName = typeof data.customerName === 'string' && data.customerName.trim() ? escapeHtml(data.customerName.trim()) : 'A customer';
+      const amount = typeof data.amount === 'string' ? escapeHtml(data.amount) : '';
+      const paymentMode = typeof data.paymentMode === 'string' ? escapeHtml(data.paymentMode) : '';
+      const deliveryAddress = typeof data.deliveryAddress === 'string' ? escapeHtml(data.deliveryAddress) : '';
+      const customerPhone = typeof data.customerPhone === 'string' ? escapeHtml(data.customerPhone) : '';
+      return {
+        subject: 'Local delivery order ' + orderRef + ' — ' + (amount || 'review in admin panel'),
+        html: await render(
+          AdminLocalOrderEmail({ orderRef, customerName, amount, paymentMode, deliveryAddress, customerPhone })
+        )
+      };
+    }
     case 'OutForDelivery':
       return {
         subject: `Your order ${orderRef} is out for delivery today`,
@@ -98,6 +126,18 @@ export async function renderNotificationEmail(template: string, data: Record<str
         subject: `Your order ${orderRef} has been cancelled`,
         html: await render(OrderCancelledEmail(orderRef))
       };
+    case 'ReturnRequestUpdate': {
+      const returnStatus =
+        typeof data.returnStatus === 'string' && data.returnStatus.trim()
+          ? escapeHtml(data.returnStatus.trim())
+          : 'updated';
+      const note =
+        typeof data.note === 'string' && data.note.trim() ? escapeHtml(data.note.trim()) : undefined;
+      return {
+        subject: `Update on your return request for ${orderRef}`,
+        html: await render(ReturnRequestUpdateEmail(orderRef, returnStatus, note))
+      };
+    }
     case 'LowStockAlert':
       {
         const items = Array.isArray(data.items)
