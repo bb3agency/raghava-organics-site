@@ -259,13 +259,13 @@ Apply a coupon code to the cart. Body: `{ code }`. Validates coupon rules (min o
 Remove the applied coupon from the cart.
 
 ### `POST /api/v1/cart/check-pincode`
-Check if a pincode is serviceable. Body: `{ pincode }`. Returns `{ serviceable, estimatedDays }`.
+Check if a pincode is serviceable. Body: `{ pincode }`. Returns `{ serviceable }`. Queries **every configured provider** (Delhivery + Shiprocket) in parallel and reports `serviceable: true` if ANY provider can ship. `serviceable: false` ("not deliverable") is returned ONLY when every provider that could answer *explicitly* said not-serviceable — a provider that errors transiently (timeout/5xx) is treated as "unknown" and does not block; a provider that is unavailable (`CONFIG_NOT_READY`, e.g. missing pickup pincode) is excluded from the decision. If no provider can answer at all, the endpoint returns 503, not a false "not deliverable". To widen real coverage, both providers must be configured in Ops.
 
 ### `GET /api/v1/cart/delivery-rates`
-Get delivery rate estimates for the cart. Query: `pincode` (required), `paymentMode` (optional, `PREPAID` | `COD`, default `PREPAID`). Returns shipping charge and estimated days for the active provider. COD and prepaid quotes may differ.
+Get delivery rate estimates for the cart. Query: `pincode` (required), `paymentMode` (optional, `PREPAID` | `COD`, default `PREPAID`). Multi-provider: checks serviceability across all configured providers, quotes each serviceable (or transiently-errored) provider, and returns the cheapest by true cost. `PINCODE_NOT_SERVICEABLE` (422) fires only when every provider explicitly reported the pincode not-serviceable; if providers were serviceable/unknown but no rate could be fetched, a 503 is returned instead. COD and prepaid quotes may differ.
 
 ### `GET /api/v1/store/config`
-Public runtime storefront configuration. No auth. Returns `isCodEnabled`, `minOrderValuePaise`, `mobileOtpSignupEnabled`, and mirrors of backend `FEATURE_*` flags (`couponsEnabled`, `reviewsEnabled`, `wishlistEnabled`, `gstInvoicingEnabled`). Does not expose GSTIN or secrets.
+Public runtime storefront configuration. No auth. Returns `isCodEnabled`, `minOrderValuePaise`, `mobileOtpSignupEnabled`, merchant toggles (`reviewsEnabled`, `returnsEnabled`), and mirrors of backend `FEATURE_*` flags (`couponsEnabled`, `wishlistEnabled`, `gstInvoicingEnabled`). Does not expose GSTIN or secrets.
 
 ---
 
@@ -298,7 +298,7 @@ Customer self-service cancel. **Allowed only from `CONFIRMED` or `PROCESSING`** 
 Track a shipment by AWB number. Public, no auth required. Returns courier status, tracking URL, estimated delivery date, and timeline events. Shows data from the linked order's shipment record.
 
 ### `POST /api/v1/orders/:id/return-requests`
-Create a return request for a delivered order. Body: `{ items: [{ orderItemId, quantity, reason? }], reason }`. Returns request with status `REQUESTED`.
+Create a return request for a delivered order. Body: `{ items: [{ orderItemId, quantity, reason? }], reason }`. Returns request with status `REQUESTED`. Guards: 400 when the merchant has disabled returns (`StoreSettings.returnsEnabled`, Admin → Settings); 409 `CONFLICT` while an earlier request for the same order is still open (`REQUESTED`/`APPROVED`/`PICKED_UP`).
 
 ---
 
@@ -364,10 +364,11 @@ Top-selling products by revenue or quantity. Query: `from`, `to`, `limit`.
 | `GET /api/v1/admin/products/:id` | Full product detail including all variants, images, inventory state, `isActive`, `metaDescription`, `isFeatured`. |
 | `POST /api/v1/admin/products` | Create product. Body: `name`, `slug`, `description`, `categoryId`, `tags`, `isFeatured`, `isActive`, optional `metaDescription` (max 500), `variants[]` (incl. optional `lowStockThreshold`), optional `images[]`. |
 | `PATCH /api/v1/admin/products/:id` | Partial update: `name`, `slug`, `description`, `categoryId`, `tags`, `isFeatured`, `isActive`, `metaDescription` (nullable). |
-| `DELETE /api/v1/admin/products/:id` | Deactivate product (soft delete — sets `isActive: false`). Reversible. Admin UI label: **Deactivate**. |
+| `DELETE /api/v1/admin/products/:id` | Deactivate product (soft delete — sets `isActive: false`). Reversible. **Also purges all its variants' live cart lines + stock reservations** so shoppers can't check out a pulled product; existing orders unaffected. Admin UI label: **Deactivate**. |
 | `DELETE /api/v1/admin/products/:id/permanent` | Permanently delete product (hard delete). **409** if order history or reviews exist. Clears cart items + hosted media. UI: **Delete Permanently** (`AdminRowActionsMenu`). |
 | `POST /api/v1/admin/products/:id/variants` | Add a new variant to an existing product. Body: size, color, SKU, price, stock. |
-| `PATCH /api/v1/admin/products/:id/variants/:variantId` | Update a variant's fields (price, SKU, attributes). |
+| `PATCH /api/v1/admin/products/:id/variants/:variantId` | Update a variant's fields (price, SKU, attributes, `isActive`). **Deactivating (`isActive: false`) purges the variant's live cart lines + reservations**; existing orders unaffected. |
+| `DELETE /api/v1/admin/products/:id/variants/:variantId` | Hard-delete a variant. **400** if it's the last variant; **409** if it appears in any order (deactivate instead — the admin UI offers this on 409); live cart lines are cleared before delete. |
 | `POST /api/v1/admin/products/:id/images` | Add image by URL. Body: `{ url, altText, sortOrder }` — `url` is `https://…` or hosted `/api/v1/media/products/…` path. |
 | `POST /api/v1/admin/products/:id/images/upload` | Upload one or more images (multipart `file` repeated, optional `altText`). **Max 5 MiB each.** Sort order auto-assigned per batch. **Automatically** pushes to Cloudflare R2 when `MEDIA_STORAGE_PROVIDER=r2`; local dev writes to `MEDIA_STORAGE_ROOT`. Returns single image or `{ items: [...] }`. |
 | `PATCH /api/v1/admin/products/:id/images/reorder` | Reorder product images. Body: `{ images: [{ id, sortOrder }] }`. |
@@ -391,6 +392,7 @@ Top-selling products by revenue or quantity. Query: `from`, `to`, `limit`.
 | `POST /api/v1/admin/categories` | Create category. Body: `{ name, slug, parentId?, imageUrl?, isActive? }`. Reactivates by slug if inactive match exists. |
 | `PATCH /api/v1/admin/categories/:id` | Update name, slug, parent (`null` clears), image (`null` clears), or `isActive`. |
 | `DELETE /api/v1/admin/categories/:id` | Soft-delete: sets `isActive: false`. Products keep their category assignment. |
+| `POST /api/v1/admin/categories/:id/image/upload` | Upload the single optional category image (multipart `file`; JPEG/PNG/WebP/AVIF, same size limits + storage provider as product images — local disk or Cloudflare R2). Replaces AND deletes any previously hosted category image, updates `Category.imageUrl`, invalidates the product-list cache. Requires `categories:write`. Registered in the admin endpoint policy registry (Layer A). |
 | `DELETE /api/v1/admin/categories/:id/permanent` | Hard-delete: permanently removes category from DB. Returns 409 if any products reference it; 404 if category not found. Requires `categories:write` permission. Idempotency guarded. **Bodyless DELETE** (no JSON body). Registered in admin endpoint policy registry (Layer A). |
 
 ---
@@ -434,8 +436,15 @@ Manual stock adjustment for a variant. Body: `{ quantity, note? }`. Creates an a
 |---|---|
 | `PATCH /api/v1/admin/orders/:id/status` | Update order status. Body: `{ status, note? }`. Note is tagged with admin ID. Setting status to `REFUNDED` additionally requires `orders:refund` permission. |
 | `POST /api/v1/admin/orders/:id/ship` | Manually trigger shipment booking with the active courier provider. Uses the provider stored on the order's `selectedShippingProvider` field (chosen at checkout based on cheapest rate across all configured providers). Creates shipment, fetches AWB and estimated delivery days, updates order status to SHIPPED, and **immediately sends `OrderShipped` notification to customer** (email + SMS) with tracking URL and estimated delivery days. The `Shipment.provider` DB field records which provider (DELHIVERY or SHIPROCKET) fulfilled this specific order. Idempotent — if AWB already exists, skips external call and re-sends notification. |
-| `POST /api/v1/admin/orders/:id/schedule-pickup` | Schedule a courier pickup for a booked shipment. Idempotent. |
-| `POST /api/v1/admin/orders/:id/notifications/retrigger` | Re-enqueue notification for this order. Body: `{ template }`. Requires `orders:notify` permission. Idempotent. |
+| `POST /api/v1/admin/orders/:id/schedule-pickup` | Schedule a courier pickup for a booked shipment. Idempotent. Pickup is warehouse-level: one courier visit collects every ready AWB, so a "pickup already arranged" response from the provider is treated as success. `pickupScheduledDate` is persisted whenever the provider confirms coverage — including the already-in-queue case where no slot time is returned (falls back to the request timestamp). Shiprocket nests the slot date under `response.pickup_scheduled_date` and reports success via top-level `pickup_status`; Delhivery returns the slot date directly. |
+| `POST /api/v1/admin/orders/:id/notifications/retrigger` | Resend notification for this order. Body: `{ template?, channels? }` — `template` is OPTIONAL: when omitted the backend derives it from the order's CURRENT status (SHIPPED → OrderShipped, DELIVERED → OrderDelivered, CANCELLED/REFUNDED → OrderCancelled, etc.), so the admin "Resend notification" button always reflects the live state. Requires `orders:notify` permission. Idempotent. |
+
+### Admin self-service (no permission grant — any active admin)
+
+| Route | What it does |
+|---|---|
+| `GET /api/v1/admin/me/notification-preferences` | Own new-order alert preferences: `{ enabled, channels, email, phone }`. Strictly self-scoped (JWT sub); listed in the route-discipline exemption set because a permission grant would wrongly gate personal opt-in. |
+| `PATCH /api/v1/admin/me/notification-preferences` | Update own opt-in + channels (`EMAIL`/`WHATSAPP`/`SMS`). Rejects enabling with zero channels, EMAIL without an email on the account, or WHATSAPP/SMS without a phone. Every opted-in admin receives an `AdminNewOrder` notification (per their channels) when any order is confirmed — the legacy store-contact "order shipped" alert was removed 2026-07-04. |
 
 ### Label-print route — `orders:read` permission, write-level guards
 
@@ -467,7 +476,7 @@ Manual stock adjustment for a variant. Body: `{ quantity, note? }`. Creates an a
 |---|---|---|
 | `GET /api/v1/admin/return-requests` | `orders:read` | Paginated list of all return requests. Query: `status`, `page`, `limit`. |
 | `GET /api/v1/admin/return-requests/:id` | `orders:read` | Full detail for a single return request: customer, items requested for return, reason, current status, `adminNote`. |
-| `PATCH /api/v1/admin/return-requests/:id` | `orders:write` | Update return request status: `APPROVED`, `REJECTED`, `PICKED_UP`, `REFUNDED`. Body: `{ status, adminNote? }`. |
+| `PATCH /api/v1/admin/return-requests/:id` | `orders:write` | Update return request status. Body: `{ status, adminNote? }`. Transitions are enforced (`REQUESTED→APPROVED/REJECTED`, `APPROVED→PICKED_UP/REJECTED`, `PICKED_UP→REFUNDED`; `REJECTED`/`REFUNDED` terminal — otherwise 409 `INVALID_STATUS_TRANSITION`). Real transitions email the customer (`ReturnRequestUpdate` template, audit markers stripped from the note). |
 
 ---
 
@@ -546,6 +555,20 @@ Inventory defaults: low-stock threshold, out-of-stock behaviour (block checkout 
 
 ### `GET /PATCH /api/v1/admin/settings/cod`
 COD enable/disable toggle, customer cancellation window in hours, seller state (used for tax calculations).
+
+### `GET /PATCH /api/v1/admin/settings/local-delivery`
+**Merchant-fulfilled local delivery (2026-07-10).** `settings:read` / `settings:write`. Controls
+`StoreSettings.localDelivery*`: master toggle, whitelisted pincode list (each entry may carry its
+own `feePaise`; null/absent → the store default fee, default ₹20/2000 paise), the default fee,
+an optional free-above-subtotal threshold, and the estimated-days figure shown at checkout.
+When a checkout destination pincode is on this whitelist, Delhivery/Shiprocket are **never
+invoked** (no serviceability, no quote, no booking, no webhooks): the order is created with
+`selectedShippingProvider = LOCAL`, `canShipNow` is always false with a local-delivery reason,
+`POST /admin/orders/:id/ship` hard-rejects (422), and the admin advances the order manually via
+`PATCH /admin/orders/:id/status` — each manual change (SHIPPED / OUT_FOR_DELIVERY / DELIVERED /
+CANCELLED) fires the matching customer notification through `send-primary`, and marking a local
+COD order DELIVERED captures the payment. Admin new-order alerts use the `AdminLocalOrder`
+template (includes address + phone) instead of `AdminNewOrder`.
 
 ---
 
