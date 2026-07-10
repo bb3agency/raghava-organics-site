@@ -12,8 +12,11 @@ export const metadata: Metadata = {
   alternates: { canonical: "/gallery" },
 };
 
-// Storefront gallery data is merchant-managed and changes rarely — revalidate hourly.
-export const revalidate = 3600;
+// Rendered dynamically so the merchant's Admin → Gallery changes (enable/disable toggle
+// AND newly uploaded images) reflect immediately. An hourly ISR cache previously left the
+// route open after it was switched off and hid freshly uploaded photos for up to an hour.
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 interface GalleryResponse {
   enabled: boolean;
@@ -23,7 +26,7 @@ interface GalleryResponse {
 async function fetchGallery(): Promise<GalleryResponse> {
   try {
     const base = getServerApiBaseUrl();
-    const res = await fetch(`${base}/gallery`, { next: { revalidate: 3600 } });
+    const res = await fetch(`${base}/gallery`, { cache: "no-store" });
     if (!res.ok) return { enabled: false, items: [] };
     const body: unknown = await res.json();
     const data =
