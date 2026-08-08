@@ -1452,3 +1452,17 @@ In a new tab, Zustand starts empty (`accessToken = null`). `useSessionBootstrap`
 
 **Fleet state:** all three repos (template + raghava + sbgs) at backend-core 0.1.21 / frontend-core 0.1.12.
 
+
+---
+
+## 2026-08-08 — Invoice download button hand-carry (theme layer)
+
+**Scope:** Port of the sbgs/core invoice-CTA change to this client's theme pages (theme layer is never core-synced). Pairs with core-sync frontend-core-v0.1.58 (on-demand invoice generation; `isInvoiceEligibleOrderStatus` in `lib/order-status-ui.ts`).
+
+- `/orders` list + `/orders/[id]`: Download Invoice button now shows for `gstInvoicingEnabled && (invoice.hasPdf || status CONFIRMED→DELIVERED)` — the download endpoints generate the PDF on demand, so the button no longer waits for `hasPdf`.
+- Filename falls back to `<orderNumber>-invoice.pdf` when the invoice number is not yet known; detail page refetches the order after a first on-demand download so the invoice number/issue date render.
+- Mobile: buttons are 40px tall on phone viewports (`h-10 sm:h-9` / `sm:h-8`).
+
+**Gates:** `tsc --noEmit` clean; 175/175 unit tests. (Local `npm run build` requires `.env.production.local` — pre-existing fail-fast; CI/VPS builds have the env.)
+
+**Depends on:** core-sync frontend-core-v0.1.58 (#139) — this branch is stacked on it.
