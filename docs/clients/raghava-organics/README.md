@@ -12,6 +12,7 @@ Client-specific deployment and evidence live here (not under `backend/docs/`).
 | [LOCAL_SETUP_EVIDENCE.md](./LOCAL_SETUP_EVIDENCE.md) | Local backend bootstrap evidence |
 | [DEPLOYMENT_READY_SIGNOFF.md](./DEPLOYMENT_READY_SIGNOFF.md) | Local vs production readiness (updated 2026-06-10 pass 2 — CI 1012/1012 + 114/114, runtime store config, boot guards) |
 | [GITHUB_CD_SETUP.md](./GITHUB_CD_SETUP.md) | Raghava CD values (full guide: [GITHUB_CD_SELF_HOSTED_RUNNER_GUIDE.md](../../../backend/docs/GITHUB_CD_SELF_HOSTED_RUNNER_GUIDE.md)) |
+| [CREDENTIAL_ROTATION_RUNBOOK.md](./CREDENTIAL_ROTATION_RUNBOOK.md) | **Tokens revoked/expired?** Symptom→credential table, PAT permissions, the 3 Actions secrets, VPS SSH auth, verification |
 | [PHASE5_EVIDENCE_CHECKLIST.md](./PHASE5_EVIDENCE_CHECKLIST.md) | Postman, dry-runs, go-live sign-off |
 | [scripts/](./scripts/) | Bash scripts to run on the VPS (incl. `phase7.5-nginx-tls-preflight.sh` for multi-client Nginx) |
 
