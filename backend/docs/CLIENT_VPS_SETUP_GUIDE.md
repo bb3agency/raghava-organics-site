@@ -752,8 +752,14 @@ Safety note: run `contract:admin` only against a controlled non-production targe
 
 ## 19. Failure patterns (quick diagnosis)
 
+> 🔑 **Expired/revoked GitHub tokens** are their own class of failure — deploys dying at
+> `git pull`, `core-drift` failing on the template remote, or core-sync PRs opening with no
+> CI. See `docs/clients/<client-id>/CREDENTIAL_ROTATION_RUNBOOK.md` for the
+> symptom→credential table and rotation steps.
+
 | Symptom | Likely cause |
 | --- | --- |
+| Deploy fails at "Sync monorepo root via git pull": `remote: Invalid username or token` | VPS git credential expired/revoked — see the credential rotation runbook (§4: SSH account key, no expiry) |
 | Webhook **401** spikes | Wrong `RAZORPAY_WEBHOOK_SECRET` / shipping provider token; clock skew; allowlist mismatch |
 | Payments stuck **PENDING_PAYMENT** | Workers down; Redis down; queue failure — check workers logs and Bull Board |
 | **502** from Nginx | Backend container not listening on `BACKEND_PORT` |
