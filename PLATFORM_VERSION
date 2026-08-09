@@ -3,12 +3,12 @@
 # version dashboard and the core-drift CI check. See
 # backend/docs/PLATFORM_VERSIONING_AND_SYNC_GUIDE.md.
 backend-core: 0.1.89
-frontend-core: 0.1.62
+frontend-core: 0.1.63
 
 # Minimum backend-core this frontend-core requires (compatibility contract).
 requires-backend-core: 0.1.1
 
-# Sanctioned, temporary divergences from core (see guide Â§7). Each entry:
-#   path â€” justification â€” owner â€” expires (YYYY-MM-DD)
+# Sanctioned, temporary divergences from core (see guide §7). Each entry:
+#   path — justification — owner — expires (YYYY-MM-DD)
 # Empty = no approved divergence (clean).
 approved-divergence: []
