@@ -22,7 +22,7 @@
 | Production storefront | `https://raghavaorganics.com` |
 | Production image CDN | `https://cdn.raghavaorganics.com` (Cloudflare R2 custom domain) |
 | DNS | Cloudflare authoritative (Namecheap NS updated) |
-| Last updated | 2026-06-11 (Cloudflare R2 + CDN env; frontend production template finalized; see `docs/clients/raghava-organics/CLOUDFLARE_R2_MEDIA.md`) |
+| Last updated | 2026-08-10 (GST overhaul 0.1.92–0.1.95; invoice v3; gallery fix; NGINX_AUTO_RELOAD hand-carry) |
 
 ---
 
@@ -1466,3 +1466,20 @@ In a new tab, Zustand starts empty (`accessToken = null`). `useSessionBootstrap`
 **Gates:** `tsc --noEmit` clean; 175/175 unit tests. (Local `npm run build` requires `.env.production.local` — pre-existing fail-fast; CI/VPS builds have the env.)
 
 **Depends on:** core-sync frontend-core-v0.1.58 (#139) — this branch is stacked on it.
+
+---
+
+## 2026-08-10 — GST platform overhaul (backend-core 0.1.92–0.1.95 / frontend-core 0.1.65–0.1.67) + PDP gallery theme fix
+
+**Core-synced (arrived via core-sync PRs #159–#165):**
+- Invoicing survives the GST toggle: `gstInvoicingEnabled`/`gstBillingEnabled` only pick "TAX INVOICE" vs plain "INVOICE"; every order keeps a downloadable invoice. Theme invoice buttons no longer gate on the flag (hand-carried 2026-08-10 alongside #160).
+- Intra/inter-state is classified from PINCODES (admin pickup pincode vs delivery pincode, `@common/gst/pincode-state`), not typed state strings — "TS" vs "Telangana" no longer bills IGST.
+- Checkout order summary shows a "Tax breakup (included in total)" card (CGST/SGST or IGST + taxable value) once a pincode is entered and GST billing is on; driven by `taxBreakup` on `GET /cart/delivery-rates`. GST billing off → no tax rows anywhere.
+- Invoice v3 layout: per-row GST %, ex-GST unit price, taxable value, only the relevant tax columns, row total = taxable + tax; totals stack sums visibly to the grand total. **Shipping is never taxed and never an item row** (merchant policy). Invoice numbers: legacy sequential rows keep their numbers; a one-time `DELETE FROM "Invoice"` clean-slate was sanctioned to regenerate everything in v3 (renumbers legacy rows).
+- Admin: GST-billing toggle copy updated (mentions checkout + auto classification).
+
+**Theme (this repo only, commit 67b3777):** `ProductGallery` rendered only the first 6 of 8 product images (`slice(0, 6)`) and keyed thumbnails by URL alone (duplicate-URL collisions dropped thumbnails). Now renders all images, keys by url+index.
+
+**Ops/CD (hand-carried commit 80bac03):** `NGINX_AUTO_RELOAD=1` default added to `.github/workflows/deploy.yml` — workflows are NOT core-synced, so this never arrived via the release train. Requires the §22 sudoers grants on the runner (sudo ≥1.9.10 syntax — see CLIENT_VPS_SETUP_GUIDE §22).
+
+**Fleet state:** template + raghava + sbgs all at backend-core 0.1.95 / frontend-core 0.1.67.
