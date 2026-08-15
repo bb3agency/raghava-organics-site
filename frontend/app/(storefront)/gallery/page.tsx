@@ -1,9 +1,9 @@
 import type { Metadata } from "next";
-import Image from "next/image";
 import { notFound } from "next/navigation";
 import { getServerApiBaseUrl } from "@/lib/api-base";
 import type { GalleryImage } from "@/lib/gallery-api";
 import { APP_NAME } from "@/lib/constants";
+import { GalleryTimeline } from "@/components/storefront/GalleryTimeline";
 
 export const metadata: Metadata = {
   title: `Gallery | ${APP_NAME}`,
@@ -64,40 +64,12 @@ export default async function GalleryPage() {
             From our fields to your kitchen
           </h1>
           <p className="mt-4 text-base leading-relaxed text-[#5b6b6a] sm:text-lg">
-            A glimpse into the farms, harvests, and people behind {APP_NAME}.
+            A glimpse into the farms, harvests, and people behind {APP_NAME} — newest first.
           </p>
         </div>
 
-        {items.length === 0 ? (
-          <p className="mt-16 text-center text-sm font-medium text-[#767676]">
-            Photos coming soon.
-          </p>
-        ) : (
-          <div className="mt-12 grid grid-cols-2 gap-3 sm:gap-4 md:grid-cols-3 lg:grid-cols-4">
-            {items.map((image, index) => (
-              <figure
-                key={image.id}
-                className="group relative overflow-hidden rounded-2xl bg-[#dbe8d8] shadow-sm"
-              >
-                <div className="relative aspect-square w-full">
-                  <Image
-                    src={image.imageUrl}
-                    alt={image.altText || `${APP_NAME} gallery image`}
-                    fill
-                    sizes="(max-width: 768px) 50vw, (max-width: 1024px) 33vw, 25vw"
-                    priority={index < 4}
-                    className="object-cover transition-transform duration-500 group-hover:scale-105"
-                  />
-                </div>
-                {image.caption && (
-                  <figcaption className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-[#23403d]/80 to-transparent p-4 pt-10">
-                    <p className="text-sm font-semibold text-white">{image.caption}</p>
-                  </figcaption>
-                )}
-              </figure>
-            ))}
-          </div>
-        )}
+        <GalleryTimeline items={items} storeName={APP_NAME} />
+
       </section>
     </main>
   );
