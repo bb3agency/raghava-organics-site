@@ -1483,3 +1483,24 @@ In a new tab, Zustand starts empty (`accessToken = null`). `useSessionBootstrap`
 **Ops/CD (hand-carried commit 80bac03):** `NGINX_AUTO_RELOAD=1` default added to `.github/workflows/deploy.yml` — workflows are NOT core-synced, so this never arrived via the release train. Requires the §22 sudoers grants on the runner (sudo ≥1.9.10 syntax — see CLIENT_VPS_SETUP_GUIDE §22).
 
 **Fleet state:** template + raghava + sbgs all at backend-core 0.1.95 / frontend-core 0.1.67.
+
+---
+
+## 2026-08-15 — Pentest fixes + invoice filename + gallery timeline (backend-core 0.1.97–0.1.99 / frontend-core 0.1.68–0.1.70)
+
+**Security (core-synced, backend-core 0.1.98 / frontend-core 0.1.69):**
+- `PATCH /users/me` no longer accepts `email`/`phone` — a stolen access token could rebind the account and take over password/OTP recovery. Changing either identifier now goes through `POST /users/me/identifier/change/request` + `/verify`, which sends a code to the identifier **already on the account** (OTP'ing only the new value proves nothing — the attacker owns it) and revokes every session on commit.
+- Theme touched: `app/(account)/settings/page.tsx` — Email moved out of the profile form into its own card; Change/Remove open `IdentifierChangeDialog` (core).
+
+**Invoices (0.1.97 / 0.1.68):** downloaded files are named from the response's `Content-Disposition`, so the filename always matches the invoice number inside the PDF. Previously every download guessed from React state, which is stale exactly when it matters — first download of an on-demand invoice, and both order LIST screens, which never had an invoice number at all.
+
+**Gallery timeline (0.1.99 / 0.1.70):**
+- Core: `GalleryImage` gains `capturedAt` (merchant-entered date TAKEN) + `width`/`height` read from the image header at upload; the API serves a server-computed `timelineDate` (`capturedAt ?? createdAt`) and orders by it. Layout maths in `lib/gallery-timeline.ts`; admin gallery gains a **Photo date** field.
+- **Theme (this repo, hand-carried):** `components/storefront/GalleryTimeline.tsx` + `app/(storefront)/gallery/page.tsx` replace the square grid with month sections and justified rows that preserve each photo's real aspect ratio — the banner-shaped photos the old grid square-cropped now render at their true shape. Sticky month headers, desktop scrub rail, lightbox with keyboard/swipe/focus management, `prefers-reduced-motion` respected.
+- **Merchant action:** existing photos have no `capturedAt` and group under their upload month. Set Photo date in admin for the timeline to read as a real journey.
+
+**CI gap closed (hand-carried — `.github/workflows/**` is NOT core-synced):** `reliability-ci.yml` gains a `frontend-gates` job (typecheck → lint → tests → **production build**). `reliability-gates` runs entirely inside `backend/`, so before this a client PR could go green with a frontend that did not compile — which is exactly what the 0.1.98 sync did. Build-env placeholders are scoped to the build STEP; at job level they leak into unit tests that assert the code's own env fallbacks.
+
+**Verification:** template + both clients green on all gates; raghava + sbgs VPS deploys succeeded; `https://raghavaorganics.com/gallery` 200 and `GET /api/v1/gallery` returning `timelineDate` + real `width`/`height`.
+
+**Fleet state:** template + raghava + sbgs all at backend-core 0.1.99 / frontend-core 0.1.70.
