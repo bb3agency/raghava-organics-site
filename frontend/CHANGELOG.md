@@ -12,6 +12,72 @@ Each entry MUST carry the **Propagation** block.
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-08-18
+
+### Fixed
+- **Saving one variant no longer resets the other variant rows.** `VariantEditRow` re-seeded its draft in a `useEffect` keyed on `[variant]` — object identity. Every `loadProduct()` rebuilds the variant objects, so *any* refetch (saving a different variant, adding/removing an image, reordering) changed that identity and reset every row on the page, discarding edits the merchant had typed but not yet saved. This was the remaining half of the 0.2.2 report: 0.2.2 stopped the top-level product fields from being clobbered, but the variant rows themselves were still resetting.
+  Re-seeding is now keyed on `variantFieldSignature(variant)` — a value-identity of exactly the mirrored fields — so a row re-seeds only when its own server values genuinely changed.
+- **Editing the primary variant in the Variants table now updates the Pricing card at the top of the page.** The Pricing card is a mirror of `variants[0]`, seeded only by a `seedFields: true` load. Since 0.2.2 routed sub-entity refetches through `seedFields: false`, saving the primary variant left the mirror showing the old price until a full page reload — the two disagreed, and saving the product afterwards could push the stale value back.
+  `loadProduct` now re-syncs the primary-variant mirror on a `seedFields: false` refresh when (and only when) the primary variant's signature changed, so it tracks edits made in the table without clobbering unsaved edits made in the card itself.
+
+**Propagation:**
+- Severity: NORMAL - Layers: frontend core (`components/admin/AdminProductEditor.tsx`)
+- Migration: NO - Flag: none - Design impact: none (admin console) - Breaking: NO
+- Backend: none required
+- Follow-up to 0.2.2; apply together if skipping versions
+- Rollback: revert the file
+
+
+## [0.2.2] - 2026-08-18
+
+### Fixed
+- **Product editor no longer discards unsaved edits when a variant or image is saved.** `loadProduct()` re-seeded every top-level form input from the server (`name`, `slug`, `description`, short description, category, tags, featured, status, GST/HSN, primary-variant pricing), and it was called after every sub-entity mutation - saving a variant, adding/removing/reordering a variant or image. The refetch exists only to update the variant/image lists, so it was silently overwriting whatever the merchant had typed into the product fields but not yet saved. Merchants saw "all the fields reset when I hit save" and lost work.
+  `loadProduct` now takes `{ seedFields }` (default `true` for the initial mount load) and all nine sub-mutation call sites pass `false`: the product object still refreshes so lists stay accurate, but the form inputs are left alone.
+
+### Added
+- **Opening stock when adding a variant to an existing product.** The add-variant form now has an "Opening stock (qty)" input and sends `quantity` on `POST /admin/products/:id/variants`. The endpoint has always accepted `quantity` and creates the Inventory row with it - the form simply never sent it, so every new variant was created at 0 stock and the merchant had to go to Inventory and stock it in a separate step before it could sell. Left blank, the field is omitted so the server default still applies.
+  Stock on the *edit* side stays read-only ("Managed in Inventory") on purpose: changes to existing stock must go through the inventory module so they get an adjustment-history audit trail.
+
+**Propagation:**
+- Severity: NORMAL - Layers: frontend core (`components/admin/AdminProductEditor.tsx`)
+- Migration: NO - Flag: none - Design impact: none (admin console) - Breaking: NO
+- Backend: none required - `quantity` is already in the variant-create schema and `adminCreateProductVariant` already seeds Inventory from it
+- Rollback: revert the file
+
+
+## [0.2.1] - 2026-08-17
+
+### Changed
+- **Checkout order lines show the variant size and an explicit quantity.** Each line in the checkout summary now renders the variant label under the product name and a `Qty N - <unit price> each` row. Previously quantity appeared only as a small badge overlapping the thumbnail corner, and the right-hand figure is a line total that gave no indication of how many units it covered - customers read it as the unit price.
+  - `CartLineProductDetails` already rendered the variant label; checkout was the one caller not passing `variantClassName`, so it fell back to the larger default styling.
+  - Note a variant named `Default` stays suppressed by `getCartLineVariantLabel`, so products whose variants are unnamed in admin still show no size - there is nothing to show. Merchants must name variants (e.g. `500 g`) for sizes to appear.
+
+**Propagation:**
+- Severity: NORMAL - Layers: frontend core (`components/checkout/CheckoutForm.tsx`)
+- Migration: NO - Flag: none - Design impact: none (checkout is core, not theme) - Breaking: NO
+- Developed in the sbgs-site client repo and carried there as a time-boxed `approved-divergence`; syncing this version lets that client drop the divergence entry.
+- Rollback: revert the file
+
+
+## [0.2.0] - 2026-08-17
+
+### Fixed
+- **The storefront no longer guesses whether a bot challenge is required** (pairs with backend-core 0.2.0). It inferred this from build-time `NEXT_PUBLIC_TURNSTILE_SITE_KEY` while the API decided from `TURNSTILE_SECRET_KEY`; a build missing that variable rendered no widget, sent no token, and had every login, registration, phone OTP and password reset rejected — with no error on either side naming the cause. `useAuthTurnstile()` now reads `authChallenge` from `GET /store/config`, and the resolved site key (server-published, else env) is passed to `TurnstileChallenge`.
+  Two new guarantees: submit is held until the contract is known (a token-less request is counted as a challenge failure by the API and locks the IP after three, so a race would not merely fail — it would lock the user out), and when a challenge is required with **no site key resolvable anywhere**, the forms block submit and say so instead of firing a request that cannot succeed.
+- Challenge error copy no longer names our environment variables to customers — that text is developer-facing and now shows only in dev builds.
+
+### Added
+- `lib/auth-challenge.ts` — the resolution logic as a pure, tested function (7 cases, including a reproduction of the production outage). Extracted from the hook precisely because this is the code that failed: logic this load-bearing needs tests, and tests are cheap in `lib/` and expensive inside a React hook.
+
+### Changed
+- Admin product editor: **Weight (g) is now required** when creating a product, and wired into the field-error UI. It already was required in practice — the shipping worker refuses to build an AWB without it — and it now also drives the quantity printed on the invoice, so a missing weight silently degrades a weight-based SKU to a piece count on a tax document.
+
+**Propagation:**
+- Severity: **HIGH** — a client on the old frontend with a challenge-enforcing API has NO working auth - Layers: frontend core (`lib/auth-challenge.ts` new + test, `lib/storefront-settings.ts`, `lib/error-messages.ts`, `hooks/use-auth-turnstile.ts`, `components/auth/**`, `components/admin/AdminProductEditor.tsx`, `app/(auth)/login/page.tsx`, `app/(ops)/ops/login/page.tsx`) — **no THEME change**
+- Migration: NO - Flag: none - Design impact: none (token-styled) - Breaking: NO (older backends omit `authChallenge`; the parser treats that as "not required" and falls back to the build-time key)
+- Requires: backend-core >= 0.2.0 to benefit; degrades safely against older backends
+- Rollback: revert the files — restores the silent-mismatch failure mode.
+
 ## [0.1.70] - 2026-08-15
 
 ### Added
