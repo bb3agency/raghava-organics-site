@@ -420,3 +420,22 @@ All responses include:
 No route contract or endpoint shape changed due to the Phase 7 VPS incident. The failures were deploy/runtime configuration issues (env completeness, compose strategy, and host-Postgres routing). Operational remediation is documented in:
 
 - `docs/PHASE7_VPS_DEPLOY_INCIDENT_PLAYBOOK.md`
+
+## Core 0.3.0 – 0.4.0 additions (2026-10-21)
+
+> This client copy has diverged from the template, so the new routes are listed here instead of merged into the tables above. The template's copy is the canonical, fully merged reference.
+
+| Method | Route | Permission | What it does |
+|---|---|---|---|
+| GET | `/api/v1/admin/dashboard/action-queue` | `dashboard:read` | What needs the merchant now. Returns `ordersToFulfil` (CONFIRMED), `ordersProcessing`, `ordersAwaitingPayment`, `refundsOwed` (0.4.0), `returnsToReview`, `reviewsToModerate`, `lowStockVariants`, `outOfStockVariants`. Each count equals the list it links to. |
+| GET | `/api/v1/admin/dashboard/order-status-counts?from&to` | `orders:read` | Per-status counts for a window and the equal-length window before it. All 9 statuses are always present. |
+| GET | `/api/v1/admin/dashboard/sales-chart` | `dashboard:read` | Now zero-filled: every bucket in the range is returned (capped at 1000 buckets). |
+| PATCH | `/api/v1/admin/orders/:id/status` | `orders:write` (+`orders:refund` for REFUNDED) | **Fixed in 0.3.0:** it used to hang on every request (sync preHandler). Used by the admin *Order progress* tracker. |
+| GET | `/api/v1/admin/orders?refund=owed` | `orders:read` | Cancelled, provider-paid orders whose refund never completed (0.4.0). |
+| POST | `/api/v1/admin/orders/:id/refund/retry` | `orders:refund` + idempotency key | Retry a refund that is still owed. Returns 409 when nothing is owed (0.4.0). |
+| GET | `/api/v1/admin/orders/:id` | `orders:read` | Gains `refundOwed: { amountPaise, autoRetrying, lastError, lastFailedAt } \| null` (0.4.0). |
+| GET | `/api/v1/ops/overview` | `ops:read` | One-call ops overview: load-shed, config readiness, queues, people/invites, failed audits (24h), recent audit, pending OTPs (0.3.0). |
+| GET | `/api/v1/ops/audit/logs` | `ops:read` | Adds `actor { id, name, email }`. An unknown `actionType` is now a 400 (0.3.0). |
+| GET | `/api/v1/ops/config/overview` | `ops:read` | Adds `restartPending` per item (0.3.0). |
+
+Refund flow and webhooks (`refund.processed` + **`refund.failed`**): `docs/REFUND_LIFECYCLE.md`.
