@@ -42,8 +42,9 @@ export function AdminSessionWarning() {
     setExtending(true);
     setExtendError(null);
     try {
-      // Single-flight refresh guard (see refreshAccessTokenOnce) — avoids the
-      // single-use-cookie consume race that logs the admin out mid-session.
+      // Single-flight: routes through the shared refresh guard so a burst of
+      // parallel 401 retries + this "Extend" click cannot consume-race the
+      // single-use refresh cookie into a mid-session logout.
       const refreshed = await refreshAccessTokenOnce();
       const claims = parseAccessTokenClaims(refreshed.accessToken);
       if (claims?.role === "ADMIN") {
@@ -73,7 +74,7 @@ export function AdminSessionWarning() {
 
   return (
     <div
-      className="mb-6 rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm"
+      className="mb-6 rounded-md border border-warning-soft bg-warning-soft px-4 py-3 text-sm"
       role="status"
       aria-live="polite"
     >
@@ -82,7 +83,7 @@ export function AdminSessionWarning() {
         Your access token expires in about two minutes. Extend your session or sign in again.
       </p>
       {extendError ? (
-        <p className="mt-2 text-xs text-red-600">{extendError}</p>
+        <p className="mt-2 text-xs text-destructive">{extendError}</p>
       ) : null}
       <div className="mt-3 flex flex-wrap gap-2">
         <button
