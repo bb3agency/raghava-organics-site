@@ -192,6 +192,10 @@ The system is PR-gated, so the worst case is "a sync silently doesn't happen," n
 - **Token scope/expiry.** An expired/under-scoped PAT fails the dispatch or the fetch. These fail loudly in the Actions log but are easy to miss if you don't watch the run. → After tagging, glance at the template's release-train run and each client's core-sync run.
 - **A non-fast-forward client branch.** The workflow pushes `--force-with-lease` to `core-sync/<tag>`; if that branch exists with unrelated commits it won't clobber blindly — it errors. → Delete a stale `core-sync/*` branch before re-running.
 
+- **A new `core-manifest.json` entry only takes effect from the NEXT release (we hit this, 2026-10-21).** The engine syncs each client with the client's *current* (previous) manifest. Paths a release newly declares core are **not** synced by that release. Symptom: the sync updated `app/(ops)/**` pages but not the `components/ops/**` they import, and client typecheck failed. → In the release that adds a manifest entry, hand-carry those paths verbatim from the tag (in a worktree: `git archive <tag> <paths> | tar -x`, removing files the template deleted). From the next release on they sync. Since 0.3.1 the frontend core covers `components/{ops,auth,maintenance,providers}/**` and `contexts/**`.
+- **A frontend-core that `requires-backend-core` of the same release must deploy together.** The two sync PRs are separate, and each merge triggers CD, so the new frontend can go live against the old backend (new admin calls 404). → In each client, merge `core-sync/backend-core-vX` into `core-sync/frontend-core-vX`, set all three pins in `PLATFORM_VERSION` (`backend-core`, `frontend-core`, `requires-backend-core`), run `CORE_DRIFT_STRICT=true TEMPLATE_REMOTE=template bash backend/scripts/check-core-drift.sh`, push, and merge that PR with a **merge commit** (the backend PR then shows as merged). The backend PR's own `drift` check usually fails until then: it pins the new backend against the old frontend, which is expected.
+- **"SHA mismatch … Another push may have landed mid-deploy. Failing safely." is benign.** It means a second merge landed while a deploy ran. The queued deploy that follows ships the newer commit. Confirm that later run is green, not the failed one.
+
 Net rule: **after every release, watch the template's release-train run and each client's core-sync PR appear.** Green PR + your review is the gate; an absent PR means a skip you must chase.
 
 ---
@@ -219,8 +223,8 @@ Net rule: **after every release, watch the template's release-train run and each
 
 | Client | backend-core | frontend-core | Enabled flags (non-default) | Design notes |
 | --- | --- | --- | --- | --- |
-| raghava-organics | 0.1.1 | 0.1.1 | _baseline_ | Tasty-Daily palette (forest green / peach), Inter |
-| sbgs (srisaibabasweets) | 0.1.1 | 0.1.1 | _baseline_ | own palette |
+| raghava-organics | 0.4.0 | 0.4.0 | _baseline_ | Tasty-Daily palette (forest green / peach), Inter |
+| sbgs (srisaibabasweets) | 0.4.0 | 0.4.0 | _baseline_ | own palette |
 
 Update this table on every client sync — it is the at-a-glance "who is up to date."
 
