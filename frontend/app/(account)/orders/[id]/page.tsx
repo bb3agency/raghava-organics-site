@@ -35,6 +35,7 @@ import {
 } from "@/lib/order-status-ui";
 import { toast } from "@/lib/toast";
 import { Button } from "@/components/ui/button";
+import { OrderRefundNotice } from "@/components/account/OrderRefundNotice";
 import { OrderReviewPrompt } from "@/components/product/OrderReviewPrompt";
 import { useStoreConfig } from "@/components/providers/StoreConfigProvider";
 
@@ -363,6 +364,8 @@ export default function AccountOrderDetailPage() {
               : 'Payment is pending for this order. Click "Retry Payment" to complete your purchase.'}
           </div>
         )}
+
+        <OrderRefundNotice order={order} className="mt-4" />
       </div>
 
       {/* ── Items ──────────────────────────────────────────────────────── */}
